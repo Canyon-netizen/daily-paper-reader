@@ -20,7 +20,8 @@
 
 - `<arxiv-id>` 必须是 arXiv 短 ID（`YYMM.NNNNN`，可带版本尾巴，如 `v1`、`v2`）。
 - `<slug>` 是 ASCII kebab-case 标题摘要，由 `src/6.generate_docs.py:slugify` 生成。
-- 同 ID 多版本只保留最高版本（v 越大越新）。**重复检查**由 `astro-src/scripts/build-arxiv-index.mjs` 自动做（保留最短 path）。
+- 同 ID 多版本只保留最高版本（v 越大越新）。**重复检查**由 `astro-src/scripts/build-arxiv-index.mjs` 自动做：按 canonical id（去掉 `vN`）分组，保留最高版本的 path，并为 canonical id 及每个见过的版本 id 建立别名统一指向该 path，因此前端无论用 `v1`/`v2` 还是无版本 id 查询都命中当前笔记。
+- **版本落后自动刷新**：`.github/workflows/maintain-version-refresh.yml`（每周一，或手动触发）跑 `src/maintain/refresh_versions.py`，扫描本目录论文、对比 arXiv 最新版本，落后者用 `src/6.generate_docs.py --paper-id` 重生成新版本笔记并删除旧版本 `.md`/`.txt`/图目录，保持“v 越大越新”。
 
 伴随文件：
 

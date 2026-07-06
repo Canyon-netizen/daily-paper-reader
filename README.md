@@ -178,6 +178,8 @@ git checkout -- config.yaml
 
 完整工作流（每日 pipeline / 会议检索 / multi-source 维护）见上方 ASCII 架构图与 `.github/workflows/` 目录。每个 workflow 的具体步骤看对应的 `.yml` 文件。
 
+> 🔄 **论文版本自动刷新**：[`maintain-version-refresh.yml`](.github/workflows/maintain-version-refresh.yml)（每周一定时，或手动 `workflow_dispatch`）跑 [`src/maintain/refresh_versions.py`](src/maintain/refresh_versions.py)，扫描 `docs/papers/` 里每篇论文、查询 arXiv 最新版本，落后的自动用 `src/6.generate_docs.py --paper-id` 重生成新版本笔记（精读→全文总结+图，速读→速览），并删除旧版本 `.md`/`.txt`/图目录。支持 `--dry-run` / `--limit` / `--only-id`。
+
 ---
 
 ## 🗄️ Supabase schema (`sql/`)

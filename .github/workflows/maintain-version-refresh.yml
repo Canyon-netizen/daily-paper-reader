@@ -1,0 +1,194 @@
+name: maintain-version-refresh
+
+# 每周检查 docs/papers/ 中的论文是否落后于 arXiv 最新版本，落后的自动重生成笔记。
+# 设计说明见 src/maintain/refresh_versions.py 与 docs/path-spec.md。
+
+on:
+  schedule:
+    - cron: "17 5 * * 1" # 每周一 UTC 05:17（北京时间周一 13:17）；错开整点，避开 fork 撞车
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只报告不改动（true/false）"
+        required: false
+        default: "false"
+      limit:
+        description: "本次最多刷新的论文数（0=不限）"
+        required: false
+        default: "0"
+      only_id:
+        description: "仅检查指定 canonical id（如 2606.29340）；留空表示全量"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-paper-reader-maintain # 与 daily / supabase 维护共用，避免同时改 docs/
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    if: github.repository == 'Canyon-netizen/daily-paper-reader' || github.repository == 'ziwenhahaha/daily-paper-reader' || github.repository == '5-xj/daily-paper-reader'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Load secrets from Gist
+        env:
+          DPR_GIST_ID: ${{ secrets.DPR_GIST_ID }}
+          DPR_GIST_TOKEN: ${{ secrets.DPR_GIST_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::group::fetching dpr secrets gist"
+          curl -fsSL \
+            -H "Authorization: token ${DPR_GIST_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/gists/${DPR_GIST_ID}" \
+            -o /tmp/dpr-gist.json
+          echo "::endgroup::"
+
+          python3 - <<'PY'
+          import json, os, sys
+          data = json.load(open("/tmp/dpr-gist.json"))
+          files = data.get("files") or {}
+          target = next(
+              (f["content"] for f in files.values()
+               if f.get("filename", "").endswith(".json")),
+              None,
+          )
+          if not target:
+              print("::error::no .json file in gist", file=sys.stderr)
+              sys.exit(1)
+          payload = json.loads(target)
+          env_file = os.environ.get("GITHUB_ENV")
+          for k, v in payload.items():
+              line = f"{k}={v}"
+              print(line)
+              if env_file:
+                  with open(env_file, "a") as fp:
+                      fp.write(line + "\n")
+          PY
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Cache Python deps
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+            ~/.cache/torch
+            ~/.cache/dpr-tools/pdffigures2
+          key: ${{ runner.os }}-dpr-refresh-deps-v1-${{ hashFiles('requirements.txt') }}
+
+      - name: Install deps (skip sqlite3)
+        run: |
+          python - <<'PY'
+          import re
+          lines = open("requirements.txt", "r", encoding="utf-8").read().splitlines()
+          lines = [l for l in lines if l.strip() and not re.match(r"^sqlite3\\b", l)]
+          open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
+          PY
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip install --system -r /tmp/req.txt
+
+      - name: Prepare pdffigures2
+        run: |
+          set -euo pipefail
+          TOOL_DIR="$HOME/.cache/dpr-tools/pdffigures2"
+          SRC_DIR="$TOOL_DIR/src"
+          JAR_PATH="$TOOL_DIR/pdffigures2.jar"
+          mkdir -p "$TOOL_DIR"
+          if [ ! -f "$JAR_PATH" ]; then
+            rm -rf "$SRC_DIR"
+            git clone --depth 1 https://github.com/allenai/pdffigures2 "$SRC_DIR"
+            cd "$SRC_DIR"
+            curl -fsSL -o sbt.tgz https://github.com/sbt/sbt/releases/download/v1.10.1/sbt-1.10.1.tgz
+            tar -xzf sbt.tgz
+            ./sbt/bin/sbt assembly
+            cp pdffigures2.jar "$JAR_PATH"
+          fi
+          echo "PDFFIGURES2_JAR=$JAR_PATH" >> "$GITHUB_ENV"
+
+      - name: Run version refresh
+        env:
+          LLM_MODEL: ${{ env.LLM_MODEL }}
+          LLM_API_KEY: ${{ env.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ env.LLM_BASE_URL }}
+        run: |
+          set -euo pipefail
+          DRY_RUN="${{ github.event.inputs.dry_run }}"
+          LIMIT="${{ github.event.inputs.limit }}"
+          ONLY_ID="${{ github.event.inputs.only_id }}"
+          ARGS=()
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          if [ -n "$LIMIT" ] && [ "$LIMIT" != "0" ]; then
+            ARGS+=(--limit "$LIMIT")
+          fi
+          if [ -n "$ONLY_ID" ]; then
+            ARGS+=(--only-id "$ONLY_ID")
+          fi
+          python src/maintain/refresh_versions.py "${ARGS[@]}"
+
+      - name: Rebuild arxiv index
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: node astro-src/scripts/build-arxiv-index.mjs
+
+      - name: Commit results
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="${GITHUB_REF_NAME:-main}"
+
+          git add docs public/arxiv-index.json
+          if git diff --cached --quiet; then
+            echo "No version changes to commit."
+            exit 0
+          fi
+
+          git commit -m "[chore] refresh stale arxiv versions"
+
+          git fetch origin "$branch"
+          git merge --no-ff "origin/$branch" -m "Merge origin/$branch into workflow branch"
+          git push origin HEAD:"$branch"
+
+      - name: Trigger Cloudflare Pages rebuild
+        if: ${{ always() && github.event.inputs.dry_run != 'true' }}
+        continue-on-error: true
+        env:
+          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
+            echo "CF_DEPLOY_HOOK_URL not set, skipping deploy hook"
+            exit 0
+          fi
+          curl -X POST "$CF_DEPLOY_HOOK_URL" -f
+          echo "Cloudflare Pages rebuild queued"
