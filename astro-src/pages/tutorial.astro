@@ -1,0 +1,71 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/page.css';
+---
+
+<BaseLayout
+  title="使用教程 · Daily Paper Reader"
+  description="Daily Paper Reader 快捷键、颜色标记、论文分享、Zotero 集成的完整使用说明。"
+>
+  <Navbar />
+  <main class="page">
+    <h1>📖 使用教程</h1>
+    <p class="lead">
+      Daily Paper Reader 是一个每日自动抓取 arXiv 论文、按你关注的 query tag 分类、并提供 LLM 摘要的阅读器。
+    </p>
+
+    <h2>⌨️ 快捷键</h2>
+    <ul>
+      <li><kbd>←</kbd> / <kbd>→</kbd> — 在论文列表/分类中切换</li>
+      <li><kbd>↑</kbd> / <kbd>↓</kbd> — 滚动到上一/下一篇</li>
+      <li><kbd>1</kbd> / <kbd>2</kbd> / <kbd>3</kbd> / <kbd>4</kbd> — 论文颜色标记(蓝/绿/橙/红)</li>
+      <li><kbd>Esc</kbd> — 关闭浮层 / 弹窗</li>
+    </ul>
+
+    <h2>📚 论文页面</h2>
+    <p>每篇论文页面包含:</p>
+    <ul>
+      <li><strong>TLDR</strong>:一句话核心结论</li>
+      <li><strong>速览</strong>:动机 / 方法 / 结果 / 结论四段速读</li>
+      <li><strong>正文</strong>:完整中文摘要 + 英文 Abstract + AI 详细总结</li>
+      <li><strong>元数据</strong>:arXiv ID、作者、PDF 链接、tag、LLM 评分</li>
+    </ul>
+
+    <h2>🎨 主题切换</h2>
+    <p>
+      右上角的 <kbd>☀</kbd> / <kbd>🌙</kbd> / <kbd>◐</kbd> 按钮循环切换
+      <strong>light / dark / contrast</strong> 三主题。状态保存在 <code>localStorage</code>。
+    </p>
+
+    <h2>🔍 检索与筛选</h2>
+    <p>在每篇论文页或后台面板中,你可以:</p>
+    <ul>
+      <li>按 query tag 筛选(强化学习、多智能体、自蒸馏 …)</li>
+      <li>按 LLM 评分排序</li>
+      <li>按发布日期倒序浏览</li>
+    </ul>
+
+    <h2>💾 Zotero 集成</h2>
+    <p>
+      详见 <a href="/zotero-usage/">Zotero 集成说明</a>。把论文一键保存到你的 Zotero 文献库,
+      自动带标题/作者/年份/PDF/TLDR。
+    </p>
+
+    <h2>❓ 常见问题</h2>
+    <h3>为什么有些论文显示"摘要解析失败"?</h3>
+    <p>
+      这是 daily pipeline 写入 <code>figures_json</code> 字段时的已知问题。源文件保留在仓库里,
+      修复后会重新展示。当前可以用 arXiv ID 去 arxiv.org 直接搜原文。
+    </p>
+
+    <h3>怎么贡献或反馈?</h3>
+    <p>
+      项目开源于
+      <a href="https://github.com/Canyon-netizen/daily-paper-reader" target="_blank" rel="noopener">GitHub</a>,
+      欢迎提 Issue / PR。
+    </p>
+  </main>
+  <Footer />
+</BaseLayout>

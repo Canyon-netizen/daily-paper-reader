@@ -1,0 +1,60 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/page.css';
+---
+
+<BaseLayout
+  title="Zotero 集成 · Daily Paper Reader"
+  description="把论文一键保存到 Zotero,自动带标题/作者/PDF/TLDR。"
+>
+  <Navbar />
+  <main class="page">
+    <h1>📚 Zotero 集成</h1>
+    <p class="lead">
+      Daily Paper Reader 与 Zotero 配合,可以一键保存论文到你的 Zotero 文献库,
+      自动附带标题、作者、年份、PDF 与 TLDR。
+    </p>
+
+    <h2>1. 安装 Zotero Actions & Tags 插件</h2>
+    <ol>
+      <li>下载 <a href="https://www.zotero.org/download/" target="_blank" rel="noopener">Zotero</a></li>
+      <li>安装 <a href="https://github.com/windingwind/zotero-actions-tags" target="_blank" rel="noopener">Actions and Tags 插件</a></li>
+      <li>从仓库 <code>docs/tutorial/zotero-actions-backup.yml</code> 下载 actions 配置</li>
+      <li>Zotero → Tools → Actions and Tags → Add new action → Import from file</li>
+      <li>选择 <code>zotero-actions-backup.yml</code> 导入</li>
+    </ol>
+
+    <h2>2. 使用</h2>
+    <p>
+      打开任意论文页,顶部 PDF 链接旁的 arXiv 数字(ID)会高亮。右键 → <strong>Save to Zotero</strong> 即可。
+    </p>
+    <p>导入的论文会自动带:</p>
+    <ul>
+      <li>标题 / 作者 / 年份(从 arXiv 拉取)</li>
+      <li>PDF 附件</li>
+      <li>TLDR(从页面摘录)</li>
+      <li>Tag: <code>arxiv-2606.xxxxx</code></li>
+    </ul>
+
+    <h2>3. 故障排查</h2>
+    <p>
+      如果遇到问题,检查 <strong>Tools → Actions and Tags → 你的 action → Edit</strong>,
+      确认 <em>Run on item added</em> 触发器已启用。
+    </p>
+    <p>
+      仍然异常时,打开 Zotero → Help → Debug Output Logging,重试操作,看日志里 Actions and Tags 的输出。
+    </p>
+
+    <hr />
+
+    <p>
+      遇到其它问题?
+      <a href="https://github.com/Canyon-netizen/daily-paper-reader/issues" target="_blank" rel="noopener">
+        在 GitHub 提 Issue ↗
+      </a>
+    </p>
+  </main>
+  <Footer />
+</BaseLayout>

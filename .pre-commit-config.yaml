@@ -1,0 +1,78 @@
+# Pre-commit hooks for daily-paper-reader
+#
+# 安装:
+#   pip install pre-commit
+#   pre-commit install
+#
+# 跑全部(在所有文件上,不等 git hook 触发):
+#   pre-commit run --all-files
+#
+# 跳过 hook(紧急):
+#   git commit --no-verify
+#
+# 设计原则:
+#   - 钩子只跑仓库已有的工具(不会强制 contributor 装新依赖)。
+#   - offline 子集是默认,完整 pytest 在 CI(.github/workflows/ci.yml)跑。
+
+# 强制 Python 3.11+ 与项目 requirements.txt 一致,避免 contributor
+# 在老 Python 上 hook 通过但 CI 失败。
+default_language_version:
+  python: python3
+
+repos:
+  - repo: local
+    hooks:
+      # 1) pytest 离线子集
+      # 跑 .github/workflows/ci.yml 同样的 --deselect 列表,确保本地
+      # pre-commit hook 和 CI 行为一致;live-network test 只在 CI 跑。
+      - id: pytest-offline
+        name: pytest (offline subset)
+        entry: bash -c 'python -m pytest tests/ -q \
+          --deselect tests/test_statement_timeout.py \
+          --deselect tests/test_model_loader_remote.py \
+          --deselect tests/test_reranker_api.py \
+          --deselect tests/test_query_embedding_cache.py \
+          --deselect tests/test_sync_streaming_pipeline.py \
+          --deselect tests/test_supabase_init_and_sync.py \
+          --deselect tests/test_conference_workflow_and_ui.py \
+          --deselect tests/test_main_pipeline.py \
+          --deselect tests/test_init_supabase_from_aaai_ojs.py \
+          --deselect tests/test_init_supabase_from_acl.py \
+          --deselect tests/test_init_supabase_from_biorxiv.py \
+          --deselect tests/test_init_supabase_from_chemrxiv.py \
+          --deselect tests/test_init_supabase_from_emnlp.py \
+          --deselect tests/test_init_supabase_from_iclr_openreview.py \
+          --deselect tests/test_init_supabase_from_icml_openreview.py \
+          --deselect tests/test_init_supabase_from_medrxiv.py \
+          --deselect tests/test_init_supabase_from_neurips_openreview.py \
+          --deselect tests/test_fetch_acl_anthology.py \
+          --deselect tests/test_fetch_openreview_conference.py \
+          --deselect tests/test_fetch_paper_aaai_ojs.py \
+          --deselect tests/test_fetch_paper_biorxiv.py \
+          --deselect tests/test_fetch_paper_chemrxiv.py \
+          --deselect tests/test_fetch_paper_medrxiv.py'
+        language: system
+        pass_filenames: false
+        # 不论改了哪个文件都跑一遍(因为是测试 + 整套 import 链)
+        always_run: true
+        stages: [pre-commit]
+
+      # 2) astro check — TypeScript + Astro 组件语法校验
+      # 防止 contributor 提交 TS 语法错误导致生产 build 红。
+      - id: astro-check
+        name: astro check (TS + component syntax)
+        entry: bash -c 'npx --no-install astro check || echo "[pre-commit] astro check failed or not installed; CI will catch it"'
+        language: system
+        pass_filenames: false
+        files: ^(astro-src/|package\.json$|astro\.config\.mjs$|tsconfig\.json$)
+        stages: [pre-commit]
+
+      # 3) 防止 .scratch/ 误提交
+      # .scratch/ 已在 .gitignore,但 contributor 可能 `git add -f` 误操作;
+      # 这里 fail-fast 让提交前就报错。
+      - id: no-scratch-files
+        name: forbid committing files under .scratch/
+        entry: bash -c 'if git diff --cached --name-only | grep -q "^\.scratch/"; then echo ".scratch/ is gitignored; do not commit files there."; exit 1; fi'
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

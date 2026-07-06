@@ -1,0 +1,269 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/page.css';
+import '../styles/settings.css';
+
+// Cloudflare Worker 5 行代码模板,作为字符串注入 <pre> 避免 Astro 把 {} 当 JSX 表达式
+const workerSnippet = `export default {
+  async fetch(req) {
+    const u = new URL(req.url);
+    let target = u.pathname.replace(/^\\/proxy\\/?/, '');
+    if (!target) target = u.searchParams.get('url');
+    if (!/^https?:\\/\\//i.test(target))
+      return new Response('missing url', { status: 400 });
+    const r = await fetch(target, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (cf-worker-proxy/1.0)' },
+      redirect: 'follow',
+    });
+    const h = new Headers(r.headers);
+    h.set('Access-Control-Allow-Origin', '*');
+    h.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    h.set('Access-Control-Allow-Headers', '*');
+    return new Response(r.body, { status: r.status, headers: h });
+  },
+};`;
+
+import { ARXIV_CATEGORIES, PROVIDER_PRESETS, DEFAULT_PROXY } from '../scripts/settings';
+
+const GROUPS: { id: string; label: string }[] = [
+  { id: 'cs', label: 'cs — 计算机' },
+  { id: 'stat', label: 'stat — 统计' },
+  { id: 'math', label: 'math — 数学' },
+  { id: 'eess', label: 'eess — 电气 / 信号' },
+  { id: 'q-bio', label: 'q-bio — 量化生物' },
+];
+
+function catOptions(groupId: string): string {
+  return ARXIV_CATEGORIES.filter((c) => c.group === groupId).map((c) =>
+    `<label class="settings-cat-option">
+       <input type="checkbox" name="cfg-categories" value="${c.code}" />
+       <span class="settings-cat-code">${c.code}</span>
+       <span class="settings-cat-label">${c.label}</span>
+     </label>`,
+  ).join('');
+}
+
+const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
+  `<option value="${key}">${p.label}</option>`,
+).join('');
+---
+
+<BaseLayout
+  title="设置 · Daily Paper Reader"
+  description="LLM / Gist / arXiv 类目 / CORS 代理 — 所有浏览器端配置集中管理。"
+>
+  <Navbar />
+
+  <main class="settings-page">
+    <header class="settings-page-header">
+      <strong>设置</strong> · 所有配置都只存在你浏览器的 localStorage,不上传任何服务器。
+      <a class="settings-page-back" href={import.meta.env.BASE_URL + 'paper-analyzer/'}>← 返回论文分析</a>
+    </header>
+
+    <div id="settings-saved-hint" class="settings-saved-hint" aria-live="polite">
+      <span class="settings-saved-hint-icon">✓</span>
+      <span>已自动保存</span>
+    </div>
+
+    <!-- ===== LLM 设置 ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">LLM 调用</h2>
+      <p class="settings-card-sub">
+        用于"论文分析"页面调用大模型生成中文摘要 / TLDR / 笔记。
+        填好之后点 <strong>测试连接</strong> 验证 key 和 model 是否可用。
+      </p>
+
+      <div class="settings-field">
+        <label for="cfg-provider">API 提供商</label>
+        <select id="cfg-provider" set:html={providerOptions}></select>
+      </div>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-key">API Key</label>
+        <input id="cfg-key" type="password" placeholder="sk-..." autocomplete="off" />
+        <div class="settings-field-hint">Key 只存在你的浏览器,不会发到任何服务器。</div>
+      </div>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-base">Base URL</label>
+        <input id="cfg-base" type="text" placeholder="https://api.deepseek.com" />
+        <div class="settings-field-hint">
+          OpenAI 兼容格式。选择"自定义"时,这里改成你自己的端点(以 <code>/v1</code> 结尾)。
+        </div>
+      </div>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-model">Model</label>
+        <div class="settings-model-row">
+          <select id="cfg-model"></select>
+          <input id="cfg-model-input" type="text" placeholder="手动输入 model 名" hidden />
+          <button type="button" id="cfg-model-edit-btn" class="settings-mini-btn" title="切到手动输入">✏️</button>
+        </div>
+      </div>
+
+      <div class="settings-field">
+        <span class="settings-field-label">连接</span>
+        <div class="settings-model-actions">
+          <button type="button" id="test-connection-btn" class="settings-action-btn">🔌 测试连接</button>
+          <button type="button" id="refresh-models-btn" class="settings-action-btn">🔄 拉服务端模型列表</button>
+          <span id="model-status" class="settings-model-status"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== arXiv 类目 ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">arXiv 搜索类目</h2>
+      <p class="settings-card-sub">
+        勾选后,"论文分析"页面的 arXiv 搜索结果只会来自这些类目(arXiv <code>cat:</code> 字段)。
+        默认勾选 cs 主流 6 类,覆盖 AI / NLP / CV / RL / IR 等方向。
+      </p>
+
+      <div class="settings-cats-toolbar">
+        <button type="button" id="cats-select-default" class="settings-mini-btn">仅 cs 主流</button>
+        <button type="button" id="cats-select-all" class="settings-mini-btn">全选</button>
+        <button type="button" id="cats-select-none" class="settings-mini-btn">清空</button>
+        <span id="cats-status" class="settings-cats-status">已选 0 个类目</span>
+      </div>
+
+      {GROUPS.map((g) => (
+        <fieldset class="settings-cats-group" data-group={g.id}>
+          <legend>{g.label}</legend>
+          <div class="settings-cats-grid" set:html={catOptions(g.id)} />
+        </fieldset>
+      ))}
+    </section>
+
+    <!-- ===== Gist 同步 ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">GitHub 同步</h2>
+      <p class="settings-card-sub">
+        同一个 PAT 同时用于 (1) <strong>同步配置到 secret Gist</strong> — 后台 daily pipeline 拉这个 Gist 覆盖仓库 <code>config.yaml</code>;
+        (2) <strong>保存论文到 GitHub</strong> — 在论文分析页点"📤 保存到 GitHub"会触发 <code>save-paper.yml</code> workflow。
+        没用 Gist / 没用论文保存功能可以跳过。
+      </p>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-gist-token">GitHub Personal Access Token</label>
+        <input id="cfg-gist-token" type="password" placeholder="ghp_... 或 github_pat_..." autocomplete="off" />
+        <div class="settings-field-hint">
+          在 <a href="https://github.com/settings/tokens" target="_blank" rel="noopener">github.com/settings/tokens</a> 生成。
+          <strong>classic PAT</strong>:勾上 <code>gist</code> + <code>repo</code>;
+          <strong>fine-grained PAT</strong>:勾 <code>Gists: Read and write</code> + <code>Actions: Read and write</code>(或 <code>Contents: Read and write</code> 走 Contents API)。
+          Token 只存在浏览器,不上传。
+        </div>
+      </div>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-gist-id">Gist ID(留空则首次同步时自动创建)</label>
+        <input id="cfg-gist-id" type="text" placeholder="32 位 hex(同步成功后会自动填回这里)" />
+      </div>
+
+      <div class="settings-gist-actions">
+        <button type="button" id="gist-sync-btn" class="settings-action-btn primary">💾 同步配置到 Gist</button>
+        <span id="gist-sync-hint" class="settings-gist-hint"></span>
+      </div>
+    </section>
+
+    <!-- ===== GitHub 保存论文(仓库配置) ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">GitHub 保存论文 — 仓库配置</h2>
+      <p class="settings-card-sub">
+        上面那个 GitHub PAT 同时也用来触发 <code>save-paper.yml</code> workflow。
+        这里只需要确认 owner / repo / workflow 文件名,默认值就是当前仓库,一般不用改。
+      </p>
+
+      <div class="settings-field">
+        <label for="cfg-github-owner">仓库 Owner</label>
+        <input id="cfg-github-owner" type="text" placeholder="Canyon-netizen" />
+      </div>
+
+      <div class="settings-field">
+        <label for="cfg-github-repo">仓库名</label>
+        <input id="cfg-github-repo" type="text" placeholder="daily-paper-reader" />
+      </div>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-github-workflow">Workflow 文件名</label>
+        <input id="cfg-github-workflow" type="text" placeholder="save-paper.yml" />
+        <div class="settings-field-hint">
+          仓库里 <code>.github/workflows/</code> 下的 workflow 文件名(不含路径)。
+          默认 <code>save-paper.yml</code>。
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== 主题列表 ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">搜集主题</h2>
+      <p class="settings-card-sub">
+        影响后台 daily pipeline 抓哪些论文。每行一个 <code>tag: 中文说明</code>。
+        默认主题来自仓库内置 <code>config.yaml</code>,这里可以覆盖。
+        改动只存在浏览器,下次"同步配置到 Gist"会带上这一段。
+      </p>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-topics">主题列表</label>
+        <textarea
+          id="cfg-topics"
+          rows="8"
+          placeholder="RL: 强化学习&#10;MAS: 多智能体&#10;game ai: 游戏 AI"
+        ></textarea>
+      </div>
+
+      <div class="settings-topics-bar">
+        <span id="topics-status" class="settings-topics-status">已加载 0 个主题</span>
+        <div class="settings-topics-actions">
+          <button type="button" id="topics-reset-btn" class="settings-mini-btn">↺ 恢复默认</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== CORS 代理 ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">arXiv CORS 代理</h2>
+      <p class="settings-card-sub">
+        浏览器拉 arXiv 一定会被 CORS 拦,需要代理转发。
+        默认走站点自带的反代(<code>{DEFAULT_PROXY}</code>),公共代理(<code>corsproxy.io</code> /
+        <code>allorigins</code> / <code>thingproxy</code>)经常挂。
+        留空走默认;自部署一个 Cloudflare Worker 永远稳定。
+      </p>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-cors">自定义代理前缀</label>
+        <input id="cfg-cors" type="text" placeholder="https://your-proxy.example.com/api/proxy" />
+        <div class="settings-field-hint">
+          留空走默认代理链(直连 → 站点反代 → 公共代理)。填了之后优先用你的代理,公共代理作 fallback。
+        </div>
+      </div>
+
+      <details class="settings-proxy-guide">
+        <summary>3 分钟自部署 Cloudflare Worker(永久稳定)</summary>
+        <ol class="settings-proxy-steps">
+          <li>去 <a href="https://dash.cloudflare.com/?to=/:account/workers" target="_blank" rel="noopener">Cloudflare Workers</a> 创建 Worker(免费)。</li>
+          <li>把下面这段代码整段粘进去,点 <strong>Deploy</strong>:<pre class="settings-proxy-code">{workerSnippet}</pre></li>
+          <li>部署完会拿到 <code>https://&lt;name&gt;.&lt;sub&gt;.workers.dev</code> 地址,把它填到上方"自定义代理前缀"输入框。</li>
+          <li>之后 arXiv 搜索永久走你自己的代理,公共代理挂了也不影响。</li>
+        </ol>
+      </details>
+    </section>
+
+    <!-- ===== 重置 ===== -->
+    <section class="settings-card settings-card-danger">
+      <h2 class="settings-card-title">重置</h2>
+      <p class="settings-card-sub">
+        清除所有浏览器配置(LLM / Gist / 主题 / 类目 / CORS 代理)。
+        <strong>无法撤销</strong> — 如果用了 Gist 同步,先确认你能从 Gist 恢复。
+      </p>
+      <button type="button" id="settings-reset-all-btn" class="settings-action-btn danger">⚠ 清空所有配置</button>
+    </section>
+  </main>
+
+  <Footer />
+
+  <script>
+    import '../scripts/settings-page.ts';
+  </script>
+</BaseLayout>

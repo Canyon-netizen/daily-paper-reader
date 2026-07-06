@@ -1,0 +1,304 @@
+---
+// astro-src/pages/[ym]/[day]/[arxiv].astro
+// 单篇论文页:用 lib/paper.ts 读 MD 文件(兼容坏文件)
+// 路径格式:docs/YYYYMM/DD/{arxiv_id}-{slug}.md -> /YYYYMM/DD/{arxiv_id}-{slug}/
+import type { GetStaticPaths } from 'astro';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import { readPaper, listAllPaperIds, renderMarkdownBody } from '../../../lib/paper';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  const ids = await listAllPaperIds();
+  // 仅处理 3 段路径: YYYYMM/DD/{arxiv_id}-{slug}
+  return ids
+    .filter((id) => id.split('/').length === 3)
+    .map((id) => ({
+      params: {
+        ym: id.split('/')[0],
+        day: id.split('/')[1],
+        arxiv: id.split('/')[2],
+      },
+    }));
+};
+
+const { ym, day, arxiv } = Astro.params;
+const id = `${ym}/${day}/${arxiv}`;
+const paper = await readPaper(id);
+const base = import.meta.env.BASE_URL;
+---
+
+<BaseLayout title={paper?.title_zh || paper?.title || id}>
+  <Navbar />
+  <main class="paper-page">
+    {paper ? (
+      paper.isBroken ? (
+        <div class="container">
+          <article class="paper-broken">
+            <h1>⚠️ 论文摘要解析失败</h1>
+            <p>这篇论文({id})的 frontmatter YAML 损坏,无法读取标题和摘要。</p>
+            <p>原因:{paper.brokenReason}</p>
+            <p>这是 daily pipeline 写入 figures_json 字段时的已知 bug,源文件保留供后续修复。</p>
+            <p>如果你需要这篇论文内容,请用其他渠道获取 arxiv ID <code>{paper.arxivId}</code>。</p>
+            <p><a href={`${base}`}>← 返回首页</a></p>
+          </article>
+        </div>
+      ) : (
+        <article class="paper-article">
+          <header class="paper-header">
+            <div class="container">
+              <div class="paper-meta-line">
+                {paper.yearMonth}/{paper.day} · arXiv {paper.arxivId}
+                {paper.date && <span> · 发布 {paper.date}</span>}
+              </div>
+              <h1 class="paper-title-zh">{paper.title_zh || paper.title}</h1>
+              {paper.title_zh && paper.title && paper.title !== paper.title_zh && (
+                <h2 class="paper-title-en">{paper.title}</h2>
+              )}
+              <div class="paper-meta">
+                {paper.authors && (
+                  <div class="meta-row">
+                    <span class="meta-label">AUTHORS</span>
+                    <span class="meta-value">{paper.authors}</span>
+                  </div>
+                )}
+                {paper.evidence && (
+                  <div class="meta-row">
+                    <span class="meta-label">EVIDENCE</span>
+                    <span class="meta-value">{paper.evidence}</span>
+                  </div>
+                )}
+                {paper.score !== undefined && (
+                  <div class="meta-row">
+                    <span class="meta-label">SCORE</span>
+                    <span class="meta-value score-pill">{paper.score.toFixed(1)}</span>
+                  </div>
+                )}
+                {paper.tags && paper.tags.length > 0 && (
+                  <div class="meta-row">
+                    <span class="meta-label">TAGS</span>
+                    <span class="meta-value">
+                      {paper.tags.map((t) => <span class="tag">{t}</span>)}
+                    </span>
+                  </div>
+                )}
+                {paper.pdf && (
+                  <div class="meta-row">
+                    <span class="meta-label">PDF</span>
+                    <a class="meta-value pdf-link" href={paper.pdf} target="_blank" rel="noopener">↗ {paper.arxivId}.pdf</a>
+                  </div>
+                )}
+                {paper.generated_at && (
+                  <div class="meta-row">
+                    <span class="meta-label">GENERATED</span>
+                    <span class="meta-value">{paper.generated_at}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </header>
+
+          {paper.tldr && (
+            <section class="paper-glance">
+              <div class="container">
+                <h3>📝 TLDR</h3>
+                <p>{paper.tldr}</p>
+              </div>
+            </section>
+          )}
+
+          {(paper.motivation || paper.method || paper.result || paper.conclusion) && (
+            <section class="paper-summary">
+              <div class="container">
+                <h3>🧭 速览</h3>
+                {paper.motivation && (
+                  <div class="glance-card">
+                    <div class="glance-label">动机</div>
+                    <p>{paper.motivation}</p>
+                  </div>
+                )}
+                {paper.method && (
+                  <div class="glance-card">
+                    <div class="glance-label">方法</div>
+                    <p>{paper.method}</p>
+                  </div>
+                )}
+                {paper.result && (
+                  <div class="glance-card">
+                    <div class="glance-label">结果</div>
+                    <p>{paper.result}</p>
+                  </div>
+                )}
+                {paper.conclusion && (
+                  <div class="glance-card">
+                    <div class="glance-label">结论</div>
+                    <p>{paper.conclusion}</p>
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {paper.body && (
+            <section class="paper-body">
+              <div class="container">
+                <article class="markdown" set:html={renderMarkdownBody(paper.body, { figures: paper.figures, base })} />
+              </div>
+            </section>
+          )}
+        </article>
+      )
+    ) : (
+      <div class="container">
+        <h1>404</h1>
+        <p>找不到论文:{id}</p>
+        <p><a href={`${base}`}>← 返回首页</a></p>
+      </div>
+    )}
+  </main>
+</BaseLayout>
+
+<style>
+  .paper-page { padding-bottom: 4rem; }
+  .container { max-width: var(--content-max-width); margin: 0 auto; padding: 0 1.5rem; }
+
+  .paper-broken {
+    padding: 3rem 0;
+    text-align: center;
+    color: var(--fg-muted);
+  }
+  .paper-broken h1 { color: var(--accent); margin-bottom: 1rem; }
+  .paper-broken code { background: var(--code-bg); padding: 0.1em 0.4em; border-radius: 4px; }
+
+  .paper-article { background: var(--bg); }
+
+  .paper-header {
+    border-bottom: 1px solid var(--border);
+    padding: 2rem 0;
+    background: var(--bg-elevated);
+  }
+  .paper-meta-line {
+    font-size: 0.85rem;
+    color: var(--fg-subtle);
+    font-family: var(--font-mono);
+    margin-bottom: 0.5rem;
+  }
+  .paper-title-zh {
+    font-size: 1.85rem;
+    margin: 0 0 0.5rem;
+    line-height: 1.3;
+  }
+  .paper-title-en {
+    font-size: 1.1rem;
+    font-weight: 400;
+    color: var(--fg-muted);
+    margin: 0 0 1.5rem;
+    font-style: italic;
+  }
+  .paper-meta { display: flex; flex-direction: column; gap: 0.5rem; }
+  .meta-row { display: flex; gap: 1rem; align-items: baseline; }
+  .meta-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--fg-subtle);
+    min-width: 90px;
+  }
+  .meta-value { color: var(--fg); font-size: 0.95rem; }
+  .score-pill {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent);
+    padding: 0.15em 0.5em;
+    border-radius: var(--radius-sm);
+    font-weight: 700;
+  }
+  .tag {
+    display: inline-block;
+    background: var(--tag-bg);
+    color: var(--tag-fg);
+    padding: 0.1em 0.5em;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    margin-right: 0.3em;
+  }
+  .pdf-link { color: var(--accent); font-family: var(--font-mono); font-size: 0.9rem; }
+
+  .paper-glance {
+    padding: 1.5rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .paper-glance h3 { margin-top: 0; color: var(--fg); }
+  .paper-glance p { color: var(--fg); line-height: 1.6; }
+
+  .paper-summary { padding: 1.5rem 0; border-bottom: 1px solid var(--border); }
+  .paper-summary h3 { margin-top: 0; }
+  .glance-card {
+    border-left: 3px solid var(--accent);
+    padding: 0.5rem 1rem;
+    margin: 0.75rem 0;
+    background: var(--bg-elevated);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  }
+  .glance-label {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    margin-bottom: 0.3rem;
+  }
+  .glance-card p { margin: 0; color: var(--fg); }
+
+  .paper-body { padding: 2rem 0; }
+  .paper-body .markdown { line-height: 1.7; }
+  .paper-body .markdown h1 { font-size: 1.6rem; margin-top: 1.5em; }
+  .paper-body .markdown h2 { font-size: 1.35rem; margin-top: 1.5em; }
+  .paper-body .markdown h3 { font-size: 1.15rem; margin-top: 1.3em; }
+  .paper-body .markdown p { color: var(--fg); margin: 0 0 1em; }
+  .paper-body .markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+  .paper-body .markdown ul { margin: 0.5em 0 1em 1.5em; }
+  .paper-body .markdown li { margin: 0.3em 0; }
+  .paper-body .markdown code { background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; font-family: var(--font-mono); }
+  .paper-body .markdown code.math-inline { background: var(--accent-soft); color: var(--accent); }
+
+  /* 论文图表区块(由 renderMarkdownBody 在 body 末尾追加) */
+  .paper-figures-wrap { margin: 1.5rem 0; }
+  .paper-figures-wrap > summary {
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--accent);
+    padding: 0.6rem 0;
+    list-style: none;
+  }
+  .paper-figures-wrap > summary::-webkit-details-marker { display: none; }
+  .paper-figures-wrap > summary::before { content: '▶ '; transition: transform 150ms; display: inline-block; }
+  .paper-figures-wrap[open] > summary::before { transform: rotate(90deg); }
+  .paper-figures {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    margin-top: 0.8rem;
+  }
+  .paper-figures figure { margin: 0; }
+  .paper-figures img {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+  }
+  .paper-figures figcaption {
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+    padding: 0.4rem 0 0;
+    line-height: 1.45;
+  }
+
+  /* 精读里 LLM 插入的图片(行内) */
+  .paper-body .markdown img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    margin: 0.5rem 0;
+  }
+</style>

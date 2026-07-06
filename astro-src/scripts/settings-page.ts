@@ -1,0 +1,459 @@
+// /settings/ 页面客户端逻辑
+//
+// 所有配置项的读写都通过 ./settings.ts,这里只做 DOM 绑定 + 用户交互。
+// 类目勾选、LLM 字段、Gist 凭据、主题列表、CORS 代理都在这里编辑,改完 debounce
+// 写 localStorage + 弹"已自动保存"提示。
+
+import {
+  loadSettings,
+  saveSettings,
+  loadProvider,
+  saveProvider,
+  getCustomProxy,
+  setCustomProxy,
+  getGistToken,
+  setGistToken,
+  getGistId,
+  setGistId,
+  getTopicsText,
+  setTopicsText,
+  parseTopicsText,
+  loadCategories,
+  saveCategories,
+  DEFAULT_TOPICS_TEXT,
+  DEFAULT_CATEGORY_CODES,
+  ARXIV_CATEGORIES,
+  PROVIDER_PRESETS,
+  LLM_DEFAULTS,
+  GIST_FILENAME,
+  loadGitHubToken,
+  setGitHubToken,
+  loadGitHubRepo,
+  setGitHubRepo,
+} from './settings';
+
+// ============================================================================
+// DOM helpers
+// ============================================================================
+const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`#${id} not found`);
+  return el as T;
+};
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+  let t: ReturnType<typeof setTimeout> | null = null;
+  return ((...args: any[]) => {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  }) as T;
+}
+
+// ============================================================================
+// "已自动保存" 提示
+// ============================================================================
+let savedHintTimer: ReturnType<typeof setTimeout> | null = null;
+function flashSavedHint(): void {
+  const el = document.getElementById('settings-saved-hint');
+  if (!el) return;
+  el.classList.add('visible');
+  if (savedHintTimer) clearTimeout(savedHintTimer);
+  savedHintTimer = setTimeout(() => el.classList.remove('visible'), 1200);
+}
+
+// ============================================================================
+// Model: select / input 双向切换
+// ============================================================================
+function isModelManual(): boolean {
+  const inputEl = document.getElementById('cfg-model-input') as HTMLInputElement | null;
+  return !!(inputEl && !inputEl.hidden);
+}
+
+function readModelValue(): string {
+  if (isModelManual()) return $<HTMLInputElement>('cfg-model-input').value.trim();
+  return $<HTMLSelectElement>('cfg-model').value.trim();
+}
+
+function setModelMode(manual: boolean): void {
+  const select = $<HTMLSelectElement>('cfg-model');
+  const input = $<HTMLInputElement>('cfg-model-input');
+  const editBtn = $<HTMLButtonElement>('cfg-model-edit-btn');
+  if (manual) {
+    select.hidden = true;
+    input.hidden = false;
+    if (!input.value) input.value = select.value;
+    editBtn.textContent = '📋';
+    editBtn.title = '切回下拉选择';
+  } else {
+    input.hidden = true;
+    select.hidden = false;
+    editBtn.textContent = '✏️';
+    editBtn.title = '切到手动输入';
+  }
+}
+
+function setModelOptions(models: string[], placeholder: string, defaultModel = ''): void {
+  const sel = $<HTMLSelectElement>('cfg-model');
+  const opts = [`<option value="" disabled hidden>${escapeHtml(placeholder)}</option>`].concat(
+    models.map((m, i) => {
+      const isFirst = i === 0;
+      const selected = (defaultModel && m === defaultModel) || (!defaultModel && isFirst);
+      return `<option value="${escapeHtml(m)}"${selected ? ' selected' : ''}>${escapeHtml(m)}</option>`;
+    }),
+  );
+  sel.innerHTML = opts.join('');
+}
+
+function applyProviderPreset(provider: string): void {
+  const preset = PROVIDER_PRESETS[provider];
+  if (!preset) return;
+  setModelOptions(preset.models, `选择 ${preset.label} model`, preset.defaultModel);
+  $<HTMLInputElement>('cfg-model-input').value = preset.defaultModel;
+  setModelMode(false);
+  const isCustom = provider === 'custom';
+  $<HTMLInputElement>('cfg-base').placeholder = isCustom ? 'https://your-api.example.com/v1' : preset.baseUrl;
+}
+
+function detectProviderFromSettings(cfg: ReturnType<typeof loadSettings>): string {
+  for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
+    if (key === 'custom') continue;
+    if (preset.baseUrl && cfg.baseUrl.startsWith(preset.baseUrl)) return key;
+  }
+  return 'custom';
+}
+
+// ============================================================================
+// Status messages
+// ============================================================================
+function setModelStatus(msg: string, kind: '' | 'ok' | 'error' | 'warn' = ''): void {
+  const el = document.getElementById('model-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'settings-model-status' + (kind ? ' ' + kind : '');
+}
+
+// ============================================================================
+// Connection test / Refresh model list
+// ============================================================================
+interface ModelsResponse {
+  data?: Array<{ id?: string; model?: string }>;
+}
+
+async function fetchOpenAIModels(baseUrl: string, apiKey: string): Promise<string[]> {
+  const url = `${baseUrl.replace(/\/+$/, '')}/v1/models`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    if (res.status === 401) throw new Error('API key 无效(401),检查 Base URL 和 Key 是否匹配');
+    if (res.status === 403) throw new Error('API key 没权限(403),或 Base URL 写错');
+    if (res.status === 404) throw new Error('该 Base URL 不支持 /v1/models(404),可能不是 OpenAI 兼容接口');
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 120)}`);
+  }
+  const data: ModelsResponse = await res.json();
+  return Array.from(new Set(
+    (data.data || []).map((m) => (m.id || m.model || '').trim()).filter(Boolean),
+  ));
+}
+
+function readSettingsFromUI(): ReturnType<typeof loadSettings> {
+  return {
+    apiKey: $<HTMLInputElement>('cfg-key').value.trim(),
+    baseUrl: $<HTMLInputElement>('cfg-base').value.trim() || LLM_DEFAULTS.baseUrl,
+    model: readModelValue() || LLM_DEFAULTS.model,
+  };
+}
+
+async function testConnection(): Promise<void> {
+  const cfg = readSettingsFromUI();
+  if (!cfg.apiKey) { setModelStatus('请先填 API key', 'error'); return; }
+  if (!cfg.baseUrl) { setModelStatus('请先填 Base URL', 'error'); return; }
+  const btn = $<HTMLButtonElement>('test-connection-btn');
+  const refreshBtn = $<HTMLButtonElement>('refresh-models-btn');
+  btn.disabled = true; refreshBtn.disabled = true;
+  setModelStatus('正在测试连接 ...');
+  try {
+    const models = await fetchOpenAIModels(cfg.baseUrl, cfg.apiKey);
+    const currentModel = cfg.model.trim();
+    if (currentModel && models.includes(currentModel)) {
+      setModelStatus(`✓ 连接成功,共 ${models.length} 个模型,当前 model "${currentModel}" 存在`, 'ok');
+    } else if (currentModel) {
+      setModelStatus(`⚠ 连接成功,共 ${models.length} 个模型,但当前 model "${currentModel}" 不在列表里`, 'warn');
+    } else {
+      setModelStatus(`✓ 连接成功,共 ${models.length} 个模型`, 'ok');
+    }
+  } catch (e) {
+    setModelStatus(`✗ ${(e as Error).message || e}`, 'error');
+  } finally {
+    btn.disabled = false; refreshBtn.disabled = false;
+  }
+}
+
+async function refreshModelList(): Promise<void> {
+  const cfg = readSettingsFromUI();
+  if (!cfg.apiKey) { setModelStatus('请先填 API key', 'error'); return; }
+  if (!cfg.baseUrl) { setModelStatus('请先填 Base URL', 'error'); return; }
+  const btn = $<HTMLButtonElement>('refresh-models-btn');
+  const testBtn = $<HTMLButtonElement>('test-connection-btn');
+  btn.disabled = true; testBtn.disabled = true;
+  setModelStatus('正在拉模型列表 ...');
+  try {
+    const models = await fetchOpenAIModels(cfg.baseUrl, cfg.apiKey);
+    if (models.length === 0) { setModelStatus('⚠ 返回的列表为空,保留当前列表', 'warn'); return; }
+    const currentModel = cfg.model.trim();
+    const preferred = models.includes(currentModel) ? currentModel : '';
+    setModelOptions(models, '请选择 model', preferred);
+    setModelMode(false);
+    $<HTMLInputElement>('cfg-model-input').value = $<HTMLSelectElement>('cfg-model').value;
+    saveSettings(readSettingsFromUI());
+    flashSavedHint();
+    if (currentModel && !models.includes(currentModel)) {
+      setModelStatus(`✓ 已更新下拉列表(共 ${models.length} 个),"${currentModel}" 不在服务端 → 已自动选 "${models[0]}"`, 'warn');
+    } else {
+      setModelStatus(`✓ 已从服务端拉取 ${models.length} 个模型,已选 "${preferred || models[0]}"`, 'ok');
+    }
+  } catch (e) {
+    setModelStatus(`✗ 拉取失败: ${(e as Error).message || e}`, 'error');
+  } finally {
+    btn.disabled = false; testBtn.disabled = false;
+  }
+}
+
+// ============================================================================
+// Categories
+// ============================================================================
+function refreshCatsStatus(): void {
+  const checked = $$<HTMLInputElement>('input[name="cfg-categories"]:checked');
+  const el = document.getElementById('cats-status');
+  if (el) el.textContent = `已选 ${checked.length} 个类目`;
+}
+
+function setCatChecked(codes: string[]): void {
+  const set = new Set(codes);
+  $$<HTMLInputElement>('input[name="cfg-categories"]').forEach((box) => {
+    box.checked = set.has(box.value);
+  });
+  refreshCatsStatus();
+}
+
+function readCatsChecked(): string[] {
+  return $$<HTMLInputElement>('input[name="cfg-categories"]:checked').map((b) => b.value);
+}
+
+// ============================================================================
+// Topics
+// ============================================================================
+function refreshTopicsStatus(): void {
+  const entries = parseTopicsText($<HTMLTextAreaElement>('cfg-topics').value);
+  const el = document.getElementById('topics-status');
+  if (!el) return;
+  const isDefault = entries.length === parseTopicsText(DEFAULT_TOPICS_TEXT).length
+    && entries.every((e, i) => {
+      const d = parseTopicsText(DEFAULT_TOPICS_TEXT)[i];
+      return d && d.tag === e.tag && d.description === e.description;
+    });
+  el.textContent = `已加载 ${entries.length} 个主题${isDefault ? '(默认)' : ''}`;
+}
+
+// ============================================================================
+// Gist sync — 把 LLM + 主题 + 类目写到一个 secret Gist
+// ============================================================================
+async function syncToGist(): Promise<void> {
+  const hint = document.getElementById('gist-sync-hint');
+  const setHint = (msg: string, kind: 'info' | 'ok' | 'error' = 'info') => {
+    if (!hint) return;
+    hint.textContent = msg;
+    hint.className = `settings-gist-hint ${kind}`;
+  };
+
+  const token = getGistToken();
+  if (!token) { setHint('请先填 Gist Token', 'error'); return; }
+
+  const payload = {
+    llm: {
+      apiKey: $<HTMLInputElement>('cfg-key').value.trim(),
+      baseUrl: $<HTMLInputElement>('cfg-base').value.trim() || LLM_DEFAULTS.baseUrl,
+      model: readModelValue() || LLM_DEFAULTS.model,
+    },
+    provider: $<HTMLSelectElement>('cfg-provider').value,
+    topics: parseTopicsText($<HTMLTextAreaElement>('cfg-topics').value),
+    categories: readCatsChecked(),
+  };
+  const content = JSON.stringify(payload, null, 2);
+
+  let gistId = getGistId();
+  setHint('同步中 ...', 'info');
+  try {
+    if (!gistId) {
+      // Create
+      const res = await fetch('https://api.github.com/gists', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json' },
+        body: JSON.stringify({
+          description: 'Daily Paper Reader browser config',
+          public: false,
+          files: { [GIST_FILENAME]: { content } },
+        }),
+      });
+      if (!res.ok) throw new Error(`创建 Gist 失败: HTTP ${res.status}`);
+      const data = await res.json();
+      gistId = data.id;
+      setGistId(gistId);
+      $<HTMLInputElement>('cfg-gist-id').value = gistId;
+    } else {
+      // Update
+      const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+        method: 'PATCH',
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json' },
+        body: JSON.stringify({ files: { [GIST_FILENAME]: { content } } }),
+      });
+      if (!res.ok) throw new Error(`更新 Gist 失败: HTTP ${res.status}`);
+    }
+    setHint(`✓ 已同步到 Gist ${gistId}`, 'ok');
+  } catch (e) {
+    setHint(`✗ ${(e as Error).message || e}`, 'error');
+  }
+}
+
+// ============================================================================
+// Reset all
+// ============================================================================
+function resetAllSettings(): void {
+  if (!confirm('确定要清空所有本地配置?无法撤销。')) return;
+  const KEYS = [
+    'dpr_analyzer_v1',
+    'dpr_analyzer_provider_v1',
+    'dpr_analyzer_proxy_v1',
+    'dpr_analyzer_gist_token_v1',
+    'dpr_analyzer_gist_id_v1',
+    'dpr_analyzer_topics_v1',
+    'dpr_analyzer_categories_v1',
+    'dpr_analyzer_github_token_v1',
+    'dpr_analyzer_github_owner_v1',
+    'dpr_analyzer_github_repo_v1',
+    'dpr_analyzer_github_workflow_v1',
+  ];
+  for (const k of KEYS) try { localStorage.removeItem(k); } catch { /* ignore */ }
+  alert('已清空所有配置,刷新页面');
+  location.reload();
+}
+
+// ============================================================================
+// Init
+// ============================================================================
+const $$ = <T extends HTMLElement = HTMLElement>(sel: string, root?: Element): T[] =>
+  Array.from((root ?? document).querySelectorAll<T>(sel));
+
+function init(): void {
+  // --- 1. LLM ---
+  const cfg = loadSettings();
+  const provider = loadProvider();
+  $<HTMLSelectElement>('cfg-provider').value = provider;
+  applyProviderPreset(provider);
+  $<HTMLInputElement>('cfg-key').value = cfg.apiKey;
+  $<HTMLInputElement>('cfg-base').value = cfg.baseUrl;
+  // 把 cfg.model 同步到 select / input,保留 mode
+  const sel = $<HTMLSelectElement>('cfg-model');
+  if (Array.from(sel.options).some((o) => o.value === cfg.model)) {
+    sel.value = cfg.model;
+    $<HTMLInputElement>('cfg-model-input').value = cfg.model;
+  } else {
+    // 当前 model 不在 preset 列表 → 切到手动输入,值保留
+    $<HTMLInputElement>('cfg-model-input').value = cfg.model;
+    setModelMode(true);
+  }
+
+  $<HTMLSelectElement>('cfg-provider').addEventListener('change', () => {
+    const p = $<HTMLSelectElement>('cfg-provider').value;
+    saveProvider(p);
+    applyProviderPreset(p);
+    saveSettings(readSettingsFromUI());
+    flashSavedHint();
+  });
+  const debouncedSave = debounce(() => { saveSettings(readSettingsFromUI()); flashSavedHint(); }, 400);
+  ['cfg-key', 'cfg-base', 'cfg-model', 'cfg-model-input'].forEach((id) => {
+    $<HTMLInputElement>(id).addEventListener('input', debouncedSave);
+  });
+  $<HTMLSelectElement>('cfg-model').addEventListener('change', debouncedSave);
+  $<HTMLButtonElement>('cfg-model-edit-btn').addEventListener('click', () => setModelMode(!isModelManual()));
+  $<HTMLButtonElement>('test-connection-btn').addEventListener('click', testConnection);
+  $<HTMLButtonElement>('refresh-models-btn').addEventListener('click', refreshModelList);
+
+  // --- 2. 类目 ---
+  setCatChecked(loadCategories());
+  refreshCatsStatus();
+  $$<HTMLInputElement>('input[name="cfg-categories"]').forEach((box) => {
+    box.addEventListener('change', () => {
+      saveCategories(readCatsChecked());
+      refreshCatsStatus();
+      flashSavedHint();
+    });
+  });
+  $<HTMLButtonElement>('cats-select-default').addEventListener('click', () => { setCatChecked(DEFAULT_CATEGORY_CODES); saveCategories(readCatsChecked()); flashSavedHint(); });
+  $<HTMLButtonElement>('cats-select-all').addEventListener('click', () => { setCatChecked(ARXIV_CATEGORIES.map((c) => c.code)); saveCategories(readCatsChecked()); flashSavedHint(); });
+  $<HTMLButtonElement>('cats-select-none').addEventListener('click', () => { setCatChecked([]); saveCategories([]); flashSavedHint(); });
+
+  // --- 3. Gist ---
+  $<HTMLInputElement>('cfg-gist-token').value = getGistToken();
+  $<HTMLInputElement>('cfg-gist-id').value = getGistId();
+  const debouncedGistToken = debounce(() => { setGistToken($<HTMLInputElement>('cfg-gist-token').value.trim()); flashSavedHint(); }, 400);
+  $<HTMLInputElement>('cfg-gist-token').addEventListener('input', debouncedGistToken);
+  const debouncedGistId = debounce(() => { setGistId($<HTMLInputElement>('cfg-gist-id').value.trim()); flashSavedHint(); }, 400);
+  $<HTMLInputElement>('cfg-gist-id').addEventListener('input', debouncedGistId);
+  $<HTMLButtonElement>('gist-sync-btn').addEventListener('click', syncToGist);
+
+  // --- 4. 主题 ---
+  try { $<HTMLTextAreaElement>('cfg-topics').value = getTopicsText(); } catch { $<HTMLTextAreaElement>('cfg-topics').value = DEFAULT_TOPICS_TEXT; }
+  refreshTopicsStatus();
+  const debouncedTopicsSave = debounce(() => { setTopicsText($<HTMLTextAreaElement>('cfg-topics').value); refreshTopicsStatus(); flashSavedHint(); }, 400);
+  $<HTMLTextAreaElement>('cfg-topics').addEventListener('input', () => { refreshTopicsStatus(); debouncedTopicsSave(); });
+  $<HTMLButtonElement>('topics-reset-btn').addEventListener('click', () => {
+    setTopicsText(DEFAULT_TOPICS_TEXT);
+    $<HTMLTextAreaElement>('cfg-topics').value = DEFAULT_TOPICS_TEXT;
+    refreshTopicsStatus();
+    flashSavedHint();
+  });
+
+  // --- 5. CORS 代理 ---
+  $<HTMLInputElement>('cfg-cors').value = getCustomProxy();
+  const debouncedCors = debounce(() => { setCustomProxy($<HTMLInputElement>('cfg-cors').value.trim()); flashSavedHint(); }, 400);
+  $<HTMLInputElement>('cfg-cors').addEventListener('input', debouncedCors);
+
+  // --- 6. GitHub 仓库配置(owner/repo/workflow) — 上面那个 PAT 同时给 Gist 同步和
+  //     论文保存用,所以这里不重复填 token,只确认仓库配置。
+  const ghRepo = loadGitHubRepo();
+  $<HTMLInputElement>('cfg-github-owner').value = ghRepo.owner;
+  $<HTMLInputElement>('cfg-github-repo').value = ghRepo.repo;
+  $<HTMLInputElement>('cfg-github-workflow').value = ghRepo.workflow;
+  const saveGhRepo = debounce(() => {
+    setGitHubRepo({
+      owner: $<HTMLInputElement>('cfg-github-owner').value.trim(),
+      repo: $<HTMLInputElement>('cfg-github-repo').value.trim(),
+      workflow: $<HTMLInputElement>('cfg-github-workflow').value.trim(),
+    });
+    flashSavedHint();
+  }, 400);
+  ['cfg-github-owner', 'cfg-github-repo', 'cfg-github-workflow'].forEach((id) => {
+    $<HTMLInputElement>(id).addEventListener('input', saveGhRepo);
+  });
+
+  // --- 6. Reset ---
+  $<HTMLButtonElement>('settings-reset-all-btn').addEventListener('click', resetAllSettings);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', init);
+} else {
+  init();
+}

@@ -1,0 +1,128 @@
+/* 内容页(tutorial / zotero-usage / 404 / paper)通用样式 */
+
+.page {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 5rem;
+}
+.page h1 {
+  font-size: clamp(1.8rem, 3vw, 2.4rem);
+  letter-spacing: -0.015em;
+  margin: 0 0 0.5rem;
+  font-weight: 800;
+}
+.page h2 {
+  font-size: 1.35rem;
+  margin: 2.4rem 0 0.8rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+.page h3 {
+  font-size: 1.12rem;
+  margin: 1.6rem 0 0.5rem;
+}
+.page .lead {
+  font-size: 1.08rem;
+  color: var(--fg-muted);
+  line-height: 1.65;
+  margin: 0 0 2.2rem;
+}
+.page p {
+  line-height: 1.7;
+  color: var(--fg);
+  margin: 0 0 1em;
+}
+.page ul, .page ol {
+  padding-left: 1.4rem;
+  margin: 0 0 1.2rem;
+}
+.page li {
+  margin: 0.45em 0;
+  line-height: 1.65;
+}
+.page code {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  font-size: 0.88em;
+}
+.page pre {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  margin: 1.2rem 0;
+}
+.page kbd {
+  display: inline-block;
+  padding: 0.15em 0.5em;
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--fg);
+  box-shadow: 0 1px 0 var(--border);
+}
+.page a {
+  color: var(--link);
+  text-decoration: none;
+  border-bottom: 1px dashed color-mix(in srgb, var(--link) 50%, transparent);
+  transition: all var(--transition);
+}
+.page a:hover {
+  color: var(--link-hover);
+  border-bottom-color: var(--link-hover);
+}
+.page hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
+}
+
+/* 404 专用 */
+.page-404 {
+  text-align: center;
+  padding: 5rem 1.5rem 6rem;
+}
+.page-404 .code {
+  font-family: var(--font-mono);
+  font-size: clamp(4rem, 12vw, 7rem);
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-hover) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  margin: 0 0 0.5rem;
+}
+.page-404 p {
+  color: var(--fg-muted);
+  margin-bottom: 0.5rem;
+}
+.page-404 .back {
+  display: inline-block;
+  margin-top: 1.5rem;
+  padding: 0.55rem 1.1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 600;
+}
+.page-404 .back:hover {
+  background: var(--bg-muted);
+  text-decoration: none;
+  border-color: var(--border-strong);
+}
+
+@media (max-width: 560px) {
+  .page { padding: 2rem 1rem 4rem; }
+  .page h2 { margin-top: 1.8rem; }
+}

@@ -1,0 +1,126 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/page.css';
+import '../styles/topic-search.css';
+---
+
+<BaseLayout
+  title="主题探索 · Daily Paper Reader"
+  description="输入一段研究思路,AI 自动拆解子方向、从 arXiv 搜索候选论文、批量生成中文速览笔记,并支持多轮追问。"
+>
+  <Navbar />
+
+  <main class="topic">
+    <header class="topic-intro">
+      <strong>主题探索</strong> · 输入一段研究思路,模型会拆解成 3-5 个可检索的子方向,
+      去 arXiv 找候选论文,再批量生成中文速览笔记(动机/方法/结果/结论 + TLDR)。
+      你可以勾选/编辑/删减子方向,对每篇论文可"重新生成"或"多轮追问"。
+      会话存在浏览器 <code>localStorage</code>,刷新可继续,API key 不上传。
+      <a class="topic-intro-link" href={import.meta.env.BASE_URL + 'settings/'}>(设置 LLM / 类目 / 代理 →)</a>
+    </header>
+
+    <!-- 顶部会话状态栏 -->
+    <section class="topic-sessionbar" id="session-bar" aria-live="polite">
+      <div class="topic-sessionbar-summary">
+        <div class="topic-sessionbar-title">💡 主题探索</div>
+        <div class="topic-sessionbar-meta" id="session-meta">尚未开始 — 在下方输入一段研究思路</div>
+      </div>
+      <div class="topic-sessionbar-actions">
+        <button type="button" class="topic-btn ghost" id="copy-all-btn" title="把当前会话的所有论文笔记复制为 Markdown" disabled>📋 复制全部</button>
+        <button type="button" class="topic-btn danger" id="new-session-btn" title="清空当前会话,开始新会话">🗑 新建会话</button>
+      </div>
+    </section>
+
+    <!-- 无 LLM key 时的红色横幅(由 topic-search.ts 动态插入/移除) -->
+    <div id="banner-slot"></div>
+
+    <!-- 阶段 1:思路输入 -->
+    <details class="topic-stage" id="stage-input" open>
+      <summary class="topic-stage-header">
+        <span class="topic-stage-title">
+          <span class="topic-stage-title-num">1</span>
+          输入研究思路
+        </span>
+        <span class="topic-stage-toggle">▾</span>
+      </summary>
+      <div class="topic-stage-body">
+        <textarea
+          id="topic-input"
+          class="topic-textarea"
+          placeholder="例:多智能体协作中如何通过共享记忆提升长任务执行能力&#10;&#10;可以写一段中文或英文描述,模型会拆解成 3-5 个可独立检索的子方向。"
+        ></textarea>
+        <div class="topic-stage-foot">
+          <span class="topic-stage-foot-hint" id="input-hint">提示:思路越具体,拆解出的子方向越精准。</span>
+          <button type="button" class="topic-btn primary" id="decompose-btn" disabled>🔍 拆解思路</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- 阶段 2:子方向编辑 -->
+    <details class="topic-stage" id="stage-subqs">
+      <summary class="topic-stage-header">
+        <span class="topic-stage-title">
+          <span class="topic-stage-title-num">2</span>
+          编辑子方向
+          <span class="topic-stage-title-meta" id="subq-meta">尚未拆解</span>
+        </span>
+        <span class="topic-stage-toggle">▾</span>
+      </summary>
+      <div class="topic-stage-body">
+        <div id="subq-list" class="topic-subq-list"></div>
+        <div class="topic-subq-add">
+          <button type="button" class="topic-btn ghost" id="subq-add-btn">+ 添加子方向</button>
+        </div>
+        <div class="topic-stage-foot">
+          <span class="topic-stage-foot-hint" id="subq-hint">勾选要检索的子方向,然后去 arXiv 找论文。</span>
+          <button type="button" class="topic-btn primary" id="search-btn" disabled>📚 搜索论文</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- 阶段 3:候选论文 -->
+    <details class="topic-stage" id="stage-candidates">
+      <summary class="topic-stage-header">
+        <span class="topic-stage-title">
+          <span class="topic-stage-title-num">3</span>
+          候选论文
+          <span class="topic-stage-title-meta" id="cand-meta">尚未搜索</span>
+        </span>
+        <span class="topic-stage-toggle">▾</span>
+      </summary>
+      <div class="topic-stage-body">
+        <div id="cand-list"></div>
+        <div class="topic-stage-foot">
+          <span class="topic-stage-foot-hint" id="cand-hint">勾选要去总结的论文(默认全选)。</span>
+          <button type="button" class="topic-btn primary" id="summarize-btn" disabled>🚀 总结选中论文</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- 阶段 4:已总结 + 追问 -->
+    <details class="topic-stage" id="stage-summaries">
+      <summary class="topic-stage-header">
+        <span class="topic-stage-title">
+          <span class="topic-stage-title-num">4</span>
+          速览笔记 & 追问
+          <span class="topic-stage-title-meta" id="summ-meta">尚未总结</span>
+        </span>
+        <span class="topic-stage-toggle">▾</span>
+      </summary>
+      <div class="topic-stage-body">
+        <div id="summary-list" class="topic-summary-list"></div>
+      </div>
+    </details>
+
+    <!-- 全局状态条 -->
+    <div id="status-bar" class="topic-status topic-hidden" role="status" aria-live="polite"></div>
+  </main>
+
+  <Footer />
+
+  <script>
+    import '../scripts/topic-search.ts';
+  </script>
+</BaseLayout>

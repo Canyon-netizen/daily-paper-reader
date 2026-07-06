@@ -1,0 +1,52 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/page.css';
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+
+// 从 URL 路径自动提取 arXiv ID,提供一个直达 arxiv.org 的跳转按钮
+// 论文 ID 形如 2606.27180v1 (YYMM.NNNNN)
+function extractArxivId(pathname: string): string | null {
+  const m = pathname.match(/(\d{4}\.\d{4,5}(?:v\d+)?)/);
+  return m ? m[1] : null;
+}
+const arxivId = extractArxivId(Astro.url.pathname);
+const arxivUrl = arxivId ? `https://arxiv.org/abs/${arxivId}` : null;
+---
+
+<BaseLayout title="404 · 页面不存在">
+  <Navbar />
+  <main class="page page-404">
+    <div class="code">404</div>
+    <h1>页面走丢了</h1>
+    <p>这篇论文可能还没被每日 pipeline 抓取,或地址已经失效(站点 build 缓存)。</p>
+    {arxivUrl && (
+      <p class="arxiv-fallback">
+        <a href={arxivUrl} target="_blank" rel="noopener" class="arxiv-btn">
+          → 在 arxiv.org 上查看 {arxivId}
+        </a>
+      </p>
+    )}
+    {!arxivUrl && (
+      <p>可以用 arXiv ID 去 <a href="https://arxiv.org" target="_blank" rel="noopener">arxiv.org</a> 搜原文。</p>
+    )}
+    <a href={base + '/'} class="back">← 返回首页</a>
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .arxiv-fallback { margin: 1.2rem 0; }
+  .arxiv-btn {
+    display: inline-block;
+    background: var(--accent, #b31b1b);
+    color: #fff;
+    padding: 0.6rem 1.2rem;
+    border-radius: var(--radius-sm, 4px);
+    text-decoration: none;
+    font-weight: 600;
+    transition: opacity 150ms ease;
+  }
+  .arxiv-btn:hover { opacity: 0.85; }
+</style>

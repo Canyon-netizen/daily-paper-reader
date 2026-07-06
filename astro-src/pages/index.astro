@@ -1,0 +1,317 @@
+---
+// 首页
+// 1) 顶部 hero:品牌口号 + 两枚 CTA
+// 2) 数据 stat row:总论文、主题数、来源数、最新更新
+// 3) 今日推荐:评分 Top 6 论文卡片
+// 4) 按主题分类:折叠式 tag 列表
+// 5) How it works:3 步工作流介绍
+// 数据为空时仍能展示 hero/stats/empty-state,避免 Vercel 首次部署"全空"观感
+import { listPapers, listAllPapersByTag, listAllPaperIds } from '../lib/paper';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/home.css';
+
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+
+const allIds = await listAllPaperIds();
+const topPapers = await listPapers({ sortBy: 'score', limit: 6 });
+const byTag = await listAllPapersByTag();
+
+// 主题显示顺序(若仓库有按 query: 前缀分类的 tag,这里做去前缀)
+const tagOrder = ['rl', 'mas', 'self-distillation', 'intervention', 'game-ai', '其他'];
+const sortedTagEntries = tagOrder
+  .filter((t) => byTag.has(t))
+  .map((t) => [t, byTag.get(t)!] as const);
+
+const tagLabels: Record<string, string> = {
+  rl: '强化学习',
+  mas: '多智能体系统',
+  'self-distillation': '自蒸馏',
+  intervention: '激活干预',
+  'game-ai': '游戏 AI',
+  其他: '其他',
+};
+
+// 统计
+const totalPapers = allIds.length;
+const totalTopics = byTag.size;
+const sources = ['arXiv', 'bioRxiv', 'medRxiv', 'ChemRxiv', 'OpenReview']; // pipeline 支持的来源
+const latestPaper = topPapers[0];
+const latestDate = latestPaper?.date || (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date;
+const latestDateLabel = latestDate
+  ? new Date(latestDate).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+  : '等待首次抓取';
+---
+
+<BaseLayout
+  title="Daily Paper Reader · 每日 arXiv 论文阅读"
+  description="每日自动抓取 arXiv 等多源 AI 论文,按兴趣 query tag 分类,提供 LLM 中文摘要、TLDR 与 Zotero 一键保存。"
+>
+  <Navbar />
+
+  <main class="home">
+    <!-- ============ Hero ============ -->
+    <section class="hero">
+      <div class="hero-bg" aria-hidden="true"></div>
+      <div class="hero-inner">
+        <div class="hero-eyebrow">
+          <span class="hero-dot"></span>
+          每日自动更新 · arXiv / bioRxiv / OpenReview
+        </div>
+        <h1 class="hero-title">
+          让 <span class="hero-accent">AI 论文阅读</span><br />
+          变得<span class="hero-underline">更轻、更准、更有节奏</span>
+        </h1>
+        <p class="hero-subtitle">
+          抓取、摘要、分类、收藏一站完成。<br class="hero-br-mobile" />
+          按你关心的 query tag 自动筛选,每天 5 分钟看完重点。
+        </p>
+        <div class="hero-cta">
+          <a href={base + '/tutorial/'} class="cta-primary">📖 使用教程</a>
+          <a href={base + '/zotero-usage/'} class="cta-secondary">🔖 Zotero 集成</a>
+          <a
+            href="https://github.com/Canyon-netizen/daily-paper-reader"
+            target="_blank"
+            rel="noopener"
+            class="cta-ghost"
+          >⭐ Star on GitHub</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ Stats ============ -->
+    <section class="stats-wrap">
+      <div class="stats">
+        <a class="stat stat-link" href="#top-picks">
+          <div class="stat-value">{totalPapers.toLocaleString()}</div>
+          <div class="stat-label">收录论文</div>
+        </a>
+        <a class="stat stat-link" href="#by-topic">
+          <div class="stat-value">{totalTopics}</div>
+          <div class="stat-label">主题分类</div>
+        </a>
+        <div class="stat">
+          <div class="stat-value">{sources.length}</div>
+          <div class="stat-label">数据来源</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value stat-value-sm">{latestDateLabel}</div>
+          <div class="stat-label">最近更新</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 今日推荐 ============ -->
+    <section id="top-picks" class="section">
+      <div class="section-header">
+        <div>
+          <h2>🔥 今日推荐</h2>
+          <p class="section-sub">按 LLM 评分排序的 Top {topPapers.length || 0} 篇</p>
+        </div>
+        {topPapers.length > 0 && (
+          <span class="section-tag">评分优先</span>
+        )}
+      </div>
+
+      {topPapers.length > 0 ? (
+        <ul class="paper-grid">
+          {topPapers.map((p, i) => {
+            // 论文 ID 可能是 2 段 (period 模式: YYYYMMDD-YYYYMMDD/<arxivId>-<slug>)
+            // 或 3 段 (ym-day 模式: YYYYMM/DD/<arxivId>-<slug>)。检查 id 分隔符
+            // 数动态选 URL 模板,否则 2 段论文会拼成 4 段变成 /.../2606.27180v1.../2606.27180v1.../
+            const segments = p.id.split('/');
+            const href = segments.length === 3
+              ? `${base}/${p.yearMonth}/${p.day}/${p.slug}/`       // ym-day 模式
+              : `${base}/${p.id}/`;                                // period 模式:id 本身就是路径
+            return (
+              <li class="paper-card" data-rank={i + 1}>
+                <a href={href} class="paper-card-link">
+                  <div class="paper-card-head">
+                    <span class="paper-rank">#{i + 1}</span>
+                    {p.score !== undefined && (
+                      <span class="paper-score" title="LLM 评分">
+                        ★ {p.score.toFixed(1)}
+                      </span>
+                    )}
+                  </div>
+                  <h3 class="paper-title">{p.title_zh || p.title}</h3>
+                  {p.title_zh && p.title && p.title !== p.title_zh && (
+                    <p class="paper-title-en">{p.title}</p>
+                  )}
+                  {p.evidence && (
+                    <p class="paper-evidence">
+                      <span class="evidence-label">EVIDENCE</span>
+                      {p.evidence}
+                    </p>
+                  )}
+                  <div class="paper-card-foot">
+                    {p.tags && p.tags.length > 0 && (
+                      <div class="paper-tags">
+                        {p.tags.slice(0, 2).map((t) => (
+                          <span class="tag">{t.replace(/^query:/, '')}</span>
+                        ))}
+                      </div>
+                    )}
+                    <span class="paper-cta">阅读 →</span>
+                  </div>
+                </a>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <div class="empty-card">
+          <div class="empty-icon">📭</div>
+          <h3>今日还没有论文入库</h3>
+          <p>
+            数据通过 GitHub Actions 每日 UTC 00:00 抓取,首次部署完成后约 1 小时内会有内容。
+            也可以在 GitHub 仓库上手动触发 <code>daily-paper-reader</code> workflow。
+          </p>
+          <div class="empty-actions">
+            <a
+              href="https://github.com/Canyon-netizen/daily-paper-reader/actions"
+              target="_blank" rel="noopener"
+              class="cta-primary"
+            >查看 Actions</a>
+            <a
+              href="https://github.com/Canyon-netizen/daily-paper-reader/blob/main/README.md"
+              target="_blank" rel="noopener"
+              class="cta-ghost"
+            >了解数据流</a>
+          </div>
+        </div>
+      )}
+    </section>
+
+    <!-- ============ 按主题分类 ============ -->
+    {sortedTagEntries.length > 0 && (
+      <section id="by-topic" class="section">
+        <div class="section-header">
+          <div>
+            <h2>🗂️ 按主题分类</h2>
+            <p class="section-sub">按 query tag 折叠浏览,每个主题下按评分倒序</p>
+          </div>
+        </div>
+        <div class="tag-sections">
+          {sortedTagEntries.map(([tag, items]) => {
+            const label = tagLabels[tag] || tag;
+            return (
+              <details class="tag-section" open={tag === 'rl'}>
+                <summary class="tag-section-summary">
+                  <span class="tag-name">{label}</span>
+                  <span class="tag-count">{items.length} 篇</span>
+                </summary>
+                <ul class="tag-papers">
+                  {items.slice(0, 10).map((p) => {
+                    const segments = p.id.split('/');
+                    const href = segments.length === 3
+                      ? `${base}/${p.yearMonth}/${p.day}/${p.slug}/`
+                      : `${base}/${p.id}/`;
+                    return (
+                      <li>
+                        <a href={href} class="tag-paper-link">
+                          <span class="tag-paper-score">
+                            {p.score?.toFixed(1) || '—'}
+                          </span>
+                          <span class="tag-paper-title">
+                            {p.title_zh || p.title}
+                          </span>
+                          <span class="tag-paper-arrow">→</span>
+                        </a>
+                      </li>
+                    );
+                  })}
+                  {items.length > 10 && (
+                    <>
+                      {items.slice(10).map((p) => {
+                        const segments = p.id.split('/');
+                        const href = segments.length === 3
+                          ? `${base}/${p.yearMonth}/${p.day}/${p.slug}/`
+                          : `${base}/${p.id}/`;
+                        return (
+                          <li class="tag-paper-rest" data-tag-rest hidden>
+                            <a href={href} class="tag-paper-link">
+                              <span class="tag-paper-score">
+                                {p.score?.toFixed(1) || '—'}
+                              </span>
+                              <span class="tag-paper-title">
+                                {p.title_zh || p.title}
+                              </span>
+                              <span class="tag-paper-arrow">→</span>
+                            </a>
+                          </li>
+                        );
+                      })}
+                      <li class="tag-paper-more">
+                        <button type="button" class="tag-paper-toggle" data-tag-toggle>
+                          展开剩余 {items.length - 10} 篇 ↓
+                        </button>
+                      </li>
+                    </>
+                  )}
+                </ul>
+              </details>
+            );
+          })}
+        </div>
+      </section>
+    )}
+
+    <!-- ============ How it works ============ -->
+    <section class="section">
+      <div class="section-header">
+        <div>
+          <h2>⚙️ 工作流</h2>
+          <p class="section-sub">一条 pipeline 把 arXiv 抓取到你眼前</p>
+        </div>
+      </div>
+      <ol class="how">
+        <li class="how-step">
+          <div class="how-num">01</div>
+          <h3>多源抓取</h3>
+          <p>
+            GitHub Actions 每日定时从 arXiv / bioRxiv / medRxiv / ChemRxiv / OpenReview
+            抓取最近 7 天新论文。
+          </p>
+        </li>
+        <li class="how-step">
+          <div class="how-num">02</div>
+          <h3>Embedding + 评分</h3>
+          <p>
+            通过 embedding + query tag 召回候选,LLM 二次评分,Top 论文带 LLM 中文摘要与 TLDR。
+          </p>
+        </li>
+        <li class="how-step">
+          <div class="how-num">03</div>
+          <h3>静态站呈现</h3>
+          <p>
+            论文元数据写入 <code>docs/</code>,本 Astro 站每次 push 自动重新构建并部署到 Vercel。
+          </p>
+        </li>
+      </ol>
+    </section>
+  </main>
+
+  <Footer />
+
+  <script>
+    import '../scripts/theme.ts';
+
+    // 按主题分类里"展开剩余 N 篇"按钮 — 静态渲染了所有文章,只是默认折叠。
+    for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-tag-toggle]')) {
+      btn.addEventListener('click', () => {
+        const buttonLi = btn.closest('.tag-paper-more');
+        const ul = buttonLi?.parentElement;
+        if (!ul) return;
+        const restItems = ul.querySelectorAll<HTMLElement>('[data-tag-rest]');
+        if (restItems.length === 0) return;
+        const collapsing = !restItems[0].hidden; // 第一项当前为 false 意味着本次要收起
+        restItems.forEach((el) => { el.hidden = collapsing; });
+        btn.textContent = collapsing
+          ? `展开剩余 ${restItems.length} 篇 ↓`
+          : `收起剩余 ${restItems.length} 篇 ↑`;
+      });
+    }
+  </script>
+</BaseLayout>

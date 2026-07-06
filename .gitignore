@@ -1,0 +1,59 @@
+# Python 缓存与构建产物
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 虚拟环境
+venv/
+.venv/
+
+# 本地数据库文件
+chat.db
+chat.db-shm
+chat.db-wal
+
+# 日志与本地运行产物
+app.log
+*.log
+.local-runs/
+
+# 本地环境配置与密钥
+.env
+secret.private
+
+# 临时/测试文件
+test.pdf
+tmp-*.pdf
+
+# Tencent Cloud EdgeOne
+.edgeone/*
+!.edgeone/project.json
+.tef_dist/*
+deploy_edgeone.sh
+
+# Astro / Node 构建产物
+node_modules/
+.astro/
+dist/
+
+# 同步自 docs/assets/ 的图片副本(由 copy-docs-assets.mjs 在 build 前生成)
+# 不入库:docs/assets/ 才是源,这里只是给 Astro 构建用
+public/assets/
+
+# prebuild 自动生成的索引文件(build-arxiv-index.mjs 跑出来的)
+public/arxiv-index.json
+
+# Bun 锁文件格式
+# 当前用文本 bun.lock (1.2+);如未来切回二进制格式,启用此行
+bun.lockb
+
+# 用户私有配置覆盖(由 PR #7 引入,见 README "fork 配置工作流")
+config.user.yaml
+
+# 项目自带临时调试目录,放一次性测试脚本/手工脚本
+# 整目录忽略,不再用后缀逐文件匹配
+.scratch/
+
+# macOS 自动元文件
+.DS_Store
+*.DS_Store

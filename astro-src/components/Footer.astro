@@ -1,0 +1,145 @@
+---
+// 页脚
+const year = new Date().getFullYear();
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+---
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div class="footer-col footer-brand">
+      <div class="footer-logo">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="22" height="22">
+            <rect x="3" y="3" width="26" height="26" rx="6" fill="var(--accent)" />
+            <path d="M9 10h10M9 15h14M9 20h12" stroke="white" stroke-width="2.2" stroke-linecap="round" />
+            <circle cx="22" cy="20" r="1.5" fill="white" />
+          </svg>
+        </span>
+        <strong>Daily Paper Reader</strong>
+      </div>
+      <p class="footer-tagline">
+        每日自动抓取 arXiv 论文,按兴趣 query tag 分类,提供 LLM 中文摘要与 TLDR。
+      </p>
+    </div>
+
+    <div class="footer-col">
+      <h4>导航</h4>
+      <ul>
+        <li><a href={base + '/'}>首页</a></li>
+        <li><a href={base + '/tutorial/'}>使用教程</a></li>
+        <li><a href={base + '/zotero-usage/'}>Zotero 集成</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h4>项目</h4>
+      <ul>
+        <li>
+          <a href="https://github.com/Canyon-netizen/daily-paper-reader" target="_blank" rel="noopener">
+            GitHub 仓库 ↗
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/Canyon-netizen/daily-paper-reader/issues" target="_blank" rel="noopener">
+            提交 Issue ↗
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/Canyon-netizen/daily-paper-reader/blob/main/LICENSE" target="_blank" rel="noopener">
+            License (MIT) ↗
+          </a>
+        </li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h4>数据源</h4>
+      <ul>
+        <li><a href="https://arxiv.org" target="_blank" rel="noopener">arXiv.org ↗</a></li>
+        <li><a href="https://www.zotero.org" target="_blank" rel="noopener">Zotero ↗</a></li>
+        <li><a href="https://supabase.com" target="_blank" rel="noopener">Supabase ↗</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="footer-bottom">
+    <span>© {year} Daily Paper Reader · MIT License</span>
+    <span class="footer-meta">Built with Astro · 自动部署在 Vercel</span>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    margin-top: 5rem;
+    border-top: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+  }
+  .footer-inner {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem 2rem;
+    display: grid;
+    grid-template-columns: 1.4fr repeat(3, 1fr);
+    gap: 2rem;
+  }
+  .footer-col h4 {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+    margin: 0 0 0.9rem;
+  }
+  .footer-col ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .footer-col a {
+    color: var(--fg-muted);
+    text-decoration: none;
+    transition: color var(--transition);
+  }
+  .footer-col a:hover { color: var(--accent); }
+
+  .footer-brand .footer-logo {
+    display: flex; align-items: center; gap: 0.55rem;
+    margin-bottom: 0.6rem;
+    color: var(--fg);
+    font-size: 1.02rem;
+  }
+  .footer-tagline {
+    color: var(--fg-muted);
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  .footer-bottom {
+    border-top: 1px solid var(--border);
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 1.2rem 1.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    justify-content: space-between;
+    font-size: 0.82rem;
+    color: var(--fg-subtle);
+  }
+  .footer-meta { font-family: var(--font-mono); }
+
+  @media (max-width: 820px) {
+    .footer-inner { grid-template-columns: 1fr 1fr; }
+    .footer-brand { grid-column: span 2; }
+  }
+  @media (max-width: 480px) {
+    .footer-inner { grid-template-columns: 1fr; padding: 2rem 1rem 1.5rem; }
+    .footer-brand { grid-column: span 1; }
+    .footer-bottom { padding: 1rem; flex-direction: column; gap: 0.4rem; }
+  }
+</style>

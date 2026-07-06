@@ -1,0 +1,62 @@
+---
+// 全站基础 layout
+// 集中处理 head / meta / theme 防 FOUC,具体页面通过 slot 注入 body
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+  bodyClass?: string;
+}
+
+const {
+  title,
+  description = 'Daily Paper Reader — 每日自动抓取 arXiv 等多源 AI 论文,按兴趣 query tag 分类,提供 LLM 中文摘要、TLDR 与 Zotero 一键保存。',
+  bodyClass = '',
+} = Astro.props;
+const siteBase = import.meta.env.BASE_URL;
+const fullTitle = title.includes('Daily Paper Reader') ? title : `${title} · Daily Paper Reader`;
+---
+
+<!DOCTYPE html>
+<html lang="zh-cn" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#b31b1b" />
+    <meta name="color-scheme" content="light dark" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:site_name" content="Daily Paper Reader" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+
+    <link rel="icon" type="image/x-icon" href={`${siteBase}favicon.ico`} sizes="any" />
+    <link rel="icon" type="image/png" href={`${siteBase}icon.png`} />
+    <slot name="head" />
+  </head>
+  <body class={bodyClass}>
+    <slot />
+    <script>
+      // 主题初始化(防 FOUC):在内容渲染前从 localStorage 读主题
+      (function() {
+        try {
+          const stored = localStorage.getItem('dpr_theme_v1');
+          if (stored) {
+            document.documentElement.setAttribute('data-theme', stored);
+          } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+          }
+        } catch (e) { /* ignore */ }
+      })();
+    </script>
+  </body>
+</html>

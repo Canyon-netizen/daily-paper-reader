@@ -1,0 +1,84 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/page.css';
+import '../styles/paper-analyzer.css';
+---
+
+<BaseLayout
+  title="论文分析 · Daily Paper Reader"
+  description="上传 PDF 或输入 arXiv 论文名,自动生成中文摘要、TLDR 和动机/方法/结果/结论四段笔记。"
+>
+  <Navbar />
+
+  <main class="analyzer">
+    <header class="analyzer-intro">
+      <strong>论文分析</strong> · 上传 PDF 或输入 arXiv 论文名 / ID,自动提取正文并调用 LLM
+      生成 <code>中文摘要 + TLDR + 动机/方法/结果/结论</code> 四段笔记。API key 仅存在你的浏览器 localStorage,不上传。
+      <a class="analyzer-intro-link" href={import.meta.env.BASE_URL + 'settings/'}>(设置 LLM / Gist / 类目 / 代理 →)</a>
+    </header>
+
+    <!-- ===== 模式 Tab ===== -->
+    <div class="analyzer-tabs" role="tablist">
+      <button class="analyzer-tab active" data-mode="upload" role="tab" aria-selected="true">
+        📄 上传 PDF
+      </button>
+      <button class="analyzer-tab" data-mode="arxiv" role="tab" aria-selected="false">
+        🔍 arXiv 搜索
+      </button>
+    </div>
+
+    <!-- ===== 模式 1: PDF 上传 ===== -->
+    <section class="analyzer-mode" data-mode-panel="upload">
+      <div class="analyzer-drop" id="drop-zone" tabindex="0" role="button" aria-label="选择或拖拽 PDF 文件">
+        <div class="analyzer-drop-icon">📄</div>
+        <div class="analyzer-drop-title">拖拽 PDF 到这里,或点选文件</div>
+        <div class="analyzer-drop-sub">支持单文件 ≤ 30 MB · 仅本地处理,不上传</div>
+        <button type="button" class="analyzer-drop-btn" id="drop-btn">选择 PDF 文件</button>
+      </div>
+      <input id="pdf-input" type="file" accept="application/pdf,.pdf" class="analyzer-file-input-hidden" />
+      <div class="analyzer-filebar" id="file-bar" hidden>
+        <span class="analyzer-filebar-icon">📄</span>
+        <div class="analyzer-filebar-info">
+          <div class="analyzer-filebar-name" id="file-name">—</div>
+          <div class="analyzer-filebar-meta" id="file-meta">—</div>
+        </div>
+        <button class="analyzer-filebar-clear" id="file-clear" type="button">清除</button>
+      </div>
+    </section>
+
+    <!-- ===== 模式 2: arXiv 搜索 ===== -->
+    <section class="analyzer-mode" data-mode-panel="arxiv" hidden>
+      <div class="analyzer-search">
+        <input
+          id="arxiv-input"
+          type="text"
+          placeholder="论文标题 / 作者 / arXiv ID (例: 1706.03762 或 attention is all you need)"
+        />
+        <button id="arxiv-search-btn" type="button">搜索 arXiv</button>
+      </div>
+      <div class="analyzer-arxiv-results" id="arxiv-results" hidden></div>
+    </section>
+
+    <!-- ===== 操作按钮 ===== -->
+    <div class="analyzer-action">
+      <button class="primary" id="run-btn" type="button" disabled>
+        🚀 开始分析
+      </button>
+      <button class="secondary" id="reset-btn" type="button">重置</button>
+    </div>
+
+    <!-- ===== 状态 / 错误 ===== -->
+    <div class="analyzer-status" id="status" hidden></div>
+
+    <!-- ===== 结果展示 ===== -->
+    <div class="analyzer-results" id="results" hidden></div>
+  </main>
+
+  <Footer />
+
+  <script>
+    import '../scripts/paper-analyzer.ts';
+  </script>
+</BaseLayout>

@@ -1,0 +1,85 @@
+# config.user.yaml.example — fork 用户的私有配置覆写模板
+#
+# 当且仅当你想覆盖仓库内 [`config.yaml`](../config.yaml) 默认配置时，
+# 把这份文件复制为 `config.user.yaml`，并填入你要的覆写字段。
+#
+# ✅ 截至 2026-07-06（PR #7 code-layer follow-up），`src/source_config.py:load_config_with_source_migration()` 已经在 source 迁移之前自动 deep-merge 本文件，
+# 字段合并规则见 `src/source_config.py:_deep_merge()` 注释。
+# 不至于在 fork 后乱改 commit `config.yaml`。代码层落地后会自动从这里读。
+#
+# 使用规则：
+# 1. `cp config.user.yaml.example config.user.yaml`（文件名 .example 去掉）
+# 2. 编辑你要覆写的字段
+# 3. `config.user.yaml` 已被 [.gitignore](../.gitignore) ignore 第 47 行整目录，
+#    不会被 commit ——但**还是建议先确认 `git status` 干净，再开 PR**，
+#    避免 fork 后同步上游被 reject。
+#
+# 覆写优先级：`config.user.yaml` > `config.yaml` > 默认值
+# 历史 shadow 文件：`secret.private` 仍走老路径（密码类不进 user.yaml）。
+#
+# ——以下列出目前建议 fork 用户覆写的字段——
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 1. GitHub 仓库元数据（fork 后必须改）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 仓库内默认 `github.owner: ''` 是占位，必须改成你的 fork owner 才能让
+# `save-paper.yml` workflow 写到正确的 fork repo。
+#
+# github:
+#   owner: '<your-github-username>'
+#   repo: 'daily-paper-reader'   # 默认
+#   token_secret_name: DPR_GIST_ID   # GH Actions Secret 名（fork 用户请覆盖）
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 2. intent_profiles（订阅主题）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 这是日常最常覆写的字段。daily workflow 跑时会读这个字段；若用户
+# 未在 `config.user.yaml` 覆写，pipeline 仍会按 [config.yaml](../config.yaml)
+# 默认值跑。把日常真正关心的 tag 写进 `config.user.yaml` 即可避免
+# 仓库内 `config.yaml` 被频繁 commit 修改。
+#
+# subscriptions:
+#   intent_profiles:
+#   - tag: RL
+#     description: 强化学习相关论文
+#     enabled: true
+#     paper_sources: [arxiv]
+#     keywords: [...]
+#     intent_queries: [...]
+#   # 完整字段约定见仓库内 config.yaml 第 23 行起
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 3. arxiv_paper_setting.days_window（影响 docs/ 目录命名）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 默认 9（小窗口 → 单日 YYYYMMDD 目录）。
+# 改 10+ 之后 daily pipeline 会用区间标签 YYYYMMDD-YYYYMMDD 目录。
+# 详见 [docs/path-spec.md](../docs/path-spec.md)。
+#
+# arxiv_paper_setting:
+#   mode: standard       # standard | skims
+#   days_window: 9
+#   docs_dir: docs       # 默认
+#   prefer_supabase_read: true   # 走 Supabase 召回（推荐）
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 4. Supabase 私有实例（可选；fork 出论文系统时有用）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 仓库默认用 ziwenhahaha 维护的公共 Supabase。
+# 你也可以把自己的 Supabase 项目填到这里——但要确保：
+#  - 用的是 publishable / anon key（sb_publishable_...）
+#  - 数据库 schema 与 match_arxiv_papers / match_arxiv_papers_bm25 RPC 一致
+#
+# supabase:
+#   url: 'https://YOUR-PROJECT.supabase.co'
+#   anon_key: 'sb_publishable_...'
+#   papers_table: arxiv_papers
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 不要往这里填：密钥、token
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  - LLM API key    →  浏览器 localStorage（paper-analyzer→Gist 同步）
+#  - Gist token     →  浏览器 localStorage（paper-analyzer→Gist 同步）
+#  - Supabase service_role key  →  本地 .env（DPR_SKIP_COMMIT=1）
+#  - 其他密钥  →  本地 .env
+#
+# .env 已被 gitignore 整文件 ignore。

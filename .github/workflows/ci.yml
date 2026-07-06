@@ -1,0 +1,72 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    name: pytest (offline subset)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-cpu.txt
+            requirements-local-models.txt
+            requirements-paper-media.txt
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python - <<'PY'
+          # CI runs the offline subset; tests that need live Supabase / LLM
+          # endpoints are excluded by name match below.
+          import re
+          lines = open("requirements.txt", "r", encoding="utf-8").read().splitlines()
+          lines = [l for l in lines if l.strip() and not re.match(r"^sqlite3\b", l)]
+          open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
+          PY
+          python -m pip install -r /tmp/req.txt
+
+      - name: Run pytest (offline-safe subset)
+        run: |
+          set -euo pipefail
+          # 跑除 "live network" 子集之外的测试。tests/README.md 已经标了哪些是
+          # environment-dependent (Supabase / zwwen.online 等)。通过 -k 反向
+          # 排除会让 contributor 误改后能在 PR 红掉时立刻知道。
+          python -m pytest tests/ -q \
+            --deselect "tests/test_statement_timeout.py" \
+            --deselect "tests/test_model_loader_remote.py" \
+            --deselect "tests/test_reranker_api.py" \
+            --deselect "tests/test_query_embedding_cache.py" \
+            --deselect "tests/test_sync_streaming_pipeline.py" \
+            --deselect "tests/test_supabase_init_and_sync.py" \
+            --deselect "tests/test_conference_workflow_and_ui.py" \
+            --deselect "tests/test_main_pipeline.py" \
+            --deselect "tests/test_init_supabase_from_aaai_ojs.py" \
+            --deselect "tests/test_init_supabase_from_acl.py" \
+            --deselect "tests/test_init_supabase_from_biorxiv.py" \
+            --deselect "tests/test_init_supabase_from_chemrxiv.py" \
+            --deselect "tests/test_init_supabase_from_emnlp.py" \
+            --deselect "tests/test_init_supabase_from_iclr_openreview.py" \
+            --deselect "tests/test_init_supabase_from_icml_openreview.py" \
+            --deselect "tests/test_init_supabase_from_medrxiv.py" \
+            --deselect "tests/test_init_supabase_from_neurips_openreview.py" \
+            --deselect "tests/test_fetch_acl_anthology.py" \
+            --deselect "tests/test_fetch_openreview_conference.py" \
+            --deselect "tests/test_fetch_paper_aaai_ojs.py" \
+            --deselect "tests/test_fetch_paper_biorxiv.py" \
+            --deselect "tests/test_fetch_paper_chemrxiv.py" \
+            --deselect "tests/test_fetch_paper_medrxiv.py"

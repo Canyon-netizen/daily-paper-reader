@@ -1,0 +1,33 @@
+{
+  "name": "daily-paper-reader-astro",
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Daily Paper Reader — Astro 静态站 (替换 docsify)",
+  "private": true,
+  "scripts": {
+    "dev": "npm run predev && astro dev",
+    "start": "npm run predev && astro dev",
+    "predev": "node astro-src/scripts/build-arxiv-index.mjs && node astro-src/scripts/copy-docs-assets.mjs",
+    "build": "npm run prebuild && astro build",
+    "prebuild": "node astro-src/scripts/build-arxiv-index.mjs && node astro-src/scripts/copy-docs-assets.mjs",
+    "preview": "astro preview",
+    "astro": "astro",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@astrojs/mdx": "^4.3.0",
+    "@astrojs/rss": "^4.0.12",
+    "@astrojs/sitemap": "^3.6.0",
+    "astro": "^5.14.0",
+    "gray-matter": "^4.0.3",
+    "pdfjs-dist": "^4.10.38",
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

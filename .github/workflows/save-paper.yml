@@ -1,0 +1,390 @@
+name: save-paper
+
+# 由 web /paper-analyzer/ 页面 "📤 保存到 GitHub" 按钮触发。
+# 接收 client_payload,把论文 Markdown 写到 docs/<period>/<arxiv-id>-slug.md,
+# 然后 commit & push,触发 Cloudflare Pages 自动 rebuild。
+#
+# 两种模式:
+#   - glance(默认): 写一份新的速读 .md(Web 端已拼好整篇)
+#   - append-deepdive: 读现有 .md → 末尾追加"## 深度精读"章节 → 可选抽图 → 写回
+
+on:
+  workflow_dispatch:
+    inputs:
+      md_content:
+        description: "完整 Markdown 内容(含 frontmatter 和 Abstract),mode=glance 时使用"
+        required: false
+        type: string
+        default: ""
+      period:
+        description: "归档期目录,如 20260625-20260704"
+        required: true
+        type: string
+      arxiv_id:
+        description: "短 ID,如 2606.26474v1"
+        required: true
+        type: string
+      slug:
+        description: "URL slug,kebab-case ASCII"
+        required: true
+        type: string
+      message:
+        description: "commit message"
+        required: false
+        type: string
+        default: "[chore] add paper from web analyzer"
+      mode:
+        description: "glance | append-deepdive"
+        required: false
+        type: string
+        default: "glance"
+      deep_dive_md:
+        description: "精读 markdown 全文(mode=append-deepdive 时必填)"
+        required: false
+        type: string
+        default: ""
+      used_model:
+        description: "生成精读用的 model 名,写入深度精读元信息"
+        required: false
+        type: string
+        default: ""
+      truncated_pct:
+        description: "若 PDF 被截断,写入精读元信息(0-100,100=全文)"
+        required: false
+        type: string
+        default: "100"
+      needs_figures:
+        description: "true 时用 PyMuPDF 从 PDF 抽图到 docs/assets/figures/arxiv/<id>/"
+        required: false
+        type: string
+        default: "false"
+      figures_url:
+        description: "PDF URL(needs_figures=true 时用),如 https://arxiv.org/pdf/2510.18483v1"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: save-paper
+  cancel-in-progress: false
+
+jobs:
+  commit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Validate inputs
+        env:
+          MD_CONTENT: ${{ inputs.md_content }}
+          PERIOD: ${{ inputs.period }}
+          ARXIV_ID: ${{ inputs.arxiv_id }}
+          SLUG: ${{ inputs.slug }}
+          MODE: ${{ inputs.mode }}
+          DEEP_MD: ${{ inputs.deep_dive_md }}
+          NEEDS_FIGS: ${{ inputs.needs_figures }}
+        run: |
+          set -euo pipefail
+          : "${PERIOD:?period is required}"
+          : "${ARXIV_ID:?arxiv_id is required}"
+          : "${SLUG:?slug is required}"
+          # slug 只允许 [a-z0-9-],长度 1-80,防路径注入
+          if ! [[ "$SLUG" =~ ^[a-z0-9-]{1,80}$ ]]; then
+            echo "::error::slug 必须是 kebab-case ASCII(只含 a-z, 0-9, -, 长度 1-80)"
+            exit 1
+          fi
+          if ! [[ "$PERIOD" =~ ^[0-9-]+$ ]]; then
+            echo "::error::period 必须是数字 + 横线(例 20260625-20260704)"
+            exit 1
+          fi
+          if ! [[ "$ARXIV_ID" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+            echo "::error::arxiv_id 包含非法字符"
+            exit 1
+          fi
+          if [[ "$MODE" != "glance" && "$MODE" != "append-deepdive" ]]; then
+            echo "::error::mode 必须是 glance 或 append-deepdive,收到: $MODE"
+            exit 1
+          fi
+          if [[ "$MODE" == "append-deepdive" && -z "$DEEP_MD" ]]; then
+            echo "::error::mode=append-deepdive 时 deep_dive_md 不能为空"
+            exit 1
+          fi
+          if [[ "$MODE" == "glance" && -z "$MD_CONTENT" ]]; then
+            echo "::error::mode=glance 时 md_content 不能为空"
+            exit 1
+          fi
+          if [[ "$NEEDS_FIGS" != "true" && "$NEEDS_FIGS" != "false" ]]; then
+            echo "::error::needs_figures 必须是 true 或 false"
+            exit 1
+          fi
+          echo "Inputs OK: mode=$MODE period=$PERIOD arxiv_id=$ARXIV_ID slug=$SLUG needs_figures=$NEEDS_FIGS"
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Setup Python (for figure extraction)
+        if: inputs.needs_figures == 'true'
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install PyMuPDF for figure extraction
+        if: inputs.needs_figures == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PyMuPDF Pillow requests
+
+      - name: Extract figures from PDF
+        if: inputs.needs_figures == 'true'
+        env:
+          ARXIV_ID: ${{ inputs.arxiv_id }}
+          PDF_URL: ${{ inputs.figures_url }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$PDF_URL" ]]; then
+            echo "::error::needs_figures=true 但 figures_url 为空,跳过抽图"
+            # 不阻塞 commit: 精读本身仍可保存,只是没图
+            exit 0
+          fi
+          mkdir -p "docs/assets/figures/arxiv/${ARXIV_ID}"
+          python - <<PY
+          import os, sys
+          sys.path.insert(0, 'src')
+          from paper_figures import ensure_paper_media
+          figs, tables = ensure_paper_media(
+            pdf_url=os.environ['PDF_URL'],
+            docs_dir='docs',
+            source_key='arxiv',
+            asset_key=os.environ['ARXIV_ID'],
+          )
+          print(f'[OK] extracted figures={len(figs)} tables={len(tables)} for {os.environ["ARXIV_ID"]}')
+          PY
+
+      - name: Sync figures_json into existing .md frontmatter
+        if: inputs.mode == 'append-deepdive'
+        env:
+          FILE: docs/${{ inputs.period }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          ARXIV_ID: ${{ inputs.arxiv_id }}
+        run: |
+          set -euo pipefail
+          # 抽图后,扫描 docs/assets/figures/arxiv/<id>/fig-*.webp 实际文件,
+          # 把列表写回 .md 的 figures_json frontmatter 字段(append-deepdive 流程专用)。
+          # 这样 docs 网站页面的"📊 论文图表"区块能反映最新抽出的图。
+          python - <<'PY'
+          import glob, json, os, re
+          file = os.environ['FILE']
+          arxiv_id = os.environ['ARXIV_ID']
+          fig_dir = f'docs/assets/figures/arxiv/{arxiv_id}'
+          webps = sorted(glob.glob(f'{fig_dir}/fig-*.webp'))
+          if not webps:
+              print(f'[INFO] {arxiv_id} 没有图文件,跳过 figures_json 更新')
+              import sys; sys.exit(0)
+          fig_entries = []
+          for i, fp in enumerate(webps, 1):
+              rel = fp[len('docs/'):]
+              fig_entries.append({
+                  "url": rel,
+                  "caption": "",
+                  "page": 0,
+                  "index": i,
+                  "width": 0,
+                  "height": 0,
+              })
+          figures_json_str = json.dumps(fig_entries, ensure_ascii=False)
+
+          if not os.path.exists(file):
+              print(f'[WARN] {file} 不存在,跳过')
+              import sys; sys.exit(0)
+
+          with open(file, 'r', encoding='utf-8') as f:
+              existing = f.read()
+
+          # 替换或插入 figures_json 行
+          if re.search(r'^figures_json:\s', existing, re.MULTILINE):
+              new_existing = re.sub(
+                  r'^figures_json:\s.*$',
+                  f'figures_json: {json.dumps(figures_json_str, ensure_ascii=False)}',
+                  existing,
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+          else:
+              # 插到 --- 闭合前
+              new_existing, n = re.subn(
+                  r'\n---\n',
+                  f'\nfigures_json: "{figures_json_str}"\n---\n',
+                  existing, count=1,
+              )
+              if n == 0:
+                  print(f'[WARN] {file} 没有 frontmatter 边界,跳过')
+                  import sys; sys.exit(0)
+
+          with open(file, 'w', encoding='utf-8') as f:
+              f.write(new_existing)
+          print(f'[OK] figures_json 同步: {len(fig_entries)} 张图写入 {file}')
+          PY
+
+      - name: Write paper file (glance mode)
+        if: inputs.mode == 'glance'
+        env:
+          MD_CONTENT: ${{ inputs.md_content }}
+          PERIOD: ${{ inputs.period }}
+          ARXIV_ID: ${{ inputs.arxiv_id }}
+          SLUG: ${{ inputs.slug }}
+        run: |
+          set -euo pipefail
+          FILE="docs/${PERIOD}/${ARXIV_ID}-${SLUG}.md"
+          mkdir -p "docs/${PERIOD}"
+          echo "$MD_CONTENT" > "$FILE"
+          echo "Wrote $FILE ($(wc -c < "$FILE") bytes)"
+
+      - name: Append deep dive to existing file
+        if: inputs.mode == 'append-deepdive'
+        env:
+          FILE: docs/${{ inputs.period }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          DEEP_MD: ${{ inputs.deep_dive_md }}
+          USED_MODEL: ${{ inputs.used_model }}
+          TRUNCATED_PCT: ${{ inputs.truncated_pct }}
+        run: |
+          set -euo pipefail
+          if [[ ! -f "$FILE" ]]; then
+            echo "::error::$FILE 不存在,append-deepdive 需要先有速读 .md"
+            exit 1
+          fi
+          python - <<'PY'
+          import glob, os, re, sys
+
+          file = os.environ['FILE']
+          deep = os.environ['DEEP_MD'].strip()
+          model = os.environ.get('USED_MODEL', '').strip()
+          try:
+              pct = int(os.environ.get('TRUNCATED_PCT') or '100')
+          except ValueError:
+              pct = 100
+
+          with open(file, 'r', encoding='utf-8') as f:
+              existing = f.read()
+
+          # --- 1. 补 frontmatter figures_json(若 docs/ 仓库已有该论文的图但 .md 没写) ---
+          if 'figures_json:' not in existing:
+              arxiv_id = os.path.basename(file).split('-')[0]
+              fig_dir = f'docs/assets/figures/arxiv/{arxiv_id}'
+              figs = sorted(glob.glob(f'{fig_dir}/fig-*.webp'))
+              if figs:
+                  fig_entries = []
+                  for i, fp in enumerate(figs, 1):
+                      rel = fp[len('docs/'):]
+                      fig_entries.append(
+                          '{"url":"' + rel + '","caption":"","page":0,"index":' + str(i) + ',"width":0,"height":0}'
+                      )
+                  figures_json_str = '[' + ','.join(fig_entries) + ']'
+                  # 插到第一个 \n---\n 之前
+                  new_existing, n = re.subn(
+                      r'\n---\n',
+                      '\nfigures_json: "' + figures_json_str + '"\n---\n',
+                      existing, count=1,
+                  )
+                  if n > 0:
+                      existing = new_existing
+                      print(f'[OK] injected figures_json with {len(figs)} entries')
+
+          # --- 2. 追加/替换精读章节 ---
+          truncate_note = f'前 {pct}%' if pct < 100 else '全文'
+          model_line = f' · 模型: {model}' if model else ''
+          deep_block = (
+              '\n\n---\n\n## 深度精读\n\n'
+              f'> 基于 PDF 全文生成{model_line} · {truncate_note}\n\n'
+              f'{deep}\n'
+          )
+
+          replaced = False
+          for marker in ['## 深度精读', '## 论文详细总结（自动生成）']:
+              idx = existing.find(marker)
+              if idx == -1:
+                  continue
+              # 找到上一个 \n\n---\n\n 分隔;没有就直接截到 marker
+              cut = existing.rfind('\n\n---\n\n', 0, idx)
+              if cut == -1:
+                  cut = idx
+              existing = existing[:cut].rstrip() + deep_block
+              replaced = True
+              print(f'[OK] replaced existing block at marker "{marker}"')
+              break
+          if not replaced:
+              existing = existing.rstrip() + deep_block
+              print('[OK] appended new 深度精读 block')
+
+          with open(file, 'w', encoding='utf-8') as f:
+              f.write(existing)
+          print(f'[OK] wrote {file} ({len(existing)} bytes)')
+          PY
+
+      - name: Detect duplicates
+        id: dup
+        run: |
+          FILE="docs/${{ inputs.period }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
+          if git log --all --oneline -- "$FILE" | head -n 1 > /dev/null 2>&1; then
+            COUNT=$(git log --all --oneline -- "$FILE" | wc -l | tr -d ' ')
+            echo "exists=true count=$COUNT"
+          else
+            echo "exists=false"
+          fi
+
+      - name: Skip if already committed
+        if: steps.dup.outputs.exists == 'true'
+        run: |
+          echo "::notice::${{ inputs.arxiv_id }} 已在 docs 里,跳过 commit(覆盖会被 git diff 拦下)"
+
+      - name: Commit and push
+        if: steps.dup.outputs.exists != 'true'
+        env:
+          PERIOD: ${{ inputs.period }}
+          ARXIV_ID: ${{ inputs.arxiv_id }}
+          SLUG: ${{ inputs.slug }}
+          MSG: ${{ inputs.message }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          FILE="docs/${PERIOD}/${ARXIV_ID}-${SLUG}.md"
+          ARXIV_ID_RAW=$(echo "$ARXIV_ID" | sed 's|/|_|g')
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # 1. 主 .md
+          git add "$FILE"
+          # 2. 抽出来的图片(若本次走了 needs_figures)
+          if git ls-files --others --exclude-standard "docs/assets/figures/arxiv/${ARXIV_ID_RAW}/" 2>/dev/null \
+              | grep -E '\.(webp|png|jpg|jpeg)$' > /tmp/new_figs.list; then
+            if [ -s /tmp/new_figs.list ]; then
+              echo "Adding $(wc -l < /tmp/new_figs.list) figure files"
+              cat /tmp/new_figs.list | xargs git add
+            fi
+          fi
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          if [[ "$MODE" == "append-deepdive" ]]; then
+            DEFAULT_MSG="chore: deep dive ${ARXIV_ID} via web analyzer"
+          else
+            DEFAULT_MSG="chore: add ${ARXIV_ID} from web analyzer"
+          fi
+          git commit -m "${MSG:-$DEFAULT_MSG}"
+          git push
+
+      - name: Trigger Cloudflare Pages rebuild
+        if: always()
+        continue-on-error: true
+        env:
+          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -n "$CF_DEPLOY_HOOK_URL" ]; then
+            echo "Pinging Cloudflare Pages deploy hook..."
+            curl -X POST "$CF_DEPLOY_HOOK_URL" -f
+          else
+            echo "CF_DEPLOY_HOOK_URL not set, skipping"
+          fi

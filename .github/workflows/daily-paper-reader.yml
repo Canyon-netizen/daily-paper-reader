@@ -1,0 +1,296 @@
+name: daily-paper-reader
+
+on:
+  schedule:
+    - cron: "30 18 * * *" # 北京时间次日 02:30（UTC 18:30）
+  workflow_dispatch:
+    inputs:
+      run_enrich:
+        description: "Run 0.enrich_config_queries.py（默认关闭，按需开启）"
+        required: false
+        default: "false"
+      fetch_days:
+        description: "回溯抓取天数（例如 30）；留空则使用默认配置"
+        required: false
+        default: "10"
+      fetch_mode:
+        description: "抓取模式：auto/standard/skims（auto 按 fetch-days 阈值决定，standard/ skims 强制）"
+        required: false
+        default: "auto"
+      profile_tag:
+        description: "仅运行指定词条 tag；留空表示全量运行"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-paper-reader
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.repository == 'Canyon-netizen/daily-paper-reader' || github.repository == 'ziwenhahaha/daily-paper-reader' || github.repository == '5-xj/daily-paper-reader'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DPR_EMBED_API_TIMEOUT: "60"
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Random delay to spread scheduled runs
+        if: github.event_name == 'schedule'
+        run: |
+          DELAY=$(shuf -i 0-3599 -n 1)
+          echo "Sleeping ${DELAY}s (≈$((DELAY/60))min) to stagger fork runs over 1 hour …"
+          sleep $DELAY
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: Load secrets from Gist
+        env:
+          DPR_GIST_ID: ${{ secrets.DPR_GIST_ID }}
+          DPR_GIST_TOKEN: ${{ secrets.DPR_GIST_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::group::fetching dpr secrets gist"
+          curl -fsSL \
+            -H "Authorization: token ${DPR_GIST_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/gists/${DPR_GIST_ID}" \
+            -o /tmp/dpr-gist.json
+          echo "::endgroup::"
+
+          python3 - <<'PY'
+          import json, os, sys
+          data = json.load(open("/tmp/dpr-gist.json"))
+          files = data.get("files") or {}
+          target = next(
+              (f["content"] for f in files.values()
+               if f.get("filename", "").endswith(".json")),
+              None,
+          )
+          if not target:
+              print("::error::no .json file in gist", file=sys.stderr)
+              sys.exit(1)
+          payload = json.loads(target)
+          env_file = os.environ.get("GITHUB_ENV")
+          for k, v in payload.items():
+              line = f"{k}={v}"
+              print(line)
+              if env_file:
+                  with open(env_file, "a") as fp:
+                      fp.write(line + "\n")
+          PY
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache Python deps
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/uv
+            ~/.cache/torch
+            ~/.cache/dpr-tools/pdffigures2
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-dpr-embed-deps-v1-${{ hashFiles('requirements.txt') }}
+
+      - name: Install deps (skip sqlite3)
+        run: |
+          python - <<'PY'
+          import re
+          lines = open("requirements.txt", "r", encoding="utf-8").read().splitlines()
+          lines = [l for l in lines if l.strip() and not re.match(r"^sqlite3\\b", l)]
+          open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
+          PY
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          uv pip install --system -r /tmp/req.txt
+
+      - name: Prepare pdffigures2
+        run: |
+          set -euo pipefail
+
+          TOOL_DIR="$HOME/.cache/dpr-tools/pdffigures2"
+          SRC_DIR="$TOOL_DIR/src"
+          JAR_PATH="$TOOL_DIR/pdffigures2.jar"
+
+          mkdir -p "$TOOL_DIR"
+          if [ ! -f "$JAR_PATH" ]; then
+            rm -rf "$SRC_DIR"
+            git clone --depth 1 https://github.com/allenai/pdffigures2 "$SRC_DIR"
+            cd "$SRC_DIR"
+            curl -fsSL -o sbt.tgz https://github.com/sbt/sbt/releases/download/v1.10.1/sbt-1.10.1.tgz
+            tar -xzf sbt.tgz
+            ./sbt/bin/sbt assembly
+            cp pdffigures2.jar "$JAR_PATH"
+          fi
+
+          echo "PDFFIGURES2_JAR=$JAR_PATH" >> "$GITHUB_ENV"
+
+      - name: Run Retrieval and Embedding
+        env:
+          HF_HOME: ${{ github.workspace }}/hf_cache
+          HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
+          HF_HUB_DISABLE_SYMLINKS: "1"
+          MINIMAX_API_KEY: ${{ env.MINIMAX_API_KEY }}
+          MINIMAX_FILTER_MODEL: ${{ env.MINIMAX_FILTER_MODEL }}
+          MINIMAX_REWRITE_MODEL: ${{ env.MINIMAX_REWRITE_MODEL }}
+          LLM_MODEL: ${{ env.LLM_MODEL }}
+          LLM_API_KEY: ${{ env.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ env.LLM_BASE_URL }}
+        run: |
+          echo "Cleaning any previous local cache..."
+          rm -rf ${{ github.workspace }}/hf_cache
+
+          echo "=== Debug: runtime env ==="
+          echo "PWD=$(pwd)"
+          echo "HOME=$HOME"
+          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+          echo "HF_HOME=$HF_HOME"
+          echo "HUGGINGFACE_HUB_CACHE=$HUGGINGFACE_HUB_CACHE"
+          echo "HF_HUB_DISABLE_SYMLINKS=$HF_HUB_DISABLE_SYMLINKS"
+          echo "TRANSFORMERS_CACHE=${TRANSFORMERS_CACHE:-<unset>}"
+          echo "XDG_CACHE_HOME=${XDG_CACHE_HOME:-<unset>}"
+          echo "--- env (filtered) ---"
+          env | grep -E '^(HF_|HUGGINGFACE_|TRANSFORMERS_|XDG_|HOME=|GITHUB_WORKSPACE=)' | sort || true
+
+          echo "--- python/hf versions ---"
+          python - <<'PY'
+          import os
+          def v(mod):
+            try:
+              m = __import__(mod)
+              return getattr(m, "__version__", "<no __version__>")
+            except Exception as e:
+              return f"<import failed: {e}>"
+
+          print("python_exe:", os.environ.get("PYTHON", ""))
+          print("HF_HOME env:", os.environ.get("HF_HOME"))
+          print("HUGGINGFACE_HUB_CACHE env:", os.environ.get("HUGGINGFACE_HUB_CACHE"))
+          print("HF_HUB_DISABLE_SYMLINKS env:", os.environ.get("HF_HUB_DISABLE_SYMLINKS"))
+          print("TRANSFORMERS_CACHE env:", os.environ.get("TRANSFORMERS_CACHE"))
+          print("versions:", {
+            "huggingface_hub": v("huggingface_hub"),
+            "transformers": v("transformers"),
+            "sentence_transformers": v("sentence_transformers"),
+          })
+          try:
+            from huggingface_hub import constants as c
+            print("hub.constants:", {
+              "HF_HOME": getattr(c, "HF_HOME", None),
+              "HUGGINGFACE_HUB_CACHE": getattr(c, "HUGGINGFACE_HUB_CACHE", None),
+              "HF_HUB_DISABLE_SYMLINKS": getattr(c, "HF_HUB_DISABLE_SYMLINKS", None),
+            })
+          except Exception as e:
+            print("hub.constants import failed:", e)
+          PY
+
+          echo "--- cache dir check ---"
+          echo "[legacy] ~/.cache/huggingface:"
+          ls -la ~/.cache/huggingface || true
+          echo "[current] $HF_HOME:"
+          ls -la "$HF_HOME" || true
+
+          echo "Running main script..."
+          RUN_ENRICH="${{ github.event.inputs.run_enrich }}"
+          FETCH_DAYS="${{ github.event.inputs.fetch_days }}"
+          FETCH_MODE="${{ github.event.inputs.fetch_mode }}"
+          PROFILE_TAG="${{ github.event.inputs.profile_tag }}"
+          ARGS=()
+          if [ "$RUN_ENRICH" = "true" ]; then
+            ARGS+=(--run-enrich)
+          fi
+          if [ -n "$FETCH_DAYS" ]; then
+            ARGS+=(--fetch-days "$FETCH_DAYS")
+          fi
+          if [ -n "$FETCH_MODE" ]; then
+            ARGS+=(--fetch-mode "$FETCH_MODE")
+          fi
+          if [ -n "$PROFILE_TAG" ]; then
+            ARGS+=(--profile-tag "$PROFILE_TAG")
+          fi
+          python src/main.py "${ARGS[@]}" --embedding-device cpu --embedding-batch-size 8
+
+          # 让前端可以在不配置 GitHub Token 的情况下直接读取配置（只读快照）
+          cp -f config.yaml docs/config.yaml
+
+          echo "--- post-run cache symlink check ---"
+          find "$HF_HOME" -xtype l | head -n 50 || true
+
+      - name: Cleanup non-recommend archives
+        run: |
+          find archive -mindepth 2 -maxdepth 2 -type d \( -name raw -o -name filtered -o -name rank \) -exec rm -rf {} +
+
+      # 注意:docs/_sidebar.md 是在 src/6.generate_docs.py 走完 update_sidebar()
+      # 后写出的(daily workflow 当前不调 generate_docs,所以这个 step 历史上
+      # 是由外部脚本在另一条路径上跑的)。如果以后想从这里手动重建,先把
+      # `src/build_flat_sidebar.py` 写出来再启用本 step。
+      - name: Rebuild _sidebar.md from current paper set
+        if: ${{ false }}  # disabled: .scratch/build_flat_sidebar.py is gitignored, so this step has no script
+        run: |
+          python .scratch/build_flat_sidebar.py
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="${GITHUB_REF_NAME:-main}"
+
+          shopt -s nullglob
+          paths=(docs config.yaml)
+          if [ -f archive/arxiv_seen.json ]; then
+            paths+=(archive/arxiv_seen.json)
+          fi
+          if [ -f archive/crawl_state.json ]; then
+            paths+=(archive/crawl_state.json)
+          fi
+          if [ -f archive/carryover.json ]; then
+            paths+=(archive/carryover.json)
+          fi
+          for d in archive/*/recommend; do
+            paths+=("$d")
+          done
+
+          git add "${paths[@]}"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "[chore] daily pipeline"
+
+          git fetch origin "$branch"
+          git merge --no-ff "origin/$branch" -m "Merge origin/$branch into workflow branch"
+          git push origin HEAD:"$branch"
+
+      - name: Trigger Cloudflare Pages rebuild
+        if: always()
+        continue-on-error: true
+        env:
+          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
+            echo "CF_DEPLOY_HOOK_URL not set, skipping deploy hook"
+            exit 0
+          fi
+          echo "Pinging Cloudflare Pages deploy hook..."
+          curl -X POST "$CF_DEPLOY_HOOK_URL" -f
+          echo "Cloudflare Pages rebuild queued"
