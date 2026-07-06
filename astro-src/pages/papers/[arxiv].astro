@@ -1,28 +1,26 @@
 ---
-// astro-src/pages/[ym]/[day]/[arxiv].astro
+// astro-src/pages/papers/[arxiv].astro
 // 单篇论文页:用 lib/paper.ts 读 MD 文件(兼容坏文件)
-// 路径格式:docs/YYYYMM/DD/{arxiv_id}-{slug}.md -> /YYYYMM/DD/{arxiv_id}-{slug}/
+// 路径格式:docs/papers/{arxiv_id}-{slug}.md -> /papers/{arxiv_id}-{slug}/
 import type { GetStaticPaths } from 'astro';
-import BaseLayout from '../../../layouts/BaseLayout.astro';
-import Navbar from '../../../components/Navbar.astro';
-import { readPaper, listAllPaperIds, renderMarkdownBody } from '../../../lib/paper';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import { readPaper, listAllPaperIds, renderMarkdownBody } from '../../lib/paper';
 
 export const getStaticPaths: GetStaticPaths = async () => {
   const ids = await listAllPaperIds();
-  // 仅处理 3 段路径: YYYYMM/DD/{arxiv_id}-{slug}
+  // 仅处理 papers/ 段(扁平化后所有论文都进 docs/papers/)
   return ids
-    .filter((id) => id.split('/').length === 3)
+    .filter((id) => id.startsWith('papers/'))
     .map((id) => ({
       params: {
-        ym: id.split('/')[0],
-        day: id.split('/')[1],
-        arxiv: id.split('/')[2],
+        arxiv: id.split('/')[1],
       },
     }));
 };
 
-const { ym, day, arxiv } = Astro.params;
-const id = `${ym}/${day}/${arxiv}`;
+const { arxiv } = Astro.params;
+const id = `papers/${arxiv}`;
 const paper = await readPaper(id);
 const base = import.meta.env.BASE_URL;
 ---
@@ -47,7 +45,7 @@ const base = import.meta.env.BASE_URL;
           <header class="paper-header">
             <div class="container">
               <div class="paper-meta-line">
-                {paper.yearMonth}/{paper.day} · arXiv {paper.arxivId}
+                arXiv {paper.arxivId}
                 {paper.date && <span> · 发布 {paper.date}</span>}
               </div>
               <h1 class="paper-title-zh">{paper.title_zh || paper.title}</h1>
@@ -302,3 +300,5 @@ const base = import.meta.env.BASE_URL;
     margin: 0.5rem 0;
   }
 </style>
+</content>
+</invoke>

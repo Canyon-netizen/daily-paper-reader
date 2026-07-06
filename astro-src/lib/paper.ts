@@ -29,6 +29,8 @@ const DOCS_DIR = join(PROJECT_ROOT, 'docs');
  * duplicating the rule.
  */
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
+// `papers/` is the canonical paper directory. Do NOT add it here — the walk()
+// falls through into it and treats every .md inside as a paper.
 const PREFIX_SKIP_DIR = '_';
 
 export interface PaperFrontmatter {
@@ -54,10 +56,10 @@ export interface PaperFrontmatter {
 }
 
 export interface Paper extends PaperFrontmatter {
-  id: string;             // "202606/22/2606.15576v1-localizing-..."
+  id: string;             // "papers/2606.15576v1-localizing-..."
   slug: string;           // "2606.15576v1-localizing-..."
-  yearMonth: string;      // "202606"
-  day: string;            // "22"
+  yearMonth: string;      // derived from arxivId (e.g. "2606"); not from path
+  day: string;            // derived from frontmatter.date (e.g. "04"); '' when absent
   arxivId: string;        // "2606.15576v1"
   body: string;           // markdown body (frontmatter stripped)
   isBroken: boolean;      // true if frontmatter failed to parse
@@ -141,7 +143,7 @@ function parseFrontmatter(text: string): { data: PaperFrontmatter; body: string 
 }
 
 export async function readPaper(id: string): Promise<Paper | null> {
-  // id 格式: "202606/22/2606.15576v1-localizing-..."
+  // id 格式: "papers/2606.15576v1-localizing-..."
   const mdPath = join(DOCS_DIR, `${id}.md`);
   let text: string;
   try {
@@ -157,8 +159,8 @@ export async function readPaper(id: string): Promise<Paper | null> {
     return {
       id,
       slug: id.split('/').pop() || '',
-      yearMonth: id.split('/')[0] || '',
-      day: id.split('/')[1] || '',
+      yearMonth: arxivId ? arxivId.split('.')[0] : '',
+      day: '',
       arxivId,
       body: '',
       isBroken: true,
@@ -167,12 +169,16 @@ export async function readPaper(id: string): Promise<Paper | null> {
   }
   const arxivMatch = id.match(/(\d{4}\.\d{4,5}v\d+)/);
   const arxivId = arxivMatch ? arxivMatch[1] : '';
+  const yearMonth = arxivId ? arxivId.split('.')[0] : '';
+  const day = parsed.data.date && typeof parsed.data.date === 'string'
+    ? parsed.data.date.slice(8, 10)
+    : '';
   return {
     ...parsed.data,
     id,
     slug: id.split('/').pop() || '',
-    yearMonth: id.split('/')[0] || '',
-    day: id.split('/')[1] || '',
+    yearMonth,
+    day,
     arxivId,
     body: parsed.body,
     isBroken: false,

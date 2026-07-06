@@ -855,28 +855,18 @@ def format_date_str(date_str: str) -> str:
 def prepare_paper_paths(docs_dir: str, date_str: str, title: str, arxiv_id: str) -> Tuple[str, str, str]:
     slug = slugify(title)
     basename = f"{arxiv_id}-{slug}" if arxiv_id else slug
-    if RANGE_DATE_RE.match(date_str):
-        target_dir = os.path.join(docs_dir, date_str)
-        paper_id = f"{date_str}/{basename}"
-    else:
-        ym = date_str[:6]
-        day = date_str[6:]
-        target_dir = os.path.join(docs_dir, ym, day)
-        paper_id = f"{ym}/{day}/{basename}"
+    # 扁平化:所有论文都进 docs/papers/,date_str 仅用于日志/archive。
+    target_dir = os.path.join(docs_dir, "papers")
+    paper_id = f"papers/{basename}"
     md_path = os.path.join(target_dir, f"{basename}.md")
     txt_path = os.path.join(target_dir, f"{basename}.txt")
     return md_path, txt_path, paper_id
 
 
 def prepare_day_report_paths(docs_dir: str, date_str: str) -> Tuple[str, str]:
-    if RANGE_DATE_RE.match(date_str):
-        day_dir = os.path.join(docs_dir, date_str)
-    else:
-        ym = date_str[:6]
-        day = date_str[6:]
-        day_dir = os.path.join(docs_dir, ym, day)
-    day_readme = os.path.join(day_dir, "README.md")
-    return day_dir, day_readme
+    # 日报 README 不再单文件存放 — 详情由首页 docs/README.md 承载。
+    # 返回虚拟路径以保留调用方签名兼容。
+    return docs_dir, os.path.join(docs_dir, "README.md")
 
 
 def prepare_home_module_paths(docs_dir: str) -> Tuple[str, str]:
@@ -1070,13 +1060,7 @@ def build_latest_report_section(
         lines.append("")
         lines.append("### 今日简报（AI）")
         lines.append(summary)
-    if RANGE_DATE_RE.match(date_str):
-        report_href = build_docsify_id_href(f"{date_str}/README")
-    else:
-        ym = date_str[:6]
-        day = date_str[6:]
-        report_href = build_docsify_id_href(f"{ym}/{day}/README")
-    lines.append(f"- 详情：[{report_href}]({report_href})")
+    lines.append(f"- 详情：[本次日报](#本次日报)")
     lines.append("")
     lines.append("### 精读区论文标签")
     if deep_entries:
@@ -1736,21 +1720,12 @@ def process_paper(
 def resolve_paper_id_to_md_path(docs_dir: str, paper_id: str) -> str:
     """
     根据 paper_id 反推 md 文件路径。
-    paper_id 格式: YYYYMM/DD/basename 或 YYYYMMDD/basename
+    扁平化后 paper_id 格式: papers/<arxiv-id>-<slug>
     """
     parts = str(paper_id or "").strip().split("/")
-    if len(parts) < 2:
+    if len(parts) != 2 or parts[0] != "papers":
         return ""
-    if RANGE_DATE_RE.match(parts[0]):
-        # YYYYMMDD/basename 格式
-        md_path = os.path.join(docs_dir, parts[0], f"{'/'.join(parts[1:])}.md")
-    else:
-        # YYYYMM/DD/basename 格式
-        if len(parts) >= 3:
-            md_path = os.path.join(docs_dir, parts[0], parts[1], f"{'/'.join(parts[2:])}.md")
-        else:
-            md_path = ""
-    return md_path
+    return os.path.join(docs_dir, "papers", f"{parts[1]}.md")
 
 
 def filter_entries_by_existing_files(
@@ -1880,7 +1855,7 @@ def update_sidebar(
         block.append("    * 精读区\n")
         for paper_id, title, tags in deep_entries:
             safe_title = html.escape((title or "").strip() or paper_id)
-            href = f"#/{paper_id}"
+            href = build_docsify_id_href(paper_id)
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
             payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence)
             block.append(
@@ -1891,7 +1866,7 @@ def update_sidebar(
         block.append("    * 速读区\n")
         for paper_id, title, tags in quick_entries:
             safe_title = html.escape((title or "").strip() or paper_id)
-            href = f"#/{paper_id}"
+            href = build_docsify_id_href(paper_id)
             evidence = paper_evidence_by_id.get(str(paper_id).strip(), "")
             payload_json = build_sidebar_item_payload(paper_id, title, tags, href, evidence)
             block.append(
@@ -2007,36 +1982,8 @@ def write_day_report_readme(
 
 
 def list_day_report_links(docs_dir: str) -> List[Tuple[str, str]]:
-    out: List[Tuple[str, str]] = []
-    if not os.path.isdir(docs_dir):
-        return out
-    # 1) 区间目录：YYYYMMDD-YYYYMMDD
-    range_dirs = sorted(
-        [d for d in os.listdir(docs_dir) if RANGE_DATE_RE.fullmatch(d)],
-        reverse=True,
-    )
-    for rd in range_dirs:
-        readme = os.path.join(docs_dir, rd, "README.md")
-        if not os.path.exists(readme):
-            continue
-        out.append((format_date_str(rd), build_docsify_id_href(f"{rd}/README")))
-
-    # 2) 单日目录：docs/YYYYMM/DD
-    ym_dirs = sorted([d for d in os.listdir(docs_dir) if re.fullmatch(r"\d{6}", d)], reverse=True)
-    for ym in ym_dirs:
-        ym_path = os.path.join(docs_dir, ym)
-        if not os.path.isdir(ym_path):
-            continue
-        day_dirs = sorted([d for d in os.listdir(ym_path) if re.fullmatch(r"\d{2}", d)], reverse=True)
-        for day in day_dirs:
-            readme = os.path.join(ym_path, day, "README.md")
-            if not os.path.exists(readme):
-                continue
-            date8 = f"{ym}{day}"
-            label = format_date_str(date8)
-            href = build_docsify_id_href(f"{ym}/{day}/README")
-            out.append((label, href))
-    return out
+    # 扁平化后日报详情只在 docs/README.md,不再列举历史日期目录。
+    return []
 
 
 def build_home_readme_content(
@@ -2137,67 +2084,8 @@ def write_run_daily_log(
 
 
 def backfill_history_day_reports(docs_dir: str) -> int:
-    """
-    为历史日期目录补齐 README.md（若不存在），便于首页左右切换日报。
-    该补齐不依赖 LLM，只基于已存在的论文 markdown 文件生成简版日报。
-    """
-    if not os.path.isdir(docs_dir):
-        return 0
-
-    created = 0
-    ym_dirs = sorted(
-        [d for d in os.listdir(docs_dir) if re.fullmatch(r"\d{6}", d)],
-        reverse=True,
-    )
-    for ym in ym_dirs:
-        ym_path = os.path.join(docs_dir, ym)
-        if not os.path.isdir(ym_path):
-            continue
-        day_dirs = sorted(
-            [d for d in os.listdir(ym_path) if re.fullmatch(r"\d{2}", d)],
-            reverse=True,
-        )
-        for day in day_dirs:
-            day_path = os.path.join(ym_path, day)
-            if not os.path.isdir(day_path):
-                continue
-            readme_path = os.path.join(day_path, "README.md")
-            if os.path.exists(readme_path):
-                continue
-
-            paper_files = sorted(
-                [
-                    fn
-                    for fn in os.listdir(day_path)
-                    if fn.lower().endswith(".md")
-                    and fn.upper() != "README.MD"
-                    and not fn.startswith("_")
-                ]
-            )
-
-            date8 = f"{ym}{day}"
-            date_label = format_date_str(date8)
-            lines = [f"# 日报 · {date_label}", ""]
-            lines.append("- 该日报为历史补齐版本（由已有文档自动生成）。")
-            lines.append(f"- 论文数量：{len(paper_files)}")
-            lines.append("")
-            lines.append("## 论文列表")
-            if paper_files:
-                for idx, fn in enumerate(paper_files, start=1):
-                    base = fn[:-3]
-                    # 尽量从文件名恢复标题（保留 slug，可点击）
-                    title_guess = re.sub(r"^[0-9]{4}\.[0-9]{5}v[0-9]-", "", base).replace("-", " ").strip()
-                    title_guess = title_guess or base
-                    lines.append(f"{idx}. [{title_guess}]({build_docsify_id_href(f'{ym}/{day}/{base}')})")
-            else:
-                lines.append("- 当天目录暂无论文文档。")
-            lines.append("")
-
-            with open(readme_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines))
-            created += 1
-
-    return created
+    # 扁平化后不再按日期分桶,无需补齐历史日报 README。
+    return 0
 
 
 def _extract_md_section(md_text: str, heading: str) -> str:
@@ -2464,14 +2352,10 @@ def write_day_meta_index_json(
     quick_list: List[Dict[str, Any]],
 ) -> str:
     """
-    在对应的 docs 日期目录下生成索引 JSON 文件，供前端一键下载。
+    在 docs/papers/ 下生成可下载的索引 JSON。所有论文统一汇总到这一份,
+    而不是按日期分桶;过往每日运行会原地覆盖同一文件(内容包含最近一次 run 的全量论文)。
     """
-    if RANGE_DATE_RE.match(date_str):
-        target_dir = os.path.join(docs_dir, date_str)
-    else:
-        ym = date_str[:6]
-        day = date_str[6:]
-        target_dir = os.path.join(docs_dir, ym, day)
+    target_dir = os.path.join(docs_dir, "papers")
     os.makedirs(target_dir, exist_ok=True)
     out_path = os.path.join(target_dir, "papers.meta.json")
 

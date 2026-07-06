@@ -1,7 +1,7 @@
 name: save-paper
 
 # 由 web /paper-analyzer/ 页面 "📤 保存到 GitHub" 按钮触发。
-# 接收 client_payload,把论文 Markdown 写到 docs/<period>/<arxiv-id>-slug.md,
+# 接收 client_payload,把论文 Markdown 写到 docs/papers/<arxiv-id>-slug.md,
 # 然后 commit & push,触发 Cloudflare Pages 自动 rebuild。
 #
 # 两种模式:
@@ -16,10 +16,6 @@ on:
         required: false
         type: string
         default: ""
-      period:
-        description: "归档期目录,如 20260625-20260704"
-        required: true
-        type: string
       arxiv_id:
         description: "短 ID,如 2606.26474v1"
         required: true
@@ -79,7 +75,6 @@ jobs:
       - name: Validate inputs
         env:
           MD_CONTENT: ${{ inputs.md_content }}
-          PERIOD: ${{ inputs.period }}
           ARXIV_ID: ${{ inputs.arxiv_id }}
           SLUG: ${{ inputs.slug }}
           MODE: ${{ inputs.mode }}
@@ -87,16 +82,11 @@ jobs:
           NEEDS_FIGS: ${{ inputs.needs_figures }}
         run: |
           set -euo pipefail
-          : "${PERIOD:?period is required}"
           : "${ARXIV_ID:?arxiv_id is required}"
           : "${SLUG:?slug is required}"
           # slug 只允许 [a-z0-9-],长度 1-80,防路径注入
           if ! [[ "$SLUG" =~ ^[a-z0-9-]{1,80}$ ]]; then
             echo "::error::slug 必须是 kebab-case ASCII(只含 a-z, 0-9, -, 长度 1-80)"
-            exit 1
-          fi
-          if ! [[ "$PERIOD" =~ ^[0-9-]+$ ]]; then
-            echo "::error::period 必须是数字 + 横线(例 20260625-20260704)"
             exit 1
           fi
           if ! [[ "$ARXIV_ID" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
@@ -119,7 +109,7 @@ jobs:
             echo "::error::needs_figures 必须是 true 或 false"
             exit 1
           fi
-          echo "Inputs OK: mode=$MODE period=$PERIOD arxiv_id=$ARXIV_ID slug=$SLUG needs_figures=$NEEDS_FIGS"
+          echo "Inputs OK: mode=$MODE arxiv_id=$ARXIV_ID slug=$SLUG needs_figures=$NEEDS_FIGS"
 
       - name: Checkout
         uses: actions/checkout@v5
@@ -168,7 +158,7 @@ jobs:
       - name: Sync figures_json into existing .md frontmatter
         if: inputs.mode == 'append-deepdive'
         env:
-          FILE: docs/${{ inputs.period }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          FILE: docs/papers/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
           ARXIV_ID: ${{ inputs.arxiv_id }}
         run: |
           set -euo pipefail
@@ -233,20 +223,19 @@ jobs:
         if: inputs.mode == 'glance'
         env:
           MD_CONTENT: ${{ inputs.md_content }}
-          PERIOD: ${{ inputs.period }}
           ARXIV_ID: ${{ inputs.arxiv_id }}
           SLUG: ${{ inputs.slug }}
         run: |
           set -euo pipefail
-          FILE="docs/${PERIOD}/${ARXIV_ID}-${SLUG}.md"
-          mkdir -p "docs/${PERIOD}"
+          FILE="docs/papers/${ARXIV_ID}-${SLUG}.md"
+          mkdir -p "docs/papers"
           echo "$MD_CONTENT" > "$FILE"
           echo "Wrote $FILE ($(wc -c < "$FILE") bytes)"
 
       - name: Append deep dive to existing file
         if: inputs.mode == 'append-deepdive'
         env:
-          FILE: docs/${{ inputs.period }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          FILE: docs/papers/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
           DEEP_MD: ${{ inputs.deep_dive_md }}
           USED_MODEL: ${{ inputs.used_model }}
           TRUNCATED_PCT: ${{ inputs.truncated_pct }}
@@ -327,7 +316,7 @@ jobs:
       - name: Detect duplicates
         id: dup
         run: |
-          FILE="docs/${{ inputs.period }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
+          FILE="docs/papers/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
           if git log --all --oneline -- "$FILE" | head -n 1 > /dev/null 2>&1; then
             COUNT=$(git log --all --oneline -- "$FILE" | wc -l | tr -d ' ')
             echo "exists=true count=$COUNT"
@@ -343,14 +332,13 @@ jobs:
       - name: Commit and push
         if: steps.dup.outputs.exists != 'true'
         env:
-          PERIOD: ${{ inputs.period }}
           ARXIV_ID: ${{ inputs.arxiv_id }}
           SLUG: ${{ inputs.slug }}
           MSG: ${{ inputs.message }}
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          FILE="docs/${PERIOD}/${ARXIV_ID}-${SLUG}.md"
+          FILE="docs/papers/${ARXIV_ID}-${SLUG}.md"
           ARXIV_ID_RAW=$(echo "$ARXIV_ID" | sed 's|/|_|g')
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

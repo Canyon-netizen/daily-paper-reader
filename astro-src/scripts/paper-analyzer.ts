@@ -1268,7 +1268,6 @@ async function saveDeepDiveToGitHub(
   const repo = loadGitHubRepo();
   if (!token) throw new Error('请先在 /settings/ 页面填 GitHub PAT(需要 repo 权限)');
 
-  const period = todayPeriod();
   const slug = slugifyTitle(r.title || r.title_en || entry.title, entry.arxivId);
   const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/workflows/${repo.workflow}/dispatches`;
 
@@ -1294,7 +1293,6 @@ async function saveDeepDiveToGitHub(
       inputs: {
         mode: 'append-deepdive',
         md_content: '',  // append 模式不用,占位避免 workflow 报错
-        period,
         arxiv_id: entry.arxivId,
         slug,
         message: `chore: deep dive ${entry.arxivId} via web analyzer`,
@@ -1415,17 +1413,6 @@ function renderDeepDiveMarkdown(md: string): string {
 // ============================================================================
 // 把 AnalysisResult + arxiv 元数据生成完整 .md 文件(对齐后台 docs 格式)
 // ============================================================================
-function todayPeriod(): string {
-  // 后台归档期格式:YYYYMMDD-YYYYMMDD(开始 - 结束)。单篇 web 保存时,只填开始日期,
-  // 结束日期用当天;后续后台 daily pipeline 会按真实抓取周期聚合。
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const stamp = `${y}${m}${day}`;
-  return `${stamp}-${stamp}`;
-}
-
 function slugifyTitle(title: string, arxivId: string): string {
   // arxivId 已经含版本号 + 短 hash,适合作为 slug 主干
   // 如果需要更"人类可读"的标题 slug,可以再附加 title 的 ascii 化短串
@@ -1485,7 +1472,6 @@ async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promis
     throw new Error('当前结果没有 arxiv 元数据(只支持 arxiv 论文保存;PDF 上传暂不支持)');
   }
   const md = buildMarkdownNote(r, entry);
-  const period = todayPeriod();
   const slug = slugifyTitle(r.title || r.title_en || entry.title, entry.arxivId);
 
   const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/workflows/${repo.workflow}/dispatches`;
@@ -1501,7 +1487,6 @@ async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promis
       ref: 'main',
       inputs: {
         md_content: md,
-        period,
         arxiv_id: entry.arxivId,
         slug,
         message: `chore: add ${entry.arxivId} from web analyzer`,

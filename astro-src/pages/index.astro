@@ -117,13 +117,7 @@ const latestDateLabel = latestDate
       {topPapers.length > 0 ? (
         <ul class="paper-grid">
           {topPapers.map((p, i) => {
-            // 论文 ID 可能是 2 段 (period 模式: YYYYMMDD-YYYYMMDD/<arxivId>-<slug>)
-            // 或 3 段 (ym-day 模式: YYYYMM/DD/<arxivId>-<slug>)。检查 id 分隔符
-            // 数动态选 URL 模板,否则 2 段论文会拼成 4 段变成 /.../2606.27180v1.../2606.27180v1.../
-            const segments = p.id.split('/');
-            const href = segments.length === 3
-              ? `${base}/${p.yearMonth}/${p.day}/${p.slug}/`       // ym-day 模式
-              : `${base}/${p.id}/`;                                // period 模式:id 本身就是路径
+            const href = `${base}/papers/${p.slug}/`;
             return (
               <li class="paper-card" data-rank={i + 1}>
                 <a href={href} class="paper-card-link">
@@ -204,10 +198,7 @@ const latestDateLabel = latestDate
                 </summary>
                 <ul class="tag-papers">
                   {items.slice(0, 10).map((p) => {
-                    const segments = p.id.split('/');
-                    const href = segments.length === 3
-                      ? `${base}/${p.yearMonth}/${p.day}/${p.slug}/`
-                      : `${base}/${p.id}/`;
+                    const href = `${base}/papers/${p.slug}/`;
                     return (
                       <li>
                         <a href={href} class="tag-paper-link">
@@ -225,10 +216,7 @@ const latestDateLabel = latestDate
                   {items.length > 10 && (
                     <>
                       {items.slice(10).map((p) => {
-                        const segments = p.id.split('/');
-                        const href = segments.length === 3
-                          ? `${base}/${p.yearMonth}/${p.day}/${p.slug}/`
-                          : `${base}/${p.id}/`;
+                        const href = `${base}/papers/${p.slug}/`;
                         return (
                           <li class="tag-paper-rest" data-tag-rest hidden>
                             <a href={href} class="tag-paper-link">
