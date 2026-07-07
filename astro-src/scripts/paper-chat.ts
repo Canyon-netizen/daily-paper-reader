@@ -20,6 +20,17 @@ interface ChatMessage {
   content: string;
 }
 
+// escapeHtml:之前漏写导致 paper-chat.ts 顶层调用 initChat() 抛 ReferenceError,
+// 整个 ES module bundle 求值失败,顺带把 paper-figures.ts 的 initFigures 也拖死,
+// 表现为"图表 carousel 按钮点不到"。放在模块顶层,其它页面 import 也无害。
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 // ============================================================================
 // LLM 调用:简化版 chat completion(不走 paper-analyzer.callLLM,那是为
 // 结构化 JSON 输出设计的,聊天拿 content 字符串即可)。
@@ -458,4 +469,12 @@ function initChat(): void {
   });
 }
 
-initChat();
+// 顶层 try 包住:之前 initChat() 抛 ReferenceError 时(escapeHtml 未定义)
+// 整个 ES module bundle 求值中断,顺带把 paper-figures.ts 的 initFigures
+// 也拖死——表现就是论文图表 carousel 按钮没绑事件、点不到。
+// 这里 catch + console.error,让同 bundle 其它顶层语句仍能继续执行。
+try {
+  initChat();
+} catch (e) {
+  console.error('[paper-chat] init failed:', e);
+}

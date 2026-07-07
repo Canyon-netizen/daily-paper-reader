@@ -7,7 +7,11 @@ let bound = false;
 
 function clampIndex(i: number, n: number): number {
   if (!Number.isFinite(i) || n <= 0) return 0;
-  return Math.max(0, Math.min(n - 1, i));
+  // 用模运算环绕,而不是 min 截断 ——
+  // 之前是 max(0, min(n-1, i)),在最后一张(current = n-1)点 next 时 i=n,
+  // clampIndex 返回 n-1,current 不变,按钮表现为"没反应"。
+  // 用户感知:点到最后一张就卡住,以为是没绑事件。
+  return ((Math.floor(i) % n) + n) % n;
 }
 
 function initFigures(): void {
@@ -131,7 +135,12 @@ function initFigures(): void {
 }
 
 function bootstrap(): void {
-  initFigures();
+  // 包 try/catch:若 carousel DOM 异常或别处先抛,不影响 astro:page-load 等后续重挂
+  try {
+    initFigures();
+  } catch (e) {
+    console.error('[paper-figures] init failed:', e);
+  }
 }
 
 if (document.readyState === 'loading') {
