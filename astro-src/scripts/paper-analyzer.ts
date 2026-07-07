@@ -657,26 +657,31 @@ async function extractPdfText(file: File): Promise<string> {
   setStatus(`解析 PDF: ${file.name} (${(file.size / 1024).toFixed(0)} KB)...`);
   const buf = await file.arrayBuffer();
   const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-
-  const totalPages = doc.numPages;
-  let text = '';
-  const maxPages = Math.min(totalPages, 30); // 论文一般前 20 页足够
-  for (let i = 1; i <= maxPages; i++) {
-    setStatus(`解析 PDF 第 ${i}/${maxPages} 页...`);
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    const pageText = content.items
-      .map((it: any) => ('str' in it ? it.str : ''))
-      .filter(Boolean)
-      .join(' ');
-    text += pageText + '\n\n';
-    if (text.length > MAX_TEXT_CHARS) break;
+  try {
+    const totalPages = doc.numPages;
+    let text = '';
+    const maxPages = Math.min(totalPages, 30); // 论文一般前 20 页足够
+    for (let i = 1; i <= maxPages; i++) {
+      setStatus(`解析 PDF 第 ${i}/${maxPages} 页...`);
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items
+        .map((it: any) => ('str' in it ? it.str : ''))
+        .filter(Boolean)
+        .join(' ');
+      text += pageText + '\n\n';
+      if (text.length > MAX_TEXT_CHARS) break;
+    }
+    text = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    if (text.length > MAX_TEXT_CHARS) {
+      text = text.slice(0, MAX_TEXT_CHARS) + '\n\n[... 已截断 ...]';
+    }
+    return text;
+  } finally {
+    // PDF.js 内部 task worker + typed array,必须显式 destroy() 释放,
+    // 否则页面长时间停留会累计内存(单分析任务 < 1MB 累计,批量 deep-dive 时上千 MB)。
+    doc.destroy().catch(() => {});
   }
-  text = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  if (text.length > MAX_TEXT_CHARS) {
-    text = text.slice(0, MAX_TEXT_CHARS) + '\n\n[... 已截断 ...]';
-  }
-  return text;
 }
 
 // 精读专用:从 ArrayBuffer 解析 PDF 文本,允许更大上限和自定义状态回调。
@@ -687,34 +692,37 @@ async function extractPdfTextFromBuffer(
 ): Promise<string> {
   const pdfjsLib = await ensurePdfJs();
   const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  try {
+    const totalPages = doc.numPages;
+    const maxPages = opts.maxPages ?? Math.min(totalPages, 60);
+    const maxChars = opts.maxChars ?? 800_000;
 
-  const totalPages = doc.numPages;
-  const maxPages = opts.maxPages ?? Math.min(totalPages, 60);
-  const maxChars = opts.maxChars ?? 800_000;
-
-  let text = '';
-  for (let i = 1; i <= maxPages; i++) {
-    statusCb(`解析 PDF 第 ${i}/${maxPages} 页...`);
-    try {
-      const page = await doc.getPage(i);
-      const content = await page.getTextContent();
-      const pageText = content.items
-        .map((it: any) => ('str' in it ? it.str : ''))
-        .filter(Boolean)
-        .join(' ');
-      text += pageText + '\n\n';
-    } catch (e) {
-      // 防御性兜底:某些 PDF 在 worker 解析时,numPages 报告正常但 getPage(i) 仍可能抛
-      // "Invalid page request"(常见于页对象损坏 / worker 半挂)。
-      // 一旦遇到,后续页大概率全挂,直接停 — 已抽到的文本足够 LLM 精读。
-      const msg = (e as Error)?.message || String(e);
-      statusCb(`第 ${i} 页解析失败 (${msg.slice(0, 60)}),停止抽取,继续使用已抽到的 ${text.length.toLocaleString()} 字符`);
-      break;
+    let text = '';
+    for (let i = 1; i <= maxPages; i++) {
+      statusCb(`解析 PDF 第 ${i}/${maxPages} 页...`);
+      try {
+        const page = await doc.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items
+          .map((it: any) => ('str' in it ? it.str : ''))
+          .filter(Boolean)
+          .join(' ');
+        text += pageText + '\n\n';
+      } catch (e) {
+        // 防御性兜底:某些 PDF 在 worker 解析时,numPages 报告正常但 getPage(i) 仍可能抛
+        // "Invalid page request"(常见于页对象损坏 / worker 半挂)。
+        // 一旦遇到,后续页大概率全挂,直接停 — 已抽到的文本足够 LLM 精读。
+        const msg = (e as Error)?.message || String(e);
+        statusCb(`第 ${i} 页解析失败 (${msg.slice(0, 60)}),停止抽取,继续使用已抽到的 ${text.length.toLocaleString()} 字符`);
+        break;
+      }
+      if (text.length > maxChars) break;
     }
-    if (text.length > maxChars) break;
+    text = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    return text;
+  } finally {
+    doc.destroy().catch(() => {});
   }
-  text = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-  return text;
 }
 
 function showFileBar(name: string, size: number): void {
@@ -1099,7 +1107,11 @@ const MODEL_CONTEXT: Record<string, number> = {
 function estimateContext(model: string): number {
   if (MODEL_CONTEXT[model]) return MODEL_CONTEXT[model];
   const lower = (model || '').toLowerCase();
-  for (const k of Object.keys(MODEL_CONTEXT)) {
+  // 后备:按 key 长度倒序匹配,优先取最具体的(例如 'deepseek-reasoner'
+  // 必须先于 'deepseek-chat' 命中)。substring 排序不能保证先后 — 直接
+  // 按 key.length 倒序遍历更稳。
+  const keys = Object.keys(MODEL_CONTEXT).sort((a, b) => b.length - a.length);
+  for (const k of keys) {
     if (lower.includes(k.toLowerCase())) return MODEL_CONTEXT[k];
   }
   return 32_000; // 保守兜底
@@ -1939,24 +1951,28 @@ async function runAnalysis(): Promise<void> {
       const pdfjsLib = await ensurePdfJs();
       setStatus('解析 arXiv PDF...');
       const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-      let acc = '';
-      const maxPages = Math.min(doc.numPages, 25);
-      for (let i = 1; i <= maxPages; i++) {
-        setStatus(`解析 arXiv PDF 第 ${i}/${maxPages} 页...`);
-        try {
-          const page = await doc.getPage(i);
-          const content = await page.getTextContent();
-          acc += content.items.map((it: any) => ('str' in it ? it.str : '')).filter(Boolean).join(' ') + '\n\n';
-        } catch (e) {
-          // 同 extractPdfTextFromBuffer 的防御:页对象损坏时停止,已抽文本够用
-          const msg = (e as Error)?.message || String(e);
-          setStatus(`第 ${i} 页解析失败 (${msg.slice(0, 60)}),继续使用已抽到的 ${acc.length.toLocaleString()} 字符`);
-          break;
+      try {
+        let acc = '';
+        const maxPages = Math.min(doc.numPages, 25);
+        for (let i = 1; i <= maxPages; i++) {
+          setStatus(`解析 arXiv PDF 第 ${i}/${maxPages} 页...`);
+          try {
+            const page = await doc.getPage(i);
+            const content = await page.getTextContent();
+            acc += content.items.map((it: any) => ('str' in it ? it.str : '')).filter(Boolean).join(' ') + '\n\n';
+          } catch (e) {
+            // 同 extractPdfTextFromBuffer 的防御:页对象损坏时停止,已抽文本够用
+            const msg = (e as Error)?.message || String(e);
+            setStatus(`第 ${i} 页解析失败 (${msg.slice(0, 60)}),继续使用已抽到的 ${acc.length.toLocaleString()} 字符`);
+            break;
+          }
+          if (acc.length > MAX_TEXT_CHARS) break;
         }
-        if (acc.length > MAX_TEXT_CHARS) break;
+        text = acc.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+        if (text.length > MAX_TEXT_CHARS) text = text.slice(0, MAX_TEXT_CHARS) + '\n\n[... 截断 ...]';
+      } finally {
+        doc.destroy().catch(() => {});
       }
-      text = acc.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
-      if (text.length > MAX_TEXT_CHARS) text = text.slice(0, MAX_TEXT_CHARS) + '\n\n[... 截断 ...]';
     } else {
       setStatus('请先上传 PDF 或选择一篇 arXiv 论文', 'error');
       return;

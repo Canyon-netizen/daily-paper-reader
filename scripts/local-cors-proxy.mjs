@@ -55,18 +55,25 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Allowlist so a misbehaving page can't use this as an open relay.
-  const ALLOW = [
-    'arxiv.org',
-    'export.arxiv.org',
-    // PDF.js worker / module CDN
-    'cdn.bootcdn.net',
-    'cdn.jsdelivr.net',
-    'unpkg.com',
-  ];
-  if (!ALLOW.includes(parsed.hostname)) {
+  // Allowlist: arxiv 全域放行(本工具的本职),CDN 资源(bootcdn/jsdelivr/unpkg)
+  // 只放 PDF.js 的代码包路径,避免被当开放 CDN 跳板。
+  //   bootcdn:/ajax/libs/pdf.js/*
+  //   jsdelivr:/npm/pdfjs-dist@*  (jsdelivr 用 @ 分版本号,只看前半段足以锁定包)
+  //   unpkg:   /pdfjs-dist@*  (unpkg 同样)
+  // 路径外的请求一律 403。
+  const isPdfjsPath = parsed.hostname === 'cdn.bootcdn.net' &&
+    parsed.pathname.startsWith('/ajax/libs/pdf.js/');
+  const isJsdelivrPdfjs = parsed.hostname === 'cdn.jsdelivr.net' &&
+    parsed.pathname.startsWith('/npm/pdfjs-dist');
+  const isUnpkgPdfjs = parsed.hostname === 'unpkg.com' &&
+    parsed.pathname.startsWith('/pdfjs-dist');
+  const isArxiv = [
+    'arxiv.org', 'export.arxiv.org', 'www.arxiv.org', 'browse.arxiv.org',
+  ].includes(parsed.hostname);
+
+  if (!(isArxiv || isPdfjsPath || isJsdelivrPdfjs || isUnpkgPdfjs)) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end(`Host not allowed: ${parsed.hostname}\n`);
+    res.end(`Host not allowed: ${parsed.hostname}${parsed.pathname}\n`);
     return;
   }
 
