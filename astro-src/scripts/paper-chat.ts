@@ -13,6 +13,7 @@
 // 不抛错打断调用方。
 
 import { loadSettings, type LLMConfig } from './settings';
+import { renderMarkdownBody } from '../lib/markdown';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -48,9 +49,16 @@ async function sendChat(messages: ChatMessage[], cfg: LLMConfig): Promise<string
     throw new Error(`LLM API 错误 (${res.status}): ${text.slice(0, 200)}`);
   }
   const data = await res.json();
-  const content: string = data?.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('LLM 返回为空');
-  return content.trim();
+  let content: string = data?.choices?.[0]?.message?.content ?? '';
+  // 推理模型(DeepSeek-R1 等)可能把中间思考放到独立字段,这里合成进 content
+  // 后由 markdown 渲染器统一折叠展示,而非直接丢给用户。
+  const reasoning: string = data?.choices?.[0]?.message?.reasoning_content
+    || data?.choices?.[0]?.message?.reasoning
+    || '';
+  if (reasoning) content = `思考过程:\n${reasoning}\n\n---\n\n${content}`;
+  if (!content.trim()) throw new Error('LLM 返回为空');
+  // 即便上游只把 思路 放在 content 里,也整体走渲染器统一处理。
+  return content;
 }
 
 // ============================================================================
@@ -93,31 +101,57 @@ function buildSystemPrompt(d: DOMStringMap): string {
 }
 
 // ============================================================================
-// 极简 Markdown:bold / italic / inline code / 链接 / 换行。不引外部依赖。
+// Markdown 渲染 — 复用 lib/markdown 的 SSR 渲染器,标题自动 downshift 两级。
+// 唯一的额外职责:把模型输出里偶发的 块包成可折叠 details,默认收起。
 // ============================================================================
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
 
-function renderInline(s: string): string {
-  let out = escapeHtml(s);
-  out = out.replace(/`([^`\n]+?)`/g, '<code>$1</code>');
-  out = out.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
-  out = out.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g, '$1<em>$2</em>');
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_m, txt, url) =>
-    `<a href="${url}" target="_blank" rel="noopener">${txt}</a>`,
-  );
+// 按字符位置扫描 块(可独占行、可与正文同行、可跨段),
+function extractThinkSegments(
+  src: string,
+): Array<{ kind: 'think' | 'plain'; text: string }> {
+  const out: Array<{ kind: 'think' | 'plain'; text: string }> = [];
+  const closeRe = /<\/think>/gi;
+  let cursor = 0;
+  let m: RegExpExecArray | null;
+  while ((m = closeRe.exec(src)) !== null) {
+    const segmentEnd = m.index;
+    const segment = src.slice(cursor, segmentEnd);
+    const openIdx = segment.toLowerCase().lastIndexOf('<');
+    if (openIdx === -1) {
+      if (segment) out.push({ kind: 'plain', text: segment });
+    } else {
+      const before = segment.slice(0, openIdx);
+      const innerStart = openIdx + 7;
+      const inner = segment.slice(innerStart);
+      if (before) out.push({ kind: 'plain', text: before });
+      if (inner.trim()) out.push({ kind: 'think', text: inner });
+    }
+    cursor = m.index + m[0].length;
+  }
+  const tail = src.slice(cursor);
+  if (tail) out.push({ kind: 'plain', text: tail });
   return out;
 }
 
 function renderMessageBody(content: string): string {
-  return content
-    .split(/\n{2,}/)
-    .map((para) => `<p>${renderInline(para).replace(/\n/g, '<br>')}</p>`)
+  // 剥离 块后每段都交给 SSR 渲染器。chat: true 让标题整体下移两级,跳过 figures 区块。
+  // think 段渲染后再包成可折叠的 details;plain 段直接渲染。
+  const segs = extractThinkSegments(content);
+  return segs
+    .map((seg) => {
+      const rendered = renderMarkdownBody(seg.text, { chat: true });
+      if (seg.kind === 'think') {
+        return (
+          '<details class="paper-chat-think">' +
+          '<summary>🧠 思考过程</summary>' +
+          '<div class="paper-chat-think-body">' +
+          rendered +
+          '</div>' +
+          '</details>'
+        );
+      }
+      return rendered;
+    })
     .join('');
 }
 
@@ -347,7 +381,17 @@ function initChat(): void {
 
     const placeholder = document.createElement('div');
     placeholder.className = 'paper-chat-msg paper-chat-msg--assistant paper-chat-msg--thinking';
-    placeholder.textContent = '思考中…';
+    placeholder.textContent = '思考中';
+    const dots = document.createElement('span');
+    dots.className = 'paper-chat-thinking-dots';
+    dots.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 3; i++) {
+      const d = document.createElement('span');
+      d.className = 'dot';
+      d.textContent = '.';
+      dots.appendChild(d);
+    }
+    placeholder.appendChild(dots);
     stream.appendChild(placeholder);
     stream.scrollTop = stream.scrollHeight;
 

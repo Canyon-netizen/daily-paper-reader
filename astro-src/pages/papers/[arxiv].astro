@@ -5,7 +5,8 @@
 import type { GetStaticPaths } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
-import { readPaper, listAllPaperIds, renderMarkdownBody } from '../../lib/paper';
+import { readPaper, listAllPaperIds } from '../../lib/paper';
+import { renderMarkdownBody } from '../../lib/markdown';
 import '../../styles/paper-chat.css';
 
 export const getStaticPaths: GetStaticPaths = async () => {
@@ -427,7 +428,9 @@ const base = import.meta.env.BASE_URL;
   align-items: center;
   justify-content: center;
   transition: background var(--transition), border-color var(--transition), color var(--transition);
-  z-index: 2;
+  /* 必须高于 .paper-chat-panel(z-index:9991)。对话侧栏展开时 fixed 浮在右侧,
+     不提上来按钮就被侧栏挡住点不到。 */
+  z-index: 9992;
 }
 .paper-carousel-btn:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .paper-carousel-btn:disabled { opacity: 0.35; cursor: not-allowed; }

@@ -172,8 +172,115 @@
   font-family: var(--font-mono);
   font-size: 0.85em;
 }
+.paper-chat-msg pre {
+  margin: 0.35rem 0;
+  padding: 0.6rem 0.75rem;
+  background: var(--code-bg);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.paper-chat-msg pre code {
+  background: transparent;
+  padding: 0;
+}
+.paper-chat-msg ul,
+.paper-chat-msg ol {
+  margin: 0.3rem 0 0.5rem;
+  padding-left: 1.3rem;
+}
+.paper-chat-msg li {
+  margin: 0.15rem 0;
+}
+.paper-chat-msg blockquote {
+  margin: 0.4rem 0;
+  padding: 0.2rem 0.7rem;
+  border-left: 3px solid var(--border);
+  color: var(--fg-muted);
+}
+.paper-chat-msg hr {
+  border: 0;
+  border-top: 1px dashed var(--border);
+  margin: 0.6rem 0;
+}
+.paper-chat-msg h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0.5rem 0 0.3rem;
+  color: var(--fg);
+}
+.paper-chat-msg h4 {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin: 0.4rem 0 0.25rem;
+  color: var(--fg);
+}
+.paper-chat-msg h5 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin: 0.35rem 0 0.2rem;
+  color: var(--fg-muted);
+}
+.paper-chat-msg h1 {
+  /* chat 模式不输出 h1(都被 downshift 到 h3 了)。但万一用户复制粘贴保留一份保险 */
+  font-size: 1rem;
+  font-weight: 700;
+  margin: 0.5rem 0 0.3rem;
+}
+.paper-chat-msg strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+.paper-chat-msg em {
+  font-style: italic;
+}
+.paper-chat-msg img {
+  max-width: 100%;
+  border-radius: 4px;
+  margin: 0.3rem 0;
+}
+.paper-chat-msg .paper-chat-think {
+  margin: 0.3rem 0 0.5rem;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-elevated) 70%, var(--bg) 30%);
+}
+.paper-chat-msg .paper-chat-think summary {
+  cursor: pointer;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  list-style: none;
+  user-select: none;
+}
+.paper-chat-msg .paper-chat-think summary::marker,
+.paper-chat-msg .paper-chat-think summary::-webkit-details-marker {
+  display: none;
+}
+.paper-chat-msg .paper-chat-think-body {
+  padding: 0 0.6rem 0.5rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  border-top: 1px dashed var(--border);
+}
 .paper-chat-msg a {
   color: var(--link);
+}
+.paper-chat-msg table.paper-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin: 0.4rem 0;
+}
+.paper-chat-msg table.paper-md-table th,
+.paper-chat-msg table.paper-md-table td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+.paper-chat-msg table.paper-md-table th {
+  background: color-mix(in srgb, var(--bg-elevated) 50%, var(--bg) 50%);
+  font-weight: 600;
 }
 
 .paper-chat-msg--user {
@@ -193,19 +300,21 @@
   color: var(--fg-muted);
   font-style: italic;
 }
-.paper-chat-msg--thinking::after {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  text-align: left;
-  animation: paper-chat-dot 1.2s steps(4, end) infinite;
+.paper-chat-thinking-dots {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 2px;
+  vertical-align: baseline;
 }
-@keyframes paper-chat-dot {
-  0%   { content: ''; }
-  25%  { content: '.'; }
-  50%  { content: '..'; }
-  75%  { content: '...'; }
-  100% { content: ''; }
+.paper-chat-thinking-dots .dot {
+  opacity: 0.25;
+  animation: paper-chat-blink 1.2s infinite;
+}
+.paper-chat-thinking-dots .dot:nth-child(2) { animation-delay: 0.2s; }
+.paper-chat-thinking-dots .dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes paper-chat-blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40%           { opacity: 1; }
 }
 .paper-chat-msg--unread {
   outline: 2px solid var(--accent);
