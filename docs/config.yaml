@@ -1,3 +1,21 @@
+# Daily Paper Reader 配置文件
+#
+# 关键约定:
+#   - 本文件是 daily pipeline 的运行时配置。GitHub Actions
+#     跑 src/main.py 时会读写本文件(`src/source_config.py:load_config_with_source_migration`
+#     是入口,改前先看那里)。
+#   - intent_profiles 下面的 `embedding_json` 字段是 **build 缓存**(上一次
+#     remote embedding 服务返回的向量快照),会被 0.enrich_config_queries.py
+#     定期重写,human 不必手动改。改 query_text / prefixed_text 后
+#     embedding_json 会失效,跑一次 0.enrich_config_queries.py 即可。
+#   - fork 用户私有覆写请写到 `config.user.yaml`(gitignored),
+#     在 src/source_config.py:user_config_path() 解析。`config.user.yaml.example`
+#     是模板。**永远不要把 API key 写进任何 config.yaml**。
+#   - anon_key(sb_publishable_*)是 Supabase 公开 anon key,设计上对客户端公开,
+#     RLS 保证安全;service_role key 走 GitHub Actions secret / 本地 .env,
+#     绝对不能进仓库。
+#   - 本文件顶部由 `.gitattributes:merge=ours` 保护,fork 用户的本地修改
+#     在 git pull --rebase 时不会被上游覆盖。
 github:
   owner: ''
   repo: daily-paper-reader
