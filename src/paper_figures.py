@@ -713,6 +713,103 @@ def extract_figures_from_pdf(
     return figures
 
 
+# ============================================================================
+# 末档 fallback:把 PDF 整页 rasterize 成 webp,作为"页面预览图"。
+# 适用场景:TikZ/PGFplots 矢量图论文,或纯文字+表格的 industry paper——
+# 既无 eprint figure 文件,PDF 内也无 embedded image。
+# 这种论文抽不到真正的 figure,但用户在论文页上至少能看到几页内容预览,
+# 比直接空着好。
+#
+# 实现:
+#   - 用 PyMuPDF 每页渲染成 2x DPI 的 PNG,转 webp
+#   - 跳过末尾的 References / Acknowledgements 页(启发式:含特定标题段落)
+#   - 最多取前 max_pages 页
+#   - caption 注明"第 N 页渲染",提醒读者这是整页截图
+# ============================================================================
+RASTER_FALLBACK_MAX_PAGES = 6
+RASTER_FALLBACK_SKIP_HEADINGS = (
+    "references",
+    "acknowledgements",
+    "acknowledgments",
+    "bibliography",
+)
+
+
+def _page_should_skip(page_text_lower: str) -> bool:
+    """页内文本里是否以 References/Acknowledgements 开头(启发式判断页是否在文末参考文献段)。"""
+    head = page_text_lower.strip().splitlines()[:3]
+    if not head:
+        return False
+    first = head[0].strip().rstrip(":").strip()
+    return first in RASTER_FALLBACK_SKIP_HEADINGS
+
+
+def rasterize_pdf_pages_as_figures(
+    pdf_path: str,
+    output_dir: str,
+    relative_prefix: str,
+    *,
+    max_pages: int = RASTER_FALLBACK_MAX_PAGES,
+    dpi_scale: float = 2.0,
+) -> List[Dict[str, Any]]:
+    """把 PDF 前 N 页(非 References 段)渲染成 webp,作为末档 figure。"""
+    os.makedirs(output_dir, exist_ok=True)
+    figures: List[Dict[str, Any]] = []
+    fig_index = 1
+
+    with fitz.open(pdf_path) as doc:
+        n_pages = len(doc)
+        for page_idx in range(n_pages):
+            page = doc[page_idx]
+            try:
+                page_text = page.get_text("text") or ""
+            except Exception:
+                page_text = ""
+            if _page_should_skip(page_text.lower()):
+                # 跳过 References/Acknowledgements 起始页
+                break
+            if len(figures) >= max_pages:
+                break
+
+            mat = fitz.Matrix(dpi_scale, dpi_scale)
+            try:
+                pix = page.get_pixmap(matrix=mat, alpha=False)
+            except Exception:
+                continue
+
+            png_path = os.path.join(output_dir, f"_raster_{fig_index:03d}.png")
+            file_name = f"fig-{fig_index:03d}.webp"
+            webp_path = os.path.join(output_dir, file_name)
+            try:
+                pix.save(png_path)
+            except Exception:
+                continue
+            try:
+                width, height = _save_webp_from_path(png_path, webp_path)
+            except Exception:
+                continue
+            try:
+                os.remove(png_path)
+            except OSError:
+                pass
+
+            figures.append(
+                {
+                    "url": "/".join([relative_prefix.strip("/"), file_name]),
+                    "caption": f"第 {page_idx + 1} 页渲染(论文原文无内嵌图)",
+                    "page": page_idx + 1,
+                    "index": fig_index,
+                    "width": width,
+                    "height": height,
+                }
+            )
+            fig_index += 1
+
+    if figures:
+        _save_figures_meta(os.path.join(output_dir, "meta.json"), figures, extractor="pdf-rasterize")
+    return figures
+
+
 def ensure_paper_figures(
     *,
     pdf_url: str,
@@ -770,12 +867,18 @@ def ensure_paper_media(
             return eprint_figs, []
 
     pdf_bytes = _download_pdf_bytes(pdf_url)
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=True) as tmp_pdf:
+    # 不用 NamedTemporaryFile(delete=True):PyMuPDF 在 Windows 下会延迟到
+    # with 块退出后才真正读文件,导致 race 把临时文件删掉后 fitz.open 拿不到
+    # 内容。手动管生命周期:close 后保留 name,最后显式 unlink。
+    tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    try:
         tmp_pdf.write(pdf_bytes)
         tmp_pdf.flush()
+        tmp_pdf.close()
+        tmp_path = tmp_pdf.name
 
         figures, tables = _extract_media_with_papercropper(
-            tmp_pdf.name,
+            tmp_path,
             figure_dir,
             figure_relative_prefix,
             table_dir,
@@ -784,4 +887,15 @@ def ensure_paper_media(
         if figures or tables:
             return figures, tables
 
-        return extract_figures_from_pdf(tmp_pdf.name, figure_dir, figure_relative_prefix), []
+        figures = extract_figures_from_pdf(tmp_path, figure_dir, figure_relative_prefix)
+        if figures:
+            return figures, []
+
+        # 末档:TikZ 矢量图 / 纯文字论文,PDF 里没 embedded image,转成整页渲染图。
+        raster = rasterize_pdf_pages_as_figures(tmp_path, figure_dir, figure_relative_prefix)
+        return raster, []
+    finally:
+        try:
+            os.remove(tmp_pdf.name)
+        except OSError:
+            pass
