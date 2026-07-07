@@ -155,7 +155,7 @@ jobs:
           if [ -n "$ONLY_ID" ]; then
             ARGS+=(--only-id "$ONLY_ID")
           fi
-          python src/maintain/refresh_versions.py "${ARGS[@]}"
+          bash scripts/run-pipeline.sh src/maintain/refresh_versions.py "${ARGS[@]}"
 
       - name: Rebuild arxiv index
         if: ${{ github.event.inputs.dry_run != 'true' }}
