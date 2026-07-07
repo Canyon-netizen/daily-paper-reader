@@ -41,7 +41,12 @@ def run_step(label: str, args: list[str], env: dict[str, str] | None = None) -> 
     print(f"[INFO] {label}: {' '.join(args)}", flush=True)
     # 显式把当前 process env 传给子进程,确保 Gist loader 注入的变量能继承
     merged = {**os.environ, **(env or {})}
-    subprocess.run(args, check=True, env=merged)
+    # 子脚本是 package-mode (`from src.X import ...`),script-mode 启动时
+    # sys.path[0]=<script-dir>=src/, 找不到 src 包。把 cwd 强制 ROOT_DIR 并把
+    # ROOT_DIR 注入 PYTHONPATH, 让 `from src.X` 在子进程里能解析。
+    # 用 = 显式覆盖,避免继承到外部已污染的 PYTHONPATH。
+    merged["PYTHONPATH"] = ROOT_DIR
+    subprocess.run(args, check=True, env=merged, cwd=ROOT_DIR)
 
 
 def load_gist_env() -> None:
