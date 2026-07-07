@@ -296,117 +296,6 @@ const base = import.meta.env.BASE_URL;
   .paper-figures-wrap > summary::before { content: '▶ '; transition: transform 150ms; display: inline-block; }
   .paper-figures-wrap[open] > summary::before { transform: rotate(90deg); }
 
-  .paper-carousel {
-    position: relative;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    padding: 1rem 3rem 0.5rem;
-    margin-top: 0.8rem;
-    outline: none;
-  }
-  .paper-carousel:focus-visible { border-color: var(--accent); }
-
-  .paper-carousel-track {
-    position: relative;
-    overflow: hidden;
-    border-radius: var(--radius-md);
-    background: var(--bg);
-    min-height: 320px;
-  }
-
-  .paper-slide {
-    margin: 0;
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    opacity: 0;
-    transition: opacity 200ms ease-out;
-    pointer-events: none;
-  }
-  .paper-slide.is-active {
-    opacity: 1;
-    pointer-events: auto;
-    position: relative;
-  }
-  .paper-slide-frame {
-    flex: 1 1 auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    min-height: 0;
-  }
-  .paper-slide-frame img {
-    max-width: 100%;
-    max-height: 100%;
-    width: auto;
-    height: auto;
-    object-fit: contain;
-    display: block;
-  }
-  .paper-slide figcaption {
-    font-size: 0.85rem;
-    color: var(--fg-muted);
-    padding: 0.5rem 0;
-    text-align: center;
-    max-width: 90%;
-  }
-
-  .paper-carousel-btn {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 2.25rem;
-    height: 2.25rem;
-    border-radius: 50%;
-    border: 1px solid var(--border);
-    background: var(--bg-elevated);
-    color: var(--fg);
-    font-size: 1.5rem;
-    line-height: 1;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background var(--transition), border-color var(--transition), color var(--transition);
-    z-index: 2;
-  }
-  .paper-carousel-btn:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-  .paper-carousel-btn:disabled { opacity: 0.35; cursor: not-allowed; }
-  .paper-carousel-prev { left: 0.5rem; }
-  .paper-carousel-next { right: 0.5rem; }
-
-  .paper-carousel-dots {
-    display: flex;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 0.6rem 0 0.2rem;
-  }
-  .paper-carousel-dot {
-    width: 0.55rem;
-    height: 0.55rem;
-    border-radius: 50%;
-    border: 1px solid var(--border-strong);
-    background: transparent;
-    padding: 0;
-    cursor: pointer;
-    transition: background var(--transition), transform var(--transition), border-color var(--transition);
-  }
-  .paper-carousel-dot.is-active {
-    background: var(--accent);
-    border-color: var(--accent);
-    transform: scale(1.2);
-  }
-
-  @media (max-width: 640px) {
-    .paper-carousel { padding: 0.5rem 0.5rem 0; }
-    .paper-carousel-btn { width: 2rem; height: 2rem; font-size: 1.25rem; }
-  }
-
   /* 精读里 LLM 插入的图片(行内) */
   .paper-body .markdown img {
     max-width: 100%;
@@ -415,6 +304,121 @@ const base = import.meta.env.BASE_URL;
     border: 1px solid var(--border);
     margin: 0.5rem 0;
   }
+</style>
+
+<style is:global>
+/* 论文图表 carousel(由 renderMarkdownBody SSR,不走 Astro scoped attribute 回填,
+   所以这里必须 is:global,否则 .paper-slide/... 选择器带上 [data-astro-cid-*] 就匹配不到动态拼出的 HTML) */
+.paper-carousel {
+  position: relative;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 1rem 3rem 0.5rem;
+  margin-top: 0.8rem;
+  outline: none;
+}
+.paper-carousel:focus-visible { border-color: var(--accent); }
+
+.paper-carousel-track {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  min-height: 320px;
+}
+
+.paper-slide {
+  margin: 0;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+  pointer-events: none;
+}
+.paper-slide.is-active {
+  opacity: 1;
+  pointer-events: auto;
+  position: relative;
+}
+.paper-slide-frame {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 0;
+}
+.paper-slide-frame img {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.paper-slide figcaption {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  padding: 0.5rem 0;
+  text-align: center;
+  max-width: 90%;
+}
+
+.paper-carousel-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--transition), border-color var(--transition), color var(--transition);
+  z-index: 2;
+}
+.paper-carousel-btn:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.paper-carousel-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.paper-carousel-prev { left: 0.5rem; }
+.paper-carousel-next { right: 0.5rem; }
+
+.paper-carousel-dots {
+  display: flex;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0 0.2rem;
+}
+.paper-carousel-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transition: background var(--transition), transform var(--transition), border-color var(--transition);
+}
+.paper-carousel-dot.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  transform: scale(1.2);
+}
+
+@media (max-width: 640px) {
+  .paper-carousel { padding: 0.5rem 0.5rem 0; }
+  .paper-carousel-btn { width: 2rem; height: 2rem; font-size: 1.25rem; }
+}
 </style>
 </content>
 </invoke>
