@@ -173,22 +173,30 @@ const base = import.meta.env.BASE_URL;
       ></section>
     )}
   </main>
-</BaseLayout>
 
-<script>
-  import '../../scripts/paper-chat.ts';
-  import '../../scripts/paper-figures.ts';
-</script>
+  <script>
+    import '../../scripts/paper-chat.ts';
+    import '../../scripts/paper-figures.ts';
+  </script>
+</BaseLayout>
 
 <style>
   .paper-page { padding-bottom: 4rem; }
   .container { max-width: var(--content-max-width); margin: 0 auto; padding: 0 1.5rem; }
-  /* 论文正文给常驻对话侧栏让位;由 paper-chat.ts 根据用户偏好切 .container--chat-hidden */
+  /* 论文正文给常驻对话侧栏让位;由 paper-chat.ts 根据用户偏好切 .container--chat-hidden。
+     对话展开时:文字列在"侧栏左侧的可用区"内加宽并居中,填满原本中间的大片空白;
+     用 min() 设上限,超宽屏也不会把行拉得过长,窄屏则自动收窄。 */
   .paper-page .container {
-    padding-right: calc(var(--chat-sidebar-width) + 1.5rem);
-    transition: padding-right 200ms ease-out;
+    --chat-col: min(1080px, calc(100vw - var(--chat-sidebar-width) - 3rem));
+    --chat-side: max(1.5rem, calc((100vw - var(--chat-sidebar-width) - var(--chat-col)) / 2));
+    max-width: none;
+    padding-left: var(--chat-side);
+    padding-right: calc(var(--chat-sidebar-width) + var(--chat-side));
+    transition: padding 200ms ease-out;
   }
   .paper-page .container--chat-hidden {
+    max-width: var(--content-max-width);
+    padding-left: 1.5rem;
     padding-right: 1.5rem;
   }
 
@@ -290,6 +298,31 @@ const base = import.meta.env.BASE_URL;
   .paper-body .markdown li { margin: 0.3em 0; }
   .paper-body .markdown code { background: var(--code-bg); color: var(--code-fg); padding: 0.1em 0.35em; border-radius: 3px; font-size: 0.9em; font-family: var(--font-mono); }
   .paper-body .markdown code.math-inline { background: var(--accent-soft); color: var(--accent); }
+
+  /* Markdown 表格(由 renderMarkdownBody 解析 | ... | 行渲染) */
+  .paper-body .markdown .paper-md-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0 1.5em;
+    font-size: 0.95em;
+    display: block;
+    overflow-x: auto;
+  }
+  .paper-body .markdown .paper-md-table th,
+  .paper-body .markdown .paper-md-table td {
+    border: 1px solid var(--border);
+    padding: 0.5em 0.75em;
+    vertical-align: top;
+  }
+  .paper-body .markdown .paper-md-table th {
+    background: var(--code-bg, rgba(127,127,127,0.08));
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .paper-body .markdown .paper-md-table tbody tr:nth-child(even) td {
+    background: rgba(127,127,127,0.04);
+  }
+  .paper-body .markdown .paper-md-table p { margin: 0; }
 
   /* 论文图表区块(由 renderMarkdownBody 在 body 末尾追加) */
   .paper-figures-wrap { margin: 1.5rem 0; }

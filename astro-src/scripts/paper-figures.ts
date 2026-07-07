@@ -3,6 +3,8 @@
 // 容器高度按所有图片 contain 后最大高度取,避免首屏跳变;位置记 sessionStorage。
 // 复用 paper-chat.ts 的「顶层直接调用 + 早返回」模式,其它页面 import 也无害。
 
+let bound = false;
+
 function clampIndex(i: number, n: number): number {
   if (!Number.isFinite(i) || n <= 0) return 0;
   return Math.max(0, Math.min(n - 1, i));
@@ -12,6 +14,9 @@ function initFigures(): void {
   const details = document.querySelector<HTMLDetailsElement>('.paper-figures-wrap');
   const root = details?.querySelector<HTMLElement>('.paper-carousel');
   if (!details || !root) return;
+  if (bound || root.dataset.bound === '1') return;
+  bound = true;
+  root.dataset.bound = '1';
 
   const slides = Array.from(root.querySelectorAll<HTMLElement>('.paper-slide'));
   const dots = Array.from(root.querySelectorAll<HTMLButtonElement>('.paper-carousel-dot'));
@@ -125,4 +130,15 @@ function initFigures(): void {
   });
 }
 
-initFigures();
+function bootstrap(): void {
+  initFigures();
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
+} else {
+  bootstrap();
+}
+
+// Astro 客户端导航 / 视图过渡后页面可能换 DOM,重新挂一次
+document.addEventListener('astro:page-load', bootstrap);
