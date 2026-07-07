@@ -130,4 +130,4 @@ jobs:
           if [ "${FORCE_FULL_WINDOW:-false}" = "true" ]; then
             ARGS+=(--force-full-window)
           fi
-          bash scripts/run-pipeline.sh src/maintain/biorxiv.py "${ARGS[@]}"
+          python -m src.maintain.biorxiv "${ARGS[@]}"

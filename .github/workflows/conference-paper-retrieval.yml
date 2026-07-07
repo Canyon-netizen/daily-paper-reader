@@ -285,9 +285,9 @@ jobs:
             ARGS+=(--run-llm-refine --llm-min-star "${LLM_MIN_STAR:-4}" --llm-filter-concurrency 2 --display-min-score 4)
           fi
 
-          bash scripts/run-pipeline.sh src/conference_pipeline.py "${ARGS[@]}"
+          python -m src.conference_pipeline "${ARGS[@]}"
 
-          bash scripts/run-pipeline.sh src/conference_sidebar.py \
+          python -m src.conference_sidebar \
             --result "archive/${RUN_DATE}/rank/conference-${CONF_TOKEN}-${YEAR_TOKEN}.supabase.llm.json" \
             --result "archive/${RUN_DATE}/rank/conference-${CONF_TOKEN}-${YEAR_TOKEN}.supabase.rerank.json" \
             --result "archive/${RUN_DATE}/filtered/conference-${CONF_TOKEN}-${YEAR_TOKEN}.supabase.rrf.json" \

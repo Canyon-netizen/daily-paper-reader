@@ -147,7 +147,7 @@ jobs:
                 FETCH_DAYS="9"
               fi
               ARGS=(--fetch-days "$FETCH_DAYS")
-              bash scripts/run-pipeline.sh src/maintain/arxiv.py "${ARGS[@]}"
+              python -m src.maintain.arxiv "${ARGS[@]}"
               ;;
             conference)
               CONFERENCE="${{ github.event.inputs.conference }}"
@@ -160,10 +160,10 @@ jobs:
               CONF_KEY="$(printf '%s' "$CONFERENCE" | tr '[:upper:]' '[:lower:]')"
               case "$CONF_KEY" in
                 nips|neurips)
-                  bash scripts/run-pipeline.sh src/maintain/neurips.py --years "$YEARS" --skip-cleanup
+                  python -m src.maintain.neurips --years "$YEARS" --skip-cleanup
                   ;;
                 icml)
-                  bash scripts/run-pipeline.sh src/maintain/icml.py --years "$YEARS" --skip-cleanup
+                  python -m src.maintain.icml --years "$YEARS" --skip-cleanup
                   ;;
                 *)
                   echo "[ERROR] 不支持的会议：$CONFERENCE，仅支持 NIPS/NeurIPS 和 ICML。"

@@ -128,4 +128,4 @@ jobs:
           if [ "${FORCE_FULL_WINDOW:-false}" = "true" ]; then
             ARGS+=(--force-full-window)
           fi
-          bash scripts/run-pipeline.sh src/maintain/chemrxiv.py "${ARGS[@]}"
+          python -m src.maintain.chemrxiv "${ARGS[@]}"

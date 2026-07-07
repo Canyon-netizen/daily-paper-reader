@@ -227,7 +227,7 @@ jobs:
           if [ -n "$PROFILE_TAG" ]; then
             ARGS+=(--profile-tag "$PROFILE_TAG")
           fi
-          bash scripts/run-pipeline.sh src/main.py "${ARGS[@]}" --embedding-device cpu --embedding-batch-size 8
+          python -m src.main "${ARGS[@]}" --embedding-device cpu --embedding-batch-size 8
 
           # 让前端可以在不配置 GitHub Token 的情况下直接读取配置（只读快照）
           cp -f config.yaml docs/config.yaml
