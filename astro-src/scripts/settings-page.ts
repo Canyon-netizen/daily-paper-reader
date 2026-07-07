@@ -30,6 +30,8 @@ import {
   setGitHubToken,
   loadGitHubRepo,
   setGitHubRepo,
+  loadDeepDiveSettings,
+  saveDeepDiveSettings,
 } from './settings';
 
 // ============================================================================
@@ -343,6 +345,9 @@ function resetAllSettings(): void {
     'dpr_analyzer_github_owner_v1',
     'dpr_analyzer_github_repo_v1',
     'dpr_analyzer_github_workflow_v1',
+    'dpr_analyzer_deepdive_max_pages_v1',
+    'dpr_analyzer_deepdive_compact_v1',
+    'dpr_analyzer_deepdive_compact_pages_v1',
   ];
   for (const k of KEYS) try { localStorage.removeItem(k); } catch { /* ignore */ }
   alert('已清空所有配置,刷新页面');
@@ -446,6 +451,29 @@ function init(): void {
   }, 400);
   ['cfg-github-owner', 'cfg-github-repo', 'cfg-github-workflow'].forEach((id) => {
     $<HTMLInputElement>(id).addEventListener('input', saveGhRepo);
+  });
+
+  // --- 7. 长文精读(Deep Dive)---
+  // 默认 maxPages=20 防止 Cloudflare-fronted LLM provider 拒收大 body;
+  // 用户可在 settings 里调高,但 >60 通常会触发 WAF。
+  const dd = loadDeepDiveSettings();
+  const ddMax = $<HTMLInputElement>('cfg-dd-max-pages');
+  const ddCompact = $<HTMLInputElement>('cfg-dd-compact');
+  const ddCompactPages = $<HTMLInputElement>('cfg-dd-compact-pages');
+  ddMax.value = String(dd.maxPages);
+  ddCompact.checked = dd.compact;
+  ddCompactPages.value = String(dd.compactPages);
+  const saveDd = debounce(() => {
+    saveDeepDiveSettings({
+      maxPages: parseInt(ddMax.value, 10),
+      compact: ddCompact.checked,
+      compactPages: parseInt(ddCompactPages.value, 10),
+    });
+    flashSavedHint();
+  }, 400);
+  [ddMax, ddCompact, ddCompactPages].forEach((el) => {
+    el.addEventListener('input', saveDd);
+    el.addEventListener('change', saveDd);
   });
 
   // --- 6. Reset ---

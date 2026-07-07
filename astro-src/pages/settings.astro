@@ -195,6 +195,39 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
       </div>
     </section>
 
+    <!-- ===== 长文精读 ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">长文精读 (Deep Dive)</h2>
+      <p class="settings-card-sub">
+        基于论文 PDF 全文的中文深度解读。完整 PDF 文本量可达 MB 级,部分 LLM provider 前面挂的
+        CDN/WAF(典型表现: <code>Invalid page request.</code> 错误)对请求体有大小限制。
+        这里控制 PDF 读取上限,超阈值会按 chunk 自动切段串行调用 LLM 再拼合。
+      </p>
+
+      <div class="settings-field">
+        <label for="cfg-dd-max-pages">PDF 最大读取页数</label>
+        <input id="cfg-dd-max-pages" type="number" min="5" max="60" step="1" />
+        <div class="settings-field-hint">
+          推荐 <strong>20</strong>。高于 30 时自动启动 chunking,精读会分 N 段串行调用 LLM,耗时相应增长。
+          上限 60:再大会被 Cloudflare-fronted provider 的 WAF 拦截。
+        </div>
+      </div>
+
+      <div class="settings-field">
+        <label for="cfg-dd-compact">紧凑模式</label>
+        <input id="cfg-dd-compact" type="checkbox" />
+        <span class="settings-field-hint">开启 — 适合超长论文(综述 / 博士论文),只读 PDF 前 N 页,精简解读覆盖范围。</span>
+      </div>
+
+      <div class="settings-field">
+        <label for="cfg-dd-compact-pages">紧凑模式读前几页</label>
+        <input id="cfg-dd-compact-pages" type="number" min="2" max="20" step="1" />
+        <div class="settings-field-hint">
+          推荐 6 页(abstract + intro + method 头部通常落在这里)。低于 5 会过窄,高于 10 通常不再"紧凑"。
+        </div>
+      </div>
+    </section>
+
     <!-- ===== 主题列表 ===== -->
     <section class="settings-card">
       <h2 class="settings-card-title">搜集主题</h2>

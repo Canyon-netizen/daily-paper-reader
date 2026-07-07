@@ -38,6 +38,11 @@ export const STORAGE_KEYS = {
   gistId: 'dpr_analyzer_gist_id_v1',
   topics: 'dpr_analyzer_topics_v1',
   categories: 'dpr_analyzer_categories_v1',
+  // 长文精读(Deep Dive) — maxPages 默认 20,compact 默认关。
+  // 用户在 settings 页改,仅存浏览器 localStorage。
+  deepDiveMaxPages: 'dpr_analyzer_deepdive_max_pages_v1',
+  deepDiveCompact: 'dpr_analyzer_deepdive_compact_v1',
+  deepDiveCompactPages: 'dpr_analyzer_deepdive_compact_pages_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 
@@ -104,6 +109,83 @@ export const LLM_DEFAULTS = {
   baseUrl: 'https://api.deepseek.com',
   model: 'deepseek-chat',
 };
+
+// ============================================================================
+// 长文精读 (Deep Dive) — 控制 PDF 文本量与 chunking 行为
+// ============================================================================
+// maxPages: 传给 extractPdfTextFromBuffer 的页数上限。20 覆盖 95%+ arXiv 论文。
+//   太大会触发 Cloudflare-fronted LLM provider 的 WAF body size 限制,UI 上看是
+//   "Invalid page request."。用户可显式调高,但大于 60 的请求多半会失败。
+// compact: 紧凑模式开启后只读 PDF 前 compactPages 页,适合超长论文(综述、博士论文)。
+// compactPages: 紧凑模式读多少页(abstract + intro + method 头部通常在 6 页内)。
+export interface DeepDiveConfig {
+  maxPages: number;
+  compact: boolean;
+  compactPages: number;
+}
+
+export const DEEPDIVE_DEFAULTS: DeepDiveConfig = {
+  maxPages: 20,
+  compact: false,
+  compactPages: 6,
+};
+
+const DEEPDIVE_MAX_PAGES_MIN = 5;
+const DEEPDIVE_MAX_PAGES_MAX = 60;
+const DEEPDIVE_COMPACT_PAGES_MIN = 2;
+const DEEPDIVE_COMPACT_PAGES_MAX = 20;
+const DD_MAX_PAGES_KEY = STORAGE_KEYS.deepDiveMaxPages;
+const DD_COMPACT_KEY = STORAGE_KEYS.deepDiveCompact;
+const DD_COMPACT_PAGES_KEY = STORAGE_KEYS.deepDiveCompactPages;
+
+export function loadDeepDiveSettings(): DeepDiveConfig {
+  const fallback = { ...DEEPDIVE_DEFAULTS };
+  try {
+    const clampInt = (raw: string | null, dflt: number, lo: number, hi: number): number => {
+      if (!raw) return dflt;
+      const n = parseInt(raw, 10);
+      if (!Number.isFinite(n)) return dflt;
+      return Math.max(lo, Math.min(hi, n));
+    };
+    const maxPages = clampInt(
+      localStorage.getItem(DD_MAX_PAGES_KEY),
+      DEEPDIVE_DEFAULTS.maxPages,
+      DEEPDIVE_MAX_PAGES_MIN,
+      DEEPDIVE_MAX_PAGES_MAX,
+    );
+    const compactPages = clampInt(
+      localStorage.getItem(DD_COMPACT_PAGES_KEY),
+      DEEPDIVE_DEFAULTS.compactPages,
+      DEEPDIVE_COMPACT_PAGES_MIN,
+      DEEPDIVE_COMPACT_PAGES_MAX,
+    );
+    const compactRaw = localStorage.getItem(DD_COMPACT_KEY);
+    const compact = compactRaw === '1' || compactRaw === 'true';
+    return { maxPages, compact, compactPages };
+  } catch {
+    return fallback;
+  }
+}
+
+export function saveDeepDiveSettings(cfg: DeepDiveConfig): void {
+  try {
+    const clampInt = (n: number, dflt: number, lo: number, hi: number): number =>
+      Math.max(lo, Math.min(hi, Number.isFinite(n) ? Math.floor(n) : dflt));
+    localStorage.setItem(DD_MAX_PAGES_KEY, String(clampInt(
+      cfg.maxPages,
+      DEEPDIVE_DEFAULTS.maxPages,
+      DEEPDIVE_MAX_PAGES_MIN,
+      DEEPDIVE_MAX_PAGES_MAX,
+    )));
+    localStorage.setItem(DD_COMPACT_KEY, cfg.compact ? '1' : '0');
+    localStorage.setItem(DD_COMPACT_PAGES_KEY, String(clampInt(
+      cfg.compactPages,
+      DEEPDIVE_DEFAULTS.compactPages,
+      DEEPDIVE_COMPACT_PAGES_MIN,
+      DEEPDIVE_COMPACT_PAGES_MAX,
+    )));
+  } catch { /* ignore */ }
+}
 
 // ============================================================================
 // LLM / Provider
