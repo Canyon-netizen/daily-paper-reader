@@ -33,7 +33,10 @@ def log(message: str) -> None:
 
 def run_step(name: str, cmd: List[str], *, env: Dict[str, str] | None = None) -> None:
     log(f"[INFO] {name}: {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=str(ROOT_DIR), check=True, env=env)
+    # 注入 PYTHONPATH=ROOT_DIR,让子进程 `from src.X` 能解析 src 包。
+    # cwd=ROOT_DIR 已经让 sys.path[0] 是脚本所在目录的根,加 PYTHONPATH 双保险。
+    merged_env = {**os.environ, **(env or {}), "PYTHONPATH": str(ROOT_DIR)}
+    subprocess.run(cmd, cwd=str(ROOT_DIR), check=True, env=merged_env)
 
 
 def rel(path: Path) -> str:

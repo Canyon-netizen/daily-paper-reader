@@ -21,7 +21,8 @@ LOCAL_MAINTAIN_EMBED_CHUNK_SIZE = 1024
 
 def run_step(label: str, args: list[str]) -> None:
     print(f"[INFO] {label}: {' '.join(args)}", flush=True)
-    subprocess.run(args, check=True)
+    env = {**os.environ, "PYTHONPATH": project_root}
+    subprocess.run(args, check=True, env=env, cwd=project_root)
 
 
 def main() -> None:

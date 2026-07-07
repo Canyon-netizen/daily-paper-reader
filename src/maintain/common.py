@@ -26,7 +26,11 @@ def _norm(value: object) -> str:
 
 def run_step(label: str, args: List[str]) -> None:
     log(f"{label}: {' '.join(args)}")
-    subprocess.run(args, check=True)
+    # 子脚本是 package-mode (`from src.X import ...`),script-mode 启动时
+    # sys.path[0]=<script-dir>=src/, 找不到 src 包。把 cwd 强制 ROOT_DIR 并把
+    # ROOT_DIR 注入 PYTHONPATH,让 `from src.X` 在子进程里能解析。
+    env = {**os.environ, "PYTHONPATH": ROOT_DIR}
+    subprocess.run(args, check=True, env=env, cwd=ROOT_DIR)
 
 
 def ensure_parent_dir(path: str) -> None:
