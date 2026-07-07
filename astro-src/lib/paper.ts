@@ -295,21 +295,35 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
   let prefix = '';
   if (figures.length > 0) {
     const base = opts.base || '/';
+    const total = figures.length;
     const parts: string[] = [];
-    parts.push(`<h2>📊 论文图表（共 ${figures.length} 张）</h2>`);
+    parts.push(`<h2>📊 论文图表（共 ${total} 张）</h2>`);
     parts.push('<details class="paper-figures-wrap">');
-    parts.push(`<summary>展开查看 ${figures.length} 张图</summary>`);
-    parts.push('<div class="paper-figures">');
-    for (const fig of figures) {
+    parts.push(`<summary>展开查看 ${total} 张图</summary>`);
+    parts.push(`<div class="paper-carousel" data-count="${total}" aria-label="论文图表轮播，共 ${total} 张" tabindex="0">`);
+    parts.push('<div class="paper-carousel-track">');
+    figures.forEach((fig, i) => {
       const src = figureUrlToSrc(fig.url, base);
       const alt = escapeHtml(fig.caption || `Figure ${fig.index}`);
-      parts.push(`<figure><img src="${src}" loading="lazy" alt="${alt}" />`);
-      if (fig.caption) {
-        parts.push(`<figcaption>${alt}</figcaption>`);
-      }
-      parts.push('</figure>');
+      const captionHtml = fig.caption
+        ? `<figcaption>图 ${i + 1} / ${total}：${alt}</figcaption>`
+        : `<figcaption>图 ${i + 1} / ${total}</figcaption>`;
+      parts.push(
+        `<figure class="paper-slide" data-index="${i}">` +
+          `<div class="paper-slide-frame"><img src="${src}" loading="lazy" alt="${alt}" /></div>` +
+          captionHtml +
+        `</figure>`
+      );
+    });
+    parts.push('</div>'); // track
+    parts.push('<button type="button" class="paper-carousel-btn paper-carousel-prev" aria-label="上一张">‹</button>');
+    parts.push('<button type="button" class="paper-carousel-btn paper-carousel-next" aria-label="下一张">›</button>');
+    parts.push('<div class="paper-carousel-dots" role="tablist" aria-label="选择图片">');
+    for (let i = 0; i < total; i++) {
+      parts.push(`<button type="button" class="paper-carousel-dot" data-index="${i}" aria-label="第 ${i + 1} 张"></button>`);
     }
-    parts.push('</div>');
+    parts.push('</div>'); // dots
+    parts.push('</div>'); // carousel
     parts.push('</details>');
     parts.push('<hr />');
     prefix = parts.join('\n');
@@ -368,6 +382,43 @@ export interface ListOptions {
   tag?: string;
   search?: string;
   skipBroken?: boolean;  // default true
+  /**
+   * 当同一 arxiv id 有多个 v (v1/v2/...) 的 .md 共存时,只保留版本号最高的那篇。
+   * 默认 true —— 这样首页 Top6 / 各 tag 桶都不会出现 v1+v2 同框。
+   * 关闭:显式传 dedup:false(用于科研 debug 或特定页需要全版本)。
+   */
+  dedup?: boolean;  // default true
+}
+
+/**
+ * 把同一 canonical arxiv id 的多版本 (v1/v2/...) 合并,保留**版本号最高**的
+ * 那一篇。处理 bioRxiv / medRxiv / ChemRxiv 等非 arxiv numeric id 时按 id
+ * 整体保留(不合并),避免误跨仓库去重。
+ *
+ * 例子:
+ *   id `2606.31737v1-...`  ->  arxiv:2606.31737
+ *   id `2606.31737v2-...`  ->  arxiv:2606.31737 (取这个,丢弃 v1)
+ *   id `biorxiv-10-1101-...-v3`  ->  id:biorxiv-10-1101-...-v3 (整体 key,不归并)
+ */
+function dedupByCanonicalArxivId(items: PaperListItem[]): PaperListItem[] {
+  const byKey = new Map<string, PaperListItem>();
+  const ARXIV_RE = /^(\d{4}\.\d{4,5})v(\d+)$/;
+  const keyOf = (p: PaperListItem): string => {
+    const m = ARXIV_RE.exec(p.arxivId || '');
+    return m ? `arxiv:${m[1]}` : `id:${p.id}`;
+  };
+  const verOf = (p: PaperListItem): number => {
+    const m = ARXIV_RE.exec(p.arxivId || '');
+    return m ? parseInt(m[2], 10) : 0;
+  };
+  for (const p of items) {
+    const k = keyOf(p);
+    const existing = byKey.get(k);
+    if (!existing || verOf(p) > verOf(existing)) {
+      byKey.set(k, p);
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[]> {
@@ -406,6 +457,10 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       (p.title_zh || '').toLowerCase().includes(q) ||
       (p.tldr || '').toLowerCase().includes(q)
     );
+  }
+  // Dedup by canonical arxiv id (drop older versions, keep highest v)
+  if (opts.dedup !== false) {
+    filtered = dedupByCanonicalArxivId(filtered);
   }
   // Sort
   const sortBy = opts.sortBy || 'date';

@@ -37,8 +37,10 @@ const tagLabels: Record<string, string> = {
 const totalPapers = allIds.length;
 const totalTopics = byTag.size;
 const sources = ['arXiv', 'bioRxiv', 'medRxiv', 'ChemRxiv', 'OpenReview']; // pipeline 支持的来源
-const latestPaper = topPapers[0];
-const latestDate = latestPaper?.date || (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date;
+// 最近更新:用按 date desc 排后的第一篇论文 date (dedup 后),
+// 而不是 topPapers[0].date —— topPapers 是按 score 排序的,
+// 若 score 最高的论文 date 较早(比如 6 月底),就会显示陈旧,误导用户。
+const latestDate = (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date;
 const latestDateLabel = latestDate
   ? new Date(latestDate).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
   : '等待首次抓取';
