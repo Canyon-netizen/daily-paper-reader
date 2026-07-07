@@ -33,6 +33,7 @@ import {
   LLM_DEFAULTS,
   loadGitHubToken,
   loadGitHubRepo,
+  loadDeepDiveSettings,
 } from './settings';
 
 // ============================================================================
@@ -62,7 +63,8 @@ export interface ArxivEntry {
   title: string;
   authors: string[];
   summary: string;
-  published: string;
+  published: string;     // arXiv <published>: 永远是 v1 首发的日期,选"最新版本"不能拿它比
+  updated: string;       // arXiv <updated>:   随版本号 vN 升级才变,选"最新版本"用这个
   pdfUrl: string;        // arxiv.org/pdf/<id>
 }
 
@@ -72,6 +74,17 @@ export interface ArxivEntry {
 const DEFAULT_BASE = LLM_DEFAULTS.baseUrl;
 const DEFAULT_MODEL = LLM_DEFAULTS.model;
 const MAX_TEXT_CHARS = 50_000; // 抽出的正文上限(避免爆 LLM context)
+
+// ============================================================================
+// 长文精读 (Deep Dive) body 大小防护
+// ============================================================================
+// Cloudflare-fronted LLM provider 通常对 POST body 限 ~1MB,超出回 challenge 页
+// (典型错误文案 "Invalid page request."),错误信息看不出真假,前端难诊断。
+// 解决:序列化前量 byteLength,超过阈值自动按字符切 chunk 串行调用再拼合。
+const REQUEST_BODY_LIMIT_BYTES = 900_000;
+const CHUNK_TARGET_CHARS = 200_000;     // 单 chunk PDF 文本字符目标(~600KB body)
+const CHUNK_OVERLAP_CHARS = 2_000;      // 段间重叠,用于上下文衔接
+const WAF_SIGNATURE = /cloudflare|attention required|\bcf[-_ ]?ray\b|invalid page request|enable javascript|checking your browser|\bforbidden\b|403 forbidden/i;
 
 // ============================================================================
 // CORS 代理 — arXiv 不返回 Access-Control-Allow-Origin,纯浏览器 fetch 会被拦。
@@ -805,12 +818,15 @@ export async function searchArxiv(query: string, opts: { dedupeLatestVersion?: b
 
   const entries = Array.from(doc.querySelectorAll('entry')).map(parseArxivEntry).filter((e): e is ArxivEntry => e !== null);
   if (opts.dedupeLatestVersion === false) return entries;
-  // arXiv 同篇论文多版本时按 published 时间戳降序,第一个就是最新;按 canonical id 取首条
+  // arXiv 同篇论文多版本时按 <updated> 时间戳降序,第一个就是最新;
+  // 注意: <published> 永远是 v1 首发的日期,所有版本都一样,用它做 dedup
+  // 会永远选中 v1,导致多版本论文的前端卡片永远指向旧版本(见 6821f09)。
+  // 按 canonical id 取首条。
   const byCanonical = new Map<string, ArxivEntry>();
   for (const e of entries) {
     const key = canonicalArxivId(e.arxivId);
     const cur = byCanonical.get(key);
-    if (!cur || (e.published || '') > (cur.published || '')) byCanonical.set(key, e);
+    if (!cur || (e.updated || '') > (cur.updated || '')) byCanonical.set(key, e);
   }
   return Array.from(byCanonical.values());
 }
@@ -844,12 +860,13 @@ export function parseArxivEntry(e: Element): ArxivEntry | null {
   const authorNodes = Array.from(e.querySelectorAll('author name'));
   const authors = authorNodes.map((n) => n.textContent?.trim() ?? '').filter(Boolean);
   const published = e.querySelector('published')?.textContent?.trim() ?? '';
+  const updated = e.querySelector('updated')?.textContent?.trim() ?? '';
   // PDF 链接:优先取 entry 里 rel=related 或 title=pdf 的 link
   const pdfLink = Array.from(e.querySelectorAll('link')).find((l) =>
     l.getAttribute('title') === 'pdf' || l.getAttribute('rel') === 'related'
   );
   const pdfUrl = pdfLink?.getAttribute('href') ?? `https://arxiv.org/pdf/${arxivId}`;
-  return { id: idFull, arxivId, title, authors, summary, published, pdfUrl };
+  return { id: idFull, arxivId, title, authors, summary, published, updated, pdfUrl };
 }
 
 export async function fetchArxivPdf(pdfUrl: string, statusCb?: (msg: string) => void): Promise<ArrayBuffer> {
@@ -1144,6 +1161,151 @@ const DEEPDIVE_SYSTEM_PROMPT = `你是论文精读助手,擅长把英文学术�
 - 中文为主,公式 / 模型名 / 论文名保留英文
 - 总长度 4000-7000 中文字符`;
 
+// ============================================================================
+// 长文精读:错误上报 + body 大小防护 + 自动 chunk
+// ============================================================================
+
+
+async function readErrorBody(res: Response): Promise<string> {
+  try {
+    const t = await res.text();
+    return t || '';
+  } catch { return ''; }
+}
+
+// 检测 body 是不是 Cloudflare / CDN challenge 页(关键误判来源)。
+function looksLikeWaf(body: string): boolean {
+  return WAF_SIGNATURE.test(body);
+}
+
+// 单次 LLM 调用,自动按字节阈值分块。返回 markdown 字符串。
+// systemMsg / userContent 是已经构造好的字符串;调用方决定是否要走 chunk 模式。
+async function invokeChatCompletion(
+  cfg: LLMConfig,
+  systemMsg: string,
+  userContent: string,
+  label: string,
+  statusCb: (msg: string) => void,
+  opts: { maxOutputTokens?: number } = {},
+): Promise<string> {
+  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
+  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
+
+  // 量 body 字节 — 对纯 ASCII 文本 byteLength === 字符数;含中文时略大于字符数。
+  // 用 TextEncoder 量实际 UTF-8 字节数最准确但贵,这里降级用 1.5x 估。
+  const estimatedBytes = new TextEncoder().encode(
+    JSON.stringify({ system: systemMsg, user: userContent }),
+  ).length;
+
+  if (estimatedBytes <= REQUEST_BODY_LIMIT_BYTES) {
+    return await invokeOne(url, cfg, systemMsg, userContent, isDeepSeek, isReasoning, label, estimatedBytes);
+  }
+  statusCb(`请求体过大(≈ ${(estimatedBytes / 1024 / 1024).toFixed(1)} MB),自动分段调用 LLM...`);
+  return await chunkAndCall(url, cfg, systemMsg, userContent, isDeepSeek, isReasoning, label, statusCb);
+}
+
+async function invokeOne(
+  url: string, cfg: LLMConfig,
+  systemMsg: string, userContent: string,
+  isDeepSeek: boolean, isReasoning: boolean,
+  label: string, sentBytes: number,
+): Promise<string> {
+  const requestBody: Record<string, unknown> = {
+    model: cfg.model,
+    messages: [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: userContent },
+    ],
+    temperature: 0.3,
+  };
+  if (isDeepSeek && isReasoning) {
+    requestBody.thinking = { type: 'disabled' };
+  }
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${cfg.apiKey}`,
+    },
+    body: JSON.stringify(requestBody),
+  });
+  if (!res.ok) {
+    const body = await readErrorBody(res);
+    throw new Error(formatLlmError(label, res.status, sentBytes, body));
+  }
+  const data = await res.json();
+  let content: string = data?.choices?.[0]?.message?.content ?? '';
+  if (!content) throw new Error(`${label}: LLM 返回为空`);
+  // 剥 reasoning 模型 思考块 + markdown fence
+  content = content
+    .replace(/<[Tt]hink(?:ing)?Block>[\s\S]*?<\/(?:[Tt]hink|ThinkingBlock)>/g, '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/^```(?:markdown)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
+  return content;
+}
+
+function formatLlmError(label: string, status: number, sentBytes: number, body: string): string {
+  const mb = Math.round(sentBytes / 1024 / 1024 * 10) / 10;
+  const bodyExcerpt = body.slice(0, 2000).replace(/\s+/g, ' ');
+  const isWaf = looksLikeWaf(body);
+  const wafNote = isWaf
+    ? `\n⚠ 检测到 Cloudflare / CDN WAF 拦截标记 — 大概率是 CDN 在前拦截(请求体过大 / 触发风控),不是 LLM 真实错误。\n建议:设置 → 长文精读 里减小 maxPages 或开启紧凑模式;或切换 LLM provider。`
+    : '';
+  return `${label} (HTTP ${status}) [请求体 ≈ ${mb} MB]:\n${bodyExcerpt}${wafNote}`;
+}
+
+// 把 userContent 按 PDF 文本段切块串行调用,每段拼成 ## 段 N 解读。
+// 段间留 CHUNK_OVERLAP_CHARS 重叠。Markdown 输出格式:
+//   # 综合精读\n\n## 段 1 解读\n<md>\n\n---\n\n## 段 2 解读\n<md>
+async function chunkAndCall(
+  url: string, cfg: LLMConfig,
+  systemMsg: string, userContent: string,
+  isDeepSeek: boolean, isReasoning: boolean,
+  label: string, statusCb: (msg: string) => void,
+): Promise<string> {
+  // 找 userContent 里 PDF 文本的起点 — "[PDF 全文节选]" 之后算 PDF,之前的(speedReadHint + 标题 + ...)每段重复带上,避免 LLM 丢失上下文。
+  const pdfMarker = '[PDF 全文节选]';
+  const markerIdx = userContent.indexOf(pdfMarker);
+  const prefix = markerIdx >= 0 ? userContent.slice(0, markerIdx + pdfMarker.length) + '\n' : '';
+  const pdfText = markerIdx >= 0 ? userContent.slice(markerIdx + pdfMarker.length + 1) : userContent;
+
+  const total = pdfText.length;
+  const stride = CHUNK_TARGET_CHARS;
+  const overlap = CHUNK_OVERLAP_CHARS;
+  const step = stride - overlap;
+  if (step <= 0) throw new Error('chunk 配置错误');
+  const chunks: { start: number; end: number; text: string }[] = [];
+  for (let i = 0; i < total; i += step) {
+    const end = Math.min(i + stride, total);
+    chunks.push({ start: i, end, text: pdfText.slice(i, end) });
+    if (end >= total) break;
+  }
+  const N = chunks.length;
+  statusCb(`分段调用 LLM (${N} 段)...`);
+  const parts: string[] = [];
+  for (let i = 0; i < N; i++) {
+    const c = chunks[i];
+    const overlapHeader = i > 0
+      ? `\n[上一段末尾 ${overlap} 字符提示] ${pdfText.slice(Math.max(0, c.start - overlap), c.start)}\n\n[本段 PDF 文本 起止 ${c.start}-${c.end}]\n`
+      : `\n[本段 PDF 文本 起止 0-${c.end}]\n`;
+    const fullUser = `${prefix}${overlapHeader}${c.text}`;
+    statusCb(`${label} (${i + 1}/${N})...`);
+    let md: string;
+    try {
+      md = await invokeOne(url, cfg, systemMsg, fullUser, isDeepSeek, isReasoning, `${label} 第 ${i + 1}/${N} 段`, fullUser.length);
+    } catch (e) {
+      throw new Error(`${label}: 第 ${i + 1}/${N} 段失败 — 已成功 ${i}/${N} 段\n${(e as Error).message}`);
+    }
+    parts.push(md);
+  }
+  // 拼合:每段用 ## 段 N 解读 包起来,中间 --- 分隔
+  const combined = parts.map((md, i) => `## 段 ${i + 1} 解读\n\n${md}`).join('\n\n---\n\n');
+  return `# 综合精读\n\n${combined}`;
+}
+
 interface DeepDiveResult {
   markdown: string;
   truncated: boolean;
@@ -1179,9 +1341,12 @@ async function runDeepDive(
     throw new Error('PDF 下载失败(proxy 可能返回了 HTML 错误页),请检查网络或切换自定义代理');
   }
 
-  // 2. 解析 PDF 文本
+  // 2. 解析 PDF 文本 — maxPages 由用户设置控制(默认 20,见 settings.ts)
   statusCb('提取 PDF 文本...');
-  const rawText = await extractPdfTextFromBuffer(buf, statusCb, { maxPages: 60 });
+  const dd = loadDeepDiveSettings();
+  const rawText = await extractPdfTextFromBuffer(buf, statusCb, {
+    maxPages: dd.maxPages,
+  });
   if (rawText.length < 500) {
     throw new Error('PDF 文本过短(可能为扫描版或加密文档),无法精读');
   }
@@ -1192,12 +1357,22 @@ async function runDeepDive(
   const RESERVED = 16_000;
   const availableTokens = Math.max(ctx - RESERVED, 16_000);
   const maxChars = Math.min(800_000, availableTokens * 3);
-  const pdfTokensEstimate = estimatePdfTokens(rawText.length);
-  const truncated = rawText.length > maxChars;
-  const pdfText = truncated ? rawText.slice(0, maxChars) : rawText;
+  let pdfTokensEstimate = estimatePdfTokens(rawText.length);
+  let truncated = rawText.length > maxChars;
+  let pdfText = truncated ? rawText.slice(0, maxChars) : rawText;
+
+  // compact 模式:只读前 dd.compactPages 页(纯文本层截断,无论上面 maxChars)。
+  // 30K 字符/页是 PDF 文本层的保守上限,通常一页 2-4K 字符;30K 留 buffer 给稀疏扫描页。
+  if (dd.compact) {
+    const compactChars = dd.compactPages * 30_000;
+    if (pdfText.length > compactChars) {
+      pdfText = pdfText.slice(0, compactChars);
+      truncated = true;
+    }
+  }
 
   if (truncated) {
-    statusCb(`PDF 较长,已截断到前 ${Math.round((maxChars / rawText.length) * 100)}%`);
+    statusCb(`PDF 较长,已截断到前 ${Math.round((pdfText.length / rawText.length) * 100)}%`);
   }
 
   // 4. 调用 LLM
@@ -1224,47 +1399,20 @@ async function runDeepDive(
 NNN 用三位数(001, 002, ...);只能引用实际存在的图(不要编造编号)。若不确定,纯文字描述即可,不要强行插图。`
     : `\n\n[图表说明] 该论文尚未抽图,## 3.4 / ## 4.x 章节请用纯文字描述图表内容,不要插入图片。`;
 
-  const userPrompt = `${speedReadHint}\n\n[论文标题] ${r.title_en || r.title}\n\n[PDF 全文节选]\n${pdfText}${truncateNotice}${figureHint}`;
+  const compactHint = dd.compact
+    ? `\n\n[模式] compact 精读:仅基于 PDF 前 ${dd.compactPages} 页(abstract + intro + method 头部)。涉及后续章节请写"原文未明确说明"。`
+    : '';
 
-  // 通用 LLM 调用(不走 callLLM 因为它写死了 JSON 速读输出)
-  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
-  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
-  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
-  const requestBody: Record<string, unknown> = {
-    model: cfg.model,
-    messages: [
-      { role: 'system', content: DEEPDIVE_SYSTEM_PROMPT },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature: 0.3,
-  };
-  if (isDeepSeek && isReasoning) {
-    requestBody.thinking = { type: 'disabled' };
-  }
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`LLM API 错误 (${res.status}): ${body.slice(0, 200)}`);
-  }
-  const data = await res.json();
-  let content: string = data?.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('LLM 返回为空');
+  const userPrompt = `${speedReadHint}\n\n[论文标题] ${r.title_en || r.title}${compactHint}\n\n[PDF 全文节选]\n${pdfText}${truncateNotice}${figureHint}`;
 
-  // 剥掉 reasoning 模型可能输出的 <think> 块 + markdown fence
-  content = content
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/^```(?:markdown)?\s*/i, '')
-    .replace(/\s*```\s*$/, '')
-    .trim();
-
-  statusCb('精读生成完成 ✓');
+  // 走 invokeChatCompletion:超 900KB body 自动按字符切 chunk 串行调用再拼合。
+  const content = await invokeChatCompletion(
+    cfg,
+    DEEPDIVE_SYSTEM_PROMPT,
+    userPrompt,
+    '精读生成',
+    statusCb,
+  );
 
   return {
     markdown: content,

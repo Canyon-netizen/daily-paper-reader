@@ -237,7 +237,10 @@ jobs:
 
       - name: Cleanup non-recommend archives
         run: |
-          find archive -mindepth 2 -maxdepth 2 -type d \( -name raw -o -name filtered -o -name rank \) -exec rm -rf {} +
+          # raw/filtered/rank 是中间产物,体积大且无 git 历史价值;logs/ 是 dry-run
+          # 残骸(如 archive/20260706/logs/),无人 commit 也无人清,长期累积。
+          # recommend/ 是 final output,由下一步 commit 进来,所以这里不动。
+          find archive -mindepth 2 -maxdepth 2 -type d \( -name raw -o -name filtered -o -name rank -o -name logs \) -exec rm -rf {} +
 
       # 注意:docs/_sidebar.md 是在 src/6.generate_docs.py 走完 update_sidebar()
       # 后写出的(daily workflow 当前不调 generate_docs,所以这个 step 历史上

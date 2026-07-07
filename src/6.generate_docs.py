@@ -1245,6 +1245,28 @@ def yaml_escape_value(s: str) -> str:
     return s
 
 
+def atomic_write_text(path: str, content: str, encoding: str = "utf-8") -> None:
+    """写文本到 path,通过 tmp + os.replace 原子写入。
+
+    防止并发(daily cron + 手动触发跑同一篇)直接 f.write() 把半成品内容
+    留在 .md 上。失败时清理 tmp。
+    """
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=parent or ".", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(content)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def maybe_generate_paper_figures(
     paper: Dict[str, Any],
     *,
@@ -1678,8 +1700,7 @@ def process_paper(
         tags_list = build_tags_list(section, paper.get("llm_tags") or [])
         content = build_markdown_content(paper, section, "", "", tags_list)
         os.makedirs(os.path.dirname(md_path), exist_ok=True)
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        atomic_write_text(md_path, content)
         return paper_id, title
 
     # 新文件：生成完整内容
@@ -1704,8 +1725,7 @@ def process_paper(
     content = build_markdown_content(paper, section, zh_title, zh_abstract, tags_list)
 
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
-    with open(md_path, "w", encoding="utf-8") as f:
-        f.write(content)
+    atomic_write_text(md_path, content)
 
     # 精读区：生成详细总结
     if section == "deep":
