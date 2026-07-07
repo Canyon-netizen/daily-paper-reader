@@ -44,6 +44,7 @@ GENERATE_DOCS = os.path.join(SRC_DIR, "6.generate_docs.py")
 # 仅匹配 arXiv 风格 id（YYMM.NNNNN）；biorxiv/medrxiv 等其它源用不同 id 方案，跳过。
 ARXIV_FILE_RE = re.compile(r"^(?P<canonical>\d{4}\.\d{4,5})v(?P<ver>\d+)-(?P<slug>.+)$")
 DEEP_MARKER = "## 论文详细总结（自动生成）"
+GLANCE_MARKERS = ("## 速览", "## TLDR")
 ARXIV_API = "https://export.arxiv.org/api/query?id_list={ids}"
 ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 
@@ -65,12 +66,26 @@ class LocalPaper:
 
 
 def detect_section(md_path: str) -> str:
-    """精读笔记含 `## 论文详细总结（自动生成）` 标题，否则视为速读(glance)。"""
+    """区分 deep(精读)/quick(速读/glance)以决定重生成深度。
+
+    判定优先级（高→低，命中即返回）：
+      1. 含 `## 论文详细总结（自动生成）` → 精读已生成，确为 deep
+      2. 含 `## 速览` / `## TLDR` → 速读/glance，确为 quick
+      3. 以上都没有的"残缺笔记"（历史上只有摘要、详细总结生成失败）：
+         默认 deep，避免被降级为 glance-only 而丢失精读意图
+    宁可过度保守（误把 quick 当 deep 重新精读一次）也不可降级丢失精读内容。
+    """
     try:
         with open(md_path, "r", encoding="utf-8") as f:
-            return "deep" if DEEP_MARKER in f.read() else "quick"
+            content = f.read()
     except OSError:
+        return "deep"
+
+    if DEEP_MARKER in content:
+        return "deep"
+    if any(m in content for m in GLANCE_MARKERS):
         return "quick"
+    return "deep"
 
 
 def scan_local_papers(papers_dir: str) -> List[LocalPaper]:

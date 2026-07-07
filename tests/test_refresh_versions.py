@@ -32,6 +32,17 @@ xx
 yy
 """
 
+# 只有摘要、没有详细总结也没有速览/TLDR 的"残缺"笔记（历史上 deep 生成失败）。
+# detect_section 应保守判 deep，避免被降级为 glance-only 而丢失精读意图。
+INCOMPLETE_MD = """---
+title: Incomplete Paper
+---
+## 摘要
+only an abstract here
+## Abstract
+EN abstract
+"""
+
 
 def _make_docs(tmp: str):
     papers = pathlib.Path(tmp) / "docs" / "papers"
@@ -58,6 +69,24 @@ class ScanAndParseTest(unittest.TestCase):
             self.assertEqual(by_id["2606.29340v1"].section, "deep")
             self.assertEqual(by_id["2510.18483v2"].version, 2)
             self.assertEqual(by_id["2510.18483v2"].section, "quick")
+
+    def test_incomplete_笔记_defaults_to_deep(self):
+        # 只有摘要、没有详细总结也没有速览/TLDR → 保守判 deep，避免降级。
+        with tempfile.TemporaryDirectory() as tmp:
+            papers = _make_docs(tmp)
+            (papers / "2606.26883v1-incomplete.md").write_text(INCOMPLETE_MD, encoding="utf-8")
+            found = rv.scan_local_papers(str(papers))
+            self.assertEqual(len(found), 1)
+            self.assertEqual(found[0].section, "deep")
+
+    def test_scan_skips_速览_marker_for_deep_classification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            papers = _make_docs(tmp)
+            # 同时有详细总结和速览（理论上不会同时出现，但 deep 标记优先级最高）
+            mixed = DEEP_MD + "\n## 速览\nsome glance\n"
+            (papers / "2606.29340v2-both.md").write_text(mixed, encoding="utf-8")
+            found = rv.scan_local_papers(str(papers))
+            self.assertEqual(found[0].section, "deep")
 
     def test_dedupe_keeps_highest_version(self):
         with tempfile.TemporaryDirectory() as tmp:
