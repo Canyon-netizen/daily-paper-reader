@@ -55,6 +55,11 @@ export interface AnalysisResult {
   method: string;
   result: string;
   conclusion: string;
+  // 主题语境:这篇论文在所处主题中的位置 / 与同类工作的差异 / 适用场景 / 局限性。
+  // 旧版本只有"问题→方法→结果→结论"四段,主体内容过于狭窄——只看得到这篇论文本身,
+  // 看不到它在所处研究主题里的坐标。新增此字段把笔记从"单点摘要"扩展到"主题语境"，
+  // 让用户即使不读全文也能定位这篇工作相对其他工作的位置与适用边界。
+  context?: string;
 }
 
 export interface ArxivEntry {
@@ -982,11 +987,18 @@ export const SYSTEM_PROMPT = `你是论文速览助手，请用中文生成信�
 - authors: 作者列表(英文,逗号分隔;若不确定可省)
 - tldr: 150-220 个中文字符,3-4 个短句,按"问题背景→核心方法→关键结果→贡献意义"组织
 - motivation / method / result / conclusion: 每个字段 30-70 个中文字符,一句话,对标论文速览卡片,简洁但必须包含具体信息(数字、模型名、方法名等)
+- context(主题语境,新增):40-90 个中文字符,1-2 句话,把这篇论文放回所属研究主题里定位——
+  说明它在该主题脉络中的位置(承接/扩展/对比哪类已有工作)、典型适用场景或边界条件、
+  已知局限性或仍未解决的问题。**不要重复 TLDR / motivation / method / result / conclusion 里已经说过的事实**,
+  写的是"如果只把这篇论文放回主题坐标系,它大致在哪个象限、相对其他工作最值得注意的点是什么"。
 
 【内容要求】
 - 不要把英文句子放进中文字段;可保留必要英文术语或模型名
 - 不要编造数字,如果原文没提就说"未给出具体数字"
-- 如果正文明显不完整,根据已有内容合理推断,但要简明`;
+- 如果正文明显不完整,根据已有内容合理推断,但要简明
+- tldr / motivation / method / result / conclusion / context 之间要互补不重复:
+  tldr 写宏观叙事(背景→方法→结果→贡献),四段写具体细节,context 写主题坐标——三块内容分工明确,
+  这样用户看完任意一段都不会觉得信息有缺口`;
 
 function buildUserPrompt(title: string, abstract: string, body: string): string {
   // 对齐 src/6.generate_docs.py: payload = {"title": title, "abstract": abstract}
@@ -994,7 +1006,7 @@ function buildUserPrompt(title: string, abstract: string, body: string): string 
   const payload = JSON.stringify({ title, abstract: abstract || '(无 abstract,从正文摘录)', body_excerpt: body.slice(0, 8000) }, null, 0);
   return (
     "请基于上面的 JSON 中的 title / abstract / body_excerpt,输出一个中文速览摘要,严格返回 JSON(不要输出任何其它文字):\n" +
-    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\"}\n" +
+    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\"}\n" +
     "Output must be strict JSON only, no markdown, no fences, no extra text."
   ).replace("上面的 JSON", payload + "\n上面的 JSON");
 }
@@ -1069,6 +1081,7 @@ export async function callLLM(
     method: parsed.method || '',
     result: parsed.result || '',
     conclusion: parsed.conclusion || '',
+    context: parsed.context || '',
   };
 }
 
@@ -1395,6 +1408,7 @@ async function runDeepDive(
     r.method && `[速览 方法] ${r.method}`,
     r.result && `[速览 结果] ${r.result}`,
     r.conclusion && `[速览 结论] ${r.conclusion}`,
+    r.context && `[速览 主题语境] ${r.context}`,
   ].filter(Boolean).join('\n');
 
   const truncateNotice = truncated
@@ -1621,6 +1635,16 @@ function renderDeepDiveMarkdown(md: string): string {
       continue;
     }
 
+    // 图片 markdown: ![alt](src) —— 独立成行,渲染成 <img>。src/alt 均过 escapeHtml 防注入。
+    const img = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/);
+    if (img) {
+      closeList();
+      out.push(
+        `<p class="analyzer-figure"><img src="${escapeHtml(img[2])}" alt="${escapeHtml(img[1])}" loading="lazy" decoding="async" class="analyzer-figure-img" /></p>`,
+      );
+      continue;
+    }
+
     // 三级及以上标题
     const h3 = trimmed.match(/^###\s+(.+)$/);
     if (h3) {
@@ -1729,11 +1753,12 @@ function buildFrontmatter(r: AnalysisResult, entry: ArxivEntry | null, now: stri
     r.method ? `method: ${yamlStr(r.method)}` : null,
     r.result ? `result: ${yamlStr(r.result)}` : null,
     r.conclusion ? `conclusion: ${yamlStr(r.conclusion)}` : null,
+    r.context ? `context: ${yamlStr(r.context)}` : null,
     '---',
   ].filter((l): l is string => l !== null);
 }
 
-// 速读正文块(TLDR / Abstract / 动机/方法/结果/结论),与旧 buildMarkdownNote 行为一致。
+// 速读正文块(TLDR / Abstract / 动机/方法/结果/结论/主题语境),与旧 buildMarkdownNote 行为一致。
 function buildSpeedReadBody(r: AnalysisResult, entry: ArxivEntry | null): string {
   const bodyParts: string[] = [];
   if (r.tldr) bodyParts.push(`## TLDR\n${r.tldr}`);
@@ -1742,6 +1767,7 @@ function buildSpeedReadBody(r: AnalysisResult, entry: ArxivEntry | null): string
   if (r.method) bodyParts.push(`## 方法\n${r.method}`);
   if (r.result) bodyParts.push(`## 结果\n${r.result}`);
   if (r.conclusion) bodyParts.push(`## 结论\n${r.conclusion}`);
+  if (r.context) bodyParts.push(`## 主题语境\n${r.context}`);
   return bodyParts.length ? '\n' + bodyParts.join('\n\n') + '\n' : '';
 }
 
@@ -1885,6 +1911,13 @@ function renderResult(r: AnalysisResult, rawText: string): void {
       </div>
     </div>
 
+    ${r.context ? `
+    <div class="analyzer-card analyzer-context">
+      <div class="analyzer-card-label">主题语境</div>
+      <p class="analyzer-card-body">${escapeHtml(r.context).replace(/\n/g, '<br>')}</p>
+    </div>
+    ` : ''}
+
     <details class="analyzer-raw">
       <summary>查看抽出的原文片段</summary>
       <pre>${escapeHtml(rawText.slice(0, 5000))}${rawText.length > 5000 ? '\n\n[... 共 ' + rawText.length + ' 字符,已截断显示 ...]' : ''}</pre>
@@ -1923,15 +1956,21 @@ function renderResult(r: AnalysisResult, rawText: string): void {
         const setLocalStatus = (msg: string) => {
           deepdiveStatus.textContent = msg;
         };
-        // 默认假设没图,LLM 走纯文字描述路径;若 docs/ 已有图,主动喂 figureBase 让 LLM 插图
+        // 默认假设没图,LLM 走纯文字描述路径;若 docs/ 已有图,主动喂 figureBase 让 LLM 插图。
+        // figureBase 用 raw.githubusercontent 绝对 URL,部署在 GH Pages (`base=/daily-paper-reader`)
+        // 也能渲染,不依赖站点 base 路径。
         const figAssetKey = currentArxivEntry.arxivId;
-        const figureBase = `assets/figures/arxiv/${figAssetKey}`;
+        const repo = loadGitHubRepo();
+        const absBase = repo?.owner
+          ? `https://raw.githubusercontent.com/${repo.owner}/${repo.repo}/main/docs/assets/figures/arxiv/${figAssetKey}`
+          : '';
         let figureCount = 0;
         try {
           figureCount = await probeExistingFigures(figAssetKey);
         } catch {
           figureCount = 0;
         }
+        const figureBase = (figureCount > 0 && absBase) ? absBase : '';
         try {
           const result = await runDeepDive(r, currentArxivEntry, cfg, setLocalStatus, {
             figureBase: figureCount > 0 ? figureBase : '',
@@ -1981,6 +2020,55 @@ function renderResult(r: AnalysisResult, rawText: string): void {
           await saveDeepDiveToGitHub(r, currentArxivEntry, currentDeepDive);
           saveDeepDiveBtn.textContent = '✓ 已触发,稍等部署';
           setStatus('已触发 save-paper workflow (combined),几秒后刷新 docs 页面查看', 'info');
+
+          // 工作流完成后,GitHub 还要 ~2-10s 把 commit 推上 main。重探一次 fig-001.webp:
+          // 若图已就位且本次精读是"无图文字版",自动二次调用 runDeepDive 重新渲染。
+          const arxivKey = currentArxivEntry.arxivId;
+          const hadFiguresInFirstPass = !!(currentDeepDive.figureBase && currentDeepDive.figureCount > 0);
+          if (!hadFiguresInFirstPass) {
+            const retryProbe = async (): Promise<number> => {
+              try { return await probeExistingFigures(arxivKey); } catch { return 0; }
+            };
+            let figsAfter = await retryProbe();
+            if (!figsAfter) {
+              await new Promise((r) => setTimeout(r, 2000));
+              figsAfter = await retryProbe();
+            }
+            if (figsAfter > 0) {
+              setStatus('📥 已保存,正在重渲染精读(含图)...', 'info');
+              const cfg2 = loadSettings();
+              const repo2 = loadGitHubRepo();
+              const absBase2 = repo2?.owner
+                ? `https://raw.githubusercontent.com/${repo2.owner}/${repo2.repo}/main/docs/assets/figures/arxiv/${arxivKey}`
+                : '';
+              const localStatus = (msg: string) => {
+                const s = $('deepdive-status');
+                if (s) {
+                  s.hidden = false;
+                  s.textContent = msg;
+                }
+              };
+              if (absBase2) {
+                try {
+                  const rebuilt = await runDeepDive(r, currentArxivEntry!, cfg2, localStatus, {
+                    figureBase: absBase2,
+                    figureCount: figsAfter,
+                  });
+                  currentDeepDive = rebuilt;
+                  const deepdiveOutput2 = $('deepdive-output');
+                  if (deepdiveOutput2) {
+                    deepdiveOutput2.hidden = false;
+                    deepdiveOutput2.innerHTML = `<details class="analyzer-deepdive-details" open><summary>📖 深度精读(基于 PDF 全文)</summary><div class="analyzer-deepdive-md">${renderDeepDiveMarkdown(rebuilt.markdown)}</div></details>`;
+                  }
+                  setStatus('✓ 已重新渲染含图精读', 'info');
+                } catch (e) {
+                  setStatus(`重渲染精读失败,可手动再点一次长文精读: ${(e as Error).message}`, 'error');
+                }
+              }
+            } else {
+              setStatus('workflow 已完成但图尚未落 main,可几秒后再点"长文精读"刷新', 'info');
+            }
+          }
         } catch (e) {
           saveDeepDiveBtn.textContent = oldText;
           saveDeepDiveBtn.disabled = false;
@@ -2021,6 +2109,7 @@ function copyAsMarkdown(r: AnalysisResult): void {
     `\n## 方法\n${r.method}`,
     `\n## 结果\n${r.result}`,
     `\n## 结论\n${r.conclusion}`,
+    r.context ? `\n## 主题语境\n${r.context}` : '',
     '',
   ].filter((s) => s !== '').join('\n');
   navigator.clipboard.writeText(md).then(

@@ -531,7 +531,8 @@ async function chatWithPaper(arxivId: string, question: string): Promise<string>
     `动机: ${sum.summary.motivation}\n` +
     `方法: ${sum.summary.method}\n` +
     `结果: ${sum.summary.result}\n` +
-    `结论: ${sum.summary.conclusion}\n`;
+    `结论: ${sum.summary.conclusion}\n` +
+    (sum.summary.context ? `主题语境: ${sum.summary.context}\n` : '');
 
   const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
     { role: 'system', content: PAPER_CHAT_SYSTEM + '\n\n' + sysContext },
@@ -834,6 +835,7 @@ function renderSummaryStage(): void {
             ${noteHtml('结果', r.result)}
             ${noteHtml('结论', r.conclusion)}
           </div>
+          ${r.context ? `<div class="topic-summary-context"><div class="topic-summary-context-label">主题语境</div><div class="topic-summary-context-text">${escapeHtml(r.context)}</div></div>` : ''}
         </div>
         <div class="topic-summary-actions">
           <button type="button" class="topic-btn ghost" data-act="regen">🔄 重新生成</button>
@@ -1152,6 +1154,7 @@ function copyAllAsMarkdown(): void {
     if (s.summary.method) lines.push(`\n**方法**: ${s.summary.method}`);
     if (s.summary.result) lines.push(`\n**结果**: ${s.summary.result}`);
     if (s.summary.conclusion) lines.push(`\n**结论**: ${s.summary.conclusion}`);
+    if (s.summary.context) lines.push(`\n**主题语境**: ${s.summary.context}`);
     lines.push('');
   }
   const md = lines.join('\n');
