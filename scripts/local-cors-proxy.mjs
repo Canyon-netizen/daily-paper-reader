@@ -1,5 +1,8 @@
 // Local CORS proxy for paper-analyzer dev usage.
-// Usage: GET http://localhost:8123/?url=<encoded target URL>
+// Usage (两种,任选其一):
+//   1) GET http://localhost:8123/?url=<encoded target URL>
+//   2) GET http://localhost:8123/https://arxiv.org/...  (直接把 target URL 拼在路径后)
+//
 // All targets go through Node's native fetch, so this works for arXiv (XML),
 // arxiv.org/pdf/* (PDF), and any other fetch the analyzer needs.
 
@@ -27,10 +30,19 @@ const server = http.createServer(async (req, res) => {
   }
 
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const target = url.searchParams.get('url');
+  // 两种调用方式:
+  //   A) ?url=<encoded>  ← DevTools console 里手动设 proxy 时用这个最直观
+  //   B) /<encoded full URL>  ← paper-analyzer.ts 的 same-origin 代理链拼接时走这个
+  //      路径必须以 http(s):// 开头才识别为 target,否则当作普通路径返回 400。
+  const queryUrl = url.searchParams.get('url');
+  let pathTarget = '';
+  if (!queryUrl && url.pathname.startsWith('/http')) {
+    pathTarget = decodeURIComponent(url.pathname.slice(1));
+  }
+  const target = queryUrl || pathTarget;
   if (!target) {
     res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Missing ?url=<encoded target URL>\n');
+    res.end('Missing target URL — use ?url=<encoded> or /<encoded full URL>\n');
     return;
   }
 

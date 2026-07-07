@@ -82,7 +82,42 @@ const MAX_TEXT_CHARS = 50_000; // 抽出的正文上限(避免爆 LLM context)
 // ============================================================================
 // 导出供 /topic 等其他页面复用(参 [[topic-search]])。顺序与可见性是按"已知稳定"排的,
 // topic-search 不要再调换。
+// 自家 Pages Function:部署在 https://daily-paper-reader.pages.dev/api/proxy,
+//代码见 /functions/api/proxy.ts(SSRF-safe,只代理 arXiv 域,无需 key,无配额)。
+// 浏览器请求时只要走 https://<host>/api/proxy?url=<encoded-arxiv-url> 即可。
+// 优先级最高 — 它跟站点同源,延迟低、可靠,而公共 CORS 代理经常挂(见下)。
+function sameOriginProxyHost(): string {
+  // 仅在浏览器里跑,document.baseURI 形如 https://daily-paper-reader.pages.dev/paper-analyzer/
+  // 去掉尾部路径,只要 origin(hostname)
+  try {
+    const u = new URL(document.baseURI);
+    return u.origin;
+  } catch {
+    return '';
+  }
+}
+// 开发环境(localhost / 127.0.0.1)走 scripts/local-cors-proxy.mjs
+// 部署平台上的 functions/ 在 dev server 里不生效,所以 same-origin /api/proxy
+// 在本机会 404,自动改指 8123 端口的本地代理(支持 ?url= 或路径拼接两种模式)。
+function isLocalDev(origin: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+}
 export const CORS_PROXIES: { name: string; wrap: (u: string) => string }[] = [
+  // 自家 Pages Function(部署在哪域名就拼哪个,自动适配 Vercel / EdgeOne / GitHub Pages)
+  // 注意:只有 Cloudflare Pages / Vercel / EdgeOne Pages 这些支持 functions/ 的平台才会生效;
+  // 部署到 GitHub Pages 时这个代理会 404,代码会自动 fallback 到下面的公共代理。
+  // 本地开发时 /api/proxy 不存在,改成指向 scripts/local-cors-proxy.mjs 的 8123。
+  {
+    name: 'same-origin-pages-function',
+    wrap: (u) => {
+      const origin = sameOriginProxyHost();
+      if (!origin) return u;
+      if (isLocalDev(origin)) {
+        return `http://127.0.0.1:8123/?url=${encodeURIComponent(u)}`;
+      }
+      return `${origin}/api/proxy?url=${encodeURIComponent(u)}`;
+    },
+  },
   // codetabs — 当前测试比较稳(200 + 透传)
   { name: 'codetabs.com', wrap: (u) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}` },
   // corsproxy.io — 经常 403 但偶尔可用
@@ -580,7 +615,11 @@ async function ensurePdfJs(): Promise<typeof import('pdfjs-dist')> {
   //   2. 兜底走本地 scripts/local-cors-proxy.mjs (localhost:8123) — 仅本机开发场景
   // 直连 bootcdn 在某些网络下动态 import 会失败(被报 Failed to fetch),
   // 走 CORS 代理后 worker 一定能加载。functions/api/proxy.ts 已把
-  // cdn.bootcdn.net 加入 allowlist,所以 PDF worker 直连能过。
+  // cdn.bootcdn.net/ajax/libs/pdf.js/* 加进 allowlist(限定路径前缀,
+  // 不放开整个 bootcdn),所以 PDF worker 直连能过。
+  // 警告:getCustomProxy() 的返回值必须带 https:// 协议头 — 否则会
+  // 拼出 "daily-paper-reader.pages.dev/api/proxy?url=...",浏览器报
+  // "Failed to resolve module specifier ..."(见 settings.ts DEFAULT_PROXY)。
   const corsProxy = getCustomProxy();
   const workerTarget = 'https://cdn.bootcdn.net/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs';
   let workerUrl: string;
@@ -643,13 +682,22 @@ async function extractPdfTextFromBuffer(
   let text = '';
   for (let i = 1; i <= maxPages; i++) {
     statusCb(`解析 PDF 第 ${i}/${maxPages} 页...`);
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    const pageText = content.items
-      .map((it: any) => ('str' in it ? it.str : ''))
-      .filter(Boolean)
-      .join(' ');
-    text += pageText + '\n\n';
+    try {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items
+        .map((it: any) => ('str' in it ? it.str : ''))
+        .filter(Boolean)
+        .join(' ');
+      text += pageText + '\n\n';
+    } catch (e) {
+      // 防御性兜底:某些 PDF 在 worker 解析时,numPages 报告正常但 getPage(i) 仍可能抛
+      // "Invalid page request"(常见于页对象损坏 / worker 半挂)。
+      // 一旦遇到,后续页大概率全挂,直接停 — 已抽到的文本足够 LLM 精读。
+      const msg = (e as Error)?.message || String(e);
+      statusCb(`第 ${i} 页解析失败 (${msg.slice(0, 60)}),停止抽取,继续使用已抽到的 ${text.length.toLocaleString()} 字符`);
+      break;
+    }
     if (text.length > maxChars) break;
   }
   text = text.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
@@ -1747,9 +1795,16 @@ async function runAnalysis(): Promise<void> {
       const maxPages = Math.min(doc.numPages, 25);
       for (let i = 1; i <= maxPages; i++) {
         setStatus(`解析 arXiv PDF 第 ${i}/${maxPages} 页...`);
-        const page = await doc.getPage(i);
-        const content = await page.getTextContent();
-        acc += content.items.map((it: any) => ('str' in it ? it.str : '')).filter(Boolean).join(' ') + '\n\n';
+        try {
+          const page = await doc.getPage(i);
+          const content = await page.getTextContent();
+          acc += content.items.map((it: any) => ('str' in it ? it.str : '')).filter(Boolean).join(' ') + '\n\n';
+        } catch (e) {
+          // 同 extractPdfTextFromBuffer 的防御:页对象损坏时停止,已抽文本够用
+          const msg = (e as Error)?.message || String(e);
+          setStatus(`第 ${i} 页解析失败 (${msg.slice(0, 60)}),继续使用已抽到的 ${acc.length.toLocaleString()} 字符`);
+          break;
+        }
         if (acc.length > MAX_TEXT_CHARS) break;
       }
       text = acc.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();

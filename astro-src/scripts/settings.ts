@@ -185,11 +185,21 @@ export function saveProvider(p: string): void {
 // ============================================================================
 // CORS 代理
 // ============================================================================
-export const DEFAULT_PROXY = 'daily-paper-reader.pages.dev/api/proxy';
+// 协议头必须显式带 https:// — 否则拼 worker URL 时会得到
+// "daily-paper-reader.pages.dev/api/proxy?url=...",PDF.js 把它当 module
+// specifier 解析失败(报 "Failed to resolve module specifier ...")。
+// 用户在设置面板里填代理时也务必保留协议头。
+export const DEFAULT_PROXY = 'https://daily-paper-reader.pages.dev/api/proxy';
 
 export function getCustomProxy(): string {
   try {
-    const v = (localStorage.getItem(STORAGE_KEYS.proxy) || '').trim().replace(/\/+$/, '');
+    let v = (localStorage.getItem(STORAGE_KEYS.proxy) || '').trim();
+    // 容错:用户从旧版本升级时 localStorage 里可能存着没协议头的旧值
+    // (如 "daily-paper-reader.pages.dev/api/proxy"),直接拼到 worker URL
+    // 会得到 ".../api/proxy?url=..." — 浏览器报 "Failed to resolve
+    // module specifier ..."。这里默认补上 https://,避免他们手动改设置。
+    if (v && !/^https?:\/\//i.test(v)) v = 'https://' + v;
+    v = v.replace(/\/+$/, '');
     return v || DEFAULT_PROXY;
   } catch {
     return DEFAULT_PROXY;

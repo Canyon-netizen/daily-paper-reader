@@ -15,10 +15,15 @@
 //
 // arXiv API 需要 User-Agent,不然 403。
 //
-// 安全:本端点只代理 arXiv 域(arxiv.org / export.arxiv.org / arxiv-vanity.com
-// 等已知 arXiv 镜像)。任何其他 host 都会被 400 拒绝。这样可以避免 Pages
-// 部署被当作开放 SSRF 跳板——任何 LAN / 公网 / 攻击者都不能借我们访问
-// 任意目标。CORS 仍为 * 以便浏览器任意域调用。
+// 安全:本端点代理两类目标:
+//   1. arXiv 域(arxiv.org / export.arxiv.org / arxiv-vanity.com
+//      等已知 arXiv 镜像)。任何其他 host 都会被 400 拒绝。
+//   2. PDF.js worker 单文件(cdn.bootcdn.net/ajax/libs/pdf.js/* —
+//      只用于让 PDF.js worker 走我们同源,避免动态 import 触发
+//      "Failed to fetch")。严格限定路径前缀,不能扩大到整个 bootcdn,
+//      避免 Pages 部署被当 SSRF 跳板。
+// 这样设计保证代理既能用,又不暴露任意目标内网/公网的能力。
+// CORS 仍为 * 以便浏览器任意域调用。
 
 interface EventContext {
   request: Request;
@@ -71,8 +76,20 @@ export async function onRequest(context: EventContext): Promise<Response> {
     'browse.arxiv.org',
     // arxiv-vanity 是合法 arXiv 渲染镜像
     'arxiv-vanity.com',
+    // PDF.js worker 专用 — 仅放行下面的 PDFJS_WORKER_PATH_PREFIX,
+    // 避免本端点被滥用代理任意 bootcdn 资源。
+    'cdn.bootcdn.net',
   ]);
-  if (!ALLOWED_HOSTS.has(parsedTarget.hostname.toLowerCase())) {
+  // PDF.js worker 路径前缀白名单 — 比放开整个 bootcdn 严格得多,
+  // 任意其他路径(包括 bootcdn 上的 JS/CSS/图片等)仍会被拒。
+  const PDFJS_WORKER_PATH_PREFIX = '/ajax/libs/pdf.js/';
+
+  const isAllowed =
+    ALLOWED_HOSTS.has(parsedTarget.hostname.toLowerCase()) ||
+    (parsedTarget.hostname.toLowerCase() === 'cdn.bootcdn.net' &&
+      parsedTarget.pathname.startsWith(PDFJS_WORKER_PATH_PREFIX));
+
+  if (!isAllowed) {
     return new Response(
       JSON.stringify({
         error: 'host not allowed',
