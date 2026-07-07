@@ -1462,11 +1462,11 @@ async function probeExistingFigures(arxivId: string): Promise<number> {
   }
 }
 
-// 触发 save-paper.yml (mode=append-deepdive):
-//   - 把精读 markdown 整个塞进 deep_dive_md input
+// 触发 save-paper.yml (mode=combined):
+//   - 前端拼好完整 .md(frontmatter + 速读四段 + Abstract + 精读全文),塞进 md_content
+//   - workflow 不依赖 docs 仓库里是否已有 .md(用户从论文分析页搜到就精读,可能从未点过 📤)
 //   - 如果 docs/ 仓库已经有该论文的图(后台 daily 跑过),needs_figures=false(快速路径)
-//   - 否则 needs_figures=true,让 workflow 端用 PyMuPDF 抽图
-//   - workflow 端读现有 .md → 末尾追加"## 深度精读" → 可选抽图 → commit
+//   - 否则 needs_figures=true,让 workflow 端用 PyMuPDF 抽图,再回写 figures_json
 async function saveDeepDiveToGitHub(
   r: AnalysisResult,
   entry: ArxivEntry,
@@ -1483,10 +1483,10 @@ async function saveDeepDiveToGitHub(
   const existingFigs = await probeExistingFigures(entry.arxivId);
   const needsFigures = existingFigs === 0 ? 'true' : 'false';
 
-  setStatus(`正在触发 GitHub Action (needs_figures=${needsFigures})...`);
-  const truncatedPct = deepDive.truncated
-    ? Math.round((Math.min(800_000, deepDive.contextTokens * 3 - 16_000 * 3) / deepDive.pdfChars) * 100)
-    : 100;
+  setStatus(`正在拼装完整 .md (frontmatter + 速读 + 精读)...`);
+  const md = buildCombinedNote(r, entry, deepDive);
+
+  setStatus(`正在触发 GitHub Action (mode=combined, needs_figures=${needsFigures})...`);
 
   const res = await fetch(url, {
     method: 'POST',
@@ -1499,14 +1499,15 @@ async function saveDeepDiveToGitHub(
     body: JSON.stringify({
       ref: 'main',
       inputs: {
-        mode: 'append-deepdive',
-        md_content: '',  // append 模式不用,占位避免 workflow 报错
+        mode: 'combined',
+        md_content: md,
         arxiv_id: entry.arxivId,
         slug,
-        message: `chore: deep dive ${entry.arxivId} via web analyzer`,
-        deep_dive_md: deepDive.markdown,
-        used_model: deepDive.usedModel,
-        truncated_pct: String(truncatedPct),
+        message: `chore: speed-read + deep dive ${entry.arxivId} via web analyzer`,
+        // combined 模式不读 deep_dive_md / used_model / truncated_pct,传空占位避免 yml required 校验
+        deep_dive_md: '',
+        used_model: '',
+        truncated_pct: '100',
         needs_figures: needsFigures,
         figures_url: entry.pdfUrl || '',
       },
@@ -1703,16 +1704,15 @@ function slugifyTitle(title: string, arxivId: string): string {
   return arxivId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'paper';
 }
 
-function buildMarkdownNote(r: AnalysisResult, entry: ArxivEntry | null): string {
-  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+// frontmatter 字段集中处,glance 与 combined 共用。修一处字段,两边一起跟着走。
+// 字段顺序与 docs/20260625-20260704/*.md 保持一致(参见 sample 2606.26474v1)。
+function buildFrontmatter(r: AnalysisResult, entry: ArxivEntry | null, now: string): string[] {
   const arxivId = entry?.arxivId || '';
   const pdfUrl = entry?.pdfUrl || (arxivId ? `https://arxiv.org/pdf/${arxivId}` : '');
   const tags = [`query:${arxivId.split('.')[0] || 'manual'}`];
-
-  // frontmatter 与 docs/20260625-20260704/*.md 完全对齐(参见 sample 2606.26474v1)
   // 标题/作者等含特殊字符(: , # 等)时统一加双引号,避免 YAML 解析失败。
   const yamlStr = (s: string): string => `"${(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
-  const fmLines = [
+  return [
     '---',
     `title: ${yamlStr(r.title_en || r.title || '(untitled)')}`,
     r.authors ? `authors: ${yamlStr(r.authors)}` : null,
@@ -1730,8 +1730,11 @@ function buildMarkdownNote(r: AnalysisResult, entry: ArxivEntry | null): string 
     r.result ? `result: ${yamlStr(r.result)}` : null,
     r.conclusion ? `conclusion: ${yamlStr(r.conclusion)}` : null,
     '---',
-  ].filter((l) => l !== null);
+  ].filter((l): l is string => l !== null);
+}
 
+// 速读正文块(TLDR / Abstract / 动机/方法/结果/结论),与旧 buildMarkdownNote 行为一致。
+function buildSpeedReadBody(r: AnalysisResult, entry: ArxivEntry | null): string {
   const bodyParts: string[] = [];
   if (r.tldr) bodyParts.push(`## TLDR\n${r.tldr}`);
   if (entry?.summary) bodyParts.push(`## Abstract\n${entry.summary}`);
@@ -1739,9 +1742,44 @@ function buildMarkdownNote(r: AnalysisResult, entry: ArxivEntry | null): string 
   if (r.method) bodyParts.push(`## 方法\n${r.method}`);
   if (r.result) bodyParts.push(`## 结果\n${r.result}`);
   if (r.conclusion) bodyParts.push(`## 结论\n${r.conclusion}`);
-  const body = bodyParts.length ? '\n' + bodyParts.join('\n\n') + '\n' : '';
+  return bodyParts.length ? '\n' + bodyParts.join('\n\n') + '\n' : '';
+}
 
-  return fmLines.join('\n') + '\n' + body + '\n';
+// 精读元信息行(显示在 ## 深度精读 标题正下方,告诉读者这篇精读是哪个 model 生成的、
+// 是否截断过 PDF)。跟 save-paper.yml:286-292 旧版的格式对齐,方便以后 backend
+// 写出的 .md 和 web 写出的 .md 在文档结构上一致。
+function buildDeepDiveBanner(d: DeepDiveResult): string {
+  // truncated 时给个"前 N%"提示;N 是按 model context window 算出的可用字符占 PDF 总字符的比例
+  // —— 跟 save-paper.yml 拼 deep_block 时的 truncate_note 公式保持一致。
+  let truncateNote = '全文';
+  if (d.truncated) {
+    const availableChars = Math.min(800_000, d.contextTokens * 3 - 16_000 * 3);
+    const pct = d.pdfChars > 0 ? Math.round((availableChars / d.pdfChars) * 100) : 0;
+    truncateNote = `前 ${pct}%`;
+  }
+  const modelLine = d.usedModel ? ' · 模型: ' + d.usedModel : '';
+  return `> 基于 PDF 全文生成${modelLine} · ${truncateNote}\n\n`;
+}
+
+function buildMarkdownNote(r: AnalysisResult, entry: ArxivEntry | null): string {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const fm = buildFrontmatter(r, entry, now);
+  const body = buildSpeedReadBody(r, entry);
+  return fm.join('\n') + '\n' + body + '\n';
+}
+
+// combined .md:frontmatter + 速读四段 + Abstract + 精读全文。
+// 跟旧 "📤 save 速读" 路径对比:不依赖仓库里是否已有 .md,适合"我搜到就要精读"用户。
+// 跟旧 "📥 save 精读" 路径对比:不再依赖"先点过 📤" — 一次完成。
+function buildCombinedNote(r: AnalysisResult, entry: ArxivEntry, deepDive: DeepDiveResult): string {
+  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const fm = buildFrontmatter(r, entry, now);
+  const speedRead = buildSpeedReadBody(r, entry).trimEnd();
+  // 精读章节用 `---` 分隔,跟旧 save-paper.yml 写入时的格式一致(append-deepdive 步骤里
+  // 拼的是 '\n\n---\n\n## 深度精读\n\n' + banner + deep)。
+  const banner = buildDeepDiveBanner(deepDive);
+  const deepSection = `\n\n---\n\n## 深度精读\n\n${banner}${deepDive.markdown}\n`;
+  return fm.join('\n') + '\n' + speedRead + deepSection;
 }
 
 async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promise<void> {
@@ -1808,7 +1846,7 @@ function renderResult(r: AnalysisResult, rawText: string): void {
         <button type="button" id="copy-md">复制 Markdown</button>
         <button type="button" id="download-json">下载 JSON</button>
         <button type="button" id="deepdive-btn" class="analyzer-action-deepdive" title="基于 PDF 全文生成中文长文精读">📖 生成长文精读</button>
-        <button type="button" id="save-deepdive-github" class="analyzer-action-deepdive" disabled title="先生成长文精读,再点此按钮追加到 docs 原文件 + 抽图">📥 保存精读到 GitHub</button>
+        <button type="button" id="save-deepdive-github" class="analyzer-action-deepdive" disabled title="先生成长文精读,再点此按钮一次性写入完整 .md(速读+精读)+ 抽图,不需要先点 📤">📥 一键保存(速读+精读)到 GitHub</button>
         <button type="button" id="save-github" class="analyzer-action-primary">📤 保存到 GitHub</button>
       </div>
     </div>
@@ -1926,7 +1964,7 @@ function renderResult(r: AnalysisResult, rawText: string): void {
     }
   }
 
-  // "📤 保存精读到 GitHub" 按钮(精读生成成功后可用)
+  // "📥 一键保存(速读+精读)到 GitHub" 按钮(精读生成成功后可用)
   const saveDeepDiveBtn = $<HTMLButtonElement>('save-deepdive-github');
   if (saveDeepDiveBtn) {
     if (!currentArxivEntry?.arxivId) {
@@ -1942,7 +1980,7 @@ function renderResult(r: AnalysisResult, rawText: string): void {
         try {
           await saveDeepDiveToGitHub(r, currentArxivEntry, currentDeepDive);
           saveDeepDiveBtn.textContent = '✓ 已触发,稍等部署';
-          setStatus('已触发 save-paper workflow (append-deepdive),几秒后刷新 docs 页面查看', 'info');
+          setStatus('已触发 save-paper workflow (combined),几秒后刷新 docs 页面查看', 'info');
         } catch (e) {
           saveDeepDiveBtn.textContent = oldText;
           saveDeepDiveBtn.disabled = false;

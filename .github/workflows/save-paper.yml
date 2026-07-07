@@ -4,15 +4,17 @@ name: save-paper
 # 接收 client_payload,把论文 Markdown 写到 docs/papers/<arxiv-id>-slug.md,
 # 然后 commit & push,触发 Cloudflare Pages 自动 rebuild。
 #
-# 两种模式:
-#   - glance(默认): 写一份新的速读 .md(Web 端已拼好整篇)
+# 三种模式:
+#   - glance: 写一份新的速读 .md(Web 端已拼好整篇)
 #   - append-deepdive: 读现有 .md → 末尾追加"## 深度精读"章节 → 可选抽图 → 写回
+#   - combined: 一次性写完整 .md(frontmatter + 速读四段 + Abstract + 精读全文),
+#               不要求 .md 已存在,适合"我搜到就要精读"的 web analyzer 流程
 
 on:
   workflow_dispatch:
     inputs:
       md_content:
-        description: "完整 Markdown 内容(含 frontmatter 和 Abstract),mode=glance 时使用"
+        description: "完整 Markdown 内容(含 frontmatter + 速读 + 可选精读);glance 和 combined 模式用,combined 模式下必须包含精读全文"
         required: false
         type: string
         default: ""
@@ -30,7 +32,7 @@ on:
         type: string
         default: "[chore] add paper from web analyzer"
       mode:
-        description: "glance | append-deepdive"
+        description: "glance | append-deepdive | combined"
         required: false
         type: string
         default: "glance"
@@ -93,8 +95,8 @@ jobs:
             echo "::error::arxiv_id 包含非法字符"
             exit 1
           fi
-          if [[ "$MODE" != "glance" && "$MODE" != "append-deepdive" ]]; then
-            echo "::error::mode 必须是 glance 或 append-deepdive,收到: $MODE"
+          if [[ "$MODE" != "glance" && "$MODE" != "append-deepdive" && "$MODE" != "combined" ]]; then
+            echo "::error::mode 必须是 glance / append-deepdive / combined 之一,收到: $MODE"
             exit 1
           fi
           if [[ "$MODE" == "append-deepdive" && -z "$DEEP_MD" ]]; then
@@ -103,6 +105,10 @@ jobs:
           fi
           if [[ "$MODE" == "glance" && -z "$MD_CONTENT" ]]; then
             echo "::error::mode=glance 时 md_content 不能为空"
+            exit 1
+          fi
+          if [[ "$MODE" == "combined" && -z "$MD_CONTENT" ]]; then
+            echo "::error::mode=combined 时 md_content 不能为空"
             exit 1
           fi
           if [[ "$NEEDS_FIGS" != "true" && "$NEEDS_FIGS" != "false" ]]; then
@@ -156,15 +162,16 @@ jobs:
           PY
 
       - name: Sync figures_json into existing .md frontmatter
-        if: inputs.mode == 'append-deepdive'
+        if: inputs.mode == 'append-deepdive' || inputs.mode == 'combined'
         env:
           FILE: docs/papers/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
           ARXIV_ID: ${{ inputs.arxiv_id }}
         run: |
           set -euo pipefail
           # 抽图后,扫描 docs/assets/figures/arxiv/<id>/fig-*.webp 实际文件,
-          # 把列表写回 .md 的 figures_json frontmatter 字段(append-deepdive 流程专用)。
+          # 把列表写回 .md 的 figures_json frontmatter 字段。
           # 这样 docs 网站页面的"📊 论文图表"区块能反映最新抽出的图。
+          # 用于 append-deepdive 和 combined 两种模式(两者都期望 .md 存在)。
           python - <<'PY'
           import glob, json, os, re
           file = os.environ['FILE']
@@ -219,8 +226,8 @@ jobs:
           print(f'[OK] figures_json 同步: {len(fig_entries)} 张图写入 {file}')
           PY
 
-      - name: Write paper file (glance mode)
-        if: inputs.mode == 'glance'
+      - name: Write paper file (glance / combined mode)
+        if: inputs.mode == 'glance' || inputs.mode == 'combined'
         env:
           MD_CONTENT: ${{ inputs.md_content }}
           ARXIV_ID: ${{ inputs.arxiv_id }}
@@ -358,6 +365,8 @@ jobs:
           fi
           if [[ "$MODE" == "append-deepdive" ]]; then
             DEFAULT_MSG="chore: deep dive ${ARXIV_ID} via web analyzer"
+          elif [[ "$MODE" == "combined" ]]; then
+            DEFAULT_MSG="chore: speed-read + deep dive ${ARXIV_ID} via web analyzer"
           else
             DEFAULT_MSG="chore: add ${ARXIV_ID} from web analyzer"
           fi
