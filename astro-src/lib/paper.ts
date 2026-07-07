@@ -286,6 +286,47 @@ export interface RenderOptions {
   base?: string;
 }
 
+// 把 Markdown 表格行(头部 / 分隔 / 数据)解析成 table HTML。
+// - splitCells: 按 | 切,自动去首尾空 cell(表头的 `| col | col |` 和分隔行 `| --- | --- |` 都按这个切)
+// - alignment: 从分隔行的 `:---` / `---:` / `:---:` 推算 align
+// - 第一行 = <thead>,剩余行 = <tbody>;分隔行不输出
+function renderTableRow(line: string, align: ('left' | 'center' | 'right')[]): string {
+  let cells = line.split('|');
+  // 去掉首尾由 | 切出的空字符串
+  if (cells.length && cells[0].trim() === '') cells.shift();
+  if (cells.length && cells[cells.length - 1].trim() === '') cells.pop();
+  const tds = cells.map((c, i) => {
+    const a = align[i] || 'left';
+    return `<td style="text-align:${a}">${renderInline(c.trim())}</td>`;
+  }).join('');
+  return `<tr>${tds}</tr>`;
+}
+
+function renderTable(headerLine: string, alignLine: string, dataLines: string[]): string {
+  let headerCells = headerLine.split('|');
+  if (headerCells.length && headerCells[0].trim() === '') headerCells.shift();
+  if (headerCells.length && headerCells[headerCells.length - 1].trim() === '') headerCells.pop();
+  let sepCells = alignLine.split('|');
+  if (sepCells.length && sepCells[0].trim() === '') sepCells.shift();
+  if (sepCells.length && sepCells[sepCells.length - 1].trim() === '') sepCells.pop();
+  const align: ('left' | 'center' | 'right')[] = sepCells.map((s) => {
+    const t = s.trim();
+    const left = t.startsWith(':');
+    const right = t.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    return 'left';
+  });
+  // 对齐列数和表头列数不一致时,以表头为准补 'left',避免漏掉最后一列
+  while (align.length < headerCells.length) align.push('left');
+  const ths = headerCells.map((c, i) => {
+    const a = align[i] || 'left';
+    return `<th style="text-align:${a}">${renderInline(c.trim())}</th>`;
+  }).join('');
+  const bodyRows = dataLines.map((l) => renderTableRow(l, align)).join('');
+  return `<table class="paper-md-table"><thead><tr>${ths}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+}
+
 export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string {
   if (!md) return '';
 
@@ -342,13 +383,35 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
     inList = false;
   }
 
-  for (const raw of lines) {
-    const line = raw.replace(/\s+$/, '');
+  // 表格行识别:匹配 `| ... | ... |`(必须有 | 包裹)
+  // 分隔行识别:`| --- | --- |` 或 `:---:` / `---:` / `:---`
+  const isTableRow = (s: string): boolean => /^\s*\|.*\|\s*$/.test(s);
+  const isAlignRow = (s: string): boolean => /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(s);
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].replace(/\s+$/, '');
+    const line = raw;
 
     // 标题
     if (line.startsWith('### ')) { flushList(); out.push(`<h3>${renderInline(line.slice(4))}</h3>`); continue; }
     if (line.startsWith('## '))  { flushList(); out.push(`<h2>${renderInline(line.slice(3))}</h2>`); continue; }
     if (line.startsWith('# '))   { flushList(); out.push(`<h1>${renderInline(line.slice(2))}</h1>`); continue; }
+
+    // 表格:必须是 `表头 + 分隔行 + 0..N 数据行`,且表头/分隔/数据都是 `| ... |` 行
+    if (isTableRow(line) && i + 1 < lines.length && isAlignRow(lines[i + 1].replace(/\s+$/, ''))) {
+      flushList();
+      const headerLine = line;
+      const alignLine = lines[i + 1].replace(/\s+$/, '');
+      const dataLines: string[] = [];
+      for (let j = i + 2; j < lines.length; j++) {
+        const dl = lines[j].replace(/\s+$/, '');
+        if (!isTableRow(dl)) break;
+        dataLines.push(dl);
+      }
+      out.push(renderTable(headerLine, alignLine, dataLines));
+      i += 1 + dataLines.length; // for 循环还会 +1,这里把 i 跳到表格最后一行
+      continue;
+    }
 
     // 分隔线
     if (/^---+\s*$/.test(line)) { flushList(); out.push('<hr />'); continue; }
