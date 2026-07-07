@@ -1519,6 +1519,78 @@ async function saveDeepDiveToGitHub(
     if (res.status === 403) throw new Error(`GitHub 拒绝触发(可能是 workflow 没启用,或 token 没 workflow 权限)`);
     throw new Error(`GitHub API ${res.status}: ${body.slice(0, 200)}`);
   }
+
+  // dispatch 204 成功 ≠ workflow 成功:轮询 run 状态直到完成,把失败原因抛回 UI。
+  // 否则 GitHub 那边 5 秒就挂,前端却停留在 "✓ 已触发,稍等部署",用户根本不知道。
+  await pollWorkflowConclusion(repo, token);
+}
+
+// 轮询最近一次 workflow_dispatch run 的结论:
+//   - queued / in_progress → 每 2s 拉一次,直到 completed(最多 ~50s)
+//   - completed + success → 返回
+//   - completed + failure → 找第一个 failed step,抛回错误信息 + run 链接
+async function pollWorkflowConclusion(
+  repo: { owner: string; repo: string; workflow: string },
+  token: string,
+): Promise<void> {
+  setStatus('已触发,等待 workflow 完成...');
+  const authHeaders = {
+    Accept: 'application/vnd.github+json',
+    Authorization: `Bearer ${token}`,
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  // 等 1.5s 给 GitHub 把 run 排上队,再开始拉列表
+  await new Promise((r) => setTimeout(r, 1500));
+  const listUrl = `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/workflows/${repo.workflow}/runs?per_page=1`;
+  let runId = 0;
+  for (let i = 0; i < 25; i++) {
+    const res = await fetch(listUrl, { headers: authHeaders });
+    if (!res.ok) throw new Error(`查询 workflow runs 失败: ${res.status}`);
+    const data = await res.json();
+    const run = data.workflow_runs?.[0];
+    if (!run) {
+      await new Promise((r) => setTimeout(r, 2000));
+      continue;
+    }
+    runId = run.id;
+    if (run.status === 'completed') break;
+    setStatus(`workflow 运行中(${i + 1}/25)...`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (!runId) throw new Error('workflow 未在 50 秒内排上队,稍后到 GitHub Actions 查看');
+
+  const runRes = await fetch(
+    `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/runs/${runId}`,
+    { headers: authHeaders },
+  );
+  if (!runRes.ok) throw new Error(`查询 run 状态失败: ${runRes.status}`);
+  const runInfo = await runRes.json();
+  if (runInfo.conclusion === 'success') {
+    setStatus('workflow 已完成,稍等部署', 'info');
+    return;
+  }
+
+  // 失败 — 抓 jobs 的 steps,定位第一个失败的 step 名
+  const jobsRes = await fetch(
+    `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/runs/${runId}/jobs`,
+    { headers: authHeaders },
+  );
+  let failedStep = '';
+  if (jobsRes.ok) {
+    const jobsData = await jobsRes.json();
+    for (const job of jobsData.jobs || []) {
+      for (const step of job.steps || []) {
+        if (step.conclusion === 'failure') {
+          failedStep = step.name;
+          break;
+        }
+      }
+      if (failedStep) break;
+    }
+  }
+  const url = `https://github.com/${repo.owner}/${repo.repo}/actions/runs/${runId}`;
+  const tail = failedStep ? `(失败 step: ${failedStep})` : '';
+  throw new Error(`workflow ${runInfo.conclusion || '失败'} ${tail} — 查看: ${url}`);
 }
 
 // 极简 markdown 渲染(只处理精读用得到的子集:标题、粗体、代码、列表、LaTeX、引用)
@@ -1625,7 +1697,10 @@ function slugifyTitle(title: string, arxivId: string): string {
   // arxivId 已经含版本号 + 短 hash,适合作为 slug 主干
   // 如果需要更"人类可读"的标题 slug,可以再附加 title 的 ascii 化短串
   const ascii = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-  return ascii || arxivId.replace(/[^\d.]/g, '');
+  if (ascii) return ascii;
+  // fallback:纯 ascii kebab-case,只保留 [a-z0-9],把 "." 和 "v" 都替换成 "-"
+  // (yml 校验 ^[a-z0-9-]{1,80}$ 不允许 ".",而 arxivId 形如 2606.30015v1 含点和 v)
+  return arxivId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'paper';
 }
 
 function buildMarkdownNote(r: AnalysisResult, entry: ArxivEntry | null): string {
@@ -1708,7 +1783,8 @@ async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promis
     if (res.status === 403) throw new Error(`GitHub 拒绝触发(可能是 workflow 没启用,或 token 没 workflow 权限)`);
     throw new Error(`GitHub API ${res.status}: ${body.slice(0, 200)}`);
   }
-  // 204 No Content — 成功
+  // 204 No Content — dispatch 成功。但 workflow 本身仍可能失败,所以继续轮询结论。
+  await pollWorkflowConclusion(repo, token);
 }
 
 // ============================================================================

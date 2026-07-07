@@ -86,7 +86,7 @@ jobs:
           : "${SLUG:?slug is required}"
           # slug 只允许 [a-z0-9-],长度 1-80,防路径注入
           if ! [[ "$SLUG" =~ ^[a-z0-9-]{1,80}$ ]]; then
-            echo "::error::slug 必须是 kebab-case ASCII(只含 a-z, 0-9, -, 长度 1-80)"
+            echo "::error::slug 必须是 kebab-case ASCII(只含 a-z, 0-9, -, 长度 1-80),实际收到: [$SLUG](len=${#SLUG})"
             exit 1
           fi
           if ! [[ "$ARXIV_ID" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
