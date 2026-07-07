@@ -56,37 +56,7 @@ jobs:
         env:
           DPR_GIST_ID: ${{ secrets.DPR_GIST_ID }}
           DPR_GIST_TOKEN: ${{ secrets.DPR_GIST_TOKEN }}
-        run: |
-          set -euo pipefail
-          echo "::group::fetching dpr secrets gist"
-          curl -fsSL \
-            -H "Authorization: token ${DPR_GIST_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/gists/${DPR_GIST_ID}" \
-            -o /tmp/dpr-gist.json
-          echo "::endgroup::"
-
-          python3 - <<'PY'
-          import json, os, sys
-          data = json.load(open("/tmp/dpr-gist.json"))
-          files = data.get("files") or {}
-          target = next(
-              (f["content"] for f in files.values()
-               if f.get("filename", "").endswith(".json")),
-              None,
-          )
-          if not target:
-              print("::error::no .json file in gist", file=sys.stderr)
-              sys.exit(1)
-          payload = json.loads(target)
-          env_file = os.environ.get("GITHUB_ENV")
-          for k, v in payload.items():
-              line = f"{k}={v}"
-              print(line)
-              if env_file:
-                  with open(env_file, "a") as fp:
-                      fp.write(line + "\n")
-          PY
+        run: python .github/scripts/load_gist.py
 
       - name: Setup Python
         uses: actions/setup-python@v6
