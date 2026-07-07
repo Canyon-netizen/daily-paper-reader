@@ -183,6 +183,14 @@ const base = import.meta.env.BASE_URL;
 <style>
   .paper-page { padding-bottom: 4rem; }
   .container { max-width: var(--content-max-width); margin: 0 auto; padding: 0 1.5rem; }
+  /* 论文正文给常驻对话侧栏让位;由 paper-chat.ts 根据用户偏好切 .container--chat-hidden */
+  .paper-page .container {
+    padding-right: calc(var(--chat-sidebar-width) + 1.5rem);
+    transition: padding-right 200ms ease-out;
+  }
+  .paper-page .container--chat-hidden {
+    padding-right: 1.5rem;
+  }
 
   .paper-broken {
     padding: 3rem 0;

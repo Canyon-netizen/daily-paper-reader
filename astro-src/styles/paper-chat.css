@@ -22,7 +22,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 150ms ease-out, background var(--transition);
+  transition: transform 150ms ease-out, right 200ms ease-out, background var(--transition);
 }
 .paper-chat-fab:hover {
   background: var(--accent-hover);
@@ -33,6 +33,10 @@
 }
 .paper-chat-fab--active {
   background: var(--accent-hover);
+}
+.paper-chat-fab--sidebar-visible {
+  /* 侧栏展开时,FAB 移到侧栏外侧,给用户视觉锚点 */
+  right: calc(var(--chat-sidebar-width) + 1.25rem);
 }
 .paper-chat-fab-icon { line-height: 1; }
 .paper-chat-fab-badge {
@@ -52,27 +56,33 @@
   text-align: center;
 }
 
-/* ===== Panel (展开态) ===== */
+/* ===== Panel (展开态 — 右侧贴边常驻侧栏) ===== */
 .paper-chat-panel {
   position: fixed;
-  right: 1.25rem;
-  bottom: 1.25rem;
+  right: 0;
+  top: 0;
+  bottom: 0;
   z-index: 9991;
-  width: 400px;
-  max-width: calc(100vw - 2.5rem);
-  height: min(560px, calc(100vh - 5rem));
+  width: var(--chat-sidebar-width);
+  max-width: 90vw;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-left: 1px solid var(--border);
+  border-radius: 0;
   box-shadow: var(--shadow-lg);
   overflow: hidden;
-  animation: paper-chat-rise 180ms ease-out;
+  animation: paper-chat-slide-in 220ms ease-out;
 }
-@keyframes paper-chat-rise {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
+.paper-chat-panel--hidden {
+  transform: translateX(100%);
+  /* 隐藏态仍占位,只是滑出屏外;DOM 保留以维持对话状态 */
+  pointer-events: none;
+}
+@keyframes paper-chat-slide-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
 }
 
 .paper-chat-head {
@@ -323,13 +333,13 @@
     height: 48px;
     font-size: 1.3rem;
   }
+  .paper-chat-fab--sidebar-visible {
+    /* 移动端侧栏全屏,FAB 直接放在右下角即可 */
+    right: 0.85rem;
+  }
   .paper-chat-panel {
-    right: 0;
-    bottom: 0;
     width: 100vw;
     max-width: 100vw;
-    height: 80vh;
-    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
   .paper-chat-chip {
     font-size: 0.74rem;

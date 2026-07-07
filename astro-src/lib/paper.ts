@@ -388,6 +388,13 @@ export interface ListOptions {
    * 关闭:显式传 dedup:false(用于科研 debug 或特定页需要全版本)。
    */
   dedup?: boolean;  // default true
+  /**
+   * 把筛选窗口限定到「最近 N 天」内的论文(按 frontmatter.date 算)。
+   * 用于首页「编辑精选」只显示近一周热门,避免几个月前的论文霸榜。
+   * 默认 undefined = 不限时间。窗口内论文数 < limit 时,会回退到「不限时间」的同排序结果,
+   * 避免空集(冷启动时尤其重要)。
+   */
+  sinceDays?: number;
 }
 
 /**
@@ -458,29 +465,52 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       (p.tldr || '').toLowerCase().includes(q)
     );
   }
+  // 时间窗:仅筛 frontmatter.date 在 sinceDays 内的论文;窗口外的不进入排序候选。
+  // 若窗口内不足 limit,后续在「不限时间」结果中按相同排序回退补齐,避免空集。
+  if (typeof opts.sinceDays === 'number' && opts.sinceDays > 0) {
+    const cutoff = Date.now() - opts.sinceDays * 24 * 60 * 60 * 1000;
+    filtered = filtered.filter((p) => {
+      if (!p.date) return false;
+      const t = new Date(p.date).getTime();
+      return Number.isFinite(t) && t >= cutoff;
+    });
+  }
   // Dedup by canonical arxiv id (drop older versions, keep highest v)
   if (opts.dedup !== false) {
     filtered = dedupByCanonicalArxivId(filtered);
   }
-  // Sort
+  // Sort + limit
   const sortBy = opts.sortBy || 'date';
   const sortOrder = opts.sortOrder || 'desc';
-  filtered.sort((a, b) => {
-    let av: number = 0, bv: number = 0;
-    if (sortBy === 'date') {
-      av = a.date ? new Date(a.date).getTime() : 0;
-      bv = b.date ? new Date(b.date).getTime() : 0;
-    } else if (sortBy === 'score') {
-      av = a.score || 0;
-      bv = b.score || 0;
-    }
-    return sortOrder === 'asc' ? av - bv : bv - av;
-  });
-  // Limit
-  if (opts.limit) {
-    return filtered.slice(0, opts.limit);
+  const sortItems = (src: PaperListItem[]): PaperListItem[] => {
+    const copy = src.slice();
+    copy.sort((a, b) => {
+      let av: number = 0, bv: number = 0;
+      if (sortBy === 'date') {
+        av = a.date ? new Date(a.date).getTime() : 0;
+        bv = b.date ? new Date(b.date).getTime() : 0;
+      } else if (sortBy === 'score') {
+        av = a.score || 0;
+        bv = b.score || 0;
+      }
+      return sortOrder === 'asc' ? av - bv : bv - av;
+    });
+    return opts.limit ? copy.slice(0, opts.limit) : copy;
+  };
+  const sorted = sortItems(filtered);
+  // 时间窗内不足 limit 时,回退到「不限时间」的同排序结果补齐,避免空集。
+  if (
+    typeof opts.sinceDays === 'number'
+    && opts.sinceDays > 0
+    && opts.limit
+    && sorted.length < opts.limit
+  ) {
+    const fallback = opts.dedup !== false
+      ? dedupByCanonicalArxivId(items)
+      : items;
+    return sortItems(fallback);
   }
-  return filtered;
+  return sorted;
 }
 
 export async function listAllPapersByTag(): Promise<Map<string, PaperListItem[]>> {

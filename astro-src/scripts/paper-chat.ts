@@ -122,7 +122,7 @@ function renderMessageBody(content: string): string {
 }
 
 // ============================================================================
-// UI 渲染:浮动按钮 + 展开面板
+// UI 渲染:右侧贴边常驻侧栏 + 显示/隐藏开关 FAB
 // ============================================================================
 const QUICK_PROMPTS = [
   '这篇论文的核心方法是什么?',
@@ -130,6 +130,23 @@ const QUICK_PROMPTS = [
   '这篇论文有哪些局限性?',
   '用一句话给我讲明白这篇论文',
 ];
+
+// 用户偏好"侧栏默认可见" — 跨会话持久化(沿用 settings.ts 的 dpr_analyzer_*_v1 约定)
+const CHAT_DOCKED_KEY = 'dpr_analyzer_chat_docked_v1';
+function readChatDocked(): boolean {
+  try {
+    return localStorage.getItem(CHAT_DOCKED_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+function writeChatDocked(v: boolean): void {
+  try {
+    localStorage.setItem(CHAT_DOCKED_KEY, v ? '1' : '0');
+  } catch {
+    /* localStorage 不可用时静默忽略(隐私模式等) */
+  }
+}
 
 function renderDock(container: HTMLElement): {
   fab: HTMLButtonElement;
@@ -148,14 +165,14 @@ function renderDock(container: HTMLElement): {
 
   const fab = document.createElement('button');
   fab.type = 'button';
-  fab.className = 'paper-chat-fab';
-  fab.setAttribute('aria-label', '打开与论文对话');
+  fab.className = 'paper-chat-fab paper-chat-fab--sidebar paper-chat-fab--sidebar-visible';
+  fab.setAttribute('aria-label', '切换与论文对话');
   fab.title = '与论文对话';
   fab.innerHTML = `<span class="paper-chat-fab-icon">💬</span><span class="paper-chat-fab-badge" hidden>0</span>`;
 
   const panel = document.createElement('div');
-  panel.className = 'paper-chat-panel';
-  panel.hidden = true;
+  // 默认带 --sidebar 修饰类;--hidden 由 initChat 根据用户偏好决定是否加上
+  panel.className = 'paper-chat-panel paper-chat-panel--sidebar';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', '与论文对话');
   panel.innerHTML = `
@@ -259,30 +276,59 @@ function initChat(): void {
   const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }];
   let busy = false;
   let unread = 0;
-  let panelOpen = false;
+  let sidebarVisible = readChatDocked();
 
-  function openPanel(): void {
-    panelOpen = true;
-    panel.hidden = false;
+  // 论文正文区所有 .container(4 个 section + chat 容器),同步让位/收回
+  const paperContainers = Array.from(
+    document.querySelectorAll<HTMLElement>('.paper-page .container'),
+  );
+
+  function applySidebarVisibility(): void {
+    if (sidebarVisible) {
+      panel.classList.remove('paper-chat-panel--hidden');
+      fab.classList.add('paper-chat-fab--sidebar-visible');
+      fab.classList.add('paper-chat-fab--active');
+      for (const el of paperContainers) el.classList.remove('container--chat-hidden');
+    } else {
+      panel.classList.add('paper-chat-panel--hidden');
+      fab.classList.remove('paper-chat-fab--sidebar-visible');
+      fab.classList.remove('paper-chat-fab--active');
+      for (const el of paperContainers) el.classList.add('container--chat-hidden');
+    }
+  }
+
+  function showSidebar(): void {
+    sidebarVisible = true;
+    writeChatDocked(true);
+    applySidebarVisibility();
     unread = 0;
     badge.hidden = true;
     badge.textContent = '0';
-    fab.classList.add('paper-chat-fab--active');
     setTimeout(() => input.focus(), 50);
   }
-  function closePanel(): void {
-    panelOpen = false;
-    panel.hidden = true;
-    fab.classList.remove('paper-chat-fab--active');
+  function hideSidebar(): void {
+    sidebarVisible = false;
+    writeChatDocked(false);
+    applySidebarVisibility();
   }
-  fab.addEventListener('click', () => {
-    if (panelOpen) closePanel();
-    else openPanel();
-  });
-  panel.querySelector('.paper-chat-close')?.addEventListener('click', closePanel);
+  function toggleSidebar(): void {
+    if (sidebarVisible) hideSidebar();
+    else showSidebar();
+  }
+
+  // 初始状态
+  applySidebarVisibility();
+  // localStorage 提示"已收起"时,首次显示需要触发角标归零逻辑
+  if (!sidebarVisible) {
+    unread = 0;
+    badge.hidden = true;
+  }
+
+  fab.addEventListener('click', toggleSidebar);
+  panel.querySelector('.paper-chat-close')?.addEventListener('click', hideSidebar);
   // Esc 键收起
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && panelOpen) closePanel();
+    if (e.key === 'Escape' && sidebarVisible) hideSidebar();
   });
 
   appendPlaceholder(stream);
@@ -310,8 +356,8 @@ function initChat(): void {
       placeholder.remove();
       const msgEl = appendMessage(stream, 'assistant', reply);
       messages.push({ role: 'assistant', content: reply });
-      // 面板收起时,新来消息 → 角标 +1
-      if (!panelOpen) {
+      // 侧栏收起时,新来消息 → 角标 +1
+      if (!sidebarVisible) {
         unread += 1;
         badge.textContent = String(unread);
         badge.hidden = false;
