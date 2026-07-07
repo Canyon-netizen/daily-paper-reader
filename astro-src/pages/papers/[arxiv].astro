@@ -6,6 +6,7 @@ import type { GetStaticPaths } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import { readPaper, listAllPaperIds, renderMarkdownBody } from '../../lib/paper';
+import '../../styles/paper-chat.css';
 
 export const getStaticPaths: GetStaticPaths = async () => {
   const ids = await listAllPaperIds();
@@ -152,8 +153,32 @@ const base = import.meta.env.BASE_URL;
         <p><a href={`${base}`}>← 返回首页</a></p>
       </div>
     )}
+
+    {/* 论文对话 dock — 数据载体(实际渲染由 paper-chat.ts 挂到 body 上作为 fixed 浮层)。
+        broken 论文和 404 时不渲染,避免误导。 */}
+    {paper && !paper.isBroken && (
+      <section
+        id="paper-chat"
+        aria-hidden="true"
+        data-title={paper.title || ''}
+        data-title-zh={paper.title_zh || ''}
+        data-authors={paper.authors || ''}
+        data-tldr={paper.tldr || ''}
+        data-motivation={paper.motivation || ''}
+        data-method={paper.method || ''}
+        data-result={paper.result || ''}
+        data-conclusion={paper.conclusion || ''}
+        data-tags={(paper.tags || []).join(',')}
+        data-arxiv-id={paper.arxivId || ''}
+      ></section>
+    )}
   </main>
 </BaseLayout>
+
+<script>
+  import '../../scripts/paper-chat.ts';
+  import '../../scripts/paper-figures.ts';
+</script>
 
 <style>
   .paper-page { padding-bottom: 4rem; }
@@ -270,25 +295,116 @@ const base = import.meta.env.BASE_URL;
   .paper-figures-wrap > summary::-webkit-details-marker { display: none; }
   .paper-figures-wrap > summary::before { content: '▶ '; transition: transform 150ms; display: inline-block; }
   .paper-figures-wrap[open] > summary::before { transform: rotate(90deg); }
-  .paper-figures {
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    margin-top: 0.8rem;
-  }
-  .paper-figures figure { margin: 0; }
-  .paper-figures img {
-    width: 100%;
-    height: auto;
+
+  .paper-carousel {
+    position: relative;
+    background: var(--bg-elevated);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    background: var(--bg-elevated);
+    padding: 1rem 3rem 0.5rem;
+    margin-top: 0.8rem;
+    outline: none;
   }
-  .paper-figures figcaption {
+  .paper-carousel:focus-visible { border-color: var(--accent); }
+
+  .paper-carousel-track {
+    position: relative;
+    overflow: hidden;
+    border-radius: var(--radius-md);
+    background: var(--bg);
+    min-height: 320px;
+  }
+
+  .paper-slide {
+    margin: 0;
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 200ms ease-out;
+    pointer-events: none;
+  }
+  .paper-slide.is-active {
+    opacity: 1;
+    pointer-events: auto;
+    position: relative;
+  }
+  .paper-slide-frame {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 0;
+  }
+  .paper-slide-frame img {
+    max-width: 100%;
+    max-height: 100%;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    display: block;
+  }
+  .paper-slide figcaption {
     font-size: 0.85rem;
     color: var(--fg-muted);
-    padding: 0.4rem 0 0;
-    line-height: 1.45;
+    padding: 0.5rem 0;
+    text-align: center;
+    max-width: 90%;
+  }
+
+  .paper-carousel-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--fg);
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--transition), border-color var(--transition), color var(--transition);
+    z-index: 2;
+  }
+  .paper-carousel-btn:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+  .paper-carousel-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+  .paper-carousel-prev { left: 0.5rem; }
+  .paper-carousel-next { right: 0.5rem; }
+
+  .paper-carousel-dots {
+    display: flex;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.6rem 0 0.2rem;
+  }
+  .paper-carousel-dot {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    transition: background var(--transition), transform var(--transition), border-color var(--transition);
+  }
+  .paper-carousel-dot.is-active {
+    background: var(--accent);
+    border-color: var(--accent);
+    transform: scale(1.2);
+  }
+
+  @media (max-width: 640px) {
+    .paper-carousel { padding: 0.5rem 0.5rem 0; }
+    .paper-carousel-btn { width: 2rem; height: 2rem; font-size: 1.25rem; }
   }
 
   /* 精读里 LLM 插入的图片(行内) */
