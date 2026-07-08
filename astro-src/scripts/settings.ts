@@ -46,6 +46,9 @@ export const STORAGE_KEYS = {
   // 已隐藏论文列表 — 论文详情页"隐藏"按钮的持久化层。
   // 不写 Gist(避免污染 CI $GITHUB_ENV),纯 localStorage。
   hiddenPapers: 'dpr_hidden_papers_v1',
+  // 已选论文列表 — 多选论文 → 送去 /topic/?from=selection 当种子上下文。
+  // 仅 localStorage,不上 Gist(选择是临时工作流,跨设备无意义)。
+  selection: 'dpr_paper_selection_v1',
   // paper-analyzer 分析结果本地历史(用户刷新页面后仍能查看、再次访问)。
   // 纯 localStorage,不同步 Gist,也不上 GitHub。
   analyzerHistory: 'dpr_analyzer_history_v1',
@@ -256,6 +259,87 @@ export function removeHiddenPaper(arxivId: string): boolean {
   if (next.length === ids.length) return false;
   saveHiddenPapersRaw(next);
   return true;
+}
+
+// ============================================================================
+// 已选论文列表(用于"送去主题探索")— 仅本地,不上 Gist。
+// 数据结构:每条存了 arxivId + 速览关键字段的快照,这样 topic 页能直接拼上下文,
+// 不必再回 /papers/{arxiv}/ 抓整张 frontmatter(也兼容用户离开本站时本地还能用)。
+// 软上限 8 篇 — 超过时仍允许,但 action bar 会显示警告(UI 层处理,这里不强截)。
+// ============================================================================
+export interface SelectionItem {
+  arxivId: string;
+  title: string;
+  title_zh?: string;
+  tldr: string;
+  motivation?: string;
+  method: string;
+  result: string;
+  conclusion?: string;
+  tags: string[];
+  addedAt: number;
+}
+
+export const SELECTION_SOFT_CAP = 8;
+
+export function loadSelection(): SelectionItem[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.selection);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x): x is SelectionItem =>
+      !!x && typeof x === 'object' && typeof x.arxivId === 'string' && typeof x.title === 'string',
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveSelectionRaw(items: SelectionItem[]): void {
+  try {
+    // 去重 + 保持首次出现顺序
+    const seen = new Set<string>();
+    const dedup: SelectionItem[] = [];
+    for (const it of items) {
+      if (!seen.has(it.arxivId)) {
+        seen.add(it.arxivId);
+        dedup.push(it);
+      }
+    }
+    localStorage.setItem(STORAGE_KEYS.selection, JSON.stringify(dedup));
+  } catch {
+    /* localStorage 不可用时静默忽略(隐私模式等) */
+  }
+}
+
+export function isInSelection(arxivId: string): boolean {
+  if (!arxivId) return false;
+  return loadSelection().some((x) => x.arxivId === arxivId);
+}
+
+// 返回 true 表示真的新增了,false 表示之前已在列表里或 arxivId/title 缺失。
+export function addToSelection(item: SelectionItem): boolean {
+  if (!item.arxivId || !item.title) return false;
+  const items = loadSelection();
+  if (items.some((x) => x.arxivId === item.arxivId)) return false;
+  items.push(item);
+  saveSelectionRaw(items);
+  return true;
+}
+
+// 返回 true 表示真的移除了,false 表示本来就不在列表里。
+export function removeFromSelection(arxivId: string): boolean {
+  if (!arxivId) return false;
+  const items = loadSelection();
+  const next = items.filter((x) => x.arxivId !== arxivId);
+  if (next.length === items.length) return false;
+  saveSelectionRaw(next);
+  return true;
+}
+
+export function clearSelection(): void {
+  try { localStorage.removeItem(STORAGE_KEYS.selection); } catch { /* ignore */ }
 }
 
 // ============================================================================

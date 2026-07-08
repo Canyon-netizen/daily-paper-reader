@@ -1,0 +1,219 @@
+/* 多选论文 → 送去主题探索
+ * - 左上角 checkbox badge(覆盖在 paper-card / tag-paper-link 上)
+ * - data-selected="true" 卡片态:轻微高亮
+ * - 详情页 paper-select-btn(与 paper-hide-btn 并列)
+ * - 底部居中浮动 action bar
+ *
+ * 主题色 / 间距 / 圆角全部走全局 CSS 变量,跟随 light/dark/contrast
+ */
+
+/* =====================================================================
+ * 复选框 badge — 注入在每张可多选卡片左上角
+ * ===================================================================== */
+.paper-select-badge {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  z-index: 2;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: all var(--transition);
+  box-shadow: var(--shadow-sm);
+}
+.paper-select-badge:hover {
+  border-color: var(--accent);
+  transform: scale(1.05);
+}
+.paper-select-badge-input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+/* 默认隐藏 ✓ 图标,勾选后显示 */
+.paper-select-badge-icon {
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 120ms, transform 120ms;
+  pointer-events: none;
+}
+.paper-select-badge-input:checked ~ .paper-select-badge-icon {
+  opacity: 1;
+  transform: scale(1);
+}
+.paper-select-badge-input:checked + .paper-select-badge,
+.paper-select-badge:has(.paper-select-badge-input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.paper-select-badge-input:focus-visible + .paper-select-badge,
+.paper-select-badge:has(.paper-select-badge-input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* =====================================================================
+ * 卡片被选中态(data-selected="true"):左侧条加重 + 轻微 tint
+ * ===================================================================== */
+.paper-card[data-selected='true'],
+.tag-papers li[data-selected='true'] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 60%, var(--bg-elevated));
+}
+.paper-card[data-selected='true']::before {
+  /* 复用 home.css 里的 left accent strip,选时直接撑满 */
+  transform: scaleY(1);
+}
+.tag-papers li[data-selected='true'] .tag-paper-link {
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+}
+
+/* =====================================================================
+ * 详情页 #paper-select-btn(在 paper-header-actions 里,跟 hide 按钮并列)
+ * ===================================================================== */
+.paper-header-actions {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+.paper-select-btn {
+  font-size: 0.85rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: all 150ms;
+  white-space: nowrap;
+}
+.paper-select-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.paper-select-btn--selected {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.paper-select-btn--selected:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-elevated));
+}
+
+/* =====================================================================
+ * 浮动 action bar — 底部居中
+ * ===================================================================== */
+.paper-selection-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  transform: translate(-50%, 12px);
+  z-index: 1000; /* 高于 paper-chat FAB(9990),避免被右下角浮按钮遮挡 */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 200ms, transform 200ms;
+  max-width: calc(100vw - 2rem);
+}
+.paper-selection-bar[hidden] {
+  display: none;
+}
+.paper-selection-bar:not([hidden]) {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.paper-selection-bar-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.7rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-lg);
+  color: var(--fg);
+  font-size: 0.92rem;
+}
+.paper-selection-count {
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.paper-selection-count strong {
+  color: var(--fg);
+  font-weight: 700;
+  margin: 0 0.1em;
+}
+.paper-selection-warn {
+  margin-left: 0.3em;
+  color: var(--accent);
+}
+.paper-selection-count--over strong {
+  color: var(--accent);
+}
+.paper-selection-go,
+.paper-selection-clear {
+  font-size: 0.88rem;
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 150ms;
+  white-space: nowrap;
+}
+.paper-selection-go {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.paper-selection-go:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  transform: translateY(-1px);
+}
+.paper-selection-clear {
+  color: var(--fg-muted);
+}
+.paper-selection-clear:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--bg);
+}
+
+@media (max-width: 560px) {
+  .paper-selection-bar {
+    bottom: 0.75rem;
+    max-width: calc(100vw - 1rem);
+  }
+  .paper-selection-bar-inner {
+    padding: 0.5rem 0.65rem;
+    gap: 0.4rem 0.5rem;
+    font-size: 0.85rem;
+  }
+  .paper-selection-go,
+  .paper-selection-clear {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.82rem;
+  }
+}
