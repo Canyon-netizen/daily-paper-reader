@@ -843,7 +843,7 @@ async function extractPdfText(file: File): Promise<string> {
 }
 
 // 精读专用:从 ArrayBuffer 解析 PDF 文本,允许更大上限和自定义状态回调。
-async function extractPdfTextFromBuffer(
+export async function extractPdfTextFromBuffer(
   buf: ArrayBuffer,
   statusCb: (msg: string) => void,
   opts: { maxPages?: number; maxChars?: number } = {},

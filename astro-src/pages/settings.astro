@@ -84,6 +84,10 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
         <label for="cfg-key">API Key</label>
         <input id="cfg-key" type="password" placeholder="sk-..." autocomplete="off" />
         <div class="settings-field-hint">Key 只存在你的浏览器,不会发到任何服务器。</div>
+        <div class="settings-field-hint" style="margin-top: 0.35rem;">
+          📌 <strong>论文页"全文模式"会把你正在读的论文骨架(章节标题 + 每段首句,~5-8k tokens)发到你配置的 LLM provider</strong>,用于回答细节问题。
+          仅在论文页聊天面板点选"📄 全文"按钮时启用,默认仍是结构化摘要模式。
+        </div>
       </div>
 
       <div class="settings-field settings-field-wide">
@@ -281,6 +285,24 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
           <li>之后 arXiv 搜索永久走你自己的代理,公共代理挂了也不影响。</li>
         </ol>
       </details>
+    </section>
+
+    <!-- ===== 用户标签 ===== -->
+    <section class="settings-card" id="settings-user-tags-card">
+      <h2 class="settings-card-title">🏷️ 用户标签</h2>
+      <p class="settings-card-sub">
+        你在 <a href={import.meta.env.BASE_URL + 'papers/'}>/papers/</a> 抽屉里给论文打的自定义标签(兴趣 / 状态 / 分组 / 备注)。
+        列表存浏览器 <code>localStorage</code>(key = <code>dpr_user_tags_v1</code>);
+        配了 Gist Token + Gist ID 后,每次本地改动会异步同步到 Gist。
+      </p>
+      <p class="settings-user-tags-empty" id="settings-user-tags-empty">尚无任何用户标签。</p>
+      <ul class="settings-user-tags-list" id="settings-user-tags-list" hidden></ul>
+      <div class="settings-user-tags-actions">
+        <button type="button" class="settings-action-btn ghost" id="user-tags-pull-btn">⬇ 从 Gist 拉取</button>
+        <button type="button" class="settings-action-btn ghost" id="user-tags-push-btn">⬆ 推到 Gist</button>
+        <button type="button" class="settings-action-btn ghost danger" id="user-tags-clear-btn">清空所有用户标签</button>
+      </div>
+      <p class="settings-user-tags-status" id="user-tags-status" role="status" aria-live="polite"></p>
     </section>
 
     <!-- ===== 已隐藏论文 ===== -->

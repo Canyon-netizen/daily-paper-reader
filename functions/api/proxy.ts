@@ -143,6 +143,10 @@ export async function onRequest(context: EventContext): Promise<Response> {
     'browse.arxiv.org',
     // arxiv-vanity 是合法 arXiv 渲染镜像
     'arxiv-vanity.com',
+    // ar5iv — LaTeXML 把 arXiv TeX 渲成 HTML5,论文聊天按需取骨架比 PDF 快 5-10x。
+    // paper-fulltext.ts 的 fetchAr5ivHtml 会走本代理拉 https://ar5iv.org/html/<id>
+    'ar5iv.org',
+    'www.ar5iv.org',
     // PDF.js worker 专用 — 仅放行下面的 PDFJS_WORKER_PATH_PREFIX,
     // 避免本端点被滥用代理任意 bootcdn 资源。
     'cdn.bootcdn.net',

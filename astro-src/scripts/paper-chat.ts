@@ -14,10 +14,45 @@
 
 import { loadSettings, type LLMConfig } from './settings';
 import { renderMarkdownBody } from '../lib/markdown';
+import {
+  loadFulltextSkeleton,
+  skeletonToPromptText,
+  type FulltextSkeleton,
+  type FulltextResult,
+} from './paper-fulltext';
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+
+// ============================================================================
+// 全文模式状态 — 用户偏好持久化(沿用 dpr_analyzer_*_v1 约定)
+// ============================================================================
+// 'summary' = 默认,只喂结构化摘要(老行为)
+// 'fulltext' = 注入 ar5iv 抓到的论文骨架
+// 用户切到 fulltext 后,首次发问会异步触发骨架加载;加载期间不影响当前轮回答,
+// 下一次 send 时自动用上。
+const FULLTEXT_MODE_KEY = 'dpr_analyzer_chat_fulltext_mode_v1';
+// 强制回退开关:用户或管理员在 localStorage 里设 '1' 时,toggle 锁在 summary,
+// 用于线上回滚或 A/B 控制。
+const FORCE_SUMMARY_KEY = 'dpr_analyzer_chat_force_summary_v1';
+
+type FulltextMode = 'summary' | 'fulltext';
+
+function readFulltextMode(): FulltextMode {
+  try {
+    if (localStorage.getItem(FORCE_SUMMARY_KEY) === '1') return 'summary';
+    return localStorage.getItem(FULLTEXT_MODE_KEY) === 'fulltext' ? 'fulltext' : 'summary';
+  } catch {
+    return 'summary';
+  }
+}
+function writeFulltextMode(m: FulltextMode): void {
+  try { localStorage.setItem(FULLTEXT_MODE_KEY, m); } catch { /* ignore */ }
+}
+function isForcedSummary(): boolean {
+  try { return localStorage.getItem(FORCE_SUMMARY_KEY) === '1'; } catch { return false; }
 }
 
 // escapeHtml:之前漏写导致 paper-chat.ts 顶层调用 initChat() 抛 ReferenceError,
@@ -73,9 +108,9 @@ async function sendChat(messages: ChatMessage[], cfg: LLMConfig): Promise<string
 }
 
 // ============================================================================
-// System prompt 构建
+// System prompt 构建 — 接受可选 skeleton,summary / fulltext 共用同一模板
 // ============================================================================
-function buildSystemPrompt(d: DOMStringMap): string {
+function buildSystemPrompt(d: DOMStringMap, skeleton: FulltextSkeleton | null = null): string {
   const titleZh = d.titleZh || '';
   const titleEn = d.title || '';
   const authors = d.authors || '';
@@ -89,7 +124,13 @@ function buildSystemPrompt(d: DOMStringMap): string {
 
   const lines: string[] = [];
   lines.push('你是一位耐心的科研助手,正在帮用户理解一篇论文。');
-  lines.push('下面是该论文的结构化摘要(由 daily pipeline 预先生成);当用户提问时,请**优先基于这些信息回答**,如确实超出范围请明确说"摘要里没提到,我无法确认"。');
+  if (skeleton) {
+    // 全文模式:让 LLM 优先用骨架,但不丢掉摘要(摘要已是高密度浓缩,放在最前)
+    lines.push('下面是该论文的结构化摘要 + ar5iv.org 抓到的全文骨架(章节标题 + 每段首句 + 公式/表格计数)。');
+    lines.push('优先基于全文骨架回答细节问题(方法、实验、附录);摘要信息可直接复用;若骨架未覆盖,坦诚告知。');
+  } else {
+    lines.push('下面是该论文的结构化摘要(由 daily pipeline 预先生成);当用户提问时,请**优先基于这些信息回答**,如确实超出范围请明确说"摘要里没提到,我无法确认"。');
+  }
   lines.push('回答用中文,简洁清晰,必要时用列表/小标题;避免编造论文里没写的细节。');
   lines.push('');
   lines.push('=== 论文信息 ===');
@@ -103,11 +144,20 @@ function buildSystemPrompt(d: DOMStringMap): string {
   if (method) lines.push(`\n方法:\n${method}`);
   if (result) lines.push(`\n结果:\n${result}`);
   if (conclusion) lines.push(`\n结论:\n${conclusion}`);
+  if (skeleton) {
+    lines.push('\n=== 论文全文骨架(ar5iv 抓取,按章节结构排列) ===');
+    lines.push(skeletonToPromptText(skeleton));
+  }
   lines.push('');
   lines.push('=== 回答指南 ===');
   lines.push('- 用户可能追问方法细节、实验设置、局限性、与相关工作的对比等。');
-  lines.push('- 如果用户的问题涉及摘要外的内容(如完整数学推导、附录实验),坦诚告知摘要范围有限。');
-  lines.push('- 不要复述完整摘要;直接回答用户具体的问题。');
+  if (skeleton) {
+    lines.push('- 骨架里的章节用 ## 标记,可按章节引用(如"见 §Method")。');
+    lines.push('- 若用户问的细节在骨架里没出现,坦诚说明,不要从其他论文知识推断。');
+  } else {
+    lines.push('- 如果用户的问题涉及摘要外的内容(如完整数学推导、附录实验),坦诚告知摘要范围有限。');
+  }
+  lines.push('- 不要复述完整摘要/骨架;直接回答用户具体的问题。');
   return lines.join('\n');
 }
 
@@ -203,6 +253,10 @@ function renderDock(container: HTMLElement): {
   errorBox: HTMLDivElement;
   quickBox: HTMLDivElement;
   badge: HTMLSpanElement;
+  // 全文模式相关
+  modeToggle: HTMLDivElement;
+  modeBadge: HTMLSpanElement;
+  modeHint: HTMLDivElement;
 } {
   const arxivId = container.dataset.arxivId || '';
   // 容器本身是数据载体,实际渲染都挂到 body 上的浮层节点
@@ -213,13 +267,15 @@ function renderDock(container: HTMLElement): {
   fab.className = 'paper-chat-fab paper-chat-fab--sidebar paper-chat-fab--sidebar-visible';
   fab.setAttribute('aria-label', '切换与论文对话');
   fab.title = '与论文对话';
-  fab.innerHTML = `<span class="paper-chat-fab-icon">💬</span><span class="paper-chat-fab-badge" hidden>0</span>`;
+  fab.innerHTML = `<span class="paper-chat-fab-icon">💬</span><span class="paper-chat-fab-badge" hidden>0</span><span class="paper-chat-fab-mode-dot" hidden></span>`;
 
   const panel = document.createElement('div');
   // 默认带 --sidebar 修饰类;--hidden 由 initChat 根据用户偏好决定是否加上
   panel.className = 'paper-chat-panel paper-chat-panel--sidebar';
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', '与论文对话');
+  // dpr_analyzer_chat_force_summary_v1='1' 时,把 toggle 锁在 summary 并显示提示。
+  const forced = isForcedSummary();
   panel.innerHTML = `
     <div class="paper-chat-head">
       <div class="paper-chat-title">
@@ -228,10 +284,17 @@ function renderDock(container: HTMLElement): {
       </div>
       <button type="button" class="paper-chat-close" aria-label="收起">×</button>
     </div>
+    <div class="paper-chat-mode" role="group" aria-label="对话上下文模式">
+      <button type="button" class="paper-chat-mode-btn paper-chat-mode-btn--active" data-mode="summary">📄 摘要</button>
+      <button type="button" class="paper-chat-mode-btn" data-mode="fulltext" ${forced ? 'disabled title="管理员在 localStorage 设置了 dpr_analyzer_chat_force_summary_v1=1,全文模式已禁用"' : ''}>📄 全文</button>
+      <span class="paper-chat-mode-badge" data-state="idle" aria-live="polite"></span>
+    </div>
     <div class="paper-chat-sub">
       基于本篇论文的结构化摘要与 LLM 多轮对话。
+      开启"全文"模式后,会基于 ar5iv 抓取的论文骨架(章节标题 + 每段首句)回答细节问题。
       未配置 LLM?去 <a href="./../../settings/">设置页</a>。
     </div>
+    <div class="paper-chat-mode-hint" hidden></div>
     <div class="paper-chat-stream" id="chat-stream" role="log" aria-live="polite"></div>
     <div class="paper-chat-quick" id="chat-quick">
       ${QUICK_PROMPTS.map((q, i) => `<button type="button" class="paper-chat-chip" data-quick="${i}">${escapeHtml(q)}</button>`).join('')}
@@ -259,6 +322,9 @@ function renderDock(container: HTMLElement): {
     errorBox: panel.querySelector('#chat-error') as HTMLDivElement,
     quickBox: panel.querySelector('#chat-quick') as HTMLDivElement,
     badge: fab.querySelector('.paper-chat-fab-badge') as HTMLSpanElement,
+    modeToggle: panel.querySelector('.paper-chat-mode') as HTMLDivElement,
+    modeBadge: panel.querySelector('.paper-chat-mode-badge') as HTMLSpanElement,
+    modeHint: panel.querySelector('.paper-chat-mode-hint') as HTMLDivElement,
   };
 }
 
@@ -298,10 +364,14 @@ function clearError(box: HTMLDivElement): void {
 function initChat(): void {
   const container = document.getElementById('paper-chat');
   if (!container) return;
+  // container 在整个 initChat 闭包内非空,但 TS 看不到入口 null check,
+  // 用一个确定非空别名避免每处都用 !。
+  const data = container.dataset;
 
   const parts = renderDock(container);
   const {
     fab, panel, stream, input, sendBtn, clearBtn, errorBox, quickBox, badge,
+    modeToggle, modeBadge, modeHint,
   } = parts;
 
   // 配置检查:缺 key 就锁输入,提示用户去设置页
@@ -317,8 +387,131 @@ function initChat(): void {
     );
   }
 
-  const systemPrompt = buildSystemPrompt(container.dataset);
-  const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt }];
+  // ============================================================================
+  // 全文模式状态机
+  // ============================================================================
+  // currentMode:用户当前选中(UI 反馈源)
+  // currentSkeleton:已加载的骨架;null 表示还在抓或加载失败
+  // loadingPromise:并发去重 — 同时多次触发不会重抓
+  let currentMode: FulltextMode = readFulltextMode();
+  let currentSkeleton: FulltextSkeleton | null = null;
+  let loadingPromise: Promise<FulltextResult> | null = null;
+
+  // 根据当前 mode 渲染 toggle UI 的选中态 + FAB 模式点
+  function renderModeUI(state: 'idle' | 'loading' | 'ready' | 'error', hintMsg = ''): void {
+    const summaryBtn = modeToggle.querySelector<HTMLButtonElement>('[data-mode="summary"]')!;
+    const fulltextBtn = modeToggle.querySelector<HTMLButtonElement>('[data-mode="fulltext"]')!;
+    summaryBtn.classList.toggle('paper-chat-mode-btn--active', currentMode === 'summary');
+    fulltextBtn.classList.toggle('paper-chat-mode-btn--active', currentMode === 'fulltext');
+
+    // FAB 右侧小圆点:全文模式开就亮蓝
+    const dot = fab.querySelector('.paper-chat-fab-mode-dot') as HTMLElement | null;
+    if (dot) dot.hidden = currentMode !== 'fulltext';
+
+    // badge:loading/ready/error 三态
+    modeBadge.dataset.state = state;
+    if (state === 'loading') {
+      modeBadge.innerHTML = '<span class="paper-chat-spinner"></span> 加载全文骨架…';
+    } else if (state === 'ready') {
+      const cnt = currentSkeleton?.sections.length ?? 0;
+      modeBadge.textContent = `✅ 骨架就绪 (${cnt} 章节)`;
+    } else if (state === 'error') {
+      modeBadge.textContent = '⚠️ 加载失败,继续用摘要';
+      modeBadge.title = hintMsg;
+    } else {
+      modeBadge.textContent = '';
+      modeBadge.title = '';
+    }
+
+    // mode-hint 行:loading 时给提示,完成后清掉
+    if (state === 'loading') {
+      modeHint.hidden = false;
+      modeHint.textContent = '正在抓取 ar5iv 全文,首次 3-8 秒,后续命中缓存秒切…';
+    } else if (state === 'error') {
+      modeHint.hidden = false;
+      modeHint.textContent = `全文加载失败:${hintMsg}。已自动回退到摘要模式。`;
+    } else {
+      modeHint.hidden = true;
+      modeHint.textContent = '';
+    }
+  }
+
+  // system prompt 每次 send 前按当前 mode + skeleton 重新构造
+  // 注意:messages[0] 是 system,send 时直接覆盖(不污染历史 user/assistant)
+  function rebuildSystemPrompt(): void {
+    const skeleton = currentMode === 'fulltext' ? currentSkeleton : null;
+    messages[0] = { role: 'system', content: buildSystemPrompt(data, skeleton) };
+  }
+
+  function setMode(mode: FulltextMode): void {
+    if (isForcedSummary() && mode === 'fulltext') return;
+    currentMode = mode;
+    writeFulltextMode(mode);
+    if (mode === 'fulltext') {
+      // 切到 fulltext → 触发骨架加载
+      void ensureFulltextLoaded();
+    } else {
+      // 切回 summary → 立刻清掉骨架,下次 send 用回纯摘要 prompt
+      rebuildSystemPrompt();
+      renderModeUI(currentSkeleton ? 'ready' : 'idle');
+    }
+  }
+
+  async function ensureFulltextLoaded(): Promise<void> {
+    if (currentSkeleton) {
+      rebuildSystemPrompt();
+      renderModeUI('ready');
+      return;
+    }
+    if (loadingPromise) {
+      // 已有加载在进行,等它完成即可
+      const result = await loadingPromise;
+      applyFulltextResult(result);
+      return;
+    }
+    renderModeUI('loading');
+    const arxivId = data.arxivId || '';
+    if (!arxivId) {
+      renderModeUI('error', '论文 arxiv id 缺失');
+      return;
+    }
+    loadingPromise = loadFulltextSkeleton(arxivId).catch((e: unknown) => ({
+      state: 'error' as const,
+      skeleton: null,
+      error: (e as Error)?.message || String(e),
+      hasFulltext: false,
+    }));
+    const result = await loadingPromise;
+    loadingPromise = null;
+    applyFulltextResult(result);
+  }
+
+  function applyFulltextResult(result: FulltextResult): void {
+    if (result.state === 'error') {
+      currentSkeleton = null;
+      rebuildSystemPrompt();
+      renderModeUI('error', result.error || '未知错误');
+      // 骨架加载失败时,把还在 stream 里的"加载中"提示换成"已失败"提示
+      // (注意:notice 已经在 send() 里根据 loadingPromise 状态显示对应文案,这里不用再改)
+      return;
+    }
+    if (!result.skeleton) {
+      currentSkeleton = null;
+      rebuildSystemPrompt();
+      renderModeUI('error', '骨架为空');
+      return;
+    }
+    currentSkeleton = result.skeleton;
+    rebuildSystemPrompt();
+    renderModeUI('ready');
+    // 骨架到位,清掉之前 user 消息旁挂的"加载中"提示
+    stream.querySelectorAll('.paper-chat-mode-notice').forEach((n) => n.remove());
+  }
+
+  const messages: ChatMessage[] = [{
+    role: 'system',
+    content: buildSystemPrompt(data, currentMode === 'fulltext' ? currentSkeleton : null),
+  }];
   let busy = false;
   let unread = 0;
   let sidebarVisible = readChatDocked();
@@ -376,6 +569,33 @@ function initChat(): void {
     if (e.key === 'Escape' && sidebarVisible) hideSidebar();
   });
 
+  // 智能预热:首次 focus chat 输入框或点 FAB 打开侧栏时,如果 mode=fulltext
+  // 就触发骨架加载。用户没开 chat → 零 arxiv 请求,首屏零开销。
+  let prefetchTriggered = false;
+  function maybePrefetch(): void {
+    if (prefetchTriggered) return;
+    if (currentMode === 'fulltext' && !currentSkeleton && !loadingPromise) {
+      prefetchTriggered = true;
+      void ensureFulltextLoaded();
+    }
+  }
+  input.addEventListener('focus', maybePrefetch, { once: true });
+  fab.addEventListener('click', maybePrefetch, { once: true });
+
+  // toggle 按钮点击
+  modeToggle.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-mode]');
+    if (!btn || btn.disabled) return;
+    const mode = (btn.dataset.mode as FulltextMode) || 'summary';
+    if (mode === currentMode) return;
+    setMode(mode);
+  });
+
+  // 初始 UI 反映当前 mode(用户上次选的状态)
+  renderModeUI(currentMode === 'fulltext' ? 'loading' : 'idle');
+  // 若默认是 fulltext 但还没加载,fire-and-forget 抓
+  if (currentMode === 'fulltext') void ensureFulltextLoaded();
+
   appendPlaceholder(stream);
 
   async function send(text: string): Promise<void> {
@@ -389,6 +609,19 @@ function initChat(): void {
 
     appendMessage(stream, 'user', trimmed);
     messages.push({ role: 'user', content: trimmed });
+
+    // 全文模式骨架还在加载中时,在 user 消息下面挂一行小字
+    // 提示"基于摘要回答中…",避免用户对回答口径困惑。
+    let modeNotice: HTMLDivElement | null = null;
+    if (currentMode === 'fulltext' && !currentSkeleton) {
+      modeNotice = document.createElement('div');
+      modeNotice.className = 'paper-chat-mode-notice';
+      modeNotice.textContent = loadingPromise
+        ? '⏳ 全文骨架加载中,本轮基于摘要回答'
+        : '⚠️ 全文骨架加载失败,本轮基于摘要回答';
+      stream.appendChild(modeNotice);
+      stream.scrollTop = stream.scrollHeight;
+    }
 
     const placeholder = document.createElement('div');
     placeholder.className = 'paper-chat-msg paper-chat-msg--assistant paper-chat-msg--thinking';
