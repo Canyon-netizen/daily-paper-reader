@@ -13,6 +13,8 @@ import {
   loadSettings,
   getCustomProxy,
   loadHiddenPapers,
+  loadSelection,
+  type SelectionItem,
 } from './settings';
 import {
   searchArxiv,
@@ -38,6 +40,10 @@ interface SubQ {
   query: string;
   reason: string;
   selected: boolean;
+  // 新增:从已选论文来的方向带这个标签 — 标记迁移范式
+  explorationType?: 'cross_domain' | 'method_transfer' | 'reverse' | 'combination';
+  // 新增:manual = 用户输入思路拆解;seeds = 从已选论文生成
+  source?: 'manual' | 'seeds';
 }
 
 interface Candidate {
@@ -118,6 +124,43 @@ const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研
 [
   {"label":"情节记忆与长期记忆","query":"episodic memory long-term","reason":"对应思路中关于智能体跨会话记忆的核心方法"},
   {"label":"游戏智能体记忆基准","query":"game agent memory benchmark","reason":"对应评测层面,检索游戏场景下记忆模块的基准与对比"}
+]`;
+
+const EXPLORE_FROM_SEEDS_SYSTEM = `你是研究迁移/探索助手。用户已选 N 篇相关性较高的论文,你需要基于这些论文的核心思路,
+生成 4-6 个"迁移或探索"方向,用于在 arXiv 上检索新论文。
+
+【4 种迁移范式 — 尽量覆盖,避免只输出一种】
+1. cross_domain (跨域迁移):把方法/思想从一个领域搬到另一个领域(例如把 RL 训练方法用到蛋白质设计)
+2. method_transfer (方法借鉴):把某篇论文的核心技术手段(如某种 loss、某种解码策略、某种评测协议)
+   应用到不同问题
+3. reverse (反向工程):把论文的目标/结论反过来用(例如把"检测幻觉"反过来用做"主动生成幻觉做训练数据";
+   或把"压缩模型"反过来想成"展开小模型得到大模型能力")
+4. combination (组合创新):把多篇论文的思路叠加形成新方向(例如论文 A 的表示 + 论文 B 的优化 +
+   论文 C 的评测)
+
+【输出格式 — 必须严格遵守】
+- 只输出一个 JSON 数组,不要任何其它文字、markdown 围栏、思考块
+- 不要写 <think> 思考块,不要写解释
+- 第一行必须是 [ ,最后一行必须是 ]
+- 每个元素字段:
+  - label: 中文短标题(8-20 字)
+  - query: **2-3 个英文独立 arXiv 关键词,空格分隔**(例如 "reinforcement learning protein design")
+  - reason: 一句话中文,**明确引用至少 1 篇已选论文(用标题或核心方法名)+ 它提供的可迁移点**
+  - explorationType: 必须是 cross_domain / method_transfer / reverse / combination 之一
+
+【检索纪律 - 非常重要】
+- query 必须是纯英文单词组合,**绝对不要在 query 里出现中文字符**
+- query 用 2-3 个独立的英文关键词,不要写完整短语或句子(arXiv all: 全文模式,短词召回更高)
+- reason 必须能让人看出"这个方向和已选论文的具体连接点",不要泛泛而谈"可借鉴 X 方法"
+- 当 N >= 3 时,**4 种 explorationType 至少各出现 1 次**(避免只输出 cross_domain)
+- 当 N < 3 时,允许某种范式重复,但仍要覆盖至少 2 种不同范式
+
+【示例输出】
+[
+  {"label":"RLHF 思想迁移到蛋白质序列设计","query":"reinforcement learning protein design","reason":"已选论文《Aligning Language Models》把 PPO 用于 LLM 对齐,核心 trick(reward model + KL 约束)可迁移到蛋白质生成中提升稳定性","explorationType":"cross_domain"},
+  {"label":"借用对比解码做摘要事实性","query":"contrastive decoding summarization","reason":"论文《Contrastive Decoding》提出的正负 prompt 对比解码,可直接套用到摘要生成中缓解幻觉","explorationType":"method_transfer"},
+  {"label":"反用幻觉检测做对抗训练","query":"adversarial training hallucination","reason":"把论文《Detecting Hallucinations》的检测器反过来当攻击器,生成对抗样本增强模型鲁棒性","explorationType":"reverse"},
+  {"label":"长上下文 + 思维链融合","query":"long-context chain-of-thought","reason":"结合论文 A 的 100k 上下文窗口与论文 B 的多步 CoT prompting,探索超长文档上的多步推理","explorationType":"combination"}
 ]`;
 
 export function normalizeQuery(q: string): string {
@@ -432,6 +475,92 @@ async function decomposeIdea(idea: string): Promise<SubQ[]> {
   }).filter((q: SubQ) => q.query);
 }
 
+// 基于已选论文生成"迁移/探索"子方向 — 复用 decomposeIdea 的重试/解析模式。
+// 每个 direction 的 explorationType 决定 UI 上展示哪种迁移范式 badge。
+export async function exploreFromSeeds(
+  seeds: SelectionItem[],
+  cfg: LLMConfig,
+): Promise<SubQ[]> {
+  // 过滤掉没有任何有用内容的条目(必须有 tldr 或 method 至少一个非空)
+  const useful = seeds.filter((s) =>
+    (s.tldr && s.tldr.trim()) || (s.method && s.method.trim()),
+  );
+  if (useful.length === 0) {
+    throw new Error('已选论文都缺少 TLDR/方法摘要,无法生成迁移方向');
+  }
+
+  // 拼 seedContext — 每个论文一段,字段截到 500 字符避免 prompt 过长
+  const trunc = (v: string | undefined, max = 500): string => {
+    const s = (v ?? '').trim();
+    if (!s) return '';
+    return s.length > max ? s.slice(0, max) + '…' : s;
+  };
+  const blocks: string[] = [];
+  useful.forEach((p, i) => {
+    const lines: string[] = [];
+    lines.push(`[论文 ${i + 1}] arXiv:${p.arxivId}`);
+    lines.push(`标题: ${p.title}${p.title_zh ? ' / ' + p.title_zh : ''}`);
+    if (p.tldr) lines.push(`TLDR: ${trunc(p.tldr)}`);
+    if (p.motivation) lines.push(`动机: ${trunc(p.motivation)}`);
+    if (p.method) lines.push(`方法: ${trunc(p.method)}`);
+    if (p.result) lines.push(`结果: ${trunc(p.result)}`);
+    if (p.conclusion) lines.push(`结论: ${trunc(p.conclusion)}`);
+    if (p.tags && p.tags.length) lines.push(`标签: ${p.tags.join(', ')}`);
+    blocks.push(lines.join('\n'));
+  });
+  const seedContext = blocks.join('\n\n');
+
+  const userPrompt =
+    `已选论文 (${useful.length} 篇):\n"""\n${seedContext}\n"""\n\n` +
+    `请基于这些论文生成 4-6 个迁移/探索方向(严格 JSON 数组,不要其它文字):`;
+
+  let raw = '';
+  let arr: any[] = [];
+  let attempt = 0;
+  const MAX = 2;
+  while (attempt < MAX) {
+    attempt++;
+    try {
+      raw = await callLLMRaw(EXPLORE_FROM_SEEDS_SYSTEM, userPrompt, cfg, true);
+    } catch (e) {
+      if (attempt >= MAX) throw e;
+      continue; // 网络/LLM 错误重试一次
+    }
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      if (attempt >= MAX) {
+        throw new Error(`迁移方向不是合法 JSON: ${raw.slice(0, 200)}`);
+      }
+      continue;
+    }
+    if (Array.isArray(arr) && arr.length > 0) break;
+    // 空数组 → 提示用户换种子
+    if (attempt >= MAX) {
+      throw new Error('LLM 未返回任何迁移方向,试试换个论文组合或刷新后再试');
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+
+  // 把 explorationType 限制在白名单内(LLM 偶尔会写错大小写或拼写)
+  const ALLOWED_TYPES = new Set(['cross_domain', 'method_transfer', 'reverse', 'combination']);
+  return arr.slice(0, 6).map((x: any, i: number) => {
+    const rawQuery = String(x.query ?? '').trim();
+    const cleaned = normalizeQuery(rawQuery);
+    const rawType = String(x.explorationType ?? '').trim().toLowerCase();
+    const explorationType = (ALLOWED_TYPES.has(rawType) ? rawType : undefined) as SubQ['explorationType'];
+    return {
+      id: uid('q'),
+      label: String(x.label ?? `迁移方向 ${i + 1}`).slice(0, 60),
+      query: cleaned || rawQuery,
+      reason: String(x.reason ?? '').trim(),
+      selected: true,
+      source: 'seeds' as const,
+      explorationType,
+    };
+  }).filter((q: SubQ) => q.query);
+}
+
 async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
   // 主题探索场景下 query 通常是关键词组合(如 "episodic memory long-term"),用 all: 全文匹配
   // 召回更高;冷门 query 也能搜到。返回后再按时间/相关性让用户挑。
@@ -651,12 +780,21 @@ function renderSubqStage(): void {
   const selectedCount = current.subqs.filter((s) => s.selected).length;
   subqMeta.textContent = `共 ${current.subqs.length} 个,已选 ${selectedCount}`;
   searchBtn.disabled = selectedCount === 0;
-  list.innerHTML = current.subqs.map((q, i) => `
+  list.innerHTML = current.subqs.map((q, i) => {
+    const badgeHtml = q.explorationType
+      ? `<span class="topic-subq-card-badge topic-subq-card-badge--${escapeHtml(q.explorationType)}" title="迁移范式:${escapeHtml(explorationTypeLabel(q.explorationType))}"><span class="topic-subq-card-badge-dot"></span>${escapeHtml(explorationTypeLabel(q.explorationType))}</span>`
+      : '';
+    const sourceTag = q.source === 'seeds'
+      ? `<span class="topic-subq-card-source" title="从已选论文生成">📚 来自已选论文</span>`
+      : '';
+    return `
     <div class="topic-subq-card ${q.selected ? 'selected' : ''}" data-id="${q.id}">
       <input type="checkbox" class="topic-subq-check" ${q.selected ? 'checked' : ''} aria-label="勾选子方向 ${i + 1}" />
       <div class="topic-subq-card-main">
         <div class="topic-subq-card-row">
           <input type="text" class="label-input" value="${escapeHtml(q.label)}" data-field="label" placeholder="子方向标题" />
+          ${badgeHtml}
+          ${sourceTag}
           <div class="topic-subq-card-actions">
             <button type="button" class="topic-btn ghost" data-act="regen" title="重新生成此子方向">🔄</button>
             <button type="button" class="topic-btn ghost" data-act="del" title="删除此子方向">✕</button>
@@ -668,7 +806,8 @@ function renderSubqStage(): void {
         <textarea data-field="reason" placeholder="为什么这个子方向值得检索">${escapeHtml(q.reason)}</textarea>
       </div>
     </div>
-  `).join('');
+  `;
+  }).join('');
 
   // 绑定交互
   list.querySelectorAll<HTMLElement>('.topic-subq-card').forEach((card) => {
@@ -719,6 +858,17 @@ function renderSubqStage(): void {
       }
     });
   });
+}
+
+// explorationType → 中文显示名。给 renderSubqStage 用。
+function explorationTypeLabel(t: SubQ['explorationType']): string {
+  switch (t) {
+    case 'cross_domain': return '跨域迁移';
+    case 'method_transfer': return '方法借鉴';
+    case 'reverse': return '反向工程';
+    case 'combination': return '组合创新';
+    default: return '';
+  }
 }
 
 function renderCandStage(): void {
@@ -1192,6 +1342,98 @@ function startNewSession(): void {
 }
 
 // ============================================================================
+// 基于已选论文(seed papers)的迁移探索 — 由 ?from=selection URL 触发入口
+// ============================================================================
+
+// 注入"📚 基于已选 N 篇论文探索"卡片到 #seeds-pill-slot(#stage-input 之前)
+function renderSeedsPill(seeds: SelectionItem[]): void {
+  const slot = document.getElementById('seeds-pill-slot');
+  if (!slot || seeds.length === 0) return;
+  slot.innerHTML = `
+    <div class="seeds-pill" id="seeds-pill">
+      <div class="seeds-pill-icon">📚</div>
+      <div class="seeds-pill-body">
+        <div class="seeds-pill-title">基于已选 ${seeds.length} 篇论文探索</div>
+        <div class="seeds-pill-desc">跳过手动输入思路,模型会读取每篇的 TLDR/方法/结果,生成 4-6 个迁移/探索方向(跨域迁移 / 方法借鉴 / 反向工程 / 组合创新)。</div>
+      </div>
+      <button type="button" class="topic-btn primary seeds-pill-btn" id="seeds-explore-btn">🚀 开始迁移探索</button>
+    </div>
+  `;
+  document.getElementById('seeds-explore-btn')?.addEventListener('click', () => doExploreFromSeeds());
+}
+
+// 隐藏"来自已选论文"入口卡片(在迁移探索完成后调用,避免重复触发)
+function hideSeedsPill(): void {
+  const slot = document.getElementById('seeds-pill-slot');
+  if (slot) slot.innerHTML = '';
+}
+
+async function doExploreFromSeeds(): Promise<void> {
+  const seeds = loadSelection();
+  if (seeds.length === 0) {
+    setStatus('已选论文为空,请先在论文详情页加入选集', 'error');
+    return;
+  }
+  const cfg = loadSettings() as LLMConfig;
+  if (!cfg.apiKey) {
+    renderBanner('请先在 <a href="/settings/">设置</a> 页面填 LLM API Key。');
+    return;
+  }
+
+  // 当前会话已经有内容 → 二次确认(沿用 startNewSession 的提示风格)
+  if (current && (current.subqs.length > 0 || current.summaries.length > 0)) {
+    if (!confirm(`开始迁移探索会清空当前会话的 ${current.subqs.length} 个子方向和 ${current.summaries.length} 篇已总结论文,确定吗?`)) {
+      return;
+    }
+  }
+
+  // 创建全新会话(不弹 startNewSession 的 confirm,因为上面已经问过了)
+  if (current) deleteSession(current);
+  current = {
+    id: uid('ts'),
+    topic: `基于 ${seeds.length} 篇已选论文的迁移探索`,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    subqs: [],
+    candidatesBySubq: {},
+    summaries: [],
+    chats: {},
+  };
+  {
+    const store2 = loadStore();
+    store2.currentId = current.id;
+    store2.sessions[current.id] = current;
+    saveStore(store2);
+  }
+  // 把 textarea 同步成新 topic(给用户反馈)
+  const ta = $<HTMLTextAreaElement>('topic-input');
+  ta.value = current.topic;
+  ($<HTMLButtonElement>('decompose-btn')).disabled = true;
+
+  hideSeedsPill();
+  clearBanner();
+  inFlightController = new AbortController();
+  setStatus(`🌱 基于 ${seeds.length} 篇已选论文生成迁移方向...`);
+
+  try {
+    const subqs = await exploreFromSeeds(seeds, cfg);
+    if (subqs.length === 0) {
+      throw new Error('LLM 未返回任何迁移方向');
+    }
+    current.subqs = subqs;
+    ($('stage-subqs') as HTMLDetailsElement).open = true;
+    renderAll();
+    persistSession(current!);
+    setStatus(`✓ 已生成 ${subqs.length} 个迁移方向,勾选后搜索 arXiv`);
+    setTimeout(clearStatus, 2000);
+  } catch (e) {
+    setStatusErrorWithAction(`迁移探索失败: ${(e as Error).message}`, '🔄 重试', () => doExploreFromSeeds());
+  } finally {
+    inFlightController = null;
+  }
+}
+
+// ============================================================================
 // Init
 // ============================================================================
 
@@ -1260,6 +1502,26 @@ function init(): void {
   // 顶栏
   $<HTMLButtonElement>('new-session-btn').addEventListener('click', startNewSession);
   $<HTMLButtonElement>('copy-all-btn').addEventListener('click', copyAllAsMarkdown);
+
+  // ?from=selection 入口 — 在 stage 1 之前注入"📚 基于已选 N 篇论文探索"卡片
+  // 用 try/catch 包裹,避免 seeds 相关 bug 影响主页面
+  try {
+    const params = new URLSearchParams(location.search);
+    if (params.get('from') === 'selection') {
+      // 清除 URL 上的 from=selection,避免刷新页面时再次注入
+      try {
+        const url = new URL(location.href);
+        url.searchParams.delete('from');
+        history.replaceState(null, '', url.toString());
+      } catch { /* ignore */ }
+      const seeds = loadSelection();
+      if (seeds.length > 0) {
+        renderSeedsPill(seeds);
+      }
+    }
+  } catch (e) {
+    console.warn('[topic] 注入已选论文入口失败:', (e as Error).message);
+  }
 }
 
 if (document.readyState === 'loading') {
