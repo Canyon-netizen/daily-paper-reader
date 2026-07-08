@@ -46,6 +46,9 @@ export const STORAGE_KEYS = {
   // 已隐藏论文列表 — 论文详情页"隐藏"按钮的持久化层。
   // 不写 Gist(避免污染 CI $GITHUB_ENV),纯 localStorage。
   hiddenPapers: 'dpr_hidden_papers_v1',
+  // paper-analyzer 分析结果本地历史(用户刷新页面后仍能查看、再次访问)。
+  // 纯 localStorage,不同步 Gist,也不上 GitHub。
+  analyzerHistory: 'dpr_analyzer_history_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 

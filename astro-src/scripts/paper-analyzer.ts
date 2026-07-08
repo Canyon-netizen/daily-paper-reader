@@ -34,6 +34,7 @@ import {
   loadGitHubToken,
   loadGitHubRepo,
   loadDeepDiveSettings,
+  loadHiddenPapers,
 } from './settings';
 
 // ============================================================================
@@ -60,7 +61,34 @@ export interface AnalysisResult {
   // 看不到它在所处研究主题里的坐标。新增此字段把笔记从"单点摘要"扩展到"主题语境"，
   // 让用户即使不读全文也能定位这篇工作相对其他工作的位置与适用边界。
   context?: string;
+  // 主题标签:从 TOPIC_ALLOWLIST(下方常量)里挑 1-4 个最贴切的标签,
+  // 由同一份 LLM 调用返回,前端规范化为 query:<tag> 写入 frontmatter。
+  // 失败 / 字段缺失 / 非数组时降级为 [];allowlist 之外的元素丢弃,避免自由发挥。
+  topic_tags?: string[];
 }
+
+// 预置主题标签清单。
+// 前半段 = config.yaml intent_profiles / settings.DEFAULT_TOPICS_TEXT 已有的 5 项;
+// 后半段 = 仓库 docs/papers/ 现存论文常见的方向,扩展覆盖。
+// 改此处时记得同步 SYSTEM_PROMPT 里的预置清单(否则 LLM 看到清单和实际写文件的不一致)。
+const TOPIC_ALLOWLIST: readonly string[] = [
+  'RL',                  // 强化学习(reinforcement learning、policy optimization、MDP 等)
+  'MAS',                 // 多智能体系统(multi-agent、cooperation、swarm 等)
+  'game ai',             // 游戏 AI(博弈论、self-play、StarCraft、对战 等)
+  'self distillation',   // 自蒸馏(self-imitation、policy self-distillation、on-policy distillation 等)
+  'intervention',        // 大模型干预(steering vector、activation patching、representation engineering 等)
+  'llm-agent',           // LLM 驱动的智能体(tool use、ReAct、function calling、agentic workflow 等)
+  'reasoning',           // 推理增强(chain-of-thought、CoT、search-augmented、math reasoning 等)
+  'gui',                 // GUI 智能体 / 屏幕操作(GUI agent、WebShop、mobile UI、computer use 等)
+  'vision',              // 计算机视觉 / 多模态(VLM、image classification、video、segmentation 等)
+  'speech',              // 语音 / 音频(speech recognition、text-to-speech、audio generation 等)
+  'safety',              // AI 安全 / 对齐 / 红队(jailbreak、adversarial、alignment、harmful generation 等)
+  'retrieval',           // 信息检索 / RAG(dense retrieval、reranker、retrieval-augmented generation 等)
+  'code',                // 代码生成 / 程序合成(code LLM、completion、program synthesis 等)
+  'robotics',            // 机器人 / 具身智能(manipulation、locomotion、sim-to-real、embodied AI 等)
+  'knowledge',           // 知识表示 / 知识图谱(KG、entity linking、relation extraction 等)
+];
+const TOPIC_ALLOWLIST_LOWER = new Set(TOPIC_ALLOWLIST.map((t) => t.toLowerCase()));
 
 export interface ArxivEntry {
   id: string;            // 完整 arXiv URL
@@ -518,6 +546,9 @@ async function syncToGist(): Promise<void> {
     MINIMAX_REWRITE_MODEL: `${provider}/${cfg.model || 'deepseek-chat'}`,
     corsProxy,
     topics,
+    // 已隐藏论文列表 — 两处 syncToGist 都要带这个字段,
+    // 否则从 /settings/ 同步时会把 analyzer 同步的 topics 字段连带 hiddenPapers 一起覆盖丢失。
+    hiddenPapers: loadHiddenPapers(),
   };
   const content = JSON.stringify(payload, null, 2);
 
@@ -588,10 +619,121 @@ function initModeTabs(): void {
       panels.forEach((p) => {
         p.hidden = p.dataset.modePanel !== mode;
       });
+      // 切到 📚 历史 tab → 即时刷新列表(避免外部 localStorage 改动后看不见)
+      if (mode === 'history') renderHistoryPanel();
       // 切到 arxiv 时不需要 PDF,反之亦然
       updateRunButton();
     });
   });
+}
+
+// ============================================================================
+// 📚 历史笔记 tab 渲染 / 重新加载
+// ============================================================================
+function renderHistoryPanel(): void {
+  const list = $('history-list');
+  const counter = $('history-count');
+  const clearBtn = $<HTMLButtonElement>('history-clear');
+  const items = loadHistory();
+  counter.textContent = items.length === 0 ? '空' : `${items.length} 篇`;
+  clearBtn.disabled = items.length === 0;
+  if (items.length === 0) {
+    list.innerHTML = `<div class="analyzer-history-empty">还没有历史记录。<br>跑过几篇论文后会自动列在这里(纯本机存储)。</div>`;
+    return;
+  }
+  list.innerHTML = items.map((e) => {
+    const idAttr = escapeHtml(e.id);
+    const tagText = e.source === 'pdf' ? '上传 PDF' : (e.arxivId ? `arXiv ${escapeHtml(e.arxivId)}` : '手动');
+    const titleZh = escapeHtml(e.arxivTitleZh || e.analysis.title || e.arxivTitle || '(无标题)');
+    const titleEn = e.analysis.title_en || e.arxivTitle;
+    const tldr = escapeHtml(shortTldr(e.analysis.tldr || ''));
+    const ts = escapeHtml(fmtDate(e.createdAt));
+    return `
+      <article class="analyzer-history-item" data-history-id="${idAttr}" tabindex="0" role="button" aria-label="查看这篇历史分析">
+        <div class="analyzer-history-item-main">
+          <h4 class="analyzer-history-item-title">${titleZh}</h4>
+          ${titleEn && titleEn !== e.arxivTitleZh ? `<div class="analyzer-history-item-meta">${escapeHtml(titleEn)}</div>` : ''}
+          <div class="analyzer-history-item-meta">
+            <span>${tagText}</span>
+            <span>·</span>
+            <span>${ts}</span>
+          </div>
+          ${tldr ? `<p class="analyzer-history-item-tldr">${tldr}</p>` : ''}
+        </div>
+        <div class="analyzer-history-item-acts">
+          <button type="button" class="analyzer-history-item-btn" data-history-act="open">查看</button>
+          <button type="button" class="analyzer-history-item-btn" data-history-act="del">删除</button>
+        </div>
+      </article>
+    `;
+  }).join('');
+
+  // 事件委托 — 单 listener 顶替 N 个 listener
+  list.onclick = (ev) => {
+    const t = ev.target as HTMLElement;
+    const btn = t.closest<HTMLElement>('[data-history-act]');
+    const card = t.closest<HTMLElement>('.analyzer-history-item');
+    if (!card) return;
+    const id = card.dataset.historyId!;
+    if (btn) {
+      ev.stopPropagation();
+      if (btn.dataset.historyAct === 'del') {
+        removeHistory(id);
+        renderHistoryPanel();
+      } else if (btn.dataset.historyAct === 'open') {
+        rehydrateHistory(id);
+      }
+      return;
+    }
+    rehydrateHistory(id);
+  };
+  list.onkeydown = (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    const card = (ev.target as HTMLElement).closest<HTMLElement>('.analyzer-history-item');
+    if (!card) return;
+    ev.preventDefault();
+    rehydrateHistory(card.dataset.historyId!);
+  };
+
+  if (clearBtn && !clearBtn.dataset.bound) {
+    clearBtn.dataset.bound = '1';
+    clearBtn.addEventListener('click', () => {
+      if (loadHistory().length === 0) return;
+      // 双层确认 — 避免误操作清空(本地数据)
+      if (!confirm(`确定清空全部 ${loadHistory().length} 篇历史?\n(只清 localStorage,不影响 GitHub 仓库里的论文)`)) return;
+      clearAllHistory();
+      renderHistoryPanel();
+    });
+  }
+}
+
+// 从历史点击进来:不调 LLM,直接把缓存的 AnalysisResult + entry 重新挂到 UI。
+// deep-dive / save-to-github 后续按钮仍能继续走,因为我们同步更新 currentArxivEntry。
+function rehydrateHistory(id: string): void {
+  const entry = loadHistory().find((e) => e.id === id);
+  if (!entry) { renderHistoryPanel(); return; }
+  // 构造一个最小的 ArxivEntry 让 deep-dive / save 流程正常工作
+  if (entry.source === 'arxiv' && entry.arxivId) {
+    currentArxivEntry = {
+      id: `https://arxiv.org/abs/${entry.arxivId}`,
+      arxivId: entry.arxivId,
+      title: entry.arxivTitle || entry.analysis.title_en || entry.analysis.title,
+      authors: entry.arxivAuthors ? entry.arxivAuthors.split(/\s*,\s*/) : [],
+      summary: '',  // 重渲染不需要 abstract;真要深读会从 PDF 重新拉
+      published: new Date(entry.createdAt).toISOString(),
+      updated: new Date(entry.createdAt).toISOString(),
+      pdfUrl: entry.pdfUrl || `https://arxiv.org/pdf/${entry.arxivId}`,
+    };
+  } else {
+    currentArxivEntry = null;  // 上传 PDF 走的论文没 arxivId;deep-dive/save 不能用
+  }
+  // 第三参数 restoreFromHistory=true:不重复 recordHistory(避免产生重复条目)
+  renderResult(entry.analysis, '');
+  // 切到结果展示 — 滚到结果区
+  const box = $('results');
+  if (box) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // 提示用户当前是缓存,可能与论文最新版本有出入
+  setStatus(`✓ 已从历史恢复 ${fmtDate(entry.createdAt)} 的分析(没重新跑 LLM)。如需重跑,切回「上传 PDF / ArXiv 搜索」再点开始分析。`, 'info');
 }
 
 // ============================================================================
@@ -991,6 +1133,27 @@ export const SYSTEM_PROMPT = `你是论文速览助手，请用中文生成信�
   说明它在该主题脉络中的位置(承接/扩展/对比哪类已有工作)、典型适用场景或边界条件、
   已知局限性或仍未解决的问题。**不要重复 TLDR / motivation / method / result / conclusion 里已经说过的事实**,
   写的是"如果只把这篇论文放回主题坐标系,它大致在哪个象限、相对其他工作最值得注意的点是什么"。
+- topic_tags(主题标签):从下方"预置清单"里挑 1-4 个最贴切的标签,输出为 JSON 字符串数组。
+  - **每个元素必须完全等于清单中某一项的字面值**(大小写、连字符、空格都按清单原样)。
+  - 例:["RL","MAS"] 或 ["self distillation","RL"];完全不命中时输出 []。
+  - 不许改写大小写、不许翻译成中文、不许编造、不许在新标签里塞笔记段落。
+
+【预置清单 — topic_tags 严格从这里挑,大小写 / 连字符 / 空格按以下原样】
+- RL — 强化学习(reinforcement learning、policy optimization、MDP、Q-learning 等)
+- MAS — 多智能体系统(multi-agent、cooperation、swarm、agent communication 等)
+- game ai — 游戏 AI(博弈论、self-play、StarCraft、游戏对战 等)
+- self distillation — 自蒸馏(self-imitation、policy self-distillation、on-policy distillation 等)
+- intervention — 大模型干预(steering vector、activation patching、representation engineering 等)
+- llm-agent — LLM 驱动的智能体(tool use、ReAct、function calling、agentic workflow 等)
+- reasoning — 推理增强(chain-of-thought、CoT、math reasoning、search-augmented reasoning 等)
+- gui — GUI 智能体(GUI agent、WebShop、mobile UI、computer use 等)
+- vision — 计算机视觉 / 多模态(VLM、image classification、video、segmentation 等)
+- speech — 语音 / 音频(speech recognition、text-to-speech、audio generation 等)
+- safety — AI 安全 / 对齐(jailbreak、adversarial、alignment、harmful generation 等)
+- retrieval — 信息检索 / RAG(dense retrieval、reranker、retrieval-augmented generation 等)
+- code — 代码生成 / 程序合成(code LLM、completion、program synthesis 等)
+- robotics — 机器人 / 具身智能(manipulation、locomotion、sim-to-real、embodied AI 等)
+- knowledge — 知识表示 / 知识图谱(KG、entity linking、relation extraction 等)
 
 【内容要求】
 - 不要把英文句子放进中文字段;可保留必要英文术语或模型名
@@ -1006,9 +1169,29 @@ function buildUserPrompt(title: string, abstract: string, body: string): string 
   const payload = JSON.stringify({ title, abstract: abstract || '(无 abstract,从正文摘录)', body_excerpt: body.slice(0, 8000) }, null, 0);
   return (
     "请基于上面的 JSON 中的 title / abstract / body_excerpt,输出一个中文速览摘要,严格返回 JSON(不要输出任何其它文字):\n" +
-    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\"}\n" +
+    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"topic_tags\":[\"...\",...]}\n" +
     "Output must be strict JSON only, no markdown, no fences, no extra text."
   ).replace("上面的 JSON", payload + "\n上面的 JSON");
+}
+
+// 规范化 topic_tags:限长、去空、去重、按 TOPIC_ALLOWLIST 严格匹配,不在清单的丢弃。
+// LLM 偶尔会返回自由词或拼写变体;这里兜底成空数组,buildFrontmatter 会用 arxivId 前缀兜底。
+function normalizeTopicTags(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const t = raw.trim();
+    if (!t) continue;
+    const lower = t.toLowerCase();
+    if (!TOPIC_ALLOWLIST_LOWER.has(lower)) continue;  // 不在清单 → 丢弃
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push(t);  // 保留 LLM 字面值(大小写/连字符),与 system prompt 清单一一对应
+    if (out.length >= 4) break;
+  }
+  return out;
 }
 
 export async function callLLM(
@@ -1082,6 +1265,9 @@ export async function callLLM(
     result: parsed.result || '',
     conclusion: parsed.conclusion || '',
     context: parsed.context || '',
+    // topic_tags 由 normalizeTopicTags 按 TOPIC_ALLOWLIST 严格过滤;
+    // LLM 没返回 / 字段缺失 / 格式错乱时降级为 [],buildFrontmatter 再 fallback 到 arxivId 前缀。
+    topic_tags: normalizeTopicTags(parsed.topic_tags),
   };
 }
 
@@ -1733,7 +1919,15 @@ function slugifyTitle(title: string, arxivId: string): string {
 function buildFrontmatter(r: AnalysisResult, entry: ArxivEntry | null, now: string): string[] {
   const arxivId = entry?.arxivId || '';
   const pdfUrl = entry?.pdfUrl || (arxivId ? `https://arxiv.org/pdf/${arxivId}` : '');
-  const tags = [`query:${arxivId.split('.')[0] || 'manual'}`];
+  // tags 优先级:
+  //   1) LLM 抽出的 topic_tags (来自 TOPIC_ALLOWLIST)  → "query:<tag>"
+  //   2) 全部为空时 — fallback 到旧的 arxivId 年月前缀(原行为),保证不缺标签
+  //  兜底数组保持去重 + 最多 6 个,与后端 extract_sidebar_tags 对齐。
+  const tagsFromLLM = (r.topic_tags || []).map((t) => `query:${t.toLowerCase()}`);
+  const tagSet = new Set<string>();
+  for (const t of tagsFromLLM) tagSet.add(t);
+  if (tagSet.size === 0) tagSet.add(`query:${arxivId.split('.')[0] || 'manual'}`);
+  const tags = [...tagSet].slice(0, 6);
   // 标题/作者等含特殊字符(: , # 等)时统一加双引号,避免 YAML 解析失败。
   const yamlStr = (s: string): string => `"${(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
   return [
@@ -1852,8 +2046,88 @@ async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promis
 }
 
 // ============================================================================
+// 本地历史记录(📚 历史笔记 tab 用)
+// 储存最近 50 篇在本机的 AnalysisResult;每次 callLLM 成功返回 → save 一条;
+// 切到历史 tab 时 list 显示,点击 → 重新渲染(不需要再调 LLM)。
+// 纯 localStorage,不上传,不进 Gist。如果用户拒绝再渲染或刷新页面,数据不丢。
+// ============================================================================
+const HISTORY_KEY = 'dpr_analyzer_history_v1';
+const HISTORY_MAX_ENTRIES = 50;
+const HISTORY_MAX_TLDR_CHARS = 80;
+
+interface HistoryEntry {
+  id: string;
+  createdAt: number;
+  arxivId: string;
+  source: 'pdf' | 'arxiv';
+  // 简化版 entry — 仅保存分析时所需的最小子集,避免 localStorage 存太多 / 序列化复杂对象。
+  arxivTitle: string;
+  arxivTitleZh?: string;
+  arxivAuthors?: string;
+  pdfUrl?: string;
+  analysis: AnalysisResult;
+}
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((e) => e && typeof e.id === 'string' && e.analysis && typeof e.analysis === 'object');
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(list: HistoryEntry[]): void {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, HISTORY_MAX_ENTRIES)));
+  } catch {
+    // localStorage 满了 — 静默吞掉,不阻断分析流程
+  }
+}
+
+function recordHistory(entry: HistoryEntry): void {
+  const list = loadHistory();
+  // 同 arxivId 已有 → 移到最前(time updated),不重复条目。
+  const filtered = list.filter((e) => e.arxivId !== entry.arxivId || e.source !== entry.source);
+  filtered.unshift(entry);
+  saveHistory(filtered);
+}
+
+function removeHistory(id: string): void {
+  saveHistory(loadHistory().filter((e) => e.id !== id));
+}
+
+function clearAllHistory(): void {
+  saveHistory([]);
+}
+
+function shortTldr(s: string): string {
+  const t = (s || '').replace(/\s+/g, ' ').trim();
+  return t.length > HISTORY_MAX_TLDR_CHARS ? t.slice(0, HISTORY_MAX_TLDR_CHARS) + '…' : t;
+}
+
+function fmtDate(ts: number): string {
+  const d = new Date(ts);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function newId(): string {
+  return 'h' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+}
+
+// ============================================================================
 // 结果渲染
 // ============================================================================
+// 注:历史笔记重新加载由调用方负责 — 这里只画 result DOM,不读写 history;
+// 防止「打开历史」也生成一份新 history 条目这种递归 bug。
 function renderResult(r: AnalysisResult, rawText: string): void {
   const box = $('results');
   box.hidden = false;
@@ -2186,6 +2460,19 @@ async function runAnalysis(): Promise<void> {
     }
 
     const result = await callLLM(currentArxivEntry?.title || '', currentArxivEntry?.summary || '', text, cfg);
+    // 每次新分析写一份到 localStorage 历史,后续刷新页面/切到 📚 tab 还能看。
+    // 上传 PDF 时没有 arxivId — 用 'pdf:<sha-like>' 作 id 是没必要的,直接用时间戳即可。
+    recordHistory({
+      id: newId(),
+      createdAt: Date.now(),
+      arxivId: currentArxivEntry?.arxivId || `manual-${Date.now()}`,
+      source: currentArxivEntry ? 'arxiv' : 'pdf',
+      arxivTitle: currentArxivEntry?.title || '(手动上传 PDF)',
+      arxivTitleZh: result.title,
+      arxivAuthors: currentArxivEntry?.authors?.join(', '),
+      pdfUrl: currentArxivEntry?.pdfUrl,
+      analysis: result,
+    });
     renderResult(result, text);
     clearStatus();
   } catch (e) {
@@ -2263,6 +2550,9 @@ function initAnalyzer(): void {
 
   // 2. 模式 tab
   initModeTabs();
+  // 预渲染历史 tab 列表 — 让切到 📚 时不白屏一下
+  // (再次切回时 initModeTabs 也会再 renderHistoryPanel,避免 stale)
+  try { renderHistoryPanel(); } catch { /* history helpers may be off on first load */ }
 
   // 3. PDF 上传
   const drop = $('drop-zone');

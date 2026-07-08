@@ -27,6 +27,9 @@ import '../styles/paper-analyzer.css';
       <button class="analyzer-tab" data-mode="arxiv" role="tab" aria-selected="false">
         🔍 arXiv 搜索
       </button>
+      <button class="analyzer-tab" data-mode="history" role="tab" aria-selected="false">
+        📚 历史笔记
+      </button>
     </div>
 
     <!-- ===== 模式 1: PDF 上传 ===== -->
@@ -59,6 +62,22 @@ import '../styles/paper-analyzer.css';
         <button id="arxiv-search-btn" type="button">搜索 arXiv</button>
       </div>
       <div class="analyzer-arxiv-results" id="arxiv-results" hidden></div>
+    </section>
+
+    <!-- ===== 模式 3: 历史笔记(本机缓存) ===== -->
+    <section class="analyzer-mode" data-mode-panel="history" hidden>
+      <div class="analyzer-history-head">
+        <h3 style="margin:0">📚 历史笔记</h3>
+        <div class="analyzer-history-meta">
+          <span id="history-count">0 篇</span>
+          <button type="button" id="history-clear" class="analyzer-history-clear" title="清空全部历史">清空</button>
+        </div>
+        <p class="analyzer-history-hint">
+          本页只存在浏览器 localStorage(<code>dpr_analyzer_history_v1</code>),不上传 / 不同步 Gist。
+          切到其他 tab 不会丢失,清浏览器数据会清空。
+        </p>
+      </div>
+      <div class="analyzer-history-list" id="history-list"></div>
     </section>
 
     <!-- ===== 操作按钮 ===== -->
