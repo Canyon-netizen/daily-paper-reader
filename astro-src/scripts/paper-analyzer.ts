@@ -322,7 +322,12 @@ function clearStatus(): void {
   el.innerHTML = '';
 }
 
-function escapeHtml(s: string): string {
+// 强转 string:之前 arxiv-index.json schema 演进时,有人把 entry 当字符串用,
+// escapeHtml(<object>) 抛 "t.replace is not a function"。即使现在 contract 已经修正,
+// 给 escapeHtml 加最后一道兜底:非 string (number / object / null / undefined)
+// 在模板字符串拼接时静默降级为空字符串,而不是炸整个搜索流程。
+function escapeHtml(s: unknown): string {
+  if (typeof s !== 'string') return '';
   return s
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -743,10 +748,16 @@ let currentPdfText: string | null = null;
 let currentPdfMeta: { name: string; size: number } | null = null;
 let currentArxivEntry: ArxivEntry | null = null;
 
-// arxiv-index.json: build-arxiv-index.mjs 生成,id → repo-relative docs path。
-// 惰性加载一次,缺文件/失败时回空 map。
-let arxivIndexCache: Record<string, string> | null = null;
-let arxivIndexLoading: Promise<Record<string, string>> | null = null;
+// arxiv-index.json: build-arxiv-index.mjs 生成。
+// schema 演进:早期是 {id → rel},后来 settings 面板要查 title,改为
+// {id → {rel, title}},见 build-arxiv-index.mjs:94-100 的注释。
+// paper-analyzer 用 rel 拼"查看现有笔记"链接 + 给搜索结果加"已分析"徽章;
+// title 用来在 badge tooltip 里多给一行信息(让用户知道命中的是哪篇)。
+interface ArxivIndexEntry { rel: string; title: string | null; }
+// 惰性加载一次,缺文件/失败时回空 map。loadArxivIndex 还会做运行时校验,
+// 把 schema 损坏的 entry 静默丢弃,所以这里类型是严格契约。
+let arxivIndexCache: Record<string, ArxivIndexEntry> | null = null;
+let arxivIndexLoading: Promise<Record<string, ArxivIndexEntry>> | null = null;
 // 最近一次展示的搜索结果,index 异步加载完后再画一遍,免得首次 query 就把命中徽章丢失。
 let lastRenderedEntries: ArxivEntry[] | null = null;
 
@@ -1037,7 +1048,7 @@ export async function fetchArxivPdf(pdfUrl: string, statusCb?: (msg: string) => 
 // ============================================================================
 // arXiv 索引(由构建期 build-arxiv-index.mjs 生成 public/arxiv-index.json)
 // ============================================================================
-async function loadArxivIndex(): Promise<Record<string, string>> {
+async function loadArxivIndex(): Promise<Record<string, ArxivIndexEntry>> {
   if (arxivIndexCache) return arxivIndexCache;
   if (arxivIndexLoading) return arxivIndexLoading;
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
@@ -1046,8 +1057,25 @@ async function loadArxivIndex(): Promise<Record<string, string>> {
     try {
       const r = await fetch(url);
       if (!r.ok) throw new Error(`arxiv-index.json ${r.status}`);
-      const data = (await r.json()) as Record<string, string>;
-      arxivIndexCache = data || {};
+      // 运行时校验 schema:build-arxiv-index.mjs 写的是 {[id]: {rel, title}},
+      // 但 old-shape (id → rel 字符串) 也可能在本地 / 历史 dist 里残留。
+      // 旧 shape 当成 rel 用;非对象 / 缺 rel → 静默丢弃,避免后续 escapeHtml 抛
+      // "t.replace is not a function"(这就是用户报的 t.replace bug 来源)。
+      const raw = (await r.json()) as Record<string, unknown>;
+      const data: Record<string, ArxivIndexEntry> = {};
+      for (const [k, v] of Object.entries(raw || {})) {
+        if (typeof v === 'string') {
+          // 旧 schema 兼容:id 直接映射到 rel,无 title。
+          data[k] = { rel: v, title: null };
+        } else if (v && typeof v === 'object' && typeof (v as any).rel === 'string') {
+          data[k] = {
+            rel: (v as any).rel,
+            title: typeof (v as any).title === 'string' ? (v as any).title : null,
+          };
+        }
+        // 其他形态(数组 / 数字 / null)直接 skip,不污染 cache。
+      }
+      arxivIndexCache = data;
     } catch (err) {
       // 缺文件 / 网络失败 / 构建期漏跑 — 不阻塞,UI 走"未命中"路径
       console.warn('[arxiv-index] load failed:', (err as Error).message);
@@ -1063,7 +1091,7 @@ async function loadArxivIndex(): Promise<Record<string, string>> {
  */
 function findExistingNote(arxivId: string): string | null {
   const idx = arxivIndexCache || {};
-  return idx[arxivId] || null;
+  return idx[arxivId]?.rel || null;
 }
 
 function renderArxivResults(entries: ArxivEntry[]): void {
@@ -1078,9 +1106,12 @@ function renderArxivResults(entries: ArxivEntry[]): void {
   const idx = arxivIndexCache || {};
   box.innerHTML = entries
     .map((e, i) => {
-      const existingPath = idx[e.arxivId];
+      // 索引 schema 是 {id: {rel, title}};只取 rel 拼 URL,取 title 给 badge tooltip 展示命中是哪篇。
+      const existingEntry = idx[e.arxivId];
+      const existingPath = existingEntry?.rel || null;
+      const existingTitle = existingEntry?.title || null;
       const badge = existingPath
-        ? `<span class="analyzer-existing-badge" title="docs 已有笔记: ${escapeHtml(existingPath)}">📎 已分析</span>`
+        ? `<span class="analyzer-existing-badge" title="docs 已有笔记: ${escapeHtml(existingPath)}${existingTitle ? ` · ${escapeHtml(existingTitle)}` : ''}">📎 已分析</span>`
         : '';
       const existingClass = existingPath ? ' analyzer-arxiv-item-existing' : '';
       const existingLink = existingPath
@@ -2629,7 +2660,9 @@ function initAnalyzer(): void {
       updateRunButton();
       renderArxivResults(entries);
     } catch (e) {
-      setStatus(`搜索失败: ${(e as Error).message}`, 'error');
+      const err = e as Error;
+      console.error('[doArxivSearch] caught:', err);
+      setStatus(`搜索失败: ${err.message}\n栈: ${err.stack || '(no stack)'}`, 'error');
     } finally {
       arxivBtn.disabled = false;
     }

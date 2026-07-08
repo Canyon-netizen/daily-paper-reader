@@ -429,6 +429,8 @@ const base = import.meta.env.BASE_URL;
   border-radius: var(--radius-md);
   background: var(--bg);
   min-height: 320px;
+  /* 自适应高度按当前图撑开(见 paper-figures.ts),切图时高度会变 —— 加过渡避免生硬跳变 */
+  transition: height 200ms ease-out;
 }
 
 .paper-slide {
