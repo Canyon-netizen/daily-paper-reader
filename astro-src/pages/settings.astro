@@ -283,6 +283,24 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
       </details>
     </section>
 
+    <!-- ===== 已隐藏论文 ===== -->
+    <section class="settings-card" id="settings-hidden-card">
+      <h2 class="settings-card-title">🙈 已隐藏论文</h2>
+      <p class="settings-card-sub">
+        列表存在浏览器 <code>localStorage</code>(key = <code>dpr_hidden_papers_v1</code>)。
+        设置了 Gist Token + Gist ID 后,点隐藏时自动同步。
+        论文标题从 <code>/arxiv-index.json</code> 取,缺失时显示 arXiv ID。
+      </p>
+      <p class="settings-hidden-empty" id="settings-hidden-empty">尚未隐藏任何论文。</p>
+      <ul class="settings-hidden-list" id="settings-hidden-list" hidden></ul>
+      <div class="settings-hidden-actions">
+        <button type="button" class="settings-action-btn ghost" id="hidden-pull-btn">⬇ 从 Gist 拉取</button>
+        <button type="button" class="settings-action-btn ghost" id="hidden-push-btn">⬆ 推到 Gist</button>
+        <button type="button" class="settings-action-btn ghost danger" id="hidden-clear-btn">清空本地</button>
+      </div>
+      <p class="settings-hidden-status" id="hidden-status" role="status" aria-live="polite"></p>
+    </section>
+
     <!-- ===== 重置 ===== -->
     <section class="settings-card settings-card-danger">
       <h2 class="settings-card-title">重置</h2>

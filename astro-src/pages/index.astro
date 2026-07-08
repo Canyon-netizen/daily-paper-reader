@@ -122,7 +122,7 @@ const latestDateLabel = latestDate
           {topPapers.map((p, i) => {
             const href = `${base}/papers/${p.slug}/`;
             return (
-              <li class="paper-card" data-rank={i + 1}>
+              <li class="paper-card" data-rank={i + 1} data-arxiv-id={p.arxivId}>
                 <a href={href} class="paper-card-link">
                   <div class="paper-card-head">
                     <span class="paper-rank">#{i + 1}</span>
@@ -203,7 +203,7 @@ const latestDateLabel = latestDate
                   {items.slice(0, 10).map((p) => {
                     const href = `${base}/papers/${p.slug}/`;
                     return (
-                      <li>
+                      <li data-arxiv-id={p.arxivId}>
                         <a href={href} class="tag-paper-link">
                           <span class="tag-paper-score">
                             {p.score?.toFixed(1) || '—'}
@@ -221,7 +221,7 @@ const latestDateLabel = latestDate
                       {items.slice(10).map((p) => {
                         const href = `${base}/papers/${p.slug}/`;
                         return (
-                          <li class="tag-paper-rest" data-tag-rest hidden>
+                          <li class="tag-paper-rest" data-tag-rest hidden data-arxiv-id={p.arxivId}>
                             <a href={href} class="tag-paper-link">
                               <span class="tag-paper-score">
                                 {p.score?.toFixed(1) || '—'}
@@ -288,6 +288,7 @@ const latestDateLabel = latestDate
 
   <script>
     import '../scripts/theme.ts';
+    import '../scripts/index-filter.ts';
 
     // 按主题分类里"展开剩余 N 篇"按钮 — 静态渲染了所有文章,只是默认折叠。
     for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-tag-toggle]')) {

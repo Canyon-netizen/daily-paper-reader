@@ -1,0 +1,52 @@
+/* 已隐藏论文 toast — 论文详情页底部居中。 */
+
+.hidden-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translate(-50%, 8px);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.9rem 0.6rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: 0.9rem;
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.15));
+  opacity: 0;
+  transition: opacity 200ms, transform 200ms;
+  pointer-events: none;
+  z-index: 250; /* 高于 paper-chat FAB (200) */
+  white-space: nowrap;
+}
+.hidden-toast--visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.hidden-toast-icon { font-size: 1rem; }
+.hidden-toast-text strong { font-family: var(--font-mono); color: var(--accent); }
+.hidden-toast-undo {
+  font-size: 0.85rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--accent);
+  cursor: pointer;
+  transition: all 150ms;
+}
+.hidden-toast-undo:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  border-color: var(--accent);
+}
+.hidden-toast-undo:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.hidden-toast--expired .hidden-toast-undo {
+  color: var(--fg-muted);
+  border-color: var(--border);
+}

@@ -98,3 +98,43 @@ class TestWriteEnvLines:
         load_gist.write_env_lines({"LLM_MODEL": "m"}, None)
         captured = capsys.readouterr()
         assert "LLM_MODEL=m" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# filter_payload_for_env — 前端 paper-hide.ts / settings-page.ts 写入的
+# hiddenPapers 字段不应进 CI $GITHUB_ENV。
+# ---------------------------------------------------------------------------
+
+class TestFilterPayloadForEnv:
+    def test_strips_hidden_papers(self):
+        """The main case: payload 含 hiddenPapers 时被 pop。"""
+        payload = {
+            "LLM_MODEL": "minimax/M3",
+            "LLM_API_KEY": "sk-x",
+            "hiddenPapers": ["2401.01234", "2405.05678v1"],
+        }
+        load_gist.filter_payload_for_env(payload)
+        assert "hiddenPapers" not in payload
+        # 其他字段保留
+        assert payload["LLM_API_KEY"] == "sk-x"
+        assert payload["LLM_MODEL"] == "minimax/M3"
+
+    def test_no_hidden_papers_is_noop(self):
+        """payload 不含 hiddenPapers 时,filter 不应破坏其他字段。"""
+        payload = {"LLM_MODEL": "m", "topics": []}
+        load_gist.filter_payload_for_env(payload)
+        assert payload == {"LLM_MODEL": "m", "topics": []}
+
+    def test_empty_array_still_pops(self):
+        """hiddenPapers = [] (空数组) 也应被 pop —— 显式设过 [] 和字段不存在语义不同,
+        但对 env 来说都是不应该出现的字段。"""
+        payload = {"LLM_MODEL": "m", "hiddenPapers": []}
+        load_gist.filter_payload_for_env(payload)
+        assert "hiddenPapers" not in payload
+
+    def test_non_array_hidden_papers_pops_anyway(self):
+        """Defensive: 即使前端误传了字符串/null,也应 pop,而不是写到 env。"""
+        payload = {"hiddenPapers": "garbage", "LLM_MODEL": "m"}
+        load_gist.filter_payload_for_env(payload)
+        assert "hiddenPapers" not in payload
+        assert payload["LLM_MODEL"] == "m"

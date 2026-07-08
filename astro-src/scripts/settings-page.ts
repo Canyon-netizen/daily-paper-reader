@@ -32,6 +32,11 @@ import {
   setGitHubRepo,
   loadDeepDiveSettings,
   saveDeepDiveSettings,
+  loadHiddenPapers,
+  saveHiddenPapersRaw,
+  removeHiddenPaper,
+  pullHiddenPapersFromGist,
+  pushHiddenPapersToGist,
 } from './settings';
 
 // ============================================================================
@@ -291,6 +296,9 @@ async function syncToGist(): Promise<void> {
     provider: $<HTMLSelectElement>('cfg-provider').value,
     topics: parseTopicsText($<HTMLTextAreaElement>('cfg-topics').value),
     categories: readCatsChecked(),
+    // 已隐藏论文列表 — paper-hide.ts / hiddenPapers 面板共享同一份。
+    // 这里只是把本地状态带上,真正跨设备同步走 paper-hide.ts 的 push/pull。
+    hiddenPapers: loadHiddenPapers(),
   };
   const content = JSON.stringify(payload, null, 2);
 
@@ -479,6 +487,155 @@ function init(): void {
 
   // --- 6. Reset ---
   $<HTMLButtonElement>('settings-reset-all-btn').addEventListener('click', resetAllSettings);
+
+  // --- 7. 已隐藏论文面板 ---
+  initHiddenPanel();
+}
+
+// ============================================================================
+// 已隐藏论文面板 — 列全 localStorage 里的 arxivId + 标题(从 /arxiv-index.json
+// 拿),每条带"恢复"按钮;三个操作按钮:从 Gist 拉取 / 推到 Gist / 清空本地。
+// ============================================================================
+
+interface ArxivIndexEntry {
+  rel: string;
+  title: string | null;
+}
+
+function setHiddenStatus(msg: string, kind: 'info' | 'ok' | 'error' = 'info'): void {
+  const el = document.getElementById('hidden-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.dataset.kind = kind;
+}
+
+async function fetchArxivIndex(): Promise<Record<string, ArxivIndexEntry>> {
+  try {
+    const res = await fetch('/arxiv-index.json', { cache: 'no-cache' });
+    if (!res.ok) return {};
+    return await res.json() as Record<string, ArxivIndexEntry>;
+  } catch {
+    return {};
+  }
+}
+
+function renderHiddenList(): void {
+  const ids = loadHiddenPapers();
+  const empty = document.getElementById('settings-hidden-empty');
+  const list = document.getElementById('settings-hidden-list');
+  if (!list) return;
+
+  if (ids.length === 0) {
+    if (empty) empty.hidden = false;
+    list.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  if (empty) empty.hidden = true;
+  list.hidden = false;
+  list.innerHTML = ids.map((id) => {
+    return `<li class="settings-hidden-item" data-arxiv-id="${escapeHtml(id)}">
+      <a class="settings-hidden-id" href="./papers/${encodeURIComponent(id)}/" target="_blank" rel="noopener">${escapeHtml(id)}</a>
+      <span class="settings-hidden-title" data-role="title" data-arxiv-id="${escapeHtml(id)}">${escapeHtml(id)}</span>
+      <button type="button" class="settings-action-btn ghost" data-act="restore" data-arxiv-id="${escapeHtml(id)}">↩ 恢复</button>
+    </li>`;
+  }).join('');
+}
+
+async function refreshHiddenTitles(): Promise<void> {
+  const ids = loadHiddenPapers();
+  if (ids.length === 0) return;
+  const idx = await fetchArxivIndex();
+  for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-role="title"]'))) {
+    const ax = el.dataset.arxivId || '';
+    const entry = idx[ax];
+    if (entry?.title) {
+      el.textContent = entry.title;
+      el.classList.remove('settings-hidden-title--missing');
+    } else {
+      el.textContent = `${ax} (标题未解析)`;
+      el.classList.add('settings-hidden-title--missing');
+    }
+  }
+}
+
+function initHiddenPanel(): void {
+  const listEl = document.getElementById('settings-hidden-list');
+  if (!listEl) return; // panel not on this page
+
+  renderHiddenList();
+  // 异步拉 arxiv-index.json 补全标题(不阻塞面板渲染)
+  void refreshHiddenTitles();
+
+  // 单条"恢复"
+  listEl.addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-act="restore"]');
+    if (!btn) return;
+    const ax = btn.dataset.arxivId || '';
+    if (!ax) return;
+    removeHiddenPaper(ax);
+    renderHiddenList();
+    void refreshHiddenTitles();
+    setHiddenStatus(`✓ 已恢复 ${ax}`, 'ok');
+    if (getGistToken() && getGistId()) {
+      pushHiddenPapersToGist().catch((err) =>
+        console.warn('[hidden-panel] Gist push failed:', err),
+      );
+    }
+  });
+
+  // 三个操作按钮
+  $<HTMLButtonElement>('hidden-pull-btn').addEventListener('click', async () => {
+    if (!getGistToken() || !getGistId()) {
+      setHiddenStatus('✗ 未配置 Gist Token / Gist ID,无法拉取', 'error');
+      return;
+    }
+    setHiddenStatus('正在从 Gist 拉取 ...', 'info');
+    const r = await pullHiddenPapersFromGist();
+    if (!r.ok) {
+      setHiddenStatus(`✗ 拉取失败:${r.reason || '未知错误'}`, 'error');
+      return;
+    }
+    renderHiddenList();
+    void refreshHiddenTitles();
+    if (r.merged && r.merged.length > 0) {
+      setHiddenStatus(`✓ 新合并 ${r.merged.length} 条:${r.merged.join(', ')}`, 'ok');
+    } else {
+      setHiddenStatus('✓ 拉取完成,无新增条目', 'ok');
+    }
+  });
+
+  $<HTMLButtonElement>('hidden-push-btn').addEventListener('click', async () => {
+    if (!getGistToken() || !getGistId()) {
+      setHiddenStatus('✗ 未配置 Gist Token / Gist ID,无法推送', 'error');
+      return;
+    }
+    setHiddenStatus('正在推送到 Gist ...', 'info');
+    const r = await pushHiddenPapersToGist();
+    if (!r.ok) {
+      setHiddenStatus(`✗ 推送失败:${r.reason || '未知错误'}`, 'error');
+      return;
+    }
+    setHiddenStatus(`✓ 已推送 ${loadHiddenPapers().length} 条到 Gist`, 'ok');
+  });
+
+  $<HTMLButtonElement>('hidden-clear-btn').addEventListener('click', () => {
+    const ids = loadHiddenPapers();
+    if (ids.length === 0) {
+      setHiddenStatus('本地已为空,无需清空', 'info');
+      return;
+    }
+    if (!confirm(`确定清空本地 ${ids.length} 条隐藏记录?(不影响 Gist)`)) return;
+    // 直接重写 localStorage
+    saveHiddenPapersRaw([]);
+    renderHiddenList();
+    setHiddenStatus('✓ 已清空本地', 'ok');
+    if (getGistToken() && getGistId()) {
+      pushHiddenPapersToGist().catch((err) =>
+        console.warn('[hidden-panel] Gist push failed:', err),
+      );
+    }
+  });
 }
 
 if (document.readyState === 'loading') {

@@ -12,6 +12,7 @@
 import {
   loadSettings,
   getCustomProxy,
+  loadHiddenPapers,
 } from './settings';
 import {
   searchArxiv,
@@ -738,16 +739,22 @@ function renderCandStage(): void {
 
   // 按 subq 分组渲染 — 即使某个子方向 0 命中也要显示,这样用户能看到"哪些没搜到"
   wrap.innerHTML = current.subqs.filter((q) => current!.candidatesBySubq[q.id] !== undefined).map((q) => {
-    const list = current!.candidatesBySubq[q.id] || [];
+    const allList = current!.candidatesBySubq[q.id] || [];
+    // 过滤已隐藏论文(用户在详情页点过隐藏的)。这里读一次 localStorage,
+    // 避免对每条 candidate 单独读(每次 loadHiddenPapers 都 parse JSON,O(n))。
+    const hidden = new Set(loadHiddenPapers());
+    const list = allList.filter((c) => !hidden.has(c.arxivId));
     const grpSelected = list.filter((c) => c.selected).length;
-    const emptyHint = list.length === 0
-      ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">未命中任何论文。可能是 query 太冷门,试试改 query 或换个角度重检索。</div>`
-      : '';
+    const emptyHint = list.length === 0 && allList.length > 0
+      ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">该子方向下 ${allList.length} 篇候选全部被隐藏。可在 设置页"已隐藏论文"面板 恢复。</div>`
+      : list.length === 0
+        ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">未命中任何论文。可能是 query 太冷门,试试改 query 或换个角度重检索。</div>`
+        : '';
     return `
       <div class="topic-candidate-group" data-subq="${q.id}">
         <div class="topic-candidate-group-header" data-act="toggle-grp">
           <div class="topic-candidate-group-title">📂 ${escapeHtml(q.label)}</div>
-          <div class="topic-candidate-group-meta">${list.length === 0 ? `0 命中` : `${grpSelected}/${list.length} 已选 · <a href="#" data-act="toggle-all">${grpSelected === list.length ? '全不选' : '全选'}</a>`}</div>
+          <div class="topic-candidate-group-meta">${list.length === 0 ? `0 命中${allList.length > 0 ? ` (${allList.length} 篇已隐藏)` : ''}` : `${grpSelected}/${list.length} 已选 · <a href="#" data-act="toggle-all">${grpSelected === list.length ? '全不选' : '全选'}</a>`}</div>
         </div>
         ${list.length === 0 ? emptyHint : `
         <div class="topic-candidate-list">
@@ -804,8 +811,16 @@ function renderSummaryStage(): void {
     meta.textContent = '尚未总结';
     return;
   }
-  meta.textContent = `已总结 ${current.summaries.length} 篇`;
-  list.innerHTML = current.summaries.map((s) => {
+  const hiddenSet = new Set(loadHiddenPapers());
+  const visibleSummaries = current.summaries.filter((s) => !hiddenSet.has(s.arxivId));
+  meta.textContent = `已总结 ${current.summaries.length} 篇${
+    visibleSummaries.length < current.summaries.length ? ` (${current.summaries.length - visibleSummaries.length} 篇已隐藏)` : ''
+  }`;
+  if (visibleSummaries.length === 0) {
+    list.innerHTML = '<div style="color:var(--fg-subtle);font-size:0.88rem">已总结的论文全部被隐藏。可在 设置页"已隐藏论文"面板 恢复。</div>';
+    return;
+  }
+  list.innerHTML = visibleSummaries.map((s) => {
     let entry: ArxivEntry | undefined;
     for (const clist of Object.values(current!.candidatesBySubq)) {
       const f = clist.find((c) => c.arxivId === s.arxivId);

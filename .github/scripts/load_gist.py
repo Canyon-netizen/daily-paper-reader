@@ -66,6 +66,17 @@ def flatten_legacy_llm_section(payload: dict[str, Any]) -> None:
             payload["LLM_MODEL"] = str(model)
 
 
+# 前端 `paper-hide.ts` / `settings-page.ts` 会把隐藏论文列表写到 Gist 文件
+# (key 为 `hiddenPapers: string[]`)。这个字段是纯浏览器状态,不应进 CI env —
+# 一旦落进 $GITHUB_ENV 会被序列化成 `hiddenPapers=["2401.01234","2405.05678"]`
+# 污染环境(虽然无害,但脏)。在 write_env_lines 之前把它从 payload 里 pop 掉。
+#
+# 注意与 flatten_legacy_llm_section 的区别:那段是 *展开* 嵌套对象,
+# 这段是 *丢弃* 字段(浏览器独占)。
+def filter_payload_for_env(payload: dict[str, Any]) -> None:
+    payload.pop("hiddenPapers", None)
+
+
 def write_env_lines(payload: dict[str, Any], env_file: str | None) -> None:
     for key, value in payload.items():
         line = f"{key}={value}"
@@ -111,6 +122,7 @@ def main() -> int:
 
     payload = json.loads(target)
     flatten_legacy_llm_section(payload)
+    filter_payload_for_env(payload)
     write_env_lines(payload, os.environ.get("GITHUB_ENV"))
     return 0
 

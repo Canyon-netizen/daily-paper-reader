@@ -216,6 +216,73 @@
   color: white;
 }
 .settings-action-btn.danger:hover { opacity: 0.9; }
+/* ghost 变体用于次要按钮(已隐藏论文面板等) */
+.settings-action-btn.ghost {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--fg-muted);
+}
+.settings-action-btn.ghost:hover {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* ===== 已隐藏论文面板 ===== */
+.settings-hidden-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.settings-hidden-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+.settings-hidden-id {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-size: 0.85rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.settings-hidden-id:hover { text-decoration: underline; }
+.settings-hidden-title {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-hidden-title--missing { color: var(--fg-subtle); font-style: italic; }
+.settings-hidden-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.settings-hidden-status {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+.settings-hidden-status[data-kind="ok"] { color: var(--accent); }
+.settings-hidden-status[data-kind="error"] { color: #c33; }
+.settings-hidden-status[data-kind="info"] { color: var(--fg-muted); }
+.settings-hidden-empty {
+  color: var(--fg-subtle);
+  font-style: italic;
+  font-size: 0.9rem;
+  margin: 0.5rem 0;
+}
 
 .settings-model-actions {
   display: flex;

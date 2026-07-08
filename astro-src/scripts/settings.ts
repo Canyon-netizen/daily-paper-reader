@@ -227,6 +227,9 @@ function saveHiddenPapersRaw(ids: string[]): void {
   }
 }
 
+// 导出给 settings-page.ts 的"清空本地"按钮用 — 它要一次写空数组,不走逐条 remove。
+export { saveHiddenPapersRaw };
+
 export function isPaperHidden(arxivId: string): boolean {
   if (!arxivId) return false;
   return loadHiddenPapers().includes(arxivId);
@@ -250,6 +253,112 @@ export function removeHiddenPaper(arxivId: string): boolean {
   if (next.length === ids.length) return false;
   saveHiddenPapersRaw(next);
   return true;
+}
+
+// ============================================================================
+// Gist 拉推 — 与现有 syncToGist() (settings-page.ts / paper-analyzer.ts 各一份)
+// 的"整文件覆盖"语义解耦。这里只针对 hiddenPapers 做 GET → merge → PATCH,
+// 避免 settings 同步把 analyzer 的 topics 字段连带 hiddenPapers 抹掉。
+//
+// 失败模式:
+//   - token / gistId 任一为空 → 返回 { ok: false, reason: 'no_token' },
+//     paper-hide.ts 静默不报错(用户没配 Gist 是正常态)
+//   - HTTP 401/403/网络错误 → 返回 { ok: false, reason: <message> },
+//     调用方 console.warn 即可
+// ============================================================================
+
+export interface GistHiddenPapersResult {
+  ok: boolean;
+  reason?: string;
+  /** pull 时:本次新合入的 ids(用于"已新增 N 条"提示) */
+  merged?: string[];
+}
+
+async function readGistHiddenPapers(): Promise<string[] | null> {
+  const token = getGistToken();
+  const gistId = getGistId();
+  if (!token || !gistId) return null;
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+    },
+  });
+  if (!res.ok) throw new Error(`Gist GET HTTP ${res.status}`);
+  const data = await res.json();
+  const files = data?.files || {};
+  const target = files[GIST_FILENAME] as { content?: string } | undefined;
+  if (!target?.content) return [];
+  let payload: unknown;
+  try { payload = JSON.parse(target.content); } catch { return []; }
+  const arr = (payload as { hiddenPapers?: unknown })?.hiddenPapers;
+  if (!Array.isArray(arr)) return [];
+  return arr.filter((x): x is string => typeof x === 'string');
+}
+
+// 启动时调用:Gist 里的 hiddenPapers 与 localStorage union 去重 → 写回 localStorage。
+// 不会清空 localStorage(避免把"本地新增还没推"的条目误删)。
+export async function pullHiddenPapersFromGist(): Promise<GistHiddenPapersResult> {
+  try {
+    const remote = await readGistHiddenPapers();
+    if (remote === null) return { ok: false, reason: 'no_token' };
+    const local = loadHiddenPapers();
+    const localSet = new Set(local);
+    const merged: string[] = [...local];
+    const fresh: string[] = [];
+    for (const id of remote) {
+      if (!localSet.has(id)) {
+        localSet.add(id);
+        merged.push(id);
+        fresh.push(id);
+      }
+    }
+    if (fresh.length > 0) saveHiddenPapersRaw(merged);
+    return { ok: true, merged: fresh };
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message || String(e) };
+  }
+}
+
+// 点隐藏/恢复时调用:GET → 把当前 localStorage 写回 hiddenPapers 字段 → PATCH。
+// 不动 Gist 里其他字段(llm / topics / categories / provider 等)。
+export async function pushHiddenPapersToGist(): Promise<GistHiddenPapersResult> {
+  const token = getGistToken();
+  const gistId = getGistId();
+  if (!token || !gistId) return { ok: false, reason: 'no_token' };
+  try {
+    // 读现有 payload(GET)
+    const getRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+    if (!getRes.ok) throw new Error(`Gist GET HTTP ${getRes.status}`);
+    const getData = await getRes.json();
+    const files = getData?.files || {};
+    const target = files[GIST_FILENAME] as { content?: string } | undefined;
+    let payload: Record<string, unknown> = {};
+    if (target?.content) {
+      try { payload = JSON.parse(target.content) as Record<string, unknown>; }
+      catch { payload = {}; }
+    }
+    payload.hiddenPapers = loadHiddenPapers();
+    // PATCH
+    const patchRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ files: { [GIST_FILENAME]: { content: JSON.stringify(payload, null, 2) } } }),
+    });
+    if (!patchRes.ok) throw new Error(`Gist PATCH HTTP ${patchRes.status}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message || String(e) };
+  }
 }
 
 // ============================================================================
