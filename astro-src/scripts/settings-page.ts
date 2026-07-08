@@ -348,6 +348,7 @@ function resetAllSettings(): void {
     'dpr_analyzer_deepdive_max_pages_v1',
     'dpr_analyzer_deepdive_compact_v1',
     'dpr_analyzer_deepdive_compact_pages_v1',
+    'dpr_hidden_papers_v1',
   ];
   for (const k of KEYS) try { localStorage.removeItem(k); } catch { /* ignore */ }
   alert('已清空所有配置,刷新页面');

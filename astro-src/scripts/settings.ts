@@ -43,6 +43,9 @@ export const STORAGE_KEYS = {
   deepDiveMaxPages: 'dpr_analyzer_deepdive_max_pages_v1',
   deepDiveCompact: 'dpr_analyzer_deepdive_compact_v1',
   deepDiveCompactPages: 'dpr_analyzer_deepdive_compact_pages_v1',
+  // 已隐藏论文列表 — 论文详情页"隐藏"按钮的持久化层。
+  // 不写 Gist(避免污染 CI $GITHUB_ENV),纯 localStorage。
+  hiddenPapers: 'dpr_hidden_papers_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 
@@ -185,6 +188,68 @@ export function saveDeepDiveSettings(cfg: DeepDiveConfig): void {
       DEEPDIVE_COMPACT_PAGES_MAX,
     )));
   } catch { /* ignore */ }
+}
+
+// ============================================================================
+// 已隐藏论文列表 — 软删除本地副本
+// 仅在浏览器 localStorage 持久化,不上 Gist(避免污染 CI $GITHUB_ENV)。
+// 后续要做跨设备同步,需要另开独立 Gist(dpr-hidden.json),
+// 不能写进 dpr-config.json —— 因为 .github/scripts/load_gist.py 会把
+// payload 里所有 key 当 env 写进 $GITHUB_ENV,数组会被序列化成
+// hiddenPapers=["..."] 污染环境。
+// ============================================================================
+export function loadHiddenPapers(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.hiddenPapers);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x): x is string => typeof x === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function saveHiddenPapersRaw(ids: string[]): void {
+  try {
+    // 去重 + 保持首次出现顺序
+    const seen = new Set<string>();
+    const dedup: string[] = [];
+    for (const id of ids) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        dedup.push(id);
+      }
+    }
+    localStorage.setItem(STORAGE_KEYS.hiddenPapers, JSON.stringify(dedup));
+  } catch {
+    /* localStorage 不可用时静默忽略(隐私模式等) */
+  }
+}
+
+export function isPaperHidden(arxivId: string): boolean {
+  if (!arxivId) return false;
+  return loadHiddenPapers().includes(arxivId);
+}
+
+// 返回 true 表示真的新增了,false 表示之前已在列表里。
+export function addHiddenPaper(arxivId: string): boolean {
+  if (!arxivId) return false;
+  const ids = loadHiddenPapers();
+  if (ids.includes(arxivId)) return false;
+  ids.push(arxivId);
+  saveHiddenPapersRaw(ids);
+  return true;
+}
+
+// 返回 true 表示真的移除了,false 表示本来就不在列表里。
+export function removeHiddenPaper(arxivId: string): boolean {
+  if (!arxivId) return false;
+  const ids = loadHiddenPapers();
+  const next = ids.filter((x) => x !== arxivId);
+  if (next.length === ids.length) return false;
+  saveHiddenPapersRaw(next);
+  return true;
 }
 
 // ============================================================================
