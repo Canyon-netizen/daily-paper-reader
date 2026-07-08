@@ -65,7 +65,8 @@ function initFigures(): void {
     }
     // 自适应高度跟随当前图。lazy 图切过去时可能还没解码(naturalWidth=0),
     // applyTrackHeight 会先退到兜底高;挂一次性 load 监听,解码完再撑到正确高度。
-    if (details.open) {
+    // 外层函数在 !details 时已经早返回,这里闭包里 details 一定存在,用 ! 断言。
+    if (details!.open) {
       const img = slides[current]?.querySelector<HTMLImageElement>('img');
       if (img && !img.complete) {
         img.addEventListener('load', applyTrackHeight, { once: true });

@@ -1,0 +1,907 @@
+---
+// PaperLibrary - 分屏:左列表 + 右网络,加抽屉编辑标签。
+// 数据从 script#papers-data 注入(SSR 时序列化),客户端渲染。
+// cytoscape 通过 dynamic import('cytoscape') 加载(按需,不阻塞首屏)。
+// 用户标签:localStorage 优先(key 'dpr_user_tags_v1'),Gist 同步由 user-tags.ts 内部处理。
+---
+
+<div class="papers-library-host" data-papers-library>
+  <!-- 左侧列表 -->
+  <aside class="papers-list-panel" aria-label="论文列表">
+    <div class="papers-list-toolbar">
+      <input
+        type="search"
+        class="papers-search"
+        placeholder="搜索标题 / 中文标题 / TLDR..."
+        data-papers-search
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <div class="papers-tag-filter" data-papers-tag-filter role="group" aria-label="按标签筛选"></div>
+      <div class="papers-toolbar-meta" data-papers-toolbar-meta></div>
+    </div>
+    <div class="papers-list-viewport" data-papers-viewport>
+      <div class="papers-list-spacer" data-papers-spacer>
+        <div class="papers-list-empty" data-papers-list-empty hidden>暂无匹配论文</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 右侧网络 -->
+  <section class="papers-graph-panel" aria-label="节点网络">
+    <div id="cy"></div>
+    <div class="papers-graph-loading" data-papers-graph-loading>
+      <div class="papers-graph-loading-spinner" aria-hidden="true"></div>
+      <div data-papers-graph-loading-text>计算节点网络…</div>
+    </div>
+    <div class="papers-graph-toolbar" role="group" aria-label="算法切换">
+      <button type="button" class="papers-graph-btn is-active" data-papers-algorithm="jaccard">Jaccard 标签</button>
+      <button type="button" class="papers-graph-btn" data-papers-algorithm="tfidf">TF-IDF 文本</button>
+      <button type="button" class="papers-graph-btn" data-papers-algorithm="hybrid">混合</button>
+      <button type="button" class="papers-graph-btn" data-papers-graph-fit title="适应屏幕">⤢</button>
+    </div>
+    <div class="papers-graph-meta" data-papers-graph-meta></div>
+    <div class="papers-graph-legend" data-papers-graph-legend hidden></div>
+  </section>
+
+  <!-- 右侧抽屉 -->
+  <aside class="papers-drawer" data-papers-drawer aria-hidden="true" aria-label="论文详情与标签编辑">
+    <header class="papers-drawer-header">
+      <h3 class="papers-drawer-title" data-papers-drawer-title>论文详情</h3>
+      <button type="button" class="papers-drawer-close" data-papers-drawer-close aria-label="关闭抽屉">✕</button>
+    </header>
+    <div class="papers-drawer-body" data-papers-drawer-body>
+      <div class="papers-drawer-section">
+        <h4 class="papers-drawer-title-zh" data-papers-drawer-title-zh>—</h4>
+        <p class="papers-drawer-title-en" data-papers-drawer-title-en hidden></p>
+        <div class="papers-drawer-meta">
+          <div><span data-papers-drawer-arxiv></span></div>
+          <div><span data-papers-drawer-authors></span></div>
+          <div><span data-papers-drawer-date></span></div>
+        </div>
+        <a class="papers-drawer-link" data-papers-drawer-pdf target="_blank" rel="noopener" hidden>↗ 打开 PDF</a>
+      </div>
+      <div class="papers-drawer-section">
+        <div class="papers-drawer-section-label">TLDR</div>
+        <div class="papers-drawer-tldr" data-papers-drawer-tldr>—</div>
+      </div>
+      <div class="papers-drawer-section papers-tag-editor">
+        <div class="papers-drawer-section-label">用户标签(本地 + Gist 同步)</div>
+        <div class="papers-tag-list" data-papers-tag-list></div>
+        <div class="papers-tag-edit-input-row">
+          <input
+            type="text"
+            class="papers-tag-edit-kind-input"
+            placeholder="kind (topic / status / interest)"
+            data-papers-tag-kind
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <input
+            type="text"
+            class="papers-tag-edit-label-input"
+            placeholder="label (RL / to-read / ...)"
+            data-papers-tag-label
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button type="button" class="papers-tag-edit-add" data-papers-tag-add>添加</button>
+          <span class="papers-tag-edit-saved" data-papers-tag-saved hidden>已保存 ✓</span>
+        </div>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+  // ============================================================================
+  // PaperLibrary 客户端逻辑
+  // ============================================================================
+  // 数据源:由 SSR 端把 papers 序列化为 JSON,挂到 #papers-data 节点
+  //        (避开在注释里直接写 script 字面量,以免 HTML parser 提前闭合本块)。
+  // 依赖:lib/paper-relations(computeRelations) — 计算节点边。
+  //       lib/user-tags — 读写用户标签。
+  // 渲染目标:.papers-library-host 内的 DOM。
+  // ============================================================================
+
+  import {
+    computeRelations,
+    type ComputeOptions,
+    type RelationNode,
+    type RelationEdge,
+  } from '../lib/paper-relations';
+  import {
+    getUserTags,
+    addTag,
+    removeTag,
+    flattenUserTags,
+    pullUserTagsFromGist,
+    pushUserTagsToGist,
+    type UserTag,
+  } from '../lib/user-tags';
+  import { getGistToken, getGistId } from '../scripts/settings';
+  import { showToast } from '../scripts/toast';
+
+  // ---------- 类型 ----------
+  interface PaperListItemLite {
+    id: string;
+    title?: string;
+    title_zh?: string;
+    authors?: string;
+    date?: string;
+    pdf?: string;
+    tags?: string[];
+    arxivId: string;
+    slug: string;
+    // 可选:SSR 嵌入的轻量 tldr(若空,drawer 打开时再单独请求)
+    tldr?: string;
+  }
+  interface PapersDataPayload {
+    papers: PaperListItemLite[];
+    generatedAt: string;
+  }
+
+  // ---------- 数据装载 ----------
+  function loadPapersData(): PapersDataPayload | null {
+    const el = document.getElementById('papers-data');
+    if (!el) return null;
+    try {
+      return JSON.parse(el.textContent || '{}') as PapersDataPayload;
+    } catch {
+      return null;
+    }
+  }
+
+  // ---------- 常量 ----------
+  const VIRTUAL_ROW_HEIGHT = 96;     // px,列表项估计高度(用于虚拟滚动)
+  const VIRTUAL_OVERSCAN = 6;        // 多渲染的离屏行数
+  const TAG_KIND_PALETTE: Record<string, string> = {
+    query: '#b31b1b',
+    topic: '#1d4ed8',
+    method: '#9333ea',
+    benchmark: '#0891b2',
+    default: '#6b7280',
+  };
+  const EDGE_COLOR: Record<string, string> = {
+    jaccard: '#b31b1b',
+    tfidf: '#1d4ed8',
+    embedding: '#9333ea',
+    hybrid: '#6b7280',
+  };
+  const ROW_ESTIMATE = 120; // 列表项估计平均高度,实际渲染后再校准
+
+  // ---------- 工具 ----------
+  function stripQueryPrefix(tag: string): string {
+    const i = tag.indexOf(':');
+    return i > 0 ? tag.slice(i + 1) : tag;
+  }
+  function tagKindOf(tag: string): string {
+    const i = tag.indexOf(':');
+    return i > 0 ? tag.slice(0, i).toLowerCase() : 'default';
+  }
+  function tagColor(tag: string): string {
+    return TAG_KIND_PALETTE[tagKindOf(tag)] || TAG_KIND_PALETTE.default;
+  }
+  function escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c),
+    );
+  }
+  function todayString(): string {
+    const d = new Date();
+    return d.toISOString().slice(0, 10);
+  }
+
+  // ---------- 主类 ----------
+  class PaperLibrary {
+    private host: HTMLElement;
+    private papers: PaperListItemLite[] = [];
+    private filtered: PaperListItemLite[] = [];
+    private filterText = '';
+    private filterTag = '';
+    private byId = new Map<string, PaperListItemLite>();
+    private tagCounts = new Map<string, number>();
+    private cy: unknown = null;        // cytoscape.Core
+    private cytoscapeMod: unknown = null;
+    private algoKind: 'jaccard' | 'tfidf' | 'hybrid' = 'jaccard';
+    private drawerPaperId: string | null = null;
+    private drawerUserTags: UserTag[] = [];
+    private rowHeights = new Map<number, number>(); // index -> measured height
+
+    constructor(host: HTMLElement) {
+      this.host = host;
+    }
+
+    async init(): Promise<void> {
+      const data = loadPapersData();
+      if (!data || !Array.isArray(data.papers)) {
+        this.setGraphLoadingText('数据加载失败');
+        return;
+      }
+      this.papers = data.papers;
+      this.byId = new Map(this.papers.map((p) => [p.id, p]));
+      this.buildTagFilter();
+      this.bindUI();
+      this.refreshFilter();
+      // 启动时尝试从 Gist 拉一次用户标签(若 token + gistId 都配齐);
+      // 远端合并到本地 union 去重 — 失败静默,本地状态不变。
+      // 这步在渲染图前并行做,不等它返回(网络慢也不阻塞首屏)。
+      this.maybePullTagsFromGist();
+      // 异步加载 cytoscape + 计算图
+      await this.loadAndRenderGraph();
+    }
+
+    /** 启动时从 Gist 拉用户标签,与本地 union 合并。若当前抽屉已开,刷新 chip。 */
+    private maybePullTagsFromGist(): void {
+      if (!getGistToken() || !getGistId()) return;
+      pullUserTagsFromGist()
+        .then((r) => {
+          if (r.ok && r.mergedCount && r.mergedCount > 0 && this.drawerPaperId) {
+            const p = this.byId.get(this.drawerPaperId);
+            if (p?.arxivId) {
+              this.drawerUserTags = getUserTags(p.arxivId);
+              this.renderUserTags();
+            }
+          }
+        })
+        .catch((e) => console.warn('[PaperLibrary] Gist pull failed:', e));
+    }
+
+    /** 本地写完后,异步把整个 userTags map 推到 Gist。失败弹 toast,本地状态不变。 */
+    private maybePushTagsToGist(): void {
+      if (!getGistToken() || !getGistId()) return;
+      pushUserTagsToGist().then((r) => {
+        if (!r.ok) {
+          showToast(
+            `标签已保存到本地,Gist 同步失败,下次访问会重试(${r.reason || '未知错误'})`,
+            'error',
+          );
+        }
+      }).catch((e) => {
+        showToast(
+          `标签已保存到本地,Gist 同步失败,下次访问会重试(${(e as Error).message || e})`,
+          'error',
+        );
+      });
+    }
+
+    // ---------- 标签筛选条 ----------
+    private buildTagFilter(): void {
+      this.tagCounts.clear();
+      for (const p of this.papers) {
+        for (const t of p.tags || []) {
+          this.tagCounts.set(t, (this.tagCounts.get(t) || 0) + 1);
+        }
+      }
+      // 取前 30 个最多的标签,避免渲染过多样本
+      const sorted = Array.from(this.tagCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 30);
+      const root = this.qs<HTMLDivElement>('[data-papers-tag-filter]');
+      root.innerHTML = '';
+      // "全部" chip
+      const all = document.createElement('button');
+      all.type = 'button';
+      all.className = 'papers-tag-chip is-active';
+      all.dataset.tag = '';
+      all.textContent = `全部 ${this.papers.length}`;
+      all.addEventListener('click', () => this.setTagFilter(''));
+      root.appendChild(all);
+      for (const [tag, count] of sorted) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'papers-tag-chip';
+        b.dataset.tag = tag;
+        const label = stripQueryPrefix(tag);
+        const countSpan = document.createElement('span');
+        countSpan.className = 'papers-tag-chip-count';
+        countSpan.textContent = String(count);
+        b.appendChild(document.createTextNode(label + ' '));
+        b.appendChild(countSpan);
+        b.addEventListener('click', () => this.setTagFilter(tag));
+        root.appendChild(b);
+      }
+    }
+
+    private setTagFilter(tag: string): void {
+      this.filterTag = tag;
+      const root = this.qs<HTMLDivElement>('[data-papers-tag-filter]');
+      for (const c of root.children) {
+        const btn = c as HTMLButtonElement;
+        const t = btn.dataset.tag || '';
+        btn.classList.toggle('is-active', t === tag);
+      }
+      this.refreshFilter();
+    }
+
+    // ---------- 搜索 + 过滤 ----------
+    private bindUI(): void {
+      const search = this.qs<HTMLInputElement>('[data-papers-search]');
+      let timer: number | undefined;
+      search.addEventListener('input', () => {
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          this.filterText = search.value.trim().toLowerCase();
+          this.refreshFilter();
+        }, 100);
+      });
+      // 抽屉关闭
+      this.qs<HTMLButtonElement>('[data-papers-drawer-close]')
+        .addEventListener('click', () => this.closeDrawer());
+      // 标签编辑
+      this.qs<HTMLButtonElement>('[data-papers-tag-add]')
+        .addEventListener('click', () => this.handleAddTag());
+      const kindIn = this.qs<HTMLInputElement>('[data-papers-tag-kind]');
+      const labelIn = this.qs<HTMLInputElement>('[data-papers-tag-label]');
+      labelIn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') this.handleAddTag();
+      });
+      kindIn.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') labelIn.focus();
+      });
+      // 算法切换
+      for (const btn of this.qsa<HTMLButtonElement>('[data-papers-algorithm]')) {
+        btn.addEventListener('click', () => {
+          const k = btn.dataset.papersAlgorithm as 'jaccard' | 'tfidf' | 'hybrid';
+          if (!k || k === this.algoKind) return;
+          for (const b of this.qsa<HTMLButtonElement>('[data-papers-algorithm]')) {
+            b.classList.toggle('is-active', b.dataset.papersAlgorithm === k);
+          }
+          this.algoKind = k;
+          void this.recomputeAndRender();
+        });
+      }
+      this.qs<HTMLButtonElement>('[data-papers-graph-fit]')
+        .addEventListener('click', () => this.fitGraph());
+      // 列表 viewport 滚动 → 触发虚拟滚动重算
+      const viewport = this.qs<HTMLDivElement>('[data-papers-viewport]');
+      viewport.addEventListener('scroll', () => this.renderVisibleRows());
+      // 主题变化时 cytoscape 重绘样式
+      window.addEventListener('storage', (e) => {
+        if (e.key === 'dpr_theme_v1') this.applyCytoscapeTheme();
+      });
+    }
+
+    private refreshFilter(): void {
+      const q = this.filterText;
+      const tag = this.filterTag;
+      this.filtered = this.papers.filter((p) => {
+        if (tag) {
+          const tags = p.tags || [];
+          if (!tags.includes(tag)) return false;
+        }
+        if (q) {
+          const hay = [
+            p.title || '',
+            p.title_zh || '',
+            p.tldr || '',
+          ].join(' ').toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+      const meta = this.qs<HTMLDivElement>('[data-papers-toolbar-meta]');
+      const today = todayString();
+      const todayCount = this.filtered.filter((p) => p.date === today).length;
+      meta.textContent = `共 ${this.filtered.length} / ${this.papers.length} 篇 · 今日 ${todayCount}`;
+      // 重置虚拟滚动
+      this.rowHeights.clear();
+      const spacer = this.qs<HTMLDivElement>('[data-papers-spacer]');
+      spacer.style.height = `${this.filtered.length * ROW_ESTIMATE}px`;
+      const viewport = this.qs<HTMLDivElement>('[data-papers-viewport]');
+      viewport.scrollTop = 0;
+      const empty = this.qs<HTMLDivElement>('[data-papers-list-empty]');
+      empty.hidden = this.filtered.length > 0;
+      this.renderVisibleRows();
+    }
+
+    // ---------- 虚拟滚动 ----------
+    private renderVisibleRows(): void {
+      const viewport = this.qs<HTMLDivElement>('[data-papers-viewport]');
+      const spacer = this.qs<HTMLDivElement>('[data-papers-spacer]');
+      const scrollTop = viewport.scrollTop;
+      const viewportH = viewport.clientHeight;
+
+      // 计算累计偏移(用 rowHeights 测量值,缺则用 ROW_ESTIMATE)
+      const offsets: number[] = new Array(this.filtered.length + 1);
+      offsets[0] = 0;
+      for (let i = 0; i < this.filtered.length; i++) {
+        const h = this.rowHeights.get(i) ?? ROW_ESTIMATE;
+        offsets[i + 1] = offsets[i] + h;
+      }
+      spacer.style.height = `${offsets[this.filtered.length]}px`;
+
+      // 二分找可见区间
+      let start = 0;
+      let end = this.filtered.length;
+      // start: 第一个 offset+height > scrollTop 的
+      let lo = 0, hi = this.filtered.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (offsets[mid] + (this.rowHeights.get(mid) ?? ROW_ESTIMATE) > scrollTop) hi = mid;
+        else lo = mid + 1;
+      }
+      start = Math.max(0, lo - VIRTUAL_OVERSCAN);
+      // end: 第一个 offset >= scrollTop+viewportH 的
+      lo = start; hi = this.filtered.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (offsets[mid] >= scrollTop + viewportH) hi = mid;
+        else lo = mid + 1;
+      }
+      end = Math.min(this.filtered.length, lo + VIRTUAL_OVERSCAN);
+
+      // 渲染 start..end-1
+      spacer.innerHTML = '';
+      const empty = document.createElement('div');
+      empty.className = 'papers-list-empty';
+      empty.hidden = this.filtered.length > 0;
+      empty.textContent = '暂无匹配论文';
+      spacer.appendChild(empty);
+
+      for (let i = start; i < end; i++) {
+        const p = this.filtered[i];
+        const node = document.createElement('div');
+        node.className = 'papers-list-item';
+        if (p.id === this.drawerPaperId) node.classList.add('is-active');
+        node.style.top = `${offsets[i]}px`;
+        node.style.height = `${this.rowHeights.get(i) ?? ROW_ESTIMATE}px`;
+        node.dataset.paperId = p.id;
+
+        const title = document.createElement('div');
+        title.className = 'papers-list-item-title';
+        title.textContent = p.title_zh || p.title || p.id;
+        node.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'papers-list-item-meta';
+        const authors = document.createElement('span');
+        authors.className = 'papers-list-item-authors';
+        authors.textContent = p.authors || '';
+        meta.appendChild(authors);
+        const date = document.createElement('span');
+        date.textContent = p.date || '';
+        meta.appendChild(date);
+        node.appendChild(meta);
+
+        const tagsRow = document.createElement('div');
+        tagsRow.className = 'papers-list-item-tags';
+        for (const t of (p.tags || []).slice(0, 3)) {
+          const tag = document.createElement('span');
+          tag.className = 'papers-list-item-tag';
+          tag.textContent = stripQueryPrefix(t);
+          tagsRow.appendChild(tag);
+        }
+        node.appendChild(tagsRow);
+
+        node.addEventListener('mouseenter', () => this.highlightNode(p.id, true));
+        node.addEventListener('mouseleave', () => this.highlightNode(p.id, false));
+        node.addEventListener('click', () => this.openDrawer(p.id));
+        spacer.appendChild(node);
+
+        // 测量实际高度用于下一次渲染
+        const measured = node.offsetHeight;
+        if (measured > 0 && Math.abs(measured - (this.rowHeights.get(i) ?? ROW_ESTIMATE)) > 4) {
+          this.rowHeights.set(i, measured);
+        }
+      }
+    }
+
+    // ---------- 节点高亮 ----------
+    private highlightNode(paperId: string, on: boolean): void {
+      const cy = this.cy as { elements: (sel: string) => { addClass: (c: string) => void; removeClass: (c: string) => void } } | null;
+      if (!cy) return;
+      const sel = `node[id = "${cssEscape(paperId)}"]`;
+      const el = cy.elements(sel);
+      if (on) el.addClass('is-hover');
+      else el.removeClass('is-hover');
+      // 列表项视觉同步
+      for (const item of this.qsa<HTMLDivElement>('.papers-list-item')) {
+        item.classList.toggle('is-hover', on && item.dataset.paperId === paperId);
+      }
+    }
+
+    // ---------- 图谱加载 ----------
+    private async loadAndRenderGraph(): Promise<void> {
+      try {
+        this.setGraphLoadingText('加载 cytoscape.js…');
+        // cytoscape 没有列在 dependencies(可选依赖,运行时通过 dynamic import 拉 CDN)。
+        // 用变量名拼模块 specifier,绕开 Rollup 静态分析(避免 build 报"无法解析 cytoscape")。
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const modName: string = 'cytoscape';
+        // @ts-ignore — cytoscape 模块无类型声明
+        this.cytoscapeMod = await import(/* @vite-ignore */ modName);
+        await this.recomputeAndRender();
+      } catch (e) {
+        console.error('[PaperLibrary] cytoscape 加载失败:', e);
+        this.setGraphLoadingText('cytoscape.js 加载失败,请检查网络');
+      }
+    }
+
+    private async recomputeAndRender(): Promise<void> {
+      this.setGraphLoadingText('计算节点网络…');
+      const opts: ComputeOptions = {
+        algorithm: this.algoKind,
+        topK: 6,
+        minWeight: 0.05,
+      };
+      let result;
+      try {
+        result = await computeRelations(this.papers as never[], opts);
+      } catch (e) {
+        console.error('[PaperLibrary] computeRelations 失败:', e);
+        this.setGraphLoadingText('节点网络计算失败');
+        return;
+      }
+      this.renderGraph(result.nodes, result.edges);
+    }
+
+    private renderGraph(nodes: RelationNode[], edges: RelationEdge[]): void {
+      // cytoscape 是可选依赖(运行期 dynamic import),这里 loose-typing 即可。
+      const cyMod = this.cytoscapeMod as unknown | null;
+      if (!cyMod) return;
+      // 折叠多余空边和单节点优化:数据集大时,cytoscape 在 layout 阶段会卡,这里手动限制
+      const elements = [
+        ...nodes.map((n) => ({
+          data: {
+            id: n.id,
+            label: (n.title || '').slice(0, 60),
+            title: n.title,
+            tags: n.tags,
+            primaryTag: n.tags[0] || '',
+          },
+        })),
+        ...edges.map((e, idx) => ({
+          data: {
+            id: `e${idx}`,
+            source: e.source,
+            target: e.target,
+            weight: e.weight,
+            type: e.type,
+            sharedTags: e.sharedTags,
+          },
+        })),
+      ];
+      const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const fg = isDark ? '#e6edf3' : '#1a1a1a';
+      const edgeBase = isDark ? '#484f58' : '#d1d5db';
+      // cytoscape 是可选依赖,运行期 dynamic import — 这里 loose-typing 避免连锁 TS 报错。
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cy = (cyMod as any)({
+        container: this.qs<HTMLDivElement>('#cy'),
+        elements,
+        wheelSensitivity: 0.25,
+        style: [
+          {
+            selector: 'node',
+            style: {
+              'background-color': (ele: { data: (k: string) => unknown }) =>
+                tagColor(String(ele.data('primaryTag') || '')),
+              'label': 'data(label)',
+              'font-size': '9px',
+              'color': fg,
+              'text-valign': 'bottom',
+              'text-halign': 'center',
+              'text-margin-y': 4,
+              'text-wrap': 'ellipsis',
+              'text-max-width': '80px',
+              'width': 14,
+              'height': 14,
+              'border-width': 1,
+              'border-color': isDark ? '#30363d' : '#ffffff',
+              'opacity': 0.9,
+            },
+          },
+          {
+            selector: 'node.is-hover',
+            style: {
+              'border-width': 3,
+              'border-color': '#ff6b35',
+              'width': 22,
+              'height': 22,
+              'opacity': 1,
+              'z-index': 10,
+            },
+          },
+          {
+            selector: 'node.is-active',
+            style: {
+              'border-width': 3,
+              'border-color': '#ff6b35',
+              'width': 20,
+              'height': 20,
+              'z-index': 9,
+            },
+          },
+          {
+            selector: 'node.dim',
+            style: { 'opacity': 0.15 },
+          },
+          {
+            selector: 'edge',
+            style: {
+              'curve-style': 'straight',
+              'line-color': edgeBase,
+              'width': (ele: { data: (k: string) => unknown }) =>
+                Math.max(1, Math.min(4, Number(ele.data('weight') || 0) * 4)),
+              'opacity': 0.55,
+              'target-arrow-shape': 'none',
+            },
+          },
+          {
+            selector: 'edge.jaccard',
+            style: { 'line-color': EDGE_COLOR.jaccard },
+          },
+          {
+            selector: 'edge.tfidf',
+            style: { 'line-color': EDGE_COLOR.tfidf },
+          },
+          {
+            selector: 'edge.embedding',
+            style: { 'line-color': EDGE_COLOR.embedding },
+          },
+          {
+            selector: 'edge.hybrid',
+            style: { 'line-color': EDGE_COLOR.hybrid },
+          },
+          {
+            selector: 'edge.dim',
+            style: { 'opacity': 0.05 },
+          },
+          {
+            selector: 'edge.highlight',
+            style: { 'opacity': 0.95, 'z-index': 5 },
+          },
+        ],
+        layout: {
+          name: 'cose',
+          animate: false,
+          padding: 20,
+          nodeRepulsion: () => 6000,
+          idealEdgeLength: () => 70,
+          gravity: 0.25,
+          numIter: 1500,
+          fit: true,
+        } as never,
+      });
+      // 节点点击 → 打开抽屉
+      cy.on('tap', 'node', (evt: { target: { id: () => string } }) => {
+        this.openDrawer(evt.target.id());
+      });
+      // 节点 hover → 同步高亮列表
+      cy.on('mouseover', 'node', (evt: { target: { id: () => string } }) => {
+        this.highlightListItem(evt.target.id(), true);
+      });
+      cy.on('mouseout', 'node', (evt: { target: { id: () => string } }) => {
+        this.highlightListItem(evt.target.id(), false);
+      });
+      this.cy = cy;
+      this.hideGraphLoading();
+      this.updateGraphMeta(edges.length, nodes.length);
+      this.renderLegend();
+    }
+
+    private renderLegend(): void {
+      const root = this.qs<HTMLDivElement>('[data-papers-graph-legend]');
+      root.hidden = false;
+      root.innerHTML = '';
+      const label = document.createElement('div');
+      label.style.fontWeight = '700';
+      label.style.fontSize = '0.7rem';
+      label.style.letterSpacing = '0.04em';
+      label.style.textTransform = 'uppercase';
+      label.textContent = '节点(主 tag)';
+      root.appendChild(label);
+      for (const [kind, color] of Object.entries(TAG_KIND_PALETTE)) {
+        const row = document.createElement('div');
+        row.className = 'papers-graph-legend-row';
+        const dot = document.createElement('span');
+        dot.className = 'papers-graph-legend-dot';
+        dot.style.background = color;
+        row.appendChild(dot);
+        const txt = document.createElement('span');
+        txt.textContent = kind === 'default' ? '其他' : kind;
+        row.appendChild(txt);
+        root.appendChild(row);
+      }
+    }
+
+    private updateGraphMeta(edgeCount: number, nodeCount: number): void {
+      const meta = this.qs<HTMLDivElement>('[data-papers-graph-meta]');
+      meta.textContent = `${nodeCount} 节点 / ${edgeCount} 边 · ${this.algoKind}`;
+    }
+
+    private applyCytoscapeTheme(): void {
+      // 主题切换:重渲图(简化:重新跑一次 compute + render)
+      void this.recomputeAndRender();
+    }
+
+    private highlightListItem(paperId: string, on: boolean): void {
+      for (const item of this.qsa<HTMLDivElement>('.papers-list-item')) {
+        if (item.dataset.paperId === paperId) {
+          item.classList.toggle('is-hover', on);
+        }
+      }
+    }
+
+    private fitGraph(): void {
+      const cy = this.cy as { fit: (p?: unknown, padding?: number) => void } | null;
+      if (!cy) return;
+      cy.fit(undefined, 30);
+    }
+
+    // ---------- 抽屉 ----------
+    private openDrawer(paperId: string): void {
+      const p = this.byId.get(paperId);
+      if (!p) return;
+      this.drawerPaperId = paperId;
+      const drawer = this.qs<HTMLDivElement>('[data-papers-drawer]');
+      drawer.classList.add('is-open');
+      drawer.setAttribute('aria-hidden', 'false');
+      // 列表项 active
+      for (const item of this.qsa<HTMLDivElement>('.papers-list-item')) {
+        item.classList.toggle('is-active', item.dataset.paperId === paperId);
+      }
+      // 图节点 active
+      const cy = this.cy as { elements: (sel: string) => { addClass: (c: string) => void; removeClass: (c: string) => void } } | null;
+      if (cy) {
+        cy.elements('node').removeClass('is-active');
+        cy.elements(`node[id = "${cssEscape(paperId)}"]`).addClass('is-active');
+      }
+      // 填内容
+      this.qs<HTMLDivElement>('[data-papers-drawer-title-zh]').textContent =
+        p.title_zh || p.title || p.id;
+      const titleEn = this.qs<HTMLDivElement>('[data-papers-drawer-title-en]');
+      if (p.title && p.title !== (p.title_zh || '')) {
+        titleEn.textContent = p.title;
+        titleEn.hidden = false;
+      } else {
+        titleEn.hidden = true;
+      }
+      this.qs<HTMLDivElement>('[data-papers-drawer-arxiv]').textContent =
+        p.arxivId ? `arXiv: ${p.arxivId}` : '';
+      this.qs<HTMLDivElement>('[data-papers-drawer-authors]').textContent =
+        p.authors ? `作者: ${p.authors}` : '';
+      this.qs<HTMLDivElement>('[data-papers-drawer-date]').textContent =
+        p.date ? `日期: ${p.date}` : '';
+      // TLDR 需要单独请求(SSR payload 只包含轻量列表项,不包含 tldr/abstract)
+      // 但 frontmatter 已经包含 tldr 字段 — 在 SSR 时一并嵌入。
+      const tldrEl = this.qs<HTMLDivElement>('[data-papers-drawer-tldr]');
+      // 从 payload 里找
+      const full = this.papers.find((x) => x.id === p.id) as (PaperListItemLite & { tldr?: string });
+      tldrEl.textContent = (full && (full as { tldr?: string }).tldr) || p.title_zh || p.title || '—';
+      // PDF
+      const pdfLink = this.qs<HTMLAnchorElement>('[data-papers-drawer-pdf]');
+      if (p.pdf) {
+        pdfLink.href = p.pdf;
+        pdfLink.hidden = false;
+      } else {
+        pdfLink.hidden = true;
+      }
+      // 加载用户标签
+      this.drawerUserTags = p.arxivId ? getUserTags(p.arxivId) : [];
+      this.renderUserTags();
+    }
+
+    private closeDrawer(): void {
+      const drawer = this.qs<HTMLDivElement>('[data-papers-drawer]');
+      drawer.classList.remove('is-open');
+      drawer.setAttribute('aria-hidden', 'true');
+      this.drawerPaperId = null;
+      for (const item of this.qsa<HTMLDivElement>('.papers-list-item')) {
+        item.classList.remove('is-active');
+      }
+      const cy = this.cy as { elements: (sel: string) => { removeClass: (c: string) => void } } | null;
+      if (cy) cy.elements('node').removeClass('is-active');
+    }
+
+    private renderUserTags(): void {
+      const root = this.qs<HTMLDivElement>('[data-papers-tag-list]');
+      root.innerHTML = '';
+      if (this.drawerUserTags.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'papers-tag-edit-empty';
+        empty.textContent = '暂无用户标签 — 在下方添加';
+        root.appendChild(empty);
+        return;
+      }
+      for (const t of this.drawerUserTags) {
+        const chip = document.createElement('span');
+        chip.className = 'papers-tag-edit-chip';
+        const kind = document.createElement('span');
+        kind.className = 'papers-tag-edit-kind';
+        kind.textContent = t.kind;
+        chip.appendChild(kind);
+        const label = document.createElement('span');
+        label.textContent = t.label;
+        chip.appendChild(label);
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'papers-tag-edit-remove';
+        rm.setAttribute('aria-label', `删除 ${t.kind}:${t.label}`);
+        rm.textContent = '×';
+        rm.addEventListener('click', () => this.handleRemoveTag(t.kind, t.label));
+        chip.appendChild(rm);
+        root.appendChild(chip);
+      }
+    }
+
+    private handleAddTag(): void {
+      if (!this.drawerPaperId) return;
+      const p = this.byId.get(this.drawerPaperId);
+      if (!p || !p.arxivId) return;
+      const kindIn = this.qs<HTMLInputElement>('[data-papers-tag-kind]');
+      const labelIn = this.qs<HTMLInputElement>('[data-papers-tag-label]');
+      const kind = kindIn.value.trim();
+      const label = labelIn.value.trim();
+      if (!kind || !label) return;
+      const ok = addTag(p.arxivId, kind, label);
+      if (ok) {
+        this.drawerUserTags = getUserTags(p.arxivId);
+        this.renderUserTags();
+        kindIn.value = '';
+        labelIn.value = '';
+        this.flashSaved();
+        // 异步推 Gist(失败 toast 提示,本地状态不变)
+        this.maybePushTagsToGist();
+      }
+    }
+
+    private handleRemoveTag(kind: string, label: string): void {
+      if (!this.drawerPaperId) return;
+      const p = this.byId.get(this.drawerPaperId);
+      if (!p || !p.arxivId) return;
+      const ok = removeTag(p.arxivId, kind, label);
+      if (ok) {
+        this.drawerUserTags = getUserTags(p.arxivId);
+        this.renderUserTags();
+        this.flashSaved();
+        this.maybePushTagsToGist();
+      }
+    }
+
+    private flashSaved(): void {
+      const el = this.qs<HTMLSpanElement>('[data-papers-tag-saved]');
+      el.hidden = false;
+      window.setTimeout(() => { el.hidden = true; }, 1500);
+    }
+
+    // ---------- 杂项 ----------
+    private setGraphLoadingText(text: string): void {
+      const t = this.qs<HTMLDivElement>('[data-papers-graph-loading-text]');
+      if (t) t.textContent = text;
+    }
+    private hideGraphLoading(): void {
+      const el = this.qs<HTMLDivElement>('[data-papers-graph-loading]');
+      if (el) el.style.display = 'none';
+    }
+    private qs<T extends HTMLElement>(sel: string): T {
+      const el = this.host.querySelector<T>(sel);
+      if (!el) throw new Error(`missing ${sel}`);
+      return el;
+    }
+    private qsa<T extends HTMLElement>(sel: string): T[] {
+      return Array.from(this.host.querySelectorAll<T>(sel));
+    }
+  }
+
+  // ---------- CSS selector escape (paper id 可能含 [ 等特殊字符) ----------
+  function cssEscape(s: string): string {
+    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(s);
+    return s.replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
+  }
+
+  // ---------- 启动 ----------
+  function bootstrap(): void {
+    const host = document.querySelector<HTMLElement>('[data-papers-library]');
+    if (!host) return;
+    const lib = new PaperLibrary(host);
+    void lib.init();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bootstrap);
+  } else {
+    bootstrap();
+  }
+</script>

@@ -1,0 +1,96 @@
+---
+// /papers/ 论文库 + 节点网络
+// 1) SSR 期:listPapers({dedup:true, sortBy:'date'}) 拿全量论文
+// 2) 顶部 hero + 统计(总篇数 / 今日新增 / 唯一标签数)
+// 3) 把数据序列化到 <script id="papers-data" type="application/json"> 给客户端
+// 4) 挂载 <PaperLibrary /> — 客户端脚本接管分屏布局、cytoscape 节点网络、抽屉编辑
+import type { GetStaticPaths } from 'astro';
+import { listPapers } from '../../lib/paper';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import PaperLibrary from '../../components/PaperLibrary.astro';
+import '../../styles/papers.css';
+import '../../styles/toast.css';
+
+// /papers/ 是静态索引页 — 不需要 getStaticPaths,SSR 时一次性拉全量数据
+export const getStaticPaths: GetStaticPaths = async () => [{ params: {} }];
+
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+
+// 全量论文(去重 + 按日期倒序)
+const papers = await listPapers({ dedup: true, sortBy: 'date' });
+
+// 今日新增(按 YYYY-MM-DD)
+const today = new Date().toISOString().slice(0, 10);
+const todayCount = papers.filter((p) => p.date === today).length;
+
+// 唯一标签数(扁平 query: 前缀)
+const tagSet = new Set<string>();
+for (const p of papers) {
+  for (const t of p.tags || []) {
+    const i = t.indexOf(':');
+    tagSet.add(i > 0 ? t.slice(i + 1) : t);
+  }
+}
+const uniqueTagCount = tagSet.size;
+
+// 客户端载荷:只传必要字段,避免大体积(每篇压缩到最小)
+const clientPapers = papers.map((p) => ({
+  id: p.id,
+  title: p.title || '',
+  title_zh: p.title_zh || '',
+  authors: p.authors || '',
+  date: p.date || '',
+  pdf: p.pdf || '',
+  tags: p.tags || [],
+  tldr: p.tldr || '',
+  arxivId: p.arxivId || '',
+  slug: p.slug || '',
+}));
+
+const payload = {
+  papers: clientPapers,
+  generatedAt: new Date().toISOString(),
+};
+---
+
+<BaseLayout
+  title="论文库 · 节点网络"
+  description="浏览全部论文,按标签筛选,可视化节点网络查看论文之间的相似度关联。"
+>
+  <Navbar />
+
+  <main class="papers-page">
+    <header class="papers-hero">
+      <div class="papers-hero-inner">
+        <h1 class="papers-hero-title">📚 论文库 · 节点网络</h1>
+        <p class="papers-hero-sub">
+          浏览全部论文 · 按标签筛选 · 节点网络展示论文之间的相似度关联 ·
+          点节点打开右侧抽屉编辑自定义标签
+        </p>
+        <div class="papers-hero-stats">
+          <div class="papers-hero-stat">
+            <span class="papers-hero-stat-label">总篇数</span>
+            <span class="papers-hero-stat-value papers-hero-stat-value--accent">{papers.length}</span>
+          </div>
+          <div class="papers-hero-stat">
+            <span class="papers-hero-stat-label">今日新增</span>
+            <span class="papers-hero-stat-value">{todayCount}</span>
+          </div>
+          <div class="papers-hero-stat">
+            <span class="papers-hero-stat-label">唯一标签</span>
+            <span class="papers-hero-stat-value">{uniqueTagCount}</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <PaperLibrary />
+  </main>
+
+  <!-- 客户端数据载体 — PaperLibrary 客户端脚本从这里读数据 -->
+  <script id="papers-data" type="application/json" set:html={JSON.stringify(payload)} />
+
+  <Footer />
+</BaseLayout>

@@ -284,6 +284,69 @@
   margin: 0.5rem 0;
 }
 
+/* ===== 用户标签面板 ===== */
+.settings-user-tags-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.settings-user-tags-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+.settings-user-tags-kind {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+  color: var(--accent);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.settings-user-tags-label {
+  color: var(--fg);
+  font-weight: 500;
+}
+.settings-user-tags-count {
+  color: var(--fg-muted);
+  font-size: 0.82rem;
+  margin-left: auto;
+  font-family: var(--font-mono);
+}
+.settings-user-tags-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.settings-user-tags-status {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+.settings-user-tags-status[data-kind="ok"] { color: var(--accent); }
+.settings-user-tags-status[data-kind="error"] { color: #c33; }
+.settings-user-tags-status[data-kind="info"] { color: var(--fg-muted); }
+.settings-user-tags-empty {
+  color: var(--fg-subtle);
+  font-style: italic;
+  font-size: 0.9rem;
+  margin: 0.5rem 0;
+}
+
 .settings-model-actions {
   display: flex;
   align-items: center;

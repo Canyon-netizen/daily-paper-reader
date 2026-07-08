@@ -1,0 +1,52 @@
+/* 通用 toast 提示 — 用于 /papers/ 抽屉标签保存、Gist 同步失败等场景。
+   区别于 .hidden-toast(那个带撤销按钮,固定在底部居中,30s 倒计时),
+   这里只是单向通知,无撤销,3-5s 后自动淡出。 */
+
+.dpr-toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translate(-50%, 8px);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: 0.9rem;
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.15));
+  opacity: 0;
+  transition: opacity 200ms, transform 200ms;
+  pointer-events: none;
+  z-index: 240; /* 低于 hidden-toast (250) */
+  max-width: 80vw;
+}
+.dpr-toast--visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+.dpr-toast-icon {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.dpr-toast-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dpr-toast--info .dpr-toast-icon { color: var(--fg-muted); }
+.dpr-toast--ok {
+  border-color: #16a34a;
+}
+.dpr-toast--ok .dpr-toast-icon { color: #16a34a; }
+.dpr-toast--warn {
+  border-color: #d97706;
+}
+.dpr-toast--warn .dpr-toast-icon { color: #d97706; }
+.dpr-toast--error {
+  border-color: #dc2626;
+}
+.dpr-toast--error .dpr-toast-icon { color: #dc2626; }

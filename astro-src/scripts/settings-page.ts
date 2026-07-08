@@ -38,6 +38,13 @@ import {
   pullHiddenPapersFromGist,
   pushHiddenPapersToGist,
 } from './settings';
+import {
+  loadUserTags,
+  clearAllUserTags,
+  pullUserTagsFromGist,
+  pushUserTagsToGist,
+  type UserTag,
+} from '../lib/user-tags';
 
 // ============================================================================
 // DOM helpers
@@ -359,6 +366,8 @@ function resetAllSettings(): void {
     'dpr_hidden_papers_v1',
   ];
   for (const k of KEYS) try { localStorage.removeItem(k); } catch { /* ignore */ }
+  // userTags 也清掉 — 走 clearAllUserTags 走的是同样的 STORAGE_KEY
+  try { clearAllUserTags(); } catch { /* ignore */ }
   alert('已清空所有配置,刷新页面');
   location.reload();
 }
@@ -490,6 +499,9 @@ function init(): void {
 
   // --- 7. 已隐藏论文面板 ---
   initHiddenPanel();
+
+  // --- 8. 用户标签面板 ---
+  initUserTagsPanel();
 }
 
 // ============================================================================
@@ -633,6 +645,133 @@ function initHiddenPanel(): void {
     if (getGistToken() && getGistId()) {
       pushHiddenPapersToGist().catch((err) =>
         console.warn('[hidden-panel] Gist push failed:', err),
+      );
+    }
+  });
+}
+
+// ============================================================================
+// 用户标签面板 — 列出 localStorage 里所有论文的用户标签(按 (kind,label) 聚合展示),
+// 三个操作按钮:从 Gist 拉取 / 推到 Gist / 清空所有用户标签(二次确认)。
+// ============================================================================
+
+function setUserTagsStatus(msg: string, kind: 'info' | 'ok' | 'error' = 'info'): void {
+  const el = document.getElementById('user-tags-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.dataset.kind = kind;
+}
+
+/** 把 (kind, label) 在所有论文上的使用情况聚合为一个显示项。 */
+interface AggregatedTag {
+  kind: string;
+  label: string;
+  count: number;            // 用到该 (kind,label) 的论文数
+  arxivIds: string[];       // 涉及的 arxivId(前 5 个,超出显示 +N)
+  earliest: number;         // addedAt 最小值
+}
+
+function aggregateUserTags(map: Record<string, UserTag[]>): AggregatedTag[] {
+  const idx = new Map<string, AggregatedTag>();
+  for (const [arxivId, tags] of Object.entries(map)) {
+    for (const t of tags) {
+      const k = `${t.kind} ${t.label}`;
+      let agg = idx.get(k);
+      if (!agg) {
+        agg = { kind: t.kind, label: t.label, count: 0, arxivIds: [], earliest: t.addedAt };
+        idx.set(k, agg);
+      }
+      agg.count += 1;
+      if (agg.arxivIds.length < 5) agg.arxivIds.push(arxivId);
+      if (t.addedAt > 0 && (agg.earliest === 0 || t.addedAt < agg.earliest)) {
+        agg.earliest = t.addedAt;
+      }
+    }
+  }
+  return Array.from(idx.values()).sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind.localeCompare(b.kind);
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function renderUserTagsList(): void {
+  const map = loadUserTags();
+  const empty = document.getElementById('settings-user-tags-empty');
+  const list = document.getElementById('settings-user-tags-list');
+  if (!list) return;
+
+  const aggregated = aggregateUserTags(map);
+  if (aggregated.length === 0) {
+    if (empty) empty.hidden = false;
+    list.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  if (empty) empty.hidden = true;
+  list.hidden = false;
+  list.innerHTML = aggregated.map((a) => {
+    const more = a.count > a.arxivIds.length ? ` +${a.count - a.arxivIds.length}` : '';
+    return `<li class="settings-user-tags-item">
+      <span class="settings-user-tags-kind">${escapeHtml(a.kind)}</span>
+      <span class="settings-user-tags-label">${escapeHtml(a.label)}</span>
+      <span class="settings-user-tags-count">${a.count} 篇 · ${escapeHtml(a.arxivIds.join(', '))}${more}</span>
+    </li>`;
+  }).join('');
+}
+
+function initUserTagsPanel(): void {
+  const listEl = document.getElementById('settings-user-tags-list');
+  if (!listEl) return; // panel not on this page
+
+  renderUserTagsList();
+
+  $<HTMLButtonElement>('user-tags-pull-btn').addEventListener('click', async () => {
+    if (!getGistToken() || !getGistId()) {
+      setUserTagsStatus('✗ 未配置 Gist Token / Gist ID,无法拉取', 'error');
+      return;
+    }
+    setUserTagsStatus('正在从 Gist 拉取 ...', 'info');
+    const r = await pullUserTagsFromGist();
+    if (!r.ok) {
+      setUserTagsStatus(`✗ 拉取失败:${r.reason || '未知错误'}`, 'error');
+      return;
+    }
+    renderUserTagsList();
+    if (r.mergedCount && r.mergedCount > 0) {
+      setUserTagsStatus(`✓ 新合并 ${r.mergedCount} 条用户标签`, 'ok');
+    } else {
+      setUserTagsStatus('✓ 拉取完成,无新增条目', 'ok');
+    }
+  });
+
+  $<HTMLButtonElement>('user-tags-push-btn').addEventListener('click', async () => {
+    if (!getGistToken() || !getGistId()) {
+      setUserTagsStatus('✗ 未配置 Gist Token / Gist ID,无法推送', 'error');
+      return;
+    }
+    setUserTagsStatus('正在推送到 Gist ...', 'info');
+    const r = await pushUserTagsToGist();
+    if (!r.ok) {
+      setUserTagsStatus(`✗ 推送失败:${r.reason || '未知错误'}`, 'error');
+      return;
+    }
+    setUserTagsStatus(`✓ 已推送 ${r.writtenCount ?? 0} 条用户标签到 Gist`, 'ok');
+  });
+
+  $<HTMLButtonElement>('user-tags-clear-btn').addEventListener('click', () => {
+    const map = loadUserTags();
+    const n = Object.keys(map).length;
+    if (n === 0) {
+      setUserTagsStatus('本地已为空,无需清空', 'info');
+      return;
+    }
+    if (!confirm(`确定清除所有用户标签?(共 ${n} 篇论文,不可撤销)清除后 Gist 上的副本也会被覆盖。`)) return;
+    const removed = clearAllUserTags();
+    renderUserTagsList();
+    setUserTagsStatus(`✓ 已清空 ${removed} 篇论文的用户标签`, 'ok');
+    if (getGistToken() && getGistId()) {
+      pushUserTagsToGist().catch((err) =>
+        console.warn('[user-tags-panel] Gist push failed:', err),
       );
     }
   });

@@ -383,6 +383,8 @@ export async function listAllPapersByTag(): Promise<Map<string, PaperListItem[]>
 // ============================================================================
 // Re-exports — 老的 import 路径仍然有效。
 // 真正的 markdown 渲染逻辑位于 lib/markdown.ts;新代码请直接 import 它。
+// 注意:本文件上方已定义自己的 FigureEntry 接口(与 markdown.ts 的 FigureEntry 字段一致),
+// 不再重复 re-export,避免 TS2484(Export declaration conflicts)错误。
 // ============================================================================
 export { renderMarkdownBody } from './markdown';
-export type { RenderOptions, FigureEntry } from './markdown';
+export type { RenderOptions } from './markdown';
