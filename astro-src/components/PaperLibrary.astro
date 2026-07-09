@@ -207,17 +207,13 @@
     private drawerPaperId: string | null = null;
     private drawerUserTags: UserTag[] = [];
     private rowHeights = new Map<number, number>(); // index -> measured height
-    // 点云弹簧跟随:手动算邻居位移,不依赖 layout 重跑 / node.lock。
-    // dragState:grab 时记下被拖节点初始位置 + 邻居原始相对偏移,
-    // drag 每帧按 FOLLOW_STRENGTH 跟随位移 + 松手后 rAF 弹簧衰减。
-    // 不用 node.lock 是因为 lock 会让 grabbable() 返回 false,破坏 cytoscape
-    // 内部 drag 状态机(用户上轮反馈"拖动不了"就是这个原因)。
+    // 点云力导向:每帧对所有边算胡克回复力 + 锚点对 1-hop/2-hop 邻居的涟漪推力。
+    // 不用 layout 重跑、不用 node.lock(lock 会让 grabbable()=false,破坏 cytoscape
+    // 内部 drag 状态机 — 用户之前反馈"拖动不了"就是这个原因)。
     private dragState: {
       anchorId: string;
-      anchorStartPos: { x: number; y: number };
-      anchorLastPos: { x: number; y: number };
-      // 邻居原始相对偏移(被拖节点 ↔ 邻居),drag 期间保持不变,松手后弹簧回到这个锚点。
-      neighborOffsets: Map<string, { x: number; y: number }>;
+      // 抓取瞬间每条边的两端初始相对向量(松手后整图要弹回这个拓扑)。
+      edgeRestVectors: Array<{ a: string; b: string; dx: number; dy: number; len: number }>;
       rafId: number | null;
     } | null = null;
     private settleRafId: number | null = null;
@@ -533,7 +529,10 @@
         await this.recomputeAndRender();
       } catch (e) {
         console.error('[PaperLibrary] 节点网络加载失败:', e);
-        this.setGraphLoadingText('节点网络加载失败,刷新页面重试');
+        this.setGraphLoadingText(
+          `节点网络加载失败:${e instanceof Error ? e.message : String(e)}`
+        );
+        this.hideGraphLoading();
       }
     }
 
@@ -553,7 +552,16 @@
         this.setGraphLoadingText('节点网络计算失败');
         return;
       }
-      this.renderGraph(result.nodes, result.edges);
+      try {
+        this.renderGraph(result.nodes, result.edges);
+      } catch (e) {
+        console.error('[PaperLibrary] renderGraph 失败:', e);
+        this.setGraphLoadingText(
+          `节点网络渲染失败:${e instanceof Error ? e.message : String(e)}`
+        );
+        this.hideGraphLoading();
+        return;
+      }
     }
 
     private renderGraph(nodes: RelationNode[], edges: RelationEdge[]): void {
@@ -693,7 +701,17 @@
             style: { 'opacity': 0.95, 'z-index': 5 },
           },
         ],
-        layout: this.buildCoseLayout({ numIter: 1500, animate: false, fit: true, randomize: true }) as never,
+        layout: {
+          name: 'cose',
+          animate: false,
+          padding: 30,
+          nodeRepulsion: () => 6000,
+          idealEdgeLength: () => 70,
+          gravity: 0.25,
+          numIter: 1500,
+          fit: true,
+          randomize: true,
+        } as never,
       });
       // 节点点击 → 打开抽屉
       cy.on('tap', 'node', (evt: { target: { id: () => string } }) => {
@@ -707,28 +725,35 @@
         this.highlightListItem(evt.target.id(), false);
       });
 
-      // 点云弹簧跟随(手动算位移,不依赖 layout 重跑 / node.lock):
-      //   - grab       记下被拖节点初始位置 + 1-hop 邻居的原始相对偏移,
+      // 点云力导向(整图手动算位移,不依赖 layout 重跑 / node.lock):
+      //   - grab       记下每条边的两端初始相对向量 + 给所有节点打 __origPos,
       //                加高亮;不 lock(lock 会让 grabbable()=false,破坏 drag 状态机)。
-      //   - drag       rAF-throttled 调用 applySpringFollow(),
-      //                邻居按 FOLLOW_STRENGTH 跟随被拖节点位移。
-      //   - dragfree   启动 rAF 弹簧衰减,邻居平滑晃到最终位置,清高亮。
+      //   - drag       rAF-throttled 调用 applyForceSimulation(),
+      //                对每条边算胡克回复力 + 锚点对 1-hop/2-hop 邻居的主动推力
+      //                (涟漪效应:拖一个点,1-hop 跟着被推,2-hop 跟着 1-hop 走,远端靠弹簧拉动)。
+      //   - dragfree   启动 rAF 弹簧衰减,整图弹回初始拓扑,清高亮。
       // 目标节点类型 cytoscape 没暴露完整类型,这里用 any 处理。
       /* eslint-disable @typescript-eslint/no-explicit-any */
       cy.on('grab', 'node', (evt: { target: any }) => {
         const node = evt.target;
         const pos = node.position();
-        const offsets = new Map<string, { x: number; y: number }>();
-        // 1-hop 邻居:抓取时记下相对偏移,后续跟随保持这个拓扑关系。
-        node.neighborhood().nodes().forEach((n: any) => {
-          const np = n.position();
-          offsets.set(n.id(), { x: np.x - pos.x, y: np.y - pos.y });
+        // 抓取时记下每条边的两端初始相对向量 — 松手后整图用胡克力弹回这个拓扑。
+        // 同时给所有节点打 __origPos 标记(给锚点主动推力做"原位"参考)。
+        const edgeRestVectors: Array<{ a: string; b: string; dx: number; dy: number; len: number }> = [];
+        cy.edges().forEach((e: { source: () => { id: () => string; position: () => { x: number; y: number } }; target: () => { id: () => string; position: () => { x: number; y: number } } }) => {
+          const a = e.source();
+          const b = e.target();
+          const pa = a.position();
+          const pb = b.position();
+          edgeRestVectors.push({ a: a.id(), b: b.id(), dx: pb.x - pa.x, dy: pb.y - pa.y, len: Math.hypot(pb.x - pa.x, pb.y - pa.y) });
+        });
+        cy.nodes().forEach((n: { id: () => string; position: () => { x: number; y: number }; data: (k: string, v?: unknown) => unknown }) => {
+          const p = n.position();
+          n.data('__origPos', { x: p.x, y: p.y });
         });
         this.dragState = {
           anchorId: node.id(),
-          anchorStartPos: { x: pos.x, y: pos.y },
-          anchorLastPos: { x: pos.x, y: pos.y },
-          neighborOffsets: offsets,
+          edgeRestVectors,
           rafId: null,
         };
         node.addClass('is-dragging');
@@ -740,14 +765,14 @@
         this.dragState.rafId = requestAnimationFrame(() => {
           if (!this.dragState) return;
           this.dragState.rafId = null;
-          this.applySpringFollow();
+          this.applyForceSimulation();
         });
       });
       cy.on('dragfree', 'node', (evt: { target: any }) => {
         const node = evt.target;
         node.removeClass('is-dragging');
         node.neighborhood().removeClass('is-neighbor');
-        // 启动 rAF 弹簧衰减:邻居从当前位置平滑晃到锚点(被拖节点新位置 + 原始偏移)。
+        // 启动 rAF 弹簧衰减:整图用胡克力弹回初始拓扑。
         this.runSettleFrames();
       });
       /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -807,98 +832,163 @@
       cy.fit(undefined, 30);
     }
 
-    // ---------- 点云弹簧:手动算位移(无 layout 重跑 / 无 node.lock) ----------
-    /** 邻居瞬时跟随被拖节点位移的比例 — 0=不动,1=完全同步。 */
-    private static readonly FOLLOW_STRENGTH = 0.6;
+    // ---------- 点云力导向:整图弹簧 + 锚点主动推力 ----------
+    /** 胡克弹簧理想边长 — 节点间最终静止距离大致这个值。 */
+    private static readonly IDEAL_EDGE_LEN = 70;
+    /** 弹簧刚度 — 每帧把两端拉回/推到 IDEAL_EDGE_LEN 的比例。 */
+    private static readonly SPRING_K = 0.06;
+    /** 阻尼 — 防止松手后图来回震荡。 */
+    private static readonly DAMPING = 0.78;
+    /** 锚点对 1-hop 邻居的主动推力(每帧把邻居往外推一段距离)。 */
+    private static readonly ANCHOR_PUSH_1HOP = 12;
+    /** 1-hop 邻居把"推力"再传递给 2-hop 邻居的衰减系数 — 让拖动有"涟漪感"。 */
+    private static readonly ANCHOR_PUSH_2HOP = 0.35;
+    /** 锚点推力的最大有效距离(像素) — 远端节点不受主动推力影响,只受弹簧拉动。 */
+    private static readonly PUSH_RADIUS = 260;
     /** dragfree 后 rAF 弹簧衰减的总帧数 ≈ 500ms @ 60fps。 */
     private static readonly SETTLE_FRAMES = 30;
-    /** 弹簧衰减系数:每帧残余位移乘以这个值(0.85 ≈ 30 帧后剩余 ~0.2%)。 */
-    private static readonly SETTLE_DAMPING = 0.85;
 
     /**
-     * drag 期间每帧调用:把每个 1-hop 邻居按 FOLLOW_STRENGTH 跟随被拖节点的位移。
-     * cytoscape 默认 drag handler 已经把被拖节点本身移到鼠标位置,这里只接管邻居。
-     * 不调 layout、不调 lock,完全靠 node.position() 写。
+     * drag 期间每帧:对每条边算胡克回复力(把两端拉回理想距离),
+     * 再叠加被拖节点对 1-hop/2-hop 邻居的主动推力(涟漪效应)。
+     * cytoscape 自带 drag handler 已经把被拖节点本身移到鼠标位置,
+     * 这里只接管其他所有节点。
      */
-    private applySpringFollow(): void {
+    private applyForceSimulation(): void {
       const state = this.dragState;
       if (!state) return;
-      const cy = this.cy as { getElementById: (id: string) => any } | null;
+      // cytoscape Core 没有完整类型 — 用 any 透传,和 renderGraph 里的风格保持一致。
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const cy = this.cy as any;
       if (!cy) return;
       const anchor = cy.getElementById(state.anchorId);
       const anchorPos = anchor.position();
-      const dx = anchorPos.x - state.anchorLastPos.x;
-      const dy = anchorPos.y - state.anchorLastPos.y;
-      state.anchorLastPos = { x: anchorPos.x, y: anchorPos.y };
-      // 邻居跟随位移 = 锚点本帧增量 × FOLLOW_STRENGTH
-      const fdx = dx * PaperLibrary.FOLLOW_STRENGTH;
-      const fdy = dy * PaperLibrary.FOLLOW_STRENGTH;
-      state.neighborOffsets.forEach((_off, nid) => {
-        const n = cy.getElementById(nid);
-        if (!n || n.empty()) return;
-        const p = n.position();
-        n.position({ x: p.x + fdx, y: p.y + fdy });
+
+      // 1) 弹簧回复:遍历所有边,对每条边两端施加胡克力。
+      //    远端节点虽然不直接受锚点推力,但被它们的邻居拉一把,自然就跟着动了。
+      state.edgeRestVectors.forEach((e: { a: string; b: string; dx: number; dy: number; len: number }) => {
+        const na = cy.getElementById(e.a);
+        const nb = cy.getElementById(e.b);
+        if (!na || na.empty() || !nb || nb.empty()) return;
+        const pa = na.position();
+        const pb = nb.position();
+        const dx = pb.x - pa.x;
+        const dy = pb.y - pa.y;
+        const dist = Math.hypot(dx, dy) || 0.0001;
+        const displacement = dist - PaperLibrary.IDEAL_EDGE_LEN;
+        // 力的方向 = 从 a 指向 b;正值表示两端太远(要拉近)。
+        const fx = (dx / dist) * displacement * PaperLibrary.SPRING_K;
+        const fy = (dy / dist) * displacement * PaperLibrary.SPRING_K;
+        // a 或 b 可能是被拖节点 — 它被 cytoscape 锁在鼠标位置,跳过。
+        if (e.a !== state.anchorId) na.position({ x: pa.x + fx, y: pa.y + fy });
+        if (e.b !== state.anchorId) nb.position({ x: pb.x - fx, y: pb.y - fy });
       });
+
+      // 2) 锚点主动推力(涟漪):1-hop 邻居被锚点推开,2-hop 邻居被 1-hop 间接推开。
+      //    用 __origPos 算"原位"避免反馈循环。
+      const pushed: Map<string, { x: number; y: number }> = new Map();
+      anchor.neighborhood().nodes().forEach((n: any) => {
+        const np = n.position();
+        const orig = n.data('__origPos') as { x: number; y: number } | undefined;
+        if (!orig) return;
+        const ox = np.x - orig.x;
+        const oy = np.y - orig.y;
+        const curOffset = Math.hypot(ox, oy);
+        if (curOffset < 0.5) return;  // 没动就别推了,避免原地抖动
+        const ux = ox / curOffset;
+        const uy = oy / curOffset;
+        const force = Math.min(curOffset * 0.4, PaperLibrary.ANCHOR_PUSH_1HOP);
+        pushed.set(n.id(), { x: ux * force, y: uy * force });
+      });
+      // 1-hop 应用推力
+      pushed.forEach((force, nid) => {
+        const n = cy.getElementById(nid);
+        if (!n || n.empty() || nid === state.anchorId) return;
+        const p = n.position();
+        n.position({ x: p.x + force.x, y: p.y + force.y });
+      });
+      // 2-hop 邻居:从 1-hop 推力方向继承一份
+      anchor.neighborhood().nodes().forEach((oneHop: any) => {
+        const f1 = pushed.get(oneHop.id());
+        if (!f1) return;
+        oneHop.neighborhood().nodes().forEach((twoHop: any) => {
+          if (twoHop.id() === state.anchorId) return;
+          if (pushed.has(twoHop.id())) return;  // 跳过 1-hop
+          const orig = twoHop.data('__origPos') as { x: number; y: number } | undefined;
+          if (!orig) return;
+          const cur = twoHop.position();
+          const distFromOrig = Math.hypot(cur.x - orig.x, cur.y - orig.y);
+          if (distFromOrig > PaperLibrary.PUSH_RADIUS) return;
+          const f2 = { x: f1.x * PaperLibrary.ANCHOR_PUSH_2HOP, y: f1.y * PaperLibrary.ANCHOR_PUSH_2HOP };
+          twoHop.position({ x: cur.x + f2.x, y: cur.y + f2.y });
+        });
+      });
+      /* eslint-enable @typescript-eslint/no-explicit-any */
     }
 
     /**
-     * dragfree 后:邻居已经按 FOLLOW_STRENGTH 跟随了一段距离,松手后从当前位置
-     * 平滑晃到"被拖节点新位置 + 原始相对偏移"的最终锚点(弹簧回到拓扑稳定位置)。
-     * 用 rAF 时间步长计算位移幅度,SETTLE_FRAMES 后停止。
+     * dragfree 后:对每条边用胡克力把两端拉回初始相对位置。
+     * 没有锚点主动推力,纯弹簧回平衡 — 体感是"松手后整张图微微一抖回到拓扑"。
      */
     private runSettleFrames(): void {
       if (this.settleRafId !== null) cancelAnimationFrame(this.settleRafId);
-      // 截一张快照:每个邻居的当前位置 + 它应该去的最终锚点。
       const state = this.dragState;
-      const cy = this.cy as { getElementById: (id: string) => any } | null;
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      const cy = this.cy as any;
       if (!state || !cy) {
         this.dragState = null;
         return;
       }
-      const anchor = cy.getElementById(state.anchorId);
-      const anchorPos = anchor.position();
-      // 期望终态:每个邻居位置 = 锚点新位置 + 该邻居与锚点的原始相对偏移(100%,不是 FOLLOW_STRENGTH)
-      // 拖动期间邻居只跟了 60%,松手后弹簧把它再"拉一把"到 100% 跟随位置,
-      // 体感是"松手时邻居再晃一下,贴近锚点,然后稳下来"。
-      const targets = new Map<string, { cur: { x: number; y: number }; goal: { x: number; y: number } }>();
-      state.neighborOffsets.forEach((off, nid) => {
-        const n = cy.getElementById(nid);
-        if (!n || n.empty()) return;
-        const p = n.position();
-        targets.set(nid, {
-          cur: { x: p.x, y: p.y },
-          goal: {
-            x: anchorPos.x + off.x,
-            y: anchorPos.y + off.y,
-          },
-        });
+      // 截快照:每条边的"当前两端位置"+"目标 = 初始相对向量"。
+      type Snap = { curA: { x: number; y: number }; curB: { x: number; y: number }; restDx: number; restDy: number };
+      const snaps: Array<{ a: string; b: string; s: Snap }> = [];
+      state.edgeRestVectors.forEach((e) => {
+        const na = cy.getElementById(e.a);
+        const nb = cy.getElementById(e.b);
+        if (!na || na.empty() || !nb || nb.empty()) return;
+        const pa = na.position();
+        const pb = nb.position();
+        // rest 终态:以 a 当前位置为基准,加上初始两端向量 = b 的目标位置
+        snaps.push({ a: e.a, b: e.b, s: { curA: { x: pa.x, y: pa.y }, curB: { x: pb.x, y: pb.y }, restDx: e.dx, restDy: e.dy } });
       });
       this.dragState = null;
       let framesLeft = PaperLibrary.SETTLE_FRAMES;
       const tick = (): void => {
         if (framesLeft <= 0) {
-          // 最后一帧 snap 到精确目标,避免浮点漂移。
-          targets.forEach((t, nid) => {
-            const n = cy.getElementById(nid);
-            if (n && !n.empty()) n.position({ x: t.goal.x, y: t.goal.y });
+          // 最后一帧 snap 到精确目标 — 避免浮点漂移。
+          snaps.forEach(({ a, b, s }) => {
+            const na = cy.getElementById(a);
+            const nb = cy.getElementById(b);
+            if (na && !na.empty()) na.position({ x: s.curA.x, y: s.curA.y });
+            if (nb && !nb.empty()) nb.position({ x: s.curA.x + s.restDx, y: s.curA.y + s.restDy });
           });
           this.settleRafId = null;
           return;
         }
-        const k = 1 - PaperLibrary.SETTLE_DAMPING;  // 每帧位移 = 残余距离 × k
-        targets.forEach((t, nid) => {
-          const n = cy.getElementById(nid);
-          if (!n || n.empty()) return;
-          const stepX = (t.goal.x - t.cur.x) * k;
-          const stepY = (t.goal.y - t.cur.y) * k;
-          t.cur.x += stepX;
-          t.cur.y += stepY;
-          n.position({ x: t.cur.x, y: t.cur.y });
+        const k = 1 - PaperLibrary.DAMPING;
+        snaps.forEach(({ a, b, s }) => {
+          // b 的目标 = curA + (restDx, restDy);b 当前 = curB
+          const goalBx = s.curA.x + s.restDx;
+          const goalBy = s.curA.y + s.restDy;
+          const stepBx = (goalBx - s.curB.x) * k;
+          const stepBy = (goalBy - s.curB.y) * k;
+          s.curB.x += stepBx;
+          s.curB.y += stepBy;
+          // a 也做对称收敛(防止一端固定导致弹簧只动一端)
+          const stepAx = (s.curB.x - s.restDx - s.curA.x) * k * 0.5;
+          const stepAy = (s.curB.y - s.restDy - s.curA.y) * k * 0.5;
+          s.curA.x += stepAx;
+          s.curA.y += stepAy;
+          const na = cy.getElementById(a);
+          const nb = cy.getElementById(b);
+          if (na && !na.empty()) na.position({ x: s.curA.x, y: s.curA.y });
+          if (nb && !nb.empty()) nb.position({ x: s.curB.x, y: s.curB.y });
         });
         framesLeft--;
         this.settleRafId = requestAnimationFrame(tick);
       };
       this.settleRafId = requestAnimationFrame(tick);
+      /* eslint-enable @typescript-eslint/no-explicit-any */
     }
 
     /**
