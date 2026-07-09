@@ -164,6 +164,11 @@ function paintCardSelection(el: HTMLElement, selected: boolean): void {
 }
 
 function attachCard(card: HTMLElement): void {
+  // 白名单:仅当卡片显式声明 data-paper-card-selectable 才挂复选框。
+  // 早期版本对所有 [data-selectable-paper] 元素都挂,会让首页 Top 6 卡片
+  // 顶部也出现复选框,视觉噪音;现在只有「论文库」/「主题分类」等
+  // 真正用来"凑种子"的列表才显式开 opt-in。
+  if (card.dataset.paperCardSelectable === undefined) return;
   const arxivId = (card.dataset.selectablePaper || '').trim();
   if (!arxivId) return;
   // 同一张卡可能被多次扫描(动态注入 / SSR 重渲染),只挂一次

@@ -124,14 +124,7 @@ const latestDateLabel = latestDate
             return (
               <li class="paper-card"
                   data-rank={i + 1}
-                  data-arxiv-id={p.arxivId}
-                  data-selectable-paper={p.arxivId}
-                  data-selectable-title={p.title || ''}
-                  data-selectable-title-zh={p.title_zh || ''}
-                  data-selectable-tldr={p.tldr || ''}
-                  data-selectable-method=""
-                  data-selectable-result=""
-                  data-selectable-tags={(p.tags || []).join(',')}>
+                  data-arxiv-id={p.arxivId}>
                 <a href={href} class="paper-card-link">
                   <div class="paper-card-head">
                     <span class="paper-rank">#{i + 1}</span>
@@ -213,6 +206,7 @@ const latestDateLabel = latestDate
                     const href = `${base}/papers/${p.slug}/`;
                     return (
                       <li data-arxiv-id={p.arxivId}
+                          data-paper-card-selectable
                           data-selectable-paper={p.arxivId}
                           data-selectable-title={p.title || ''}
                           data-selectable-title-zh={p.title_zh || ''}
@@ -239,6 +233,7 @@ const latestDateLabel = latestDate
                         return (
                           <li class="tag-paper-rest" data-tag-rest hidden
                               data-arxiv-id={p.arxivId}
+                              data-paper-card-selectable
                               data-selectable-paper={p.arxivId}
                               data-selectable-title={p.title || ''}
                               data-selectable-title-zh={p.title_zh || ''}
