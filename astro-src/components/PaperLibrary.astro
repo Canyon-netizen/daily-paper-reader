@@ -207,6 +207,12 @@
     private drawerPaperId: string | null = null;
     private drawerUserTags: UserTag[] = [];
     private rowHeights = new Map<number, number>(); // index -> measured height
+    // 点云弹簧跟随:拖拽期间 rAF-throttled 重跑 cose,松手后再跑一次收敛。
+    // settleLayout 持有最近一次 re-run 的 layout 实例,切换算法 / 主题 / 节点重渲前要 stop,
+    // 避免 cytoscape 内部两个 layout 同时跑导致节点位置回跳。
+    private settleLayout: unknown = null;
+    private dragRafPending = false;
+    private draggingNodeId: string | null = null;
 
     constructor(host: HTMLElement) {
       this.host = host;
@@ -524,6 +530,9 @@
     }
 
     private async recomputeAndRender(): Promise<void> {
+      this.stopSettleLayout();
+      this.dragRafPending = false;
+      this.draggingNodeId = null;
       this.setGraphLoadingText('计算节点网络…');
       const opts: ComputeOptions = {
         algorithm: this.algoKind,
@@ -678,16 +687,7 @@
             style: { 'opacity': 0.95, 'z-index': 5 },
           },
         ],
-        layout: {
-          name: 'cose',
-          animate: false,
-          padding: 20,
-          nodeRepulsion: () => 6000,
-          idealEdgeLength: () => 70,
-          gravity: 0.25,
-          numIter: 1500,
-          fit: true,
-        } as never,
+        layout: this.buildCoseLayout({ numIter: 1500, animate: false, fit: true, randomize: true }) as never,
       });
       // 节点点击 → 打开抽屉
       cy.on('tap', 'node', (evt: { target: { id: () => string } }) => {
@@ -701,18 +701,37 @@
         this.highlightListItem(evt.target.id(), false);
       });
 
-      // 拖拽交互:拖动时高亮当前节点 + 邻居,松手后保留位置(不重跑 layout —
-      // cose 在拖动期间会持续迭代仿真邻居弹簧,松手若重跑 layout 反而把节点吸回理想位置)。
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const cyAny = cy as any;
-      cy.on('grab', 'node', (evt: { target: ReturnType<typeof cyAny['elements']> }) => {
-        evt.target.addClass('is-dragging');
-        evt.target.neighborhood().addClass('is-neighbor');
+      // 点云弹簧跟随:
+      //   - grab       锁定被拖节点,加高亮(防 layout 把"被拽的锚点"挪走)
+      //   - drag       rAF-throttle 重跑 cose 让邻居被弹簧拉过来(cose 是单次批处理 layout,
+      //                不是持续仿真 — 所以要靠重跑制造"持续"效果)
+      //   - dragfree   解锁 + 跑一次收敛让云停在新位置(animate:'end' 让最后一帧平滑)
+      /* eslint-disable @typescript-eslint/no-explicit-any */
+      cy.on('grab', 'node', (evt: { target: any }) => {
+        const node = evt.target;
+        node.lock();
+        this.draggingNodeId = node.id();
+        node.addClass('is-dragging');
+        node.neighborhood().addClass('is-neighbor');
       });
-      cy.on('dragfree', 'node', (evt: { target: ReturnType<typeof cyAny['elements']> }) => {
-        evt.target.removeClass('is-dragging');
-        evt.target.neighborhood().removeClass('is-neighbor');
+      cy.on('drag', 'node', () => {
+        if (this.dragRafPending) return;
+        this.dragRafPending = true;
+        requestAnimationFrame(() => {
+          this.dragRafPending = false;
+          this.rerunCose({ numIter: 80, animate: false, fit: false, randomize: false });
+        });
       });
+      cy.on('dragfree', 'node', (evt: { target: any }) => {
+        const node = evt.target;
+        node.unlock();
+        node.removeClass('is-dragging');
+        node.neighborhood().removeClass('is-neighbor');
+        this.draggingNodeId = null;
+        // 收敛:用 'end' 动画让最后一帧过渡,体感是"晃动后停下"。
+        this.rerunCose({ numIter: 400, animate: 'end', fit: false, randomize: false });
+      });
+      /* eslint-enable @typescript-eslint/no-explicit-any */
       this.cy = cy;
       this.hideGraphLoading();
       this.updateGraphMeta(edges.length, nodes.length);
@@ -765,7 +784,61 @@
     private fitGraph(): void {
       const cy = this.cy as { fit: (p?: unknown, padding?: number) => void } | null;
       if (!cy) return;
+      this.stopSettleLayout();
       cy.fit(undefined, 30);
+    }
+
+    // ---------- 点云弹簧:layout 工厂 + 重跑 ----------
+    /**
+     * 构造一个 cose layout 配置对象。
+     * 不同阶段用不同 numIter / animate / fit / randomize:
+     *   - init     1500  iter, randomize, fit → 首次布到合适位置
+     *   - drag     80   iter, no randomize, no fit → 拖动期间快速弹簧跟随
+     *   - settle   400  iter, no randomize, animate:'end' → 松手后收敛到新平衡
+     */
+    private buildCoseLayout(opts: {
+      numIter: number;
+      animate: boolean | 'end';
+      fit: boolean;
+      randomize: boolean;
+    }): Record<string, unknown> {
+      return {
+        name: 'cose',
+        animate: opts.animate,
+        randomize: opts.randomize,
+        padding: 20,
+        nodeRepulsion: () => 6000,
+        idealEdgeLength: () => 70,
+        gravity: 0.25,
+        numIter: opts.numIter,
+        fit: opts.fit,
+      };
+    }
+
+    /** 重跑一次 cose 并把 layout 实例记下来,用于后续 stop。 */
+    private rerunCose(opts: {
+      numIter: number;
+      animate: boolean | 'end';
+      fit: boolean;
+      randomize: boolean;
+    }): void {
+      const cy = this.cy as { layout: (cfg: unknown) => { run: () => void; stop: () => void } } | null;
+      if (!cy) return;
+      // 重入保护:如果上一次重跑还没完,先 stop 它再起新的,
+      // 否则 cytoscape 内部两个 layout 同时跑会导致节点位置跳变。
+      this.stopSettleLayout();
+      const layout = cy.layout(this.buildCoseLayout(opts));
+      this.settleLayout = layout;
+      layout.run();
+    }
+
+    /** 停止当前正在跑的 settle layout;切换算法 / 主题 / fit 时调用,防残留。 */
+    private stopSettleLayout(): void {
+      const layout = this.settleLayout as { stop?: () => void } | null;
+      if (layout && typeof layout.stop === 'function') {
+        try { layout.stop(); } catch { /* cytoscape 在 layout 跑完时 stop 是 no-op,吞掉 */ }
+      }
+      this.settleLayout = null;
     }
 
     // ---------- 抽屉 ----------
