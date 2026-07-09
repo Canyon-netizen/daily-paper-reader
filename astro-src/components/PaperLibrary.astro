@@ -207,12 +207,20 @@
     private drawerPaperId: string | null = null;
     private drawerUserTags: UserTag[] = [];
     private rowHeights = new Map<number, number>(); // index -> measured height
-    // 点云弹簧跟随:拖拽期间 rAF-throttled 重跑 cose,松手后再跑一次收敛。
-    // settleLayout 持有最近一次 re-run 的 layout 实例,切换算法 / 主题 / 节点重渲前要 stop,
-    // 避免 cytoscape 内部两个 layout 同时跑导致节点位置回跳。
-    private settleLayout: unknown = null;
-    private dragRafPending = false;
-    private draggingNodeId: string | null = null;
+    // 点云弹簧跟随:手动算邻居位移,不依赖 layout 重跑 / node.lock。
+    // dragState:grab 时记下被拖节点初始位置 + 邻居原始相对偏移,
+    // drag 每帧按 FOLLOW_STRENGTH 跟随位移 + 松手后 rAF 弹簧衰减。
+    // 不用 node.lock 是因为 lock 会让 grabbable() 返回 false,破坏 cytoscape
+    // 内部 drag 状态机(用户上轮反馈"拖动不了"就是这个原因)。
+    private dragState: {
+      anchorId: string;
+      anchorStartPos: { x: number; y: number };
+      anchorLastPos: { x: number; y: number };
+      // 邻居原始相对偏移(被拖节点 ↔ 邻居),drag 期间保持不变,松手后弹簧回到这个锚点。
+      neighborOffsets: Map<string, { x: number; y: number }>;
+      rafId: number | null;
+    } | null = null;
+    private settleRafId: number | null = null;
 
     constructor(host: HTMLElement) {
       this.host = host;
@@ -530,9 +538,7 @@
     }
 
     private async recomputeAndRender(): Promise<void> {
-      this.stopSettleLayout();
-      this.dragRafPending = false;
-      this.draggingNodeId = null;
+      this.cancelDragAndSettle();
       this.setGraphLoadingText('计算节点网络…');
       const opts: ComputeOptions = {
         algorithm: this.algoKind,
@@ -701,35 +707,48 @@
         this.highlightListItem(evt.target.id(), false);
       });
 
-      // 点云弹簧跟随:
-      //   - grab       锁定被拖节点,加高亮(防 layout 把"被拽的锚点"挪走)
-      //   - drag       rAF-throttle 重跑 cose 让邻居被弹簧拉过来(cose 是单次批处理 layout,
-      //                不是持续仿真 — 所以要靠重跑制造"持续"效果)
-      //   - dragfree   解锁 + 跑一次收敛让云停在新位置(animate:'end' 让最后一帧平滑)
+      // 点云弹簧跟随(手动算位移,不依赖 layout 重跑 / node.lock):
+      //   - grab       记下被拖节点初始位置 + 1-hop 邻居的原始相对偏移,
+      //                加高亮;不 lock(lock 会让 grabbable()=false,破坏 drag 状态机)。
+      //   - drag       rAF-throttled 调用 applySpringFollow(),
+      //                邻居按 FOLLOW_STRENGTH 跟随被拖节点位移。
+      //   - dragfree   启动 rAF 弹簧衰减,邻居平滑晃到最终位置,清高亮。
+      // 目标节点类型 cytoscape 没暴露完整类型,这里用 any 处理。
       /* eslint-disable @typescript-eslint/no-explicit-any */
       cy.on('grab', 'node', (evt: { target: any }) => {
         const node = evt.target;
-        node.lock();
-        this.draggingNodeId = node.id();
+        const pos = node.position();
+        const offsets = new Map<string, { x: number; y: number }>();
+        // 1-hop 邻居:抓取时记下相对偏移,后续跟随保持这个拓扑关系。
+        node.neighborhood().nodes().forEach((n: any) => {
+          const np = n.position();
+          offsets.set(n.id(), { x: np.x - pos.x, y: np.y - pos.y });
+        });
+        this.dragState = {
+          anchorId: node.id(),
+          anchorStartPos: { x: pos.x, y: pos.y },
+          anchorLastPos: { x: pos.x, y: pos.y },
+          neighborOffsets: offsets,
+          rafId: null,
+        };
         node.addClass('is-dragging');
         node.neighborhood().addClass('is-neighbor');
       });
       cy.on('drag', 'node', () => {
-        if (this.dragRafPending) return;
-        this.dragRafPending = true;
-        requestAnimationFrame(() => {
-          this.dragRafPending = false;
-          this.rerunCose({ numIter: 80, animate: false, fit: false, randomize: false });
+        if (!this.dragState) return;
+        if (this.dragState.rafId !== null) return;        // rAF-throttle:每帧最多一次
+        this.dragState.rafId = requestAnimationFrame(() => {
+          if (!this.dragState) return;
+          this.dragState.rafId = null;
+          this.applySpringFollow();
         });
       });
       cy.on('dragfree', 'node', (evt: { target: any }) => {
         const node = evt.target;
-        node.unlock();
         node.removeClass('is-dragging');
         node.neighborhood().removeClass('is-neighbor');
-        this.draggingNodeId = null;
-        // 收敛:用 'end' 动画让最后一帧过渡,体感是"晃动后停下"。
-        this.rerunCose({ numIter: 400, animate: 'end', fit: false, randomize: false });
+        // 启动 rAF 弹簧衰减:邻居从当前位置平滑晃到锚点(被拖节点新位置 + 原始偏移)。
+        this.runSettleFrames();
       });
       /* eslint-enable @typescript-eslint/no-explicit-any */
       this.cy = cy;
@@ -784,61 +803,117 @@
     private fitGraph(): void {
       const cy = this.cy as { fit: (p?: unknown, padding?: number) => void } | null;
       if (!cy) return;
-      this.stopSettleLayout();
+      this.cancelDragAndSettle();
       cy.fit(undefined, 30);
     }
 
-    // ---------- 点云弹簧:layout 工厂 + 重跑 ----------
+    // ---------- 点云弹簧:手动算位移(无 layout 重跑 / 无 node.lock) ----------
+    /** 邻居瞬时跟随被拖节点位移的比例 — 0=不动,1=完全同步。 */
+    private static readonly FOLLOW_STRENGTH = 0.6;
+    /** dragfree 后 rAF 弹簧衰减的总帧数 ≈ 500ms @ 60fps。 */
+    private static readonly SETTLE_FRAMES = 30;
+    /** 弹簧衰减系数:每帧残余位移乘以这个值(0.85 ≈ 30 帧后剩余 ~0.2%)。 */
+    private static readonly SETTLE_DAMPING = 0.85;
+
     /**
-     * 构造一个 cose layout 配置对象。
-     * 不同阶段用不同 numIter / animate / fit / randomize:
-     *   - init     1500  iter, randomize, fit → 首次布到合适位置
-     *   - drag     80   iter, no randomize, no fit → 拖动期间快速弹簧跟随
-     *   - settle   400  iter, no randomize, animate:'end' → 松手后收敛到新平衡
+     * drag 期间每帧调用:把每个 1-hop 邻居按 FOLLOW_STRENGTH 跟随被拖节点的位移。
+     * cytoscape 默认 drag handler 已经把被拖节点本身移到鼠标位置,这里只接管邻居。
+     * 不调 layout、不调 lock,完全靠 node.position() 写。
      */
-    private buildCoseLayout(opts: {
-      numIter: number;
-      animate: boolean | 'end';
-      fit: boolean;
-      randomize: boolean;
-    }): Record<string, unknown> {
-      return {
-        name: 'cose',
-        animate: opts.animate,
-        randomize: opts.randomize,
-        padding: 20,
-        nodeRepulsion: () => 6000,
-        idealEdgeLength: () => 70,
-        gravity: 0.25,
-        numIter: opts.numIter,
-        fit: opts.fit,
-      };
-    }
-
-    /** 重跑一次 cose 并把 layout 实例记下来,用于后续 stop。 */
-    private rerunCose(opts: {
-      numIter: number;
-      animate: boolean | 'end';
-      fit: boolean;
-      randomize: boolean;
-    }): void {
-      const cy = this.cy as { layout: (cfg: unknown) => { run: () => void; stop: () => void } } | null;
+    private applySpringFollow(): void {
+      const state = this.dragState;
+      if (!state) return;
+      const cy = this.cy as { getElementById: (id: string) => any } | null;
       if (!cy) return;
-      // 重入保护:如果上一次重跑还没完,先 stop 它再起新的,
-      // 否则 cytoscape 内部两个 layout 同时跑会导致节点位置跳变。
-      this.stopSettleLayout();
-      const layout = cy.layout(this.buildCoseLayout(opts));
-      this.settleLayout = layout;
-      layout.run();
+      const anchor = cy.getElementById(state.anchorId);
+      const anchorPos = anchor.position();
+      const dx = anchorPos.x - state.anchorLastPos.x;
+      const dy = anchorPos.y - state.anchorLastPos.y;
+      state.anchorLastPos = { x: anchorPos.x, y: anchorPos.y };
+      // 邻居跟随位移 = 锚点本帧增量 × FOLLOW_STRENGTH
+      const fdx = dx * PaperLibrary.FOLLOW_STRENGTH;
+      const fdy = dy * PaperLibrary.FOLLOW_STRENGTH;
+      state.neighborOffsets.forEach((_off, nid) => {
+        const n = cy.getElementById(nid);
+        if (!n || n.empty()) return;
+        const p = n.position();
+        n.position({ x: p.x + fdx, y: p.y + fdy });
+      });
     }
 
-    /** 停止当前正在跑的 settle layout;切换算法 / 主题 / fit 时调用,防残留。 */
-    private stopSettleLayout(): void {
-      const layout = this.settleLayout as { stop?: () => void } | null;
-      if (layout && typeof layout.stop === 'function') {
-        try { layout.stop(); } catch { /* cytoscape 在 layout 跑完时 stop 是 no-op,吞掉 */ }
+    /**
+     * dragfree 后:邻居已经按 FOLLOW_STRENGTH 跟随了一段距离,松手后从当前位置
+     * 平滑晃到"被拖节点新位置 + 原始相对偏移"的最终锚点(弹簧回到拓扑稳定位置)。
+     * 用 rAF 时间步长计算位移幅度,SETTLE_FRAMES 后停止。
+     */
+    private runSettleFrames(): void {
+      if (this.settleRafId !== null) cancelAnimationFrame(this.settleRafId);
+      // 截一张快照:每个邻居的当前位置 + 它应该去的最终锚点。
+      const state = this.dragState;
+      const cy = this.cy as { getElementById: (id: string) => any } | null;
+      if (!state || !cy) {
+        this.dragState = null;
+        return;
       }
-      this.settleLayout = null;
+      const anchor = cy.getElementById(state.anchorId);
+      const anchorPos = anchor.position();
+      // 期望终态:每个邻居位置 = 锚点新位置 + 该邻居与锚点的原始相对偏移(100%,不是 FOLLOW_STRENGTH)
+      // 拖动期间邻居只跟了 60%,松手后弹簧把它再"拉一把"到 100% 跟随位置,
+      // 体感是"松手时邻居再晃一下,贴近锚点,然后稳下来"。
+      const targets = new Map<string, { cur: { x: number; y: number }; goal: { x: number; y: number } }>();
+      state.neighborOffsets.forEach((off, nid) => {
+        const n = cy.getElementById(nid);
+        if (!n || n.empty()) return;
+        const p = n.position();
+        targets.set(nid, {
+          cur: { x: p.x, y: p.y },
+          goal: {
+            x: anchorPos.x + off.x,
+            y: anchorPos.y + off.y,
+          },
+        });
+      });
+      this.dragState = null;
+      let framesLeft = PaperLibrary.SETTLE_FRAMES;
+      const tick = (): void => {
+        if (framesLeft <= 0) {
+          // 最后一帧 snap 到精确目标,避免浮点漂移。
+          targets.forEach((t, nid) => {
+            const n = cy.getElementById(nid);
+            if (n && !n.empty()) n.position({ x: t.goal.x, y: t.goal.y });
+          });
+          this.settleRafId = null;
+          return;
+        }
+        const k = 1 - PaperLibrary.SETTLE_DAMPING;  // 每帧位移 = 残余距离 × k
+        targets.forEach((t, nid) => {
+          const n = cy.getElementById(nid);
+          if (!n || n.empty()) return;
+          const stepX = (t.goal.x - t.cur.x) * k;
+          const stepY = (t.goal.y - t.cur.y) * k;
+          t.cur.x += stepX;
+          t.cur.y += stepY;
+          n.position({ x: t.cur.x, y: t.cur.y });
+        });
+        framesLeft--;
+        this.settleRafId = requestAnimationFrame(tick);
+      };
+      this.settleRafId = requestAnimationFrame(tick);
+    }
+
+    /**
+     * 取消拖拽中 / 弹簧衰减中的状态:切换算法 / 主题 / fit 时调用,防残留 rAF。
+     * 节点位置不重置(交给重新渲染的 renderGraph 用 init layout 重新布)。
+     */
+    private cancelDragAndSettle(): void {
+      if (this.dragState && this.dragState.rafId !== null) {
+        cancelAnimationFrame(this.dragState.rafId);
+      }
+      this.dragState = null;
+      if (this.settleRafId !== null) {
+        cancelAnimationFrame(this.settleRafId);
+        this.settleRafId = null;
+      }
     }
 
     // ---------- 抽屉 ----------
