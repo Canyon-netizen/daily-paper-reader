@@ -505,16 +505,17 @@
     private async loadAndRenderGraph(): Promise<void> {
       try {
         this.setGraphLoadingText('加载 cytoscape.js…');
-        // cytoscape 没有列在 dependencies(可选依赖,运行时通过 dynamic import 拉 CDN)。
-        // 用变量名拼模块 specifier,绕开 Rollup 静态分析(避免 build 报"无法解析 cytoscape")。
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const modName: string = 'cytoscape';
-        // @ts-ignore — cytoscape 模块无类型声明
-        this.cytoscapeMod = await import(/* @vite-ignore */ modName);
+        // cytoscape 是 dependencies 里的常驻依赖 — 静态 import 让 Vite 把它打进
+        // 当前页面的 chunk(分块懒加载:仅在 /papers/ 这条路由下被请求)。
+        // 之前用的 /* @vite-ignore */ + 变量 specifier 写法会被原样传到运行时,
+        // 浏览器对裸模块名 'cytoscape' 没有解析机制 → 直接 reject 进入 catch,
+        // 现象就是右侧一直停留在 "cytoscape.js 加载失败" 的 loading 态。
+        const cytoscapeMod = await import('cytoscape');
+        this.cytoscapeMod = cytoscapeMod;
         await this.recomputeAndRender();
       } catch (e) {
-        console.error('[PaperLibrary] cytoscape 加载失败:', e);
-        this.setGraphLoadingText('cytoscape.js 加载失败,请检查网络');
+        console.error('[PaperLibrary] 节点网络加载失败:', e);
+        this.setGraphLoadingText('节点网络加载失败,刷新页面重试');
       }
     }
 
