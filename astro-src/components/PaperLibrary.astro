@@ -619,6 +619,26 @@
             },
           },
           {
+            selector: 'node.is-dragging',
+            style: {
+              'border-width': 3,
+              'border-color': '#ff6b35',
+              'width': 22,
+              'height': 22,
+              'opacity': 1,
+              'z-index': 11,
+            },
+          },
+          {
+            selector: 'node.is-neighbor',
+            style: {
+              'border-width': 2,
+              'border-color': '#ff6b35',
+              'opacity': 1,
+              'z-index': 8,
+            },
+          },
+          {
             selector: 'node.dim',
             style: { 'opacity': 0.15 },
           },
@@ -679,6 +699,19 @@
       });
       cy.on('mouseout', 'node', (evt: { target: { id: () => string } }) => {
         this.highlightListItem(evt.target.id(), false);
+      });
+
+      // 拖拽交互:拖动时高亮当前节点 + 邻居,松手后保留位置(不重跑 layout —
+      // cose 在拖动期间会持续迭代仿真邻居弹簧,松手若重跑 layout 反而把节点吸回理想位置)。
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cyAny = cy as any;
+      cy.on('grab', 'node', (evt: { target: ReturnType<typeof cyAny['elements']> }) => {
+        evt.target.addClass('is-dragging');
+        evt.target.neighborhood().addClass('is-neighbor');
+      });
+      cy.on('dragfree', 'node', (evt: { target: ReturnType<typeof cyAny['elements']> }) => {
+        evt.target.removeClass('is-dragging');
+        evt.target.neighborhood().removeClass('is-neighbor');
       });
       this.cy = cy;
       this.hideGraphLoading();
