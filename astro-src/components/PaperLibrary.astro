@@ -510,8 +510,12 @@
         // 之前用的 /* @vite-ignore */ + 变量 specifier 写法会被原样传到运行时,
         // 浏览器对裸模块名 'cytoscape' 没有解析机制 → 直接 reject 进入 catch,
         // 现象就是右侧一直停留在 "cytoscape.js 加载失败" 的 loading 态。
-        const cytoscapeMod = await import('cytoscape');
-        this.cytoscapeMod = cytoscapeMod;
+        // cytoscape ESM 入口 (dist/cytoscape.esm.mjs) 是 `export { cytoscape as default }`,
+        // 所以 Vite 拿到的 namespace 是 { default: cytoscape },函数本体在 .default 上 —
+        // 直接当函数调用会报 "cyMod is not a function"。这里 unwrap 一下,
+        // 对 CJS 互操作形态 (.default === mod) 也兼容。
+        const cytoscapeNs = await import('cytoscape');
+        this.cytoscapeMod = (cytoscapeNs as unknown as { default: unknown }).default ?? cytoscapeNs;
         await this.recomputeAndRender();
       } catch (e) {
         console.error('[PaperLibrary] 节点网络加载失败:', e);
