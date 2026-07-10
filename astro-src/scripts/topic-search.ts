@@ -1024,7 +1024,40 @@ function renderCandStage(): void {
   summarizeBtn.disabled = selected === 0;
 
   // 按 subq 分组渲染 — 即使某个子方向 0 命中也要显示,这样用户能看到"哪些没搜到"
-  wrap.innerHTML = current.subqs.filter((q) => current!.candidatesBySubq[q.id] !== undefined).map((q) => {
+  // 渲染 seeds group(独立于子方向,带 [📚 参考论文] 徽章表示这是用户主动选的)
+  const seedsRendered = (() => {
+    const list = current!.candidatesBySubq['__seeds__'] || [];
+    if (list.length === 0) return '';
+    const hidden = new Set(loadHiddenPapers());
+    const visList = list.filter((c) => !hidden.has(c.arxivId));
+    const sel = visList.filter((c) => c.selected).length;
+    if (visList.length === 0) return '';
+    return `
+      <div class="topic-candidate-group topic-candidate-group--seeds" data-subq="__seeds__">
+        <div class="topic-candidate-group-header">
+          <div class="topic-candidate-group-title">
+            <span class="topic-candidate-group-badge topic-candidate-group-badge--seeds" title="你在「添加参考论文」里选的论文">📚 参考论文</span>
+          </div>
+          <div class="topic-candidate-group-meta">${sel}/${visList.length} 已选 · <a href="#" data-act="toggle-all-seeds">${sel === visList.length ? '全不选' : '全选'}</a></div>
+        </div>
+        <div class="topic-candidate-list">
+          ${visList.map((c) => `
+            <div class="topic-candidate-item ${c.selected ? 'selected' : 'topic-candidate-item--seed' : ''}" data-arxiv="${escapeHtml(c.arxivId)}">
+              <input type="checkbox" ${c.selected ? 'checked' : ''} aria-label="勾选论文 ${escapeHtml(c.entry.title)}" />
+              <div class="topic-candidate-main">
+                <div class="topic-candidate-title">${escapeHtml(c.entry.title)}</div>
+                <div class="topic-candidate-meta">arXiv:${escapeHtml(c.arxivId)} <span class="topic-candidate-seed-tag">📚 你选的</span></div>
+                <div class="topic-candidate-summary">${escapeHtml(c.entry.summary)}</div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+  })();
+  wrap.innerHTML =
+    current.subqs
+      .filter((q) => current!.candidatesBySubq[q.id] !== undefined)
+      .map((q) => {
     const allList = current!.candidatesBySubq[q.id] || [];
     // 过滤已隐藏论文(用户在详情页点过隐藏的)。这里读一次 localStorage,
     // 避免对每条 candidate 单独读(每次 loadHiddenPapers 都 parse JSON,O(n))。
@@ -1059,7 +1092,7 @@ function renderCandStage(): void {
         `}
       </div>
     `;
-  }).join('');
+  }).join('') + seedsRendered;
 
   // 绑定
   wrap.querySelectorAll<HTMLElement>('.topic-candidate-item').forEach((row) => {
@@ -1278,7 +1311,7 @@ async function sendChat(card: HTMLElement): Promise<void> {
 // 阶段 5:主题报告渲染
 // ============================================================================
 
-function renderReportToHTML(r: TopicReport): string {
+function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionItem[]): string {
   const dimsHTML = r.dimensions
     .map(
       (d) => `
@@ -1312,7 +1345,26 @@ function renderReportToHTML(r: TopicReport): string {
       : `<section class="topic-report-section"><h3>${escapeHtml(title)}</h3><ul>${items
           .map((s) => `<li>${escapeHtml(s)}</li>`)
           .join('')}</ul></section>`;
+  // 用户在 modal 主动选的参考论文 — 在主题总览之前独立罗列,只做索引层(不参与
+  // LLM 报告归纳),让用户清楚"这 N 篇是参考论文,主题报告基于 arXiv 搜 + 这 N 篇"
+  const seedsHTML = referenceSeeds && referenceSeeds.length > 0
+    ? `<section class="topic-report-seeds">
+        <h3>📚 参考论文 (${referenceSeeds.length})</h3>
+        <ul class="topic-report-seeds-list">
+          ${referenceSeeds
+            .map(
+              (s) => `<li>
+                <a href="/papers/${encodeURIComponent(s.arxivId)}/" target="_blank" rel="noopener">arXiv:${escapeHtml(s.arxivId)}</a>
+                — ${escapeHtml(s.title)}
+                ${s.tldr ? `<div style="color:var(--fg-subtle);font-size:0.85rem;margin-top:0.2rem">${escapeHtml(s.tldr.slice(0, 220))}${s.tldr.length > 220 ? '…' : ''}</div>` : ''}
+              </li>`,
+            )
+            .join('')}
+        </ul>
+      </section>`
+    : '';
   return `
+    ${seedsHTML}
     <section class="topic-report-section">
       <h3>主题总览</h3>
       <p>${escapeHtml(r.overview).replace(/\n/g, '<br>')}</p>
@@ -1351,9 +1403,14 @@ function renderReportStage(): void {
   const incNote = r.incrementallyAddedArxivIds?.length
     ? ` · 本次 +${r.incrementallyAddedArxivIds.length}`
     : '';
-  meta.textContent = `已生成 · ${r.dimensions.length} 个维度 · ${r.relatedArxivIds.length} 篇${incNote}`;
+  // 从 selection 过滤出当前会话 referenceSeedArxivIds 包含的论文,作为报告里
+  // "参考论文" group 的输入(用户在 modal 主动选的,不被 LLM 归纳)
+  const refIds = new Set(current.referenceSeedArxivIds ?? []);
+  const refSeeds = refIds.size > 0 ? loadSelection().filter((s) => refIds.has(canonicalId(s.arxivId))) : [];
+  const refNote = refSeeds.length > 0 ? ` · ${refSeeds.length} 篇参考论文` : '';
+  meta.textContent = `已生成 · ${r.dimensions.length} 个维度 · ${r.relatedArxivIds.length} 篇${incNote}${refNote}`;
   copyBtn.disabled = false;
-  out.innerHTML = renderReportToHTML(r);
+  out.innerHTML = renderReportToHTML(r, refSeeds);
 }
 
 function renderAll(): void {
@@ -1500,6 +1557,38 @@ async function doSearch(): Promise<void> {
   } else {
     setStatus(`✓ ${subqsHit}/${subqsSearched} 个子方向命中,共 ${totalCands} 篇候选`);
     setTimeout(clearStatus, 1500);
+  }
+  // 把当前会话里用户主动选的"参考论文"作为虚拟候选注入到 candidatesBySubq['__seeds__']
+  // — 用户手动从 modal 加进来的论文,默认勾上,渲染时打 [📚 参考论文] 徽章,
+  // 最终进入阶段 4 总结 + 阶段 5 报告。用 '__seeds__' 当 key 区分于子方向 group,
+  // 阶段 4 在 doSummarize 选 candidates 时也读取。
+  if (current.referenceSeedArxivIds && current.referenceSeedArxivIds.length > 0) {
+    const seeds = loadSelection();
+    const seedCands: Candidate[] = seeds
+      .filter((s) => current!.referenceSeedArxivIds!.includes(canonicalId(s.arxivId)))
+      .map((s) => {
+        // 构造一个虚拟 ArxivEntry。论文库里的 SelectionItem 是带 selection
+        // 摘要的; arXiv API 那条代码路径走 fetchArxivPdf + callLLM(SYSTEM_PROMPT
+        // 单篇 prompt), entry 字段至少要 arxivId / title / summary 齐全。
+        const summary =
+          [s.method, s.result].filter(Boolean).join('\n').trim() ||
+          s.tldr ||
+          '(参考论文无摘要,只能基于标题与 TLDR 总结)';
+        const entry: ArxivEntry = {
+          id: `https://arxiv.org/abs/${s.arxivId}`,
+          arxivId: s.arxivId,
+          title: s.title,
+          authors: [],
+          summary,
+          published: '',
+          updated: '',
+          pdfUrl: `https://arxiv.org/pdf/${s.arxivId}.pdf`,
+        };
+        return { arxivId: s.arxivId, entry, selected: true };
+      });
+    current.candidatesBySubq['__seeds__'] = seedCands;
+    // seeds 默认选上后, 用户可以手动取消勾选(走与 arXiv 候选一样的 UI)
+    // 这里注意 selected 已经设 true, 后面用户改 UI 会改同一个 selected
   }
   ($<HTMLButtonElement>('search-btn')).disabled = false;
   ($('stage-candidates') as HTMLDetailsElement).open = true;
