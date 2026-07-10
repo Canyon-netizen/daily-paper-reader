@@ -15,7 +15,7 @@
 // 该类型从 ./paper 导入,保证 schema 一致性。
 
 import type { PaperListItem } from './paper';
-import { loadSettings, LLM_DEFAULTS } from '../scripts/settings';
+import { loadSettings, LLM_DEFAULTS } from './storage';
 
 // ============================================================================
 // 类型
