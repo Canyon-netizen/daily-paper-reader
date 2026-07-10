@@ -101,7 +101,9 @@ def main() -> None:
     if not args.skip_fetch:
         fetch_cmd = [
             python,
-            os.path.join(SCRIPT_DIR, "fetchers", "fetch_biorxiv.py"),
+            os.path.join(SCRIPT_DIR, "fetchers", "fetch_biorxiv_family.py"),
+            "--source",
+            "biorxiv",
             "--days",
             str(max(int(args.days or 1), 1)),
             "--chunk-days",

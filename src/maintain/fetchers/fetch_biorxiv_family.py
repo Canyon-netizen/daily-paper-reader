@@ -23,11 +23,32 @@ from src.source_config import load_config_with_source_migration
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
-CRAWL_STATE_FILE = os.path.join(ROOT_DIR, "archive", "medrxiv_crawl_state.json")
-SEEN_IDS_FILE = os.path.join(ROOT_DIR, "archive", "medrxiv_seen.json")
+
 DATE_TOKEN_RE = re.compile(r"^\d{8}$")
 RANGE_TOKEN_RE = re.compile(r"^\d{8}-\d{8}$")
-API_BASE = "https://api.biorxiv.org/details/medrxiv"
+
+# Per-source token table. Each entry mirrors the tokens that previously lived
+# as hard-coded constants and string literals in fetch_biorxiv.py /
+# fetch_medrxiv.py. Adding a new bioRxiv-family source (e.g. another preprint
+# server using the same /details API shape) means appending one row here.
+SOURCE_CONFIG: Dict[str, Dict[str, str]] = {
+    "biorxiv": {
+        "label": "bioRxiv",
+        "source_id": "biorxiv",
+        "crawl_state_file": os.path.join(ROOT_DIR, "archive", "biorxiv_crawl_state.json"),
+        "seen_ids_file": os.path.join(ROOT_DIR, "archive", "biorxiv_seen.json"),
+        "api_base": "https://api.biorxiv.org/details/biorxiv",
+        "abs_url_template": "https://www.biorxiv.org/content/{doi}{version}",
+    },
+    "medrxiv": {
+        "label": "medRxiv",
+        "source_id": "medrxiv",
+        "crawl_state_file": os.path.join(ROOT_DIR, "archive", "medrxiv_crawl_state.json"),
+        "seen_ids_file": os.path.join(ROOT_DIR, "archive", "medrxiv_seen.json"),
+        "api_base": "https://api.biorxiv.org/details/medrxiv",
+        "abs_url_template": "https://www.medrxiv.org/content/{doi}{version}",
+    },
+}
 
 
 def log(message: str) -> None:
@@ -78,11 +99,11 @@ def get_run_date_token(end_date: datetime) -> str:
     return end_date.strftime("%Y%m%d")
 
 
-def load_last_crawl_at() -> datetime | None:
-    if not os.path.exists(CRAWL_STATE_FILE):
+def load_last_crawl_at(crawl_state_file: str) -> datetime | None:
+    if not os.path.exists(crawl_state_file):
         return None
     try:
-        with open(CRAWL_STATE_FILE, "r", encoding="utf-8") as f:
+        with open(crawl_state_file, "r", encoding="utf-8") as f:
             payload = json.load(f) or {}
     except Exception:
         return None
@@ -98,18 +119,18 @@ def load_last_crawl_at() -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
-def save_last_crawl_at(at_time: datetime) -> None:
-    os.makedirs(os.path.dirname(CRAWL_STATE_FILE), exist_ok=True)
+def save_last_crawl_at(crawl_state_file: str, at_time: datetime) -> None:
+    os.makedirs(os.path.dirname(crawl_state_file), exist_ok=True)
     payload = {"last_crawl_at": at_time.astimezone(timezone.utc).isoformat()}
-    with open(CRAWL_STATE_FILE, "w", encoding="utf-8") as f:
+    with open(crawl_state_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
-def load_seen_state() -> tuple[set[str], datetime | None]:
-    if not os.path.exists(SEEN_IDS_FILE):
+def load_seen_state(seen_ids_file: str) -> tuple[set[str], datetime | None]:
+    if not os.path.exists(seen_ids_file):
         return set(), None
     try:
-        with open(SEEN_IDS_FILE, "r", encoding="utf-8") as f:
+        with open(seen_ids_file, "r", encoding="utf-8") as f:
             payload = json.load(f) or {}
     except Exception:
         return set(), None
@@ -132,8 +153,8 @@ def load_seen_state() -> tuple[set[str], datetime | None]:
     return seen_ids, latest_dt
 
 
-def save_seen_state(seen_ids: set[str], latest_published_at: datetime | None) -> None:
-    os.makedirs(os.path.dirname(SEEN_IDS_FILE), exist_ok=True)
+def save_seen_state(seen_ids_file: str, seen_ids: set[str], latest_published_at: datetime | None) -> None:
+    os.makedirs(os.path.dirname(seen_ids_file), exist_ok=True)
     payload = {
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "latest_published_at": latest_published_at.astimezone(timezone.utc).isoformat()
@@ -141,7 +162,7 @@ def save_seen_state(seen_ids: set[str], latest_published_at: datetime | None) ->
         else "",
         "ids": sorted(seen_ids),
     }
-    with open(SEEN_IDS_FILE, "w", encoding="utf-8") as f:
+    with open(seen_ids_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
@@ -180,31 +201,37 @@ def _slugify_id(raw: str) -> str:
     return text or "item"
 
 
-def build_medrxiv_paper_id(doi: str, version: str | int | None) -> str:
+def _version_suffix(version: str | int | None) -> str:
+    """Normalize a version into the trailing fragment used in URLs and IDs.
+
+    Examples:
+      "1"        -> "v1"
+      2          -> "v2"
+      "v3"       -> "v3"
+      "abc"      -> "vabc"
+      "" / None  -> ""
+    """
+    version_text = _norm(version)
+    if not version_text:
+        return ""
+    if version_text.isdigit() or not version_text.startswith("v"):
+        return f"v{version_text}"
+    return version_text
+
+
+def build_paper_id(source_id: str, doi: str, version: str | int | None) -> str:
     safe_doi = _slugify_id(doi)
-    version_text = _norm(version)
-    if version_text and version_text.isdigit():
-        version_text = f"v{version_text}"
-    elif version_text and not version_text.startswith("v"):
-        version_text = f"v{version_text}"
-    else:
-        version_text = version_text or "v1"
-    return f"medrxiv-{safe_doi}-{version_text}"
+    version_text = _version_suffix(version) or "v1"
+    return f"{source_id}-{safe_doi}-{version_text}"
 
 
-def _build_medrxiv_abs_url(doi: str, version: str | int | None) -> str:
-    version_text = _norm(version)
-    if version_text and version_text.isdigit():
-        version_text = f"v{version_text}"
-    elif version_text and not version_text.startswith("v"):
-        version_text = f"v{version_text}"
-    elif not version_text:
-        version_text = ""
-    return f"https://www.medrxiv.org/content/{doi}{version_text}"
+def _build_abs_url(source_cfg: Dict[str, str], doi: str, version: str | int | None) -> str:
+    version_text = _version_suffix(version)
+    return source_cfg["abs_url_template"].format(doi=doi, version=version_text)
 
 
-def _build_medrxiv_pdf_url(doi: str, version: str | int | None) -> str:
-    return f"{_build_medrxiv_abs_url(doi, version)}.full.pdf"
+def _build_pdf_url(source_cfg: Dict[str, str], doi: str, version: str | int | None) -> str:
+    return f"{_build_abs_url(source_cfg, doi, version)}.full.pdf"
 
 
 def parse_authors(raw_authors: Any) -> List[str]:
@@ -222,7 +249,7 @@ def parse_authors(raw_authors: Any) -> List[str]:
     return out
 
 
-def normalize_medrxiv_record(raw: Dict[str, Any]) -> Dict[str, Any] | None:
+def normalize_record(source_cfg: Dict[str, str], raw: Dict[str, Any]) -> Dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     doi = _norm(raw.get("doi"))
@@ -234,8 +261,8 @@ def normalize_medrxiv_record(raw: Dict[str, Any]) -> Dict[str, Any] | None:
     if published and re.fullmatch(r"\d{4}-\d{2}-\d{2}", published):
         published = f"{published}T00:00:00+00:00"
     return {
-        "id": build_medrxiv_paper_id(doi, version),
-        "source": "medrxiv",
+        "id": build_paper_id(source_cfg["source_id"], doi, version),
+        "source": source_cfg["source_id"],
         "source_paper_id": doi,
         "doi": doi,
         "version": version,
@@ -246,13 +273,13 @@ def normalize_medrxiv_record(raw: Dict[str, Any]) -> Dict[str, Any] | None:
         "categories": [category] if category else [],
         "published": published or None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "link": _build_medrxiv_pdf_url(doi, version),
-        "pdf_url": _build_medrxiv_pdf_url(doi, version),
-        "abs_url": _build_medrxiv_abs_url(doi, version),
+        "link": _build_pdf_url(source_cfg, doi, version),
+        "pdf_url": _build_pdf_url(source_cfg, doi, version),
+        "abs_url": _build_abs_url(source_cfg, doi, version),
     }
 
 
-def fetch_window_records(start_dt: datetime, end_dt: datetime, *, timeout: int = 60) -> List[Dict[str, Any]]:
+def fetch_window_records(source_cfg: Dict[str, str], start_dt: datetime, end_dt: datetime, *, timeout: int = 60) -> List[Dict[str, Any]]:
     start_text = start_dt.date().isoformat()
     end_text = (end_dt - timedelta(seconds=1)).date().isoformat()
     cursor = 0
@@ -262,7 +289,7 @@ def fetch_window_records(start_dt: datetime, end_dt: datetime, *, timeout: int =
     seen_ids = set()
 
     while True:
-        url = f"{API_BASE}/{start_text}/{end_text}/{cursor}"
+        url = f"{source_cfg['api_base']}/{start_text}/{end_text}/{cursor}"
         resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
         data = resp.json() or {}
@@ -283,7 +310,7 @@ def fetch_window_records(start_dt: datetime, end_dt: datetime, *, timeout: int =
 
         fetched_this_page = 0
         for raw in collection:
-            normalized = normalize_medrxiv_record(raw)
+            normalized = normalize_record(source_cfg, raw)
             if not normalized:
                 continue
             pid = _norm(normalized.get("id"))
@@ -302,13 +329,15 @@ def fetch_window_records(start_dt: datetime, end_dt: datetime, *, timeout: int =
     return out
 
 
-def fetch_medrxiv_metadata(
+def fetch_metadata(
+    source_name: str,
     *,
     days: int | None = None,
     output_file: str | None = None,
     ignore_seen: bool = False,
     chunk_days: int = 7,
 ) -> None:
+    source_cfg = SOURCE_CONFIG[source_name]
     end_date = datetime.now(timezone.utc)
     if days is None:
         days = resolve_days_window(1)
@@ -319,12 +348,12 @@ def fetch_medrxiv_metadata(
         start_date = end_date - timedelta(days=days)
         source_desc = f"days_window={days} (ignore_seen)"
     else:
-        seen_ids, latest_published_at = load_seen_state()
+        seen_ids, latest_published_at = load_seen_state(source_cfg["seen_ids_file"])
         if latest_published_at:
             start_date = latest_published_at
             source_desc = "latest_published_at"
         else:
-            last_crawl_at = load_last_crawl_at()
+            last_crawl_at = load_last_crawl_at(source_cfg["crawl_state_file"])
             if last_crawl_at:
                 start_date = last_crawl_at
                 source_desc = "last_crawl_at"
@@ -340,24 +369,25 @@ def fetch_medrxiv_metadata(
     unique_papers: Dict[str, Dict[str, Any]] = {}
     max_published_new: datetime | None = None
 
-    group_start("Step 1 - fetch medRxiv")
+    label = source_cfg["label"]
+    group_start(f"Step 1 - fetch {label}")
     log(
-        "🌍 [medRxiv Ingest] Window: "
+        f"🌍 [{label} Ingest] Window: "
         f"{start_date.strftime('%Y%m%d%H%M')} TO {end_date.strftime('%Y%m%d%H%M')} "
         f"({source_desc})"
     )
     if len(windows) > 1:
-        log(f"🗓️  [medRxiv Ingest] 将按 {chunk_days} 天/片拆分窗口：{len(windows)} 段")
+        log(f"🗓️  [{label} Ingest] 将按 {chunk_days} 天/片拆分窗口：{len(windows)} 段")
 
     for idx, (window_start, window_end) in enumerate(windows, start=1):
         log(
-            f"[medRxiv] 抓取窗口 {idx}/{len(windows)}："
+            f"[{label}] 抓取窗口 {idx}/{len(windows)}："
             f"{window_start.date().isoformat()} ~ {(window_end - timedelta(seconds=1)).date().isoformat()}"
         )
         try:
-            rows = fetch_window_records(window_start, window_end)
+            rows = fetch_window_records(source_cfg, window_start, window_end)
         except Exception as exc:
-            log(f"[WARN] medRxiv 窗口抓取失败，将跳过：{exc}")
+            log(f"[WARN] {label} 窗口抓取失败，将跳过：{exc}")
             continue
 
         for paper in rows:
@@ -372,39 +402,47 @@ def fetch_medrxiv_metadata(
             seen_ids.add(pid)
 
     total_count = len(unique_papers)
-    log(f"✅ All Done. Total unique medRxiv papers fetched: {total_count}")
+    log(f"✅ All Done. Total unique {label} papers fetched: {total_count}")
 
     if total_count > 0:
         if not output_file:
             run_token = get_run_date_token(end_date)
             archive_dir = os.path.join(ROOT_DIR, "archive", run_token)
             raw_dir = os.path.join(archive_dir, "raw")
-            output_file = os.path.join(raw_dir, f"medrxiv_papers_{run_token}.json")
+            output_file = os.path.join(raw_dir, f"{source_cfg['source_id']}_papers_{run_token}.json")
 
         os.makedirs(os.path.dirname(output_file) if os.path.dirname(output_file) else ".", exist_ok=True)
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(list(unique_papers.values()), f, ensure_ascii=False, indent=2)
         log(f"💾 File saved to: {output_file}")
     else:
-        log("⚠️ No medRxiv papers found. Check your date range or network.")
+        log(f"⚠️ No {label} papers found. Check your date range or network.")
 
     if max_published_new:
-        save_seen_state(seen_ids, max_published_new)
+        save_seen_state(source_cfg["seen_ids_file"], seen_ids, max_published_new)
     else:
-        save_seen_state(seen_ids, latest_published_at)
-    save_last_crawl_at(end_date)
+        save_seen_state(source_cfg["seen_ids_file"], seen_ids, latest_published_at)
+    save_last_crawl_at(source_cfg["crawl_state_file"], end_date)
     group_end()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="抓取 medRxiv 论文元数据。")
+    parser = argparse.ArgumentParser(description="抓取 bioRxiv/medRxiv 论文元数据。")
+    parser.add_argument(
+        "--source",
+        type=str,
+        choices=sorted(SOURCE_CONFIG.keys()),
+        default="biorxiv",
+        help="数据源: biorxiv 或 medrxiv (默认 biorxiv)",
+    )
     parser.add_argument("--days", type=int, default=None, help="抓取窗口天数。")
     parser.add_argument("--output", type=str, default=None, help="输出 JSON 文件路径。")
     parser.add_argument("--ignore-seen", action="store_true", help="忽略已见状态，严格按 days_window 回溯。")
     parser.add_argument("--chunk-days", type=int, default=7, help="将时间窗口拆分为若干段（默认 7 天）。")
     args = parser.parse_args()
 
-    fetch_medrxiv_metadata(
+    fetch_metadata(
+        args.source,
         days=args.days,
         output_file=args.output,
         ignore_seen=bool(args.ignore_seen),
