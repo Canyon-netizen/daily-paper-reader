@@ -1904,31 +1904,24 @@ function renderAddSeedsModalList(): void {
   const items = loadSelection();
   if (items.length === 0) {
     wrap.innerHTML =
-      '<div class="topic-modal-empty">还没有参考论文 — 请在「论文库」多选,或在上方输入框按 arXiv URL 单条添加。</div>';
+      '<div class="topic-modal-empty">还没有参考论文 — 上方输入论文标题搜索,或展开「已知 arXiv ID」直接添加。</div>';
     return;
   }
   wrap.innerHTML = items
     .map(
       (it) => `
     <div class="topic-modal-list-item" data-arxiv="${escapeHtml(it.arxivId)}">
-      <label>
-        <input type="checkbox" checked data-act="check" />
-        <a href="/papers/${encodeURIComponent(it.arxivId)}/" target="_blank" rel="noopener" class="topic-link">
-          arXiv:${escapeHtml(it.arxivId)}
-        </a>
-        <span class="topic-modal-list-title">${escapeHtml(it.title)}</span>
-      </label>
-      <button type="button" class="topic-btn ghost" data-act="remove" title="从参考列表移除">✕</button>
+      <span class="topic-modal-list-badge">已加入</span>
+      <a href="/papers/${encodeURIComponent(it.arxivId)}/" target="_blank" rel="noopener" class="topic-link topic-modal-list-id">
+        arXiv:${escapeHtml(it.arxivId)}
+      </a>
+      <span class="topic-modal-list-title">${escapeHtml(it.title)}</span>
+      <button type="button" class="topic-btn ghost topic-modal-list-remove" data-act="remove" title="从参考列表移除">✕</button>
     </div>`,
     )
     .join('');
   wrap.querySelectorAll<HTMLElement>('.topic-modal-list-item').forEach((row) => {
     const ax = row.dataset.arxiv!;
-    row.querySelector<HTMLInputElement>('[data-act="check"]')!.addEventListener('change', (e) => {
-      if (!(e.target as HTMLInputElement).checked) {
-        removeFromSelection(ax);
-      }
-    });
     row.querySelector<HTMLButtonElement>('[data-act="remove"]')!.addEventListener('click', () => {
       removeFromSelection(ax);
     });
