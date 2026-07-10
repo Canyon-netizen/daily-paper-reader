@@ -28,6 +28,7 @@ import {
   callLLM,
 } from './paper-analyzer';
 import type { ArxivEntry, AnalysisResult } from './paper-analyzer';
+import { debounce, canonicalArxivId as canonicalId } from '../lib/dom-utils';
 
 // ============================================================================
 // 类型 + 常量
@@ -293,20 +294,8 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
-  let t: ReturnType<typeof setTimeout> | null = null;
-  return ((...args: any[]) => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  }) as T;
-}
-
 function uid(prefix = 'id'): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
-}
-
-function canonicalId(arxivId: string): string {
-  return arxivId.replace(/v\d+$/i, '');
 }
 
 // 简单的 worker-pool 并发(限制同时在飞的 Promise 数)。

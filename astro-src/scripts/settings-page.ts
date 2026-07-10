@@ -45,6 +45,7 @@ import {
   pushUserTagsToGist,
   type UserTag,
 } from '../lib/user-tags';
+import { debounce } from '../lib/dom-utils';
 
 // ============================================================================
 // DOM helpers
@@ -62,14 +63,6 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
-  let t: ReturnType<typeof setTimeout> | null = null;
-  return ((...args: any[]) => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  }) as T;
 }
 
 // ============================================================================

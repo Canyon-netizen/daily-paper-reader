@@ -36,6 +36,7 @@ import {
   loadDeepDiveSettings,
   loadHiddenPapers,
 } from './settings';
+import { debounce, canonicalArxivId } from '../lib/dom-utils';
 
 // ============================================================================
 // 类型
@@ -369,14 +370,6 @@ export function extractBalancedJson(s: string): string | null {
     }
   }
   return null;
-}
-
-function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
-  let t: ReturnType<typeof setTimeout> | null = null;
-  return ((...args: any[]) => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => fn(...args), ms);
-  }) as T;
 }
 
 let savedHintTimer: ReturnType<typeof setTimeout> | null = null;
@@ -957,9 +950,7 @@ export async function fetchWithDiagnosis(url: string, label: string): Promise<Re
 
 // 对齐 [[feedback_arxiv_version_dedup]] 的规则:同一篇论文多版本时只保留最新的 v#。
 // dedupeLatestVersion: 默认 true,主题搜索时也希望稳定命中一篇。
-function canonicalArxivId(id: string): string {
-  return id.replace(/v\d+$/i, '');
-}
+// (canonicalArxivId 现在从 lib/dom-utils 导入,见文件顶部。)
 
 export async function searchArxiv(query: string, opts: { dedupeLatestVersion?: boolean; mode?: 'title' | 'all' } = {}): Promise<ArxivEntry[]> {
   // arXiv API:title / all / au 前缀,以及 cat: 类目限定。
