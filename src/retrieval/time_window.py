@@ -3,16 +3,27 @@
 Why this exists
 ---------------
 Before this module, `src/2.1.retrieval_papers_bm25.py` and
-`src/2.2.retrieval_papers_embedding.py` each carried their own copy of five
-helpers that are byte-identical apart from identifier names. The two scripts
-were free to drift (and did, on small details like logging prefixes), making
-it hard to know which version to consult when a Supabase windowing bug came
-in.
+`src/2.2.retrieval_papers_embedding.py` each carried their own copy of four
+helpers. The two scripts were free to drift (and did, on small details like
+logging prefixes), making it hard to know which version to consult when a
+Supabase windowing bug came in.
 
-PR-4 lifts those five functions into this module so both retrieval scripts
-import from a single source of truth. Subsequent PRs can extend the
-abstraction (`merge_supabase_rows`, `query_supabase_with_shards`) once the
-strategy boundary is clearer.
+PR-4 phase 1 introduced this module with simplified versions (a generic
+`config.recall_window_days` reader). Phase 2 (this version) replaces those
+with the real implementations that handle `DPR_RUN_DATE` env override and
+`arxiv_paper_setting.days_window` — matching the original call sites
+byte-for-byte, modulo identifier renames.
+
+Functions lifted:
+  - resolve_supabase_recall_window
+  - split_supabase_time_window
+  - _format_supabase_window_for_log
+  - _normalize_utc_datetime
+  - multi_source_rpc_enabled
+
+The first two differ between bm25 and embedding only in the default value
+of the shard_days argument. Callers must pass it explicitly (no default)
+to keep this module unaware of which strategy it's serving.
 
 Keep this module dependency-free (only stdlib) so the two retrieval scripts
 can import it without circular references.
@@ -21,96 +32,139 @@ from __future__ import annotations
 
 import datetime as _dt
 import os
-from typing import Tuple
+import re
+from typing import Any, Dict, Optional, Tuple
 
 
-# Default shard size for the recursive Supabase time-window split. BM25 uses
-# `SUPABASE_BM25_SHARD_DAYS`; embedding uses `SUPABASE_VECTOR_SHARD_DAYS`.
-# They share the same default and the same split algorithm, so the default
-# lives here.
-DEFAULT_SHARD_DAYS = 7
+# Date-token regexes for DPR_RUN_DATE override. Match both single-day
+# (YYYYMMDD) and range (YYYYMMDD-YYYYMMDD) formats. Same as the original
+# in 2.1.retrieval_papers_bm25.py:34-36.
+_DATE_RE_DAY = re.compile(r"^(\d{8})$")
+_DATE_RE_RANGE = re.compile(r"^(\d{8})-(\d{8})$")
 
 
-def resolve_supabase_recall_window(config: dict) -> Tuple[_dt.datetime, _dt.datetime]:
+def resolve_supabase_recall_window(
+    config: Dict[str, Any],
+    end_dt: Optional[_dt.datetime] = None,
+) -> Tuple[_dt.datetime, _dt.datetime]:
     """Return (start_dt, end_dt) covering the configured Supabase recall window.
 
-    Reads `supabase.recall_window_days` from the config; defaults to 14 days
-    if missing. End is "now" (UTC). Caller is expected to pass the loaded
-    config dict (`load_config()` result).
+    Reads `arxiv_paper_setting.days_window` (default 9) and clamps to >= 1
+    day. Honors the `DPR_RUN_DATE` env override (format YYYYMMDD or
+    YYYYMMDD-YYYYMMDD). Caller is expected to pass the loaded config
+    dict (`load_config()` result).
+
+    Byte-equivalent to the original 2.1.retrieval_papers_bm25.py:62-92
+    and 2.2.retrieval_papers_embedding.py:104-134.
     """
-    supabase = (config or {}).get("supabase") or {}
+    paper_setting = (config or {}).get("arxiv_paper_setting") or {}
     try:
-        days = int(supabase.get("recall_window_days") or 14)
+        days = int(paper_setting.get("days_window") or 9)
     except Exception:
-        days = 14
-    days = max(days, 1)
-    end_dt = _dt.datetime.now(_dt.timezone.utc)
-    start_dt = end_dt - _dt.timedelta(days=days)
-    return start_dt, end_dt
+        days = 9
+    safe_days = max(days, 1)
+
+    anchor = end_dt or _dt.datetime.now(_dt.timezone.utc)
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=_dt.timezone.utc)
+    anchor = anchor.astimezone(_dt.timezone.utc)
+    token = str(os.getenv("DPR_RUN_DATE") or "").strip()
+
+    range_match = _DATE_RE_RANGE.fullmatch(token)
+    if range_match:
+        start_text, end_text = range_match.group(1), range_match.group(2)
+        try:
+            start_dt = _dt.datetime.strptime(start_text, "%Y%m%d").replace(tzinfo=_dt.timezone.utc)
+            end_day = _dt.datetime.strptime(end_text, "%Y%m%d").replace(tzinfo=_dt.timezone.utc)
+            if end_day >= start_dt:
+                return start_dt, end_day + _dt.timedelta(days=1)
+        except Exception:
+            pass
+
+    day_match = _DATE_RE_DAY.fullmatch(token)
+    if day_match:
+        day_start = _dt.datetime.strptime(day_match.group(1), "%Y%m%d").replace(tzinfo=_dt.timezone.utc)
+        if safe_days > 1:
+            return anchor - _dt.timedelta(days=safe_days), anchor
+        return day_start, day_start + _dt.timedelta(days=1)
+
+    return anchor - _dt.timedelta(days=safe_days), anchor
 
 
 def split_supabase_time_window(
-    start_dt: _dt.datetime,
-    end_dt: _dt.datetime,
+    start_dt: Optional[_dt.datetime],
+    end_dt: Optional[_dt.datetime],
     *,
-    env_var: str = "SUPABASE_BM25_SHARD_DAYS",
-    default_days: int = DEFAULT_SHARD_DAYS,
-) -> Tuple[_dt.datetime, _dt.datetime]:
-    """Return (effective_start, effective_end) capped by the configured shard.
+    shard_days: int,
+) -> list[Tuple[_dt.datetime, _dt.datetime]]:
+    """Split (start_dt, end_dt) into <=shard_days chunks.
 
-    Reads `env_var` (defaults to SUPABASE_BM25_SHARD_DAYS) and shrinks the
-    window to the most-recent N days if it exceeds that. This prevents
-    Supabase RPC timeouts on long windows.
+    Returns [] if either side is missing or end_dt <= start_dt. Returns
+    [(start, end)] (single chunk) if the span already fits in one shard.
+
+    Callers must pass shard_days explicitly (no default). The original
+    scripts used SUPABASE_BM25_SHARD_DAYS / SUPABASE_VECTOR_SHARD_DAYS
+    as defaults; this module stays strategy-agnostic.
     """
-    try:
-        max_days = int(os.getenv(env_var) or default_days)
-    except Exception:
-        max_days = default_days
-    max_days = max(max_days, 1)
-    span = end_dt - start_dt
-    if span <= _dt.timedelta(days=max_days):
-        return start_dt, end_dt
-    return end_dt - _dt.timedelta(days=max_days), end_dt
+    safe_start = _normalize_utc_datetime(start_dt)
+    safe_end = _normalize_utc_datetime(end_dt)
+    if safe_start is None or safe_end is None or safe_end <= safe_start:
+        return []
+
+    safe_shard_days = max(int(shard_days or 1), 1)
+    step = _dt.timedelta(days=safe_shard_days)
+    if safe_end - safe_start <= step:
+        return [(safe_start, safe_end)]
+
+    shards: list[Tuple[_dt.datetime, _dt.datetime]] = []
+    cursor = safe_start
+    while cursor < safe_end:
+        next_dt = min(cursor + step, safe_end)
+        shards.append((cursor, next_dt))
+        cursor = next_dt
+    return shards
 
 
-def _format_supabase_window_for_log(start_dt: _dt.datetime, end_dt: _dt.datetime) -> str:
-    """Render a (start, end) window as "YYYYMMDDHHMM TO YYYYMMDDHHMM"."""
-    return (
-        f"{start_dt.strftime('%Y%m%d%H%M')} TO {end_dt.strftime('%Y%m%d%H%M')}"
-    )
+def _format_supabase_window_for_log(
+    start_dt: Optional[_dt.datetime],
+    end_dt: Optional[_dt.datetime],
+    time_fields: Tuple[str, ...],
+) -> Tuple[str, str, str]:
+    """Return (published_str, updated_str, fields_csv) for log output.
 
-
-def _normalize_utc_datetime(value: object) -> _dt.datetime | None:
-    """Coerce an ISO-8601 string (or already-a-datetime) into a UTC datetime.
-
-    Returns None on parse failure. If the input has no tzinfo, UTC is assumed.
+    If start_dt/end_dt is None both rows become "N/A". Otherwise the
+    window is rendered as "<start.iso> ~ <end.iso>"; the published row
+    uses it iff "published" is in `time_fields`, the updated row iff
+    "updated_at" is. The third return value is the sorted, comma-joined
+    field names.
     """
-    if value is None:
-        return None
-    if isinstance(value, _dt.datetime):
-        dt = value
+    safe_fields = {str(f).strip() for f in (time_fields or ()) if str(f).strip()}
+    if start_dt is None or end_dt is None:
+        published = "N/A"
+        updated = "N/A"
     else:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        try:
-            dt = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except Exception:
-            return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_dt.timezone.utc)
-    return dt.astimezone(_dt.timezone.utc)
+        window = f"{start_dt.isoformat()} ~ {end_dt.isoformat()}"
+        published = window if "published" in safe_fields else "N/A"
+        updated = window if "updated_at" in safe_fields else "N/A"
+    return published, updated, ",".join(sorted(safe_fields))
 
 
-def multi_source_rpc_enabled(config: dict) -> bool:
-    """True iff the deployment has opted into multi-source Supabase RPCs.
+def _normalize_utc_datetime(value: Optional[_dt.datetime]) -> Optional[_dt.datetime]:
+    """Coerce a datetime to UTC. Returns None if input is not a datetime."""
+    if not isinstance(value, _dt.datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=_dt.timezone.utc)
+    return value.astimezone(_dt.timezone.utc)
 
-    Reads `supabase.multi_source_rpc_enabled` (default: False). When True the
-    retrievers prefer one UNION ALL RPC over per-source RPCs.
-    """
-    supabase = (config or {}).get("supabase") or {}
-    value = supabase.get("multi_source_rpc_enabled")
-    if isinstance(value, bool):
-        return value
-    text = str(value or "").strip().lower()
-    return text in {"1", "true", "yes", "y", "on"}
+
+def multi_source_rpc_enabled() -> bool:
+    """True iff `DPR_ENABLE_MULTI_SOURCE_RPC=1/true/yes/on` is set in env."""
+    return str(os.getenv("DPR_ENABLE_MULTI_SOURCE_RPC") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# Default shard sizes preserved here for documentation only — both retrieval
+# scripts previously baked these in as their `shard_days=` default value.
+# Now they pass explicitly so this module stays strategy-agnostic.
+SUPABASE_BM25_SHARD_DAYS = 7
+SUPABASE_VECTOR_SHARD_DAYS = 7
