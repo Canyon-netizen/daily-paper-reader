@@ -1,6 +1,8 @@
 -- ============================================================
--- bioRxiv 独立表的检索 RPC
+-- bioRxiv 论文表的检索 RPC
 -- ============================================================
+-- GENERATED FROM sql/_templates/match.sql.tmpl via scripts/build_sql.py
+-- DO NOT EDIT BY HAND — regenerate after editing sql/sources.yaml or this template.
 
 create or replace function match_biorxiv_papers_exact(
   query_embedding vector,

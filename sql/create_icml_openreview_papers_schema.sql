@@ -1,6 +1,8 @@
 -- ============================================================
--- ICML OpenReview 会议投稿表
+-- ICML OpenReview 投稿 论文表
 -- ============================================================
+-- GENERATED FROM sql/_templates/schema.sql.tmpl via scripts/build_sql.py
+-- DO NOT EDIT BY HAND — regenerate after editing sql/sources.yaml or this template.
 
 create extension if not exists vector;
 
@@ -33,3 +35,7 @@ create index if not exists icml_openreview_papers_published_idx
 create index if not exists icml_openreview_papers_title_abstract_fts_idx
   on public.icml_openreview_papers
   using gin (to_tsvector('english', coalesce(title, '') || ' ' || coalesce(abstract, '')));
+
+create index if not exists icml_openreview_papers_embedding_hnsw_idx
+  on public.icml_openreview_papers
+  using hnsw (embedding vector_cosine_ops);

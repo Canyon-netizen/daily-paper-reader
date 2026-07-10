@@ -1,9 +1,11 @@
 -- ============================================================
 -- 会议论文表 anon/authenticated 只读访问策略
 -- ============================================================
+-- GENERATED FROM sql/_templates/anon_read_policies.sql.tmpl via scripts/build_sql.py
+-- DO NOT EDIT BY HAND — regenerate after editing sql/sources.yaml.
 --
 -- 用途：
--- - 让前端使用 config.yaml 中的 Supabase anon key 读取 ICML / NeurIPS 会议论文。
+-- - 让前端使用 config.yaml 中的 Supabase anon key 读取公开会议论文。
 -- - 修复 REST 查询返回 200 [] 的问题：RLS 开启后，没有 SELECT policy 时 anon 看不到行。
 --
 -- 安全边界：
@@ -15,15 +17,9 @@
 begin;
 
 alter table public.icml_openreview_papers enable row level security;
-alter table public.neurips_openreview_papers enable row level security;
 
-grant usage on schema public to anon, authenticated;
-
-grant select on table public.icml_openreview_papers to anon, authenticated;
-grant select on table public.neurips_openreview_papers to anon, authenticated;
-
-drop policy if exists "public read icml openreview papers" on public.icml_openreview_papers;
-create policy "public read icml openreview papers"
+drop policy if exists "public read icml_openreview_papers" on public.icml_openreview_papers;
+create policy "public read icml_openreview_papers"
 on public.icml_openreview_papers
 for select
 to anon, authenticated
@@ -31,14 +27,21 @@ using (
   source ~ '^ICML-[0-9]{4}-(Accepted|Public|Rejected-Public|Withdrawn-Public)$'
 );
 
-drop policy if exists "public read neurips openreview papers" on public.neurips_openreview_papers;
-create policy "public read neurips openreview papers"
+alter table public.neurips_openreview_papers enable row level security;
+
+drop policy if exists "public read neurips_openreview_papers" on public.neurips_openreview_papers;
+create policy "public read neurips_openreview_papers"
 on public.neurips_openreview_papers
 for select
 to anon, authenticated
 using (
   source ~ '^NeurIPS-[0-9]{4}-(Accepted|Public|Rejected-Public|Withdrawn-Public)$'
 );
+
+grant usage on schema public to anon, authenticated;
+
+grant select on table public.icml_openreview_papers to anon, authenticated;
+grant select on table public.neurips_openreview_papers to anon, authenticated;
 
 grant execute on function public.match_icml_openreview_papers_exact(vector, int, timestamptz, timestamptz)
 to anon, authenticated;

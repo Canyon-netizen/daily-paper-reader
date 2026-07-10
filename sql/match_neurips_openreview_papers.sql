@@ -1,6 +1,8 @@
 -- ============================================================
--- NeurIPS OpenReview 投稿表的检索 RPC
+-- NeurIPS OpenReview 投稿 论文表的检索 RPC
 -- ============================================================
+-- GENERATED FROM sql/_templates/match.sql.tmpl via scripts/build_sql.py
+-- DO NOT EDIT BY HAND — regenerate after editing sql/sources.yaml or this template.
 
 create or replace function match_neurips_openreview_papers_exact(
   query_embedding vector,

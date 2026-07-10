@@ -1,6 +1,8 @@
 -- ============================================================
--- ICML OpenReview 投稿表的检索 RPC
+-- ICML OpenReview 投稿 论文表的检索 RPC
 -- ============================================================
+-- GENERATED FROM sql/_templates/match.sql.tmpl via scripts/build_sql.py
+-- DO NOT EDIT BY HAND — regenerate after editing sql/sources.yaml or this template.
 
 create or replace function match_icml_openreview_papers_exact(
   query_embedding vector,
@@ -78,7 +80,7 @@ as $$
       plainto_tsquery('english', query_text)
     ) as score
   from public.icml_openreview_papers p
-  where to_tsvector('english', coalesce(p.title, '') || ' ' || coalesce(abstract, ''))
+  where to_tsvector('english', coalesce(p.title, '') || ' ' || coalesce(p.abstract, ''))
         @@ plainto_tsquery('english', query_text)
     and (filter_published_start is null or p.published >= filter_published_start)
     and (filter_published_end is null or p.published < filter_published_end)
