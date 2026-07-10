@@ -1,0 +1,326 @@
+---
+// /conferences/ — 会议论文拉取 UI(F1)
+//
+// 在本地调试后端跑通 (src/local_debug_server.py on 127.0.0.1:8567) 时,
+// 这个页面提供"按会议拉取论文到 Supabase"的触发按钮。流程:
+//   1. 用户选会议 + 年份 → 点"立即拉取"
+//   2. 前端 POST /api/local/workflows/dispatch {workflowKey: 'init-conferences', inputs}
+//   3. 后端用 build_command 拼出 bash 串行跑 init_<conf>.py --year-end N --year-count M
+//   4. 前端轮询 /api/local/runs/<id> 看进度 (status / conclusion / log)
+//
+// 安全:这个 endpoint 只在 local_debug_server 监听 127.0.0.1 时可访问,
+// 不会暴露到公网。生产环境部署时需另外加认证。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/page.css';
+import '../../styles/settings.css';
+
+const CONFERENCES = [
+  { id: 'aaai', label: 'AAAI', desc: 'AAAI 官方 proceedings (OJS 抓取)' },
+  { id: 'acl', label: 'ACL', desc: 'ACL Anthology (EMNLP/ACL 共享 fetcher)' },
+  { id: 'emnlp', label: 'EMNLP', desc: 'EMNLP Anthology (同上)' },
+  { id: 'iclr', label: 'ICLR', desc: 'ICLR OpenReview 投稿' },
+  { id: 'icml', label: 'ICML', desc: 'ICML OpenReview 投稿' },
+  { id: 'neurips', label: 'NeurIPS', desc: 'NeurIPS OpenReview 投稿' },
+] as const;
+---
+
+<BaseLayout
+  title="会议论文拉取 · Daily Paper Reader"
+  description="按会议触发 init_<conf>.py,拉取最新论文并同步到 Supabase。"
+>
+  <Navbar />
+
+  <main class="settings-page">
+    <header class="settings-page-header">
+      <strong>会议论文拉取</strong> · 选会议 + 年份,点"立即拉取"后台跑 init_<conf>.py
+      (fetch + embedding + upsert 到 Supabase)。本地调试后端需在 127.0.0.1:8567 运行。
+    </header>
+
+    <section class="settings-card">
+      <h2 class="settings-card-title">拉取参数</h2>
+      <p class="settings-card-sub">
+        <code>--year-end</code> 决定抓哪一年;<code>--year-count</code> 决定往前抓几年。
+        默认 2025 / 3 = 抓 2023-2025。NeurIPS 会自动用 <code>format_years_token</code> 拼接年份范围。
+      </p>
+
+      <div class="settings-field">
+        <label for="conf-year-end">Year End</label>
+        <input type="number" id="conf-year-end" min="2010" max="2099" value="2025" />
+        <span class="settings-field-hint">默认 2025 (当前年)</span>
+      </div>
+
+      <div class="settings-field">
+        <label for="conf-year-count">Year Count</label>
+        <input type="number" id="conf-year-count" min="1" max="20" value="3" />
+        <span class="settings-field-hint">默认 3 年</span>
+      </div>
+
+      <div class="settings-field">
+        <label>
+          <input type="checkbox" id="conf-skip-fetch" />
+          跳过 fetch,只重跑 sync (复用已有 raw archive 文件)
+        </label>
+      </div>
+    </section>
+
+    <section class="settings-card">
+      <h2 class="settings-card-title">选择会议</h2>
+      <div class="conf-grid">
+        {CONFERENCES.map((c) => (
+          <div class="conf-card" data-conf-id={c.id} data-conf-label={c.label}>
+            <div class="conf-card-head">
+              <span class="conf-card-label">{c.label}</span>
+              <button
+                type="button"
+                class="settings-action-btn primary conf-trigger-btn"
+                data-conf={c.id}
+              >立即拉取</button>
+            </div>
+            <p class="conf-card-desc">{c.desc}</p>
+            <div class="conf-card-status" data-conf-status={c.id}>
+              <span class="conf-status-label">未运行</span>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p class="settings-card-sub" style="margin-top: 1rem;">
+        也可以选多个会议批量跑(下方按钮)。后端用 bash 串行执行,
+        任意一个 init_<conf>.py 失败整体 exit 1。
+      </p>
+      <button type="button" class="settings-action-btn primary" id="conf-batch-btn">
+        拉取全部 6 个会议
+      </button>
+    </section>
+
+    <section class="settings-card" id="conf-runs-card" hidden>
+      <h2 class="settings-card-title">运行历史</h2>
+      <p class="settings-card-sub">
+        最近 5 次运行。status: <code>queued</code> / <code>in_progress</code> /
+        <code>completed</code>。
+      </p>
+      <ul class="conf-runs-list" id="conf-runs-list"></ul>
+    </section>
+
+    <a class="settings-page-back" href={import.meta.env.BASE_URL}>← 返回首页</a>
+  </main>
+
+  <Footer />
+</BaseLayout>
+
+<style>
+  .conf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+  }
+  .conf-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+    background: var(--bg-elevated);
+  }
+  .conf-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .conf-card-label {
+    font-weight: 700;
+    font-size: 1rem;
+  }
+  .conf-card-desc {
+    margin: 0 0 0.5rem;
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+  }
+  .conf-card-status {
+    font-size: 0.8rem;
+    color: var(--fg-subtle);
+  }
+  .conf-card-status.is-running { color: var(--accent); }
+  .conf-card-status.is-success { color: #2e7d32; }
+  .conf-card-status.is-failure { color: #c62828; }
+  .conf-runs-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .conf-runs-list li {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+  }
+  .conf-runs-list .run-status { font-weight: 700; }
+  .conf-runs-list .run-status.queued { color: var(--fg-subtle); }
+  .conf-runs-list .run-status.in_progress { color: var(--accent); }
+  .conf-runs-list .run-status.completed { color: #2e7d32; }
+  .conf-runs-list .run-status.completed.failure { color: #c62828; }
+</style>
+
+<script>
+  import { debounce } from '../../lib/dom-utils';
+
+  type RunStatus = 'queued' | 'in_progress' | 'completed';
+  type Run = {
+    run_id: string;
+    workflow_key: string;
+    status: RunStatus;
+    conclusion?: 'success' | 'failure' | null;
+    started_at?: string;
+    completed_at?: string;
+    error?: string;
+  };
+
+  // -------- 工具函数 --------
+  function dispatch(conferences: string, yearEnd: number, yearCount: number, skipFetch: boolean) {
+    return fetch('/api/local/workflows/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workflowKey: 'init-conferences',
+        workflowFile: '',
+        inputs: {
+          conferences,
+          year_end: String(yearEnd),
+          year_count: String(yearCount),
+          ...(skipFetch ? { skip_fetch: 'true' } : {}),
+        },
+      }),
+    }).then(async (r) => {
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      return data.run as Run;
+    });
+  }
+
+  function listRuns(): Promise<Run[]> {
+    return fetch('/api/local/runs')
+      .then((r) => r.json())
+      .then((d) => (Array.isArray(d.runs) ? d.runs.slice(0, 5) : []))
+      .catch(() => []);
+  }
+
+  function getRun(runId: string): Promise<Run> {
+    return fetch(`/api/local/runs/${encodeURIComponent(runId)}`)
+      .then((r) => r.json())
+      .then((d) => d.run as Run);
+  }
+
+  function setCardStatus(conf: string, state: 'idle' | 'running' | 'success' | 'failure', text: string) {
+    const el = document.querySelector(`[data-conf-status="${conf}"]`);
+    if (!el) return;
+    el.className = `conf-card-status is-${state === 'idle' ? 'idle' : state === 'running' ? 'running' : state}`;
+    el.innerHTML = `<span class="conf-status-label">${text}</span>`;
+  }
+
+  // -------- 渲染运行历史 --------
+  function renderRuns(runs: Run[]) {
+    const list = document.getElementById('conf-runs-list');
+    const card = document.getElementById('conf-runs-card');
+    if (!list || !card) return;
+    if (runs.length === 0) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    list.innerHTML = runs
+      .map((r) => {
+        const status = r.status;
+        const cls =
+          status === 'completed' && r.conclusion === 'failure'
+            ? 'completed failure'
+            : status;
+        const inputs = (r as any).inputs || {};
+        return `<li>
+          <span class="run-status ${cls}">[${status}]</span>
+          <code>${r.workflow_key}</code>
+          conferences=${inputs.conferences || '?'} year_end=${inputs.year_end || '?'} year_count=${inputs.year_count || '?'}
+          ${r.error ? `<br/><span style="color:#c62828">${r.error}</span>` : ''}
+        </li>`;
+      })
+      .join('');
+  }
+
+  // -------- 轮询 --------
+  function pollRun(runId: string, conferences: string[]): () => void {
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      try {
+        const r = await getRun(runId);
+        if (r.status === 'in_progress') {
+          for (const c of conferences) setCardStatus(c, 'running', `运行中: ${runId.slice(0, 8)}`);
+        } else if (r.status === 'completed') {
+          const state = r.conclusion === 'failure' ? 'failure' : 'success';
+          for (const c of conferences) {
+            setCardStatus(c, state, state === 'success' ? '✓ 成功' : '✗ 失败');
+          }
+          stopped = true;
+          const runs = await listRuns();
+          renderRuns(runs);
+          return;
+        }
+      } catch {
+        // ignore network blip
+      }
+      setTimeout(tick, 1500);
+    };
+    tick();
+    return () => {
+      stopped = true;
+    };
+  }
+
+  // -------- 事件绑定 --------
+  async function triggerConf(confList: string[]) {
+    const yearEndEl = document.getElementById('conf-year-end') as HTMLInputElement | null;
+    const yearCountEl = document.getElementById('conf-year-count') as HTMLInputElement | null;
+    const skipFetchEl = document.getElementById('conf-skip-fetch') as HTMLInputElement | null;
+    if (!yearEndEl || !yearCountEl || !skipFetchEl) return;
+    const yearEnd = parseInt(yearEndEl.value, 10) || new Date().getUTCFullYear();
+    const yearCount = parseInt(yearCountEl.value, 10) || 3;
+    const skipFetch = skipFetchEl.checked;
+    const conferences = confList.join(',');
+    for (const c of confList) setCardStatus(c, 'running', '调度中…');
+    try {
+      const run = await dispatch(conferences, yearEnd, yearCount, skipFetch);
+      pollRun(run.run_id, confList);
+    } catch (e) {
+      for (const c of confList) setCardStatus(c, 'failure', `✗ 调度失败: ${(e as Error).message}`);
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    // 单会议按钮
+    document.querySelectorAll<HTMLButtonElement>('.conf-trigger-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const conf = btn.dataset.conf;
+        if (conf) void triggerConf([conf]);
+      });
+    });
+    // 全部 6 会议
+    const batchBtn = document.getElementById('conf-batch-btn');
+    if (batchBtn) {
+      batchBtn.addEventListener('click', () => {
+        void triggerConf(['AAAI', 'ACL', 'EMNLP', 'ICLR', 'ICML', 'NeurIPS']);
+      });
+    }
+    // 初始拉一次历史 (debounce 防止快速点击)
+    const refreshRuns = debounce(async () => {
+      const runs = await listRuns();
+      renderRuns(runs);
+    }, 200);
+    void refreshRuns();
+  });
+</script>

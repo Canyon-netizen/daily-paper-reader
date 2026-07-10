@@ -347,6 +347,42 @@ def build_command(workflow_key: str, workflow_file: str, inputs: dict[str, str])
     if workflow_file == "reset-content.yml" or workflow_key == "reset-content":
         return [python, "-c", "import shutil, pathlib; root=pathlib.Path('.'); shutil.rmtree(root/'docs', ignore_errors=True); shutil.copytree(root/'docs_init', root/'docs'); print('docs reset from docs_init')"]
 
+    # F1: 触发指定会议源的 init_<conf>.py — 跑 fetch + sync 到 Supabase。
+    # inputs: conferences=AAAI,ICML,NEURIPS / year_end=2025 / year_count=3 / skip_fetch=true
+    # workflow_key="init-conferences" 也可被前端表单触发。
+    if workflow_key == "init-conferences":
+        conferences_csv = str(inputs.get("conferences") or "ICML,NeurIPS")
+        year_end = int(inputs.get("year_end") or 0) or None
+        year_count = int(inputs.get("year_count") or 0) or 3
+        skip_fetch = as_bool(inputs.get("skip_fetch"), False)
+        if year_end is None:
+            year_end = datetime.now(timezone.utc).year
+        # 解析 conference 列表
+        wanted = [c.strip() for c in conferences_csv.split(",") if c.strip()]
+        if not wanted:
+            raise ValueError("init-conferences 需要 conferences 列表,例如 'AAAI,ICML'")
+        # 允许前端传会议展示名(AAAI/ACL/EMNLP/ICLR/ICML/NEURIPS)或 backend key(aaai/acl/...)
+        # init 脚本文件名是 <key> 形式,小写
+        name_to_init = {
+            "AAAI": "aaai",
+            "ACL": "acl",
+            "EMNLP": "emnlp",
+            "ICLR": "iclr",
+            "ICML": "icml",
+            "NEURIPS": "neurips",
+        }
+        # 用 bash -lc 串行跑每个 init,任意一个失败 exit 1。
+        # 年份 2025 默认 = year_end; 范围 [year_end - year_count + 1, year_end]。
+        script_parts = ["set -euo pipefail"]
+        for conf in wanted:
+            key = name_to_init.get(conf.upper(), conf.lower())
+            init_script = f"src/maintain/init_{key}.py"
+            cmd = [python, init_script, "--year-end", str(year_end), "--year-count", str(year_count)]
+            if skip_fetch:
+                cmd.append("--skip-fetch")
+            script_parts.append(" ".join(shlex.quote(part) for part in cmd))
+        return ["bash", "-lc", "\n".join(script_parts)]
+
     if workflow_file == "sync.yml" or workflow_key == "sync":
         return ["git", "status", "--short"]
 
