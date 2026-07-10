@@ -1,0 +1,41 @@
+-- ============================================================
+-- $display_name 论文表
+-- ============================================================
+-- GENERATED FROM sql/_templates/schema.sql.tmpl via scripts/build_sql.py
+-- DO NOT EDIT BY HAND — regenerate after editing sql/sources.yaml or this template.
+
+create extension if not exists vector;
+
+create table if not exists public.$schema_name (
+  id text primary key,
+  source text not null$source_default_clause,
+  source_paper_id text,
+  doi text,
+  version text,
+  title text not null,
+  abstract text,
+  authors jsonb not null default '[]'::jsonb,
+  primary_category text,
+  categories jsonb not null default '[]'::jsonb,
+  published timestamptz,
+  link text,
+  embedding vector(384),
+  embedding_model text,
+  embedding_dim int,
+  embedding_updated_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists ${schema_name}_source_published_idx
+  on public.$schema_name (source, published desc);
+
+create index if not exists ${schema_name}_published_idx
+  on public.$schema_name (published desc);
+
+create index if not exists ${schema_name}_title_abstract_fts_idx
+  on public.$schema_name
+  using gin (to_tsvector('english', coalesce(title, '') || ' ' || coalesce(abstract, '')));
+
+create index if not exists ${schema_name}_embedding_hnsw_idx
+  on public.$schema_name
+  using hnsw (embedding vector_cosine_ops);

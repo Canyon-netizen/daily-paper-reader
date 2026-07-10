@@ -1,0 +1,66 @@
+# SQL sources registry — drives scripts/build_sql.py.
+#
+# schema_name:   PostgreSQL table name (without schema prefix).
+# source_name:   logical source id, also default value for `source` column.
+# scope:         arxiv | preprint | conference — controls which templates touch this.
+# include_hnsw:  add embedding HNSW index (only for sources with vector embeddings).
+# source_default_value: if set, schema will default `source` to this literal.
+#                       Leave null for sources whose `source` column is filled by fetcher
+#                       (e.g. conference papers always have "ICML-2025-Accepted" style).
+# anon_read_policy: if true, sql/_templates/anon_read_policies.sql renders
+#                   enable row-level-security + anon SELECT for this source.
+sources:
+  - schema_name: aaai_papers
+    source_name: aaai
+    scope: conference
+    include_hnsw: true
+    source_default_value: null
+    anon_read_policy: false
+  - schema_name: acl_papers
+    source_name: acl
+    scope: conference
+    include_hnsw: true
+    source_default_value: null
+    anon_read_policy: false
+  - schema_name: biorxiv_papers
+    source_name: biorxiv
+    scope: preprint
+    include_hnsw: true
+    source_default_value: biorxiv
+    anon_read_policy: false
+  - schema_name: chemrxiv_papers
+    source_name: chemrxiv
+    scope: preprint
+    include_hnsw: true
+    source_default_value: chemrxiv
+    anon_read_policy: false
+  - schema_name: emnlp_papers
+    source_name: emnlp
+    scope: conference
+    include_hnsw: true
+    source_default_value: null
+    anon_read_policy: false
+  - schema_name: iclr_openreview_papers
+    source_name: iclr_openreview
+    scope: conference
+    include_hnsw: true
+    source_default_value: null
+    anon_read_policy: false
+  - schema_name: icml_openreview_papers
+    source_name: icml_openreview
+    scope: conference
+    include_hnsw: true
+    source_default_value: null
+    anon_read_policy: true
+  - schema_name: medrxiv_papers
+    source_name: medrxiv
+    scope: preprint
+    include_hnsw: true
+    source_default_value: medrxiv
+    anon_read_policy: false
+  - schema_name: neurips_openreview_papers
+    source_name: neurips_openreview
+    scope: conference
+    include_hnsw: true
+    source_default_value: null
+    anon_read_policy: true
