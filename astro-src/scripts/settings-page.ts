@@ -45,7 +45,7 @@ import {
   pushUserTagsToGist,
   type UserTag,
 } from '../lib/user-tags';
-import { debounce } from '../lib/dom-utils';
+import { debounce, escapeHtml } from '../lib/dom-utils';
 
 // ============================================================================
 // DOM helpers
@@ -55,15 +55,6 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
   if (!el) throw new Error(`#${id} not found`);
   return el as T;
 };
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 // ============================================================================
 // "已自动保存" 提示

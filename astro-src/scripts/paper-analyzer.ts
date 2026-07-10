@@ -36,7 +36,7 @@ import {
   loadDeepDiveSettings,
   loadHiddenPapers,
 } from './settings';
-import { debounce, canonicalArxivId } from '../lib/dom-utils';
+import { debounce, canonicalArxivId, escapeHtml } from '../lib/dom-utils';
 
 // ============================================================================
 // 类型
@@ -327,16 +327,6 @@ function clearStatus(): void {
 // escapeHtml(<object>) 抛 "t.replace is not a function"。即使现在 contract 已经修正,
 // 给 escapeHtml 加最后一道兜底:非 string (number / object / null / undefined)
 // 在模板字符串拼接时静默降级为空字符串,而不是炸整个搜索流程。
-function escapeHtml(s: unknown): string {
-  if (typeof s !== 'string') return '';
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
 // 把 docs 仓库路径转成站点绝对 URL,避免在 /paper-analyzer/ 下被解析成相对路径。
 function docsPathToUrl(p: string): string {
   return '/' + p.replace(/^docs\//, '').replace(/\.md$/, '/');

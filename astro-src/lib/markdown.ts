@@ -3,6 +3,9 @@
 // 共享的 markdown SSR 渲染器。
 // 论文正文页(/papers/{arxiv}/)和聊天侧栏的 assistant 文本都通过这个函数渲染,
 // 这样聊天气泡里就拿到了论文正文页同款 markdown 语法集。
+
+import { escapeHtml } from './dom-utils';
+
 //
 // 为了让聊天气泡里的标题层级视觉上低于论文正文页(避免气泡里出现一个比正文 H2 还大的 H1),
 // 调用方在传入 `chat: true` 时:
@@ -27,14 +30,6 @@ export interface RenderOptions {
   base?: string;
   // 聊天模式:跳过 figures 区块,标题下移两级。论文页面调用时不要设。
   chat?: boolean;
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 function renderInline(s: string): string {

@@ -28,7 +28,7 @@ import {
   callLLM,
 } from './paper-analyzer';
 import type { ArxivEntry, AnalysisResult } from './paper-analyzer';
-import { debounce, canonicalArxivId as canonicalId } from '../lib/dom-utils';
+import { debounce, canonicalArxivId as canonicalId, escapeHtml } from '../lib/dom-utils';
 
 // ============================================================================
 // 类型 + 常量
@@ -284,15 +284,6 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
   if (!el) throw new Error(`#${id} not found`);
   return el as T;
 };
-
-function escapeHtml(s: string): string {
-  return (s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 function uid(prefix = 'id'): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
