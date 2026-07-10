@@ -325,6 +325,7 @@ export function addToSelection(item: SelectionItem): boolean {
   if (items.some((x) => x.arxivId === item.arxivId)) return false;
   items.push(item);
   saveSelectionRaw(items);
+  emitSelectionChange();
   return true;
 }
 
@@ -335,11 +336,29 @@ export function removeFromSelection(arxivId: string): boolean {
   const next = items.filter((x) => x.arxivId !== arxivId);
   if (next.length === items.length) return false;
   saveSelectionRaw(next);
+  emitSelectionChange();
+  return true;
+  saveSelectionRaw(next);
   return true;
 }
 
 export function clearSelection(): void {
   try { localStorage.removeItem(STORAGE_KEYS.selection); } catch { /* ignore */ }
+  emitSelectionChange();
+}
+
+// 在 selection 任何写操作后触发。topic 页等消费者监听这个事件刷新 UI 计数/banner。
+// 自定义事件跟 paper-selection.ts 的 'paper-selection-change' 保持同名 —
+// 两个模块对同一份 selection 写入都要触发同一个事件,所有监听者都受益。
+// 仅在浏览器/dispatchEvent 可用时触发(SSR / 非浏览器环境跳过)。
+function emitSelectionChange(): void {
+  try {
+    if (typeof document !== 'undefined' && typeof CustomEvent !== 'undefined') {
+      document.dispatchEvent(new CustomEvent('paper-selection-change'));
+    }
+  } catch {
+    /* 静默 — selection 只在浏览器使用,events 失败不影响主逻辑 */
+  }
 }
 
 // ============================================================================
