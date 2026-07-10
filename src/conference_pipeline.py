@@ -70,13 +70,12 @@ def write_manifest(path: Path, payload: Dict[str, Any]) -> None:
     log(f"[INFO] 已写入会议检索 manifest：{path}")
 
 
-def _score_from_item(item: Dict[str, Any]) -> float:
-    for key in ("score", "star_rating"):
-        try:
-            return float(item.get(key))
-        except Exception:
-            continue
-    return 0.0
+from src.conference_common import score_from_ranked_item as _score_from_item
+# Re-exported under the legacy `_score_from_item` name so existing callers in
+# this module (e.g. prune_llm_result L91) don't need to change. The canonical
+# implementation lives in src.conference_common; both this module and
+# src.conference_sidebar used to carry byte-identical copies, which is what
+# this re-export removes.
 
 
 def prune_llm_result(path: Path, min_score: float) -> Dict[str, int]:

@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+from src.conference_common import score_from_ranked_item
+
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_SIDEBAR_PATH = ROOT_DIR / "docs" / "_sidebar.md"
@@ -270,15 +272,6 @@ def load_json(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         data = json.load(f)
     return data if isinstance(data, dict) else {}
-
-
-def score_from_ranked_item(item: Dict[str, Any]) -> float:
-    for key in ("score", "star_rating"):
-        try:
-            return float(item.get(key))
-        except Exception:
-            continue
-    return 0.0
 
 
 def resolve_conference_pdf_url(paper: Dict[str, Any]) -> str:

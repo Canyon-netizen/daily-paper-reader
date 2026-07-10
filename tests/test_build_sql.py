@@ -111,7 +111,13 @@ def test_no_unexpected_drift() -> None:
     )
     assert result.returncode == 0, result.stderr
     changed = {Path(line).name for line in result.stdout.splitlines() if line}
-    unexpected = changed - set(_KNOWN_DIVERGENT)
+    # Deprecated single-table SQL files were deleted in PR-11; git still reports
+    # them as "deleted" in the diff, which is the correct end-state, not drift.
+    _DELETED_IN_PR11 = {
+        "create_papers_schema.sql",  # replaced by per-source create_<schema>_papers_schema.sql
+        "match_papers.sql",          # replaced by per-source match_<schema>_papers.sql
+    }
+    unexpected = changed - set(_KNOWN_DIVERGENT) - _DELETED_IN_PR11
     assert not unexpected, (
         "These sql/ files changed but are not in _KNOWN_DIVERGENT:\n  "
         + "\n  ".join(sorted(unexpected))
