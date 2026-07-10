@@ -14,6 +14,7 @@ import {
   getCustomProxy,
   loadHiddenPapers,
   loadSelection,
+  isInSelection,
   addToSelection,
   removeFromSelection,
   clearSelection,
@@ -1884,9 +1885,10 @@ function openAddSeedsModal(): void {
   const modal = document.getElementById('add-seeds-modal');
   if (!modal) return;
   renderAddSeedsModalList();
+  // 不清空搜索框 / 不重置结果区 — 用户上次关 modal 时的状态保持,除非他手动输入
   modal.classList.remove('topic-hidden');
   modalOpen = true;
-  document.getElementById('add-seeds-url-input')?.focus();
+  document.getElementById('add-seeds-search-input')?.focus();
 }
 
 function closeAddSeedsModal(): void {
@@ -1940,6 +1942,8 @@ function updateSeedsCounter(): void {
   const n = loadSelection().length;
   nEl.textContent = String(n);
   chip.hidden = n === 0;
+  const modalCount = document.getElementById('add-seeds-count');
+  if (modalCount) modalCount.textContent = String(n);
 }
 
 async function submitAddSeedsUrl(_form: HTMLFormElement): Promise<void> {
@@ -1978,6 +1982,154 @@ async function submitAddSeedsUrl(_form: HTMLFormElement): Promise<void> {
   } catch (err) {
     setStatus(`获取失败: ${(err as Error).message}`, 'error');
   }
+}
+
+// ============================================================================
+// 标题搜索:联网 arXiv,debounce + 结果渲染
+// ============================================================================
+
+// 复用 paper-analyzer.ts 已 export 的 searchArxiv(mode: 'title' 默认就是标题语义)。
+// 前端再叠一层简单的 token 排序:标题真的命中查询 token 的条目排前面。
+function rankArxivResults(entries: ArxivEntry[], query: string): ArxivEntry[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return entries;
+  const tokens = q.split(/\s+/).filter((t) => t.length >= 2);
+  const score = (e: ArxivEntry): number => {
+    const t = e.title.toLowerCase();
+    let s = 0;
+    for (const tok of tokens) {
+      if (t.includes(tok)) s += 10;
+      if (t.startsWith(tok)) s += 5;
+      if (e.summary.toLowerCase().includes(tok)) s += 1;
+    }
+    return s;
+  };
+  return [...entries].sort((a, b) => score(b) - score(a));
+}
+
+let arxivSearchAbort: AbortController | null = null;
+let arxivSearchSeq = 0; // 竞态:只保留最后一次的结果,旧的渲染请求全部丢弃
+
+async function searchArxivByTitle(query: string): Promise<ArxivEntry[]> {
+  const q = query.trim();
+  if (q.length < 3) return [];
+  if (arxivSearchAbort) arxivSearchAbort.abort();
+  arxivSearchAbort = new AbortController();
+  const seq = ++arxivSearchSeq;
+  try {
+    // paper-analyzer.ts 已 export searchArxiv(query, { mode: 'title' }),默认就是 ti: 语义
+    const entries = await searchArxiv(q, { dedupeLatestVersion: true });
+    if (seq !== arxivSearchSeq) return []; // 用户已经输入了更新的 query,丢掉
+    return rankArxivResults(entries, q);
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') return [];
+    throw e;
+  }
+}
+
+function renderArxivSearchResults(entries: ArxivEntry[]): void {
+  const wrap = document.getElementById('add-seeds-search-results');
+  if (!wrap) return;
+  if (!entries.length) {
+    wrap.innerHTML =
+      '<div class="topic-modal-search-empty">未命中 — 试试更短的关键词、英文术语、或下方的「已知 arXiv ID」直接添加。</div>';
+    return;
+  }
+  wrap.innerHTML = entries
+    .slice(0, 12)
+    .map((e) => {
+      const id = canonicalId(e.arxivId);
+      const already = isInSelection(id);
+      const btnText = already ? '✓ 已加入' : '➕ 加入';
+      return `
+    <div class="topic-modal-search-item" data-arxiv="${escapeHtml(e.arxivId)}">
+      <div class="topic-modal-search-item-main">
+        <div class="topic-modal-search-item-title">${escapeHtml(e.title)}</div>
+        <div class="topic-modal-search-item-meta">
+          <span class="topic-modal-search-item-id">arXiv:${escapeHtml(e.arxivId)}</span>
+          <span class="topic-modal-search-item-authors">${escapeHtml(e.authors.slice(0, 3).join(', ') + (e.authors.length > 3 ? ' …' : ''))}</span>
+          <span class="topic-modal-search-item-date">${escapeHtml(e.published.slice(0, 10))}</span>
+        </div>
+        <div class="topic-modal-search-item-summary">${escapeHtml(e.summary.slice(0, 220))}${e.summary.length > 220 ? '…' : ''}</div>
+      </div>
+      <button type="button" class="topic-btn primary topic-modal-search-item-add" data-act="add"${already ? ' disabled' : ''}>${btnText}</button>
+    </div>`;
+    })
+    .join('');
+  wrap.querySelectorAll<HTMLElement>('.topic-modal-search-item').forEach((row) => {
+    const ax = row.dataset.arxiv!;
+    row.querySelector<HTMLButtonElement>('[data-act="add"]')!.addEventListener('click', () => {
+      addSearchResultToSelection(ax);
+    });
+  });
+}
+
+function addSearchResultToSelection(arxivId: string): void {
+  const wrap = document.getElementById('add-seeds-search-results');
+  if (!wrap) return;
+  // 让用户能看到当前已选 — 通过 loadSelection 检测重复
+  if (isInSelection(arxivId)) {
+    setStatus(`arXiv:${arxivId} 已在参考列表中`, '');
+    setTimeout(clearStatus, 1500);
+    return;
+  }
+  // arxivId 形如 1706.03762v7,canonicalId 会去掉 v# 后缀。
+  const canonId = canonicalId(arxivId);
+  // 直接从当前渲染结果里读 entry 元数据 — 不必再走 searchArxivById 拿。
+  const card = wrap.querySelector<HTMLElement>(
+    `.topic-modal-search-item[data-arxiv="${CSS.escape(arxivId)}"]`,
+  );
+  const title = card?.querySelector('.topic-modal-search-item-title')?.textContent?.trim() || canonId;
+  const sumText = card?.querySelector('.topic-modal-search-item-summary')?.textContent?.trim() || '';
+  addToSelection({
+    arxivId: canonId,
+    title,
+    tldr: sumText.slice(0, 400),
+    method: '',
+    result: '',
+    tags: [],
+    addedAt: Date.now(),
+  });
+  setStatus(`✓ 已加入 arXiv:${canonId}`, '');
+  setTimeout(clearStatus, 1500);
+  // 屏蔽重复添加 — 把按钮 disabled
+  if (card) {
+    const btn = card.querySelector<HTMLButtonElement>('[data-act="add"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '✓ 已加入';
+    }
+  }
+}
+
+// 搜索输入:debounce 250ms。沿用 paper-analyzer 已有的 searchArxiv()。
+function setupAddSeedsSearch(): void {
+  const input = document.getElementById('add-seeds-search-input') as HTMLInputElement | null;
+  if (!input) return;
+  const debounceMs = 250;
+  let timer: number | undefined;
+  input.addEventListener('input', () => {
+    const v = input.value;
+    if (timer) window.clearTimeout(timer);
+    timer = window.setTimeout(async () => {
+      try {
+        if (v.trim().length < 3) {
+          const wrap = document.getElementById('add-seeds-search-results');
+          if (wrap) wrap.innerHTML = '';
+          return;
+        }
+        const wrapEl = document.getElementById('add-seeds-search-results');
+        if (wrapEl) wrapEl.innerHTML = '<div class="topic-modal-search-empty">🔍 正在搜索...</div>';
+        const entries = await searchArxivByTitle(v);
+        renderArxivSearchResults(entries);
+      } catch (e) {
+        const wrapEl = document.getElementById('add-seeds-search-results');
+        if (wrapEl) {
+          wrapEl.innerHTML = `<div class="topic-modal-search-empty topic-modal-search-error">搜索失败: ${escapeHtml((e as Error).message)}</div>`;
+        }
+      }
+    }, debounceMs);
+  });
 }
 
 // ============================================================================
@@ -2075,6 +2227,7 @@ function init(): void {
     e.preventDefault();
     void submitAddSeedsUrl(e.currentTarget as HTMLFormElement);
   });
+  setupAddSeedsSearch();
   document.addEventListener('paper-selection-change', () => {
     updateSeedsCounter();
     if (modalOpen) renderAddSeedsModalList();

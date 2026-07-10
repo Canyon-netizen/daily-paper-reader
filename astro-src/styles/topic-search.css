@@ -886,3 +886,142 @@
   border-top: 1px solid var(--border);
   background: var(--bg-base);
 }
+
+/* ==========================================================================
+ * Modal:🔍 标题搜索 + 结果列表
+ * ========================================================================== */
+.topic-modal-section-title {
+  margin: 1.2rem 0 0.5rem;
+  font-size: 0.95rem;
+  color: var(--text);
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.topic-modal-section-title > span {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.topic-modal-search input[type="search"] {
+  flex: 1;
+  padding: 0.55rem 0.8rem;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  color: var(--text);
+  font-size: 0.95rem;
+}
+.topic-modal-search input[type="search"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.topic-modal-search-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 50vh;
+  overflow-y: auto;
+  margin-bottom: 0.6rem;
+}
+
+.topic-modal-search-empty {
+  padding: 0.9rem 1rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+.topic-modal-search-error {
+  color: #c0392b;
+  border-color: color-mix(in srgb, #c0392b 35%, var(--border));
+  background: color-mix(in srgb, #c0392b 6%, var(--bg-base));
+}
+
+.topic-modal-search-item {
+  display: flex;
+  gap: 0.7rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  align-items: flex-start;
+}
+.topic-modal-search-item:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.topic-modal-search-item-main {
+  flex: 1;
+  min-width: 0;
+}
+.topic-modal-search-item-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+  margin-bottom: 0.25rem;
+}
+.topic-modal-search-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.65rem;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-bottom: 0.3rem;
+}
+.topic-modal-search-item-id {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-weight: 600;
+  color: var(--accent);
+}
+.topic-modal-search-item-authors { font-style: italic; }
+.topic-modal-search-item-date { font-variant-numeric: tabular-nums; }
+
+.topic-modal-search-item-summary {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.topic-modal-search-item-add {
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.7rem;
+  align-self: center;
+}
+.topic-modal-search-item-add:disabled {
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-muted));
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+
+.topic-modal-advanced {
+  margin: 0.4rem 0 0.8rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg-base);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+.topic-modal-advanced > summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  list-style: none;
+  user-select: none;
+}
+.topic-modal-advanced > summary::before {
+  content: '▸ ';
+  margin-right: 0.25rem;
+}
+.topic-modal-advanced[open] > summary::before {
+  content: '▾ ';
+}
+.topic-modal-advanced[open] > .topic-modal-url-form {
+  margin-top: 0.6rem;
+}

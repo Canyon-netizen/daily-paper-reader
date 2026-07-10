@@ -49,13 +49,29 @@ import '../styles/topic-search.css';
         </header>
         <div class="topic-modal-body">
           <p class="topic-modal-hint">
-            勾选要加入参考的论文,可在 <a href="/papers/" class="topic-link">论文库</a> 多选凑齐再来。
-            没有目标论文时也可从 arXiv 链接单条添加(只填元数据,不进速览)。
+            输入论文标题关键词找论文(联网搜 arXiv),或展开「添加单条」手动填 arXiv ID。
+            已加入的论文见下方列表。
           </p>
-          <form class="topic-modal-url-form" id="add-seeds-url-form">
-            <input type="url" id="add-seeds-url-input" placeholder="arXiv 链接或 ID,例如 1706.03762 或 https://arxiv.org/abs/1706.03762" />
-            <button type="submit" class="topic-btn primary">➕ 添加</button>
-          </form>
+
+          <div class="topic-modal-url-form topic-modal-search">
+            <input
+              type="search"
+              id="add-seeds-search-input"
+              placeholder="🔍 按论文标题搜索 arXiv,例如 diffusion policy / long context agent"
+              autocomplete="off"
+            />
+          </div>
+          <div id="add-seeds-search-results" class="topic-modal-search-results"></div>
+
+          <details class="topic-modal-advanced">
+            <summary>已知 arXiv ID / 链接,直接添加</summary>
+            <form class="topic-modal-url-form" id="add-seeds-url-form">
+              <input type="url" id="add-seeds-url-input" placeholder="1706.03762 或 https://arxiv.org/abs/1706.03762" />
+              <button type="submit" class="topic-btn primary">➕ 添加</button>
+            </form>
+          </details>
+
+          <h3 class="topic-modal-section-title">已加入参考(<span id="add-seeds-count">0</span>)</h3>
           <div id="add-seeds-list" class="topic-modal-list"></div>
         </div>
         <footer class="topic-modal-footer">
