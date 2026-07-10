@@ -1025,74 +1025,12 @@ function renderCandStage(): void {
 
   // 按 subq 分组渲染 — 即使某个子方向 0 命中也要显示,这样用户能看到"哪些没搜到"
   // 渲染 seeds group(独立于子方向,带 [📚 参考论文] 徽章表示这是用户主动选的)
-  const seedsRendered = (() => {
-    const list = current!.candidatesBySubq['__seeds__'] || [];
-    if (list.length === 0) return '';
-    const hidden = new Set(loadHiddenPapers());
-    const visList = list.filter((c) => !hidden.has(c.arxivId));
-    const sel = visList.filter((c) => c.selected).length;
-    if (visList.length === 0) return '';
-    return `
-      <div class="topic-candidate-group topic-candidate-group--seeds" data-subq="__seeds__">
-        <div class="topic-candidate-group-header">
-          <div class="topic-candidate-group-title">
-            <span class="topic-candidate-group-badge topic-candidate-group-badge--seeds" title="你在「添加参考论文」里选的论文">📚 参考论文</span>
-          </div>
-          <div class="topic-candidate-group-meta">${sel}/${visList.length} 已选 · <a href="#" data-act="toggle-all-seeds">${sel === visList.length ? '全不选' : '全选'}</a></div>
-        </div>
-        <div class="topic-candidate-list">
-          ${visList.map((c) => `
-            <div class="topic-candidate-item ${c.selected ? 'selected' : 'topic-candidate-item--seed' : ''}" data-arxiv="${escapeHtml(c.arxivId)}">
-              <input type="checkbox" ${c.selected ? 'checked' : ''} aria-label="勾选论文 ${escapeHtml(c.entry.title)}" />
-              <div class="topic-candidate-main">
-                <div class="topic-candidate-title">${escapeHtml(c.entry.title)}</div>
-                <div class="topic-candidate-meta">arXiv:${escapeHtml(c.arxivId)} <span class="topic-candidate-seed-tag">📚 你选的</span></div>
-                <div class="topic-candidate-summary">${escapeHtml(c.entry.summary)}</div>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      </div>`;
-  })();
+  const seedsRendered = renderSeedsCandidateGroup();
   wrap.innerHTML =
     current.subqs
       .filter((q) => current!.candidatesBySubq[q.id] !== undefined)
-      .map((q) => {
-    const allList = current!.candidatesBySubq[q.id] || [];
-    // 过滤已隐藏论文(用户在详情页点过隐藏的)。这里读一次 localStorage,
-    // 避免对每条 candidate 单独读(每次 loadHiddenPapers 都 parse JSON,O(n))。
-    const hidden = new Set(loadHiddenPapers());
-    const list = allList.filter((c) => !hidden.has(c.arxivId));
-    const grpSelected = list.filter((c) => c.selected).length;
-    const emptyHint = list.length === 0 && allList.length > 0
-      ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">该子方向下 ${allList.length} 篇候选全部被隐藏。可在 设置页"已隐藏论文"面板 恢复。</div>`
-      : list.length === 0
-        ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">未命中任何论文。可能是 query 太冷门,试试改 query 或换个角度重检索。</div>`
-        : '';
-    return `
-      <div class="topic-candidate-group" data-subq="${q.id}">
-        <div class="topic-candidate-group-header" data-act="toggle-grp">
-          <div class="topic-candidate-group-title">📂 ${escapeHtml(q.label)}</div>
-          <div class="topic-candidate-group-meta">${list.length === 0 ? `0 命中${allList.length > 0 ? ` (${allList.length} 篇已隐藏)` : ''}` : `${grpSelected}/${list.length} 已选 · <a href="#" data-act="toggle-all">${grpSelected === list.length ? '全不选' : '全选'}</a>`}</div>
-        </div>
-        ${list.length === 0 ? emptyHint : `
-        <div class="topic-candidate-list">
-          ${list.map((c) => `
-            <div class="topic-candidate-item ${c.selected ? 'selected' : ''}" data-arxiv="${escapeHtml(c.arxivId)}">
-              <input type="checkbox" ${c.selected ? 'checked' : ''} aria-label="勾选论文 ${escapeHtml(c.entry.title)}" />
-              <div class="topic-candidate-main">
-                <div class="topic-candidate-title">${escapeHtml(c.entry.title)}</div>
-                <div class="topic-candidate-meta">arXiv:${escapeHtml(c.arxivId)} · ${escapeHtml((c.entry.published || '').slice(0, 10))} · ${c.entry.authors.length} 位作者</div>
-                <div class="topic-candidate-summary">${escapeHtml(c.entry.summary)}</div>
-              </div>
-              <div></div>
-            </div>
-          `).join('')}
-        </div>
-        `}
-      </div>
-    `;
-  }).join('') + seedsRendered;
+      .map((q) => renderCandidateGroupFor(q.id))
+      .join('') + seedsRendered;
 
   // 绑定
   wrap.querySelectorAll<HTMLElement>('.topic-candidate-item').forEach((row) => {
@@ -1120,6 +1058,75 @@ function renderCandStage(): void {
       persistSession(current!);
     });
   });
+}
+
+// 渲染一个子方向的候选 group(独立 helper 拆分出来,避免 renderCandStage 内联一个
+// 超大 lambda + 嵌套 .map 触发 TS 类型推断错误:topic-candidate-item--seed 的 seed
+// group 视觉差异化在此 path 上做不出来,所以独立 helper 拆出来)
+function renderCandidateGroupFor(subqId: string): string {
+  const allList = current!.candidatesBySubq[subqId] || [];
+  const hidden = new Set(loadHiddenPapers());
+  const list = allList.filter((c) => !hidden.has(c.arxivId));
+  const grpSelected = list.filter((c) => c.selected).length;
+  const subq = current!.subqs.find((q) => q.id === subqId);
+  const label = subq?.label ?? subqId;
+  const emptyHint = list.length === 0 && allList.length > 0
+    ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">该子方向下 ${allList.length} 篇候选全部被隐藏。可在 设置页"已隐藏论文"面板 恢复。</div>`
+    : list.length === 0
+      ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">未命中任何论文。可能是 query 太冷门,试试改 query 或换个角度重检索。</div>`
+      : '';
+  const metaHtml = list.length === 0
+    ? `0 命中${allList.length > 0 ? ` (${allList.length} 篇已隐藏)` : ''}`
+    : `${grpSelected}/${list.length} 已选 · <a href="#" data-act="toggle-all">${grpSelected === list.length ? '全不选' : '全选'}</a>`;
+  const itemsHtml = list.map((c) => `
+            <div class="topic-candidate-item ${c.selected ? 'selected' : ''}" data-arxiv="${escapeHtml(c.arxivId)}">
+              <input type="checkbox" ${c.selected ? 'checked' : ''} aria-label="勾选论文 ${escapeHtml(c.entry.title)}" />
+              <div class="topic-candidate-main">
+                <div class="topic-candidate-title">${escapeHtml(c.entry.title)}</div>
+                <div class="topic-candidate-meta">arXiv:${escapeHtml(c.arxivId)} · ${escapeHtml((c.entry.published || '').slice(0, 10))} · ${c.entry.authors.length} 位作者</div>
+                <div class="topic-candidate-summary">${escapeHtml(c.entry.summary)}</div>
+              </div>
+              <div></div>
+            </div>
+          `).join('');
+  return `
+    <div class="topic-candidate-group" data-subq="${subqId}">
+      <div class="topic-candidate-group-header" data-act="toggle-grp">
+        <div class="topic-candidate-group-title">📂 ${escapeHtml(label)}</div>
+        <div class="topic-candidate-group-meta">${metaHtml}</div>
+      </div>
+      ${list.length === 0 ? emptyHint : `<div class="topic-candidate-list">${itemsHtml}</div>`}
+    </div>`;
+}
+
+// 渲染"📚 参考论文"group(用户在 modal 加的论文),带 [📚 你选的] 徽章
+function renderSeedsCandidateGroup(): string {
+  const list = current!.candidatesBySubq['__seeds__'] || [];
+  if (list.length === 0) return '';
+  const hidden = new Set(loadHiddenPapers());
+  const visList = list.filter((c) => !hidden.has(c.arxivId));
+  if (visList.length === 0) return '';
+  const sel = visList.filter((c) => c.selected).length;
+  const itemsHtml = visList.map((c) => `
+            <div class="topic-candidate-item ${c.selected ? 'selected topic-candidate-item--seed' : 'topic-candidate-item--seed'}" data-arxiv="${escapeHtml(c.arxivId)}">
+              <input type="checkbox" ${c.selected ? 'checked' : ''} aria-label="勾选论文 ${escapeHtml(c.entry.title)}" />
+              <div class="topic-candidate-main">
+                <div class="topic-candidate-title">${escapeHtml(c.entry.title)}</div>
+                <div class="topic-candidate-meta">arXiv:${escapeHtml(c.arxivId)} <span class="topic-candidate-seed-tag">📚 你选的</span></div>
+                <div class="topic-candidate-summary">${escapeHtml(c.entry.summary)}</div>
+              </div>
+            </div>
+          `).join('');
+  return `
+    <div class="topic-candidate-group topic-candidate-group--seeds" data-subq="__seeds__">
+      <div class="topic-candidate-group-header" data-act="toggle-grp">
+        <div class="topic-candidate-group-title">
+          <span class="topic-candidate-group-badge topic-candidate-group-badge--seeds" title="你在「添加参考论文」里选的论文">📚 参考论文</span>
+        </div>
+        <div class="topic-candidate-group-meta">${sel}/${visList.length} 已选 · <a href="#" data-act="toggle-all">${sel === visList.length ? '全不选' : '全选'}</a></div>
+      </div>
+      <div class="topic-candidate-list">${itemsHtml}</div>
+    </div>`;
 }
 
 function renderSummaryStage(): void {
