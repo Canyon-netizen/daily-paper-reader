@@ -650,6 +650,11 @@
   white-space: nowrap;
   flex-shrink: 0;
 }
+.topic-subq-card-source--seeds {
+  background: color-mix(in srgb, #22c55e 14%, var(--bg-elevated));
+  color: #15803d;
+  border-color: color-mix(in srgb, #22c55e 38%, var(--border));
+}
 /* ==========================================================================
  * 阶段 1:参考论文 chip(counter)
  * ========================================================================== */
@@ -1029,4 +1034,46 @@
 }
 .topic-modal-advanced[open] > .topic-modal-url-form {
   margin-top: 0.6rem;
+}
+
+/* ==========================================================================
+ * 阶段 1 banner:已选参考论文提示(告知用户论文会参与拆解思路)
+ * ========================================================================== */
+.topic-stage-seeds-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1rem;
+  margin-bottom: 0.8rem;
+  background: color-mix(in srgb, #22c55e 8%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, #22c55e 35%, var(--border));
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+  color: #15803d;
+}
+.topic-stage-seeds-banner-icon {
+  flex-shrink: 0;
+  font-size: 1.1rem;
+}
+.topic-stage-seeds-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.topic-stage-seeds-banner-text strong {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  margin: 0 0.15rem;
+}
+.topic-stage-seeds-banner-detail {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topic-stage-seeds-banner-btn {
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.8rem;
 }

@@ -47,8 +47,11 @@ interface SubQ {
   selected: boolean;
   // 新增:从已选论文来的方向带这个标签 — 标记迁移范式
   explorationType?: 'cross_domain' | 'method_transfer' | 'reverse' | 'combination';
-  // 新增:manual = 用户输入思路拆解;seeds = 从已选论文生成
-  source?: 'manual' | 'seeds';
+  // 新增:
+  //   manual: 用户输入思路 + 没选参考论文 → 纯手动拆解
+  //   manual-with-seeds: 用户输入思路 + 同时选了一些参考论文 → 拆解 prompt 既看思路也看参考
+  //   seeds: 来自 ?from=selection 入口,完全替代主题,纯靠 seeds 生成迁移方向
+  source?: 'manual' | 'manual-with-seeds' | 'seeds';
 }
 
 interface Candidate {
@@ -82,6 +85,11 @@ interface TopicSession {
   // 主题报告(阶段 5 产物)。老 session 没这个字段 → undefined,所有
   // `if (current.report) ...` / `current.report?.` 走兜底,不需要 schema 迁移。
   report?: TopicReport;
+  // 最近一次 doDecompose 拆解时参考的论文 ID(来自 modal 加进 selection 的那批);
+  // 用于阶段 1 banner 渲染"你选了 N 篇论文参与本次拆解"。不影响搜索/总结逻辑。
+  // 复选框手动选子方向时同样有效。如果用户后续又点了一次 🔍 拆解思路,这里会
+  // 被覆盖成最新一批 seeds 的 ID。
+  referenceSeedArxivIds?: string[];
 }
 
 interface TopicReportDimensionPaper {
@@ -513,11 +521,37 @@ async function callLLMRaw(
 // 状态机:5 个阶段
 // ============================================================================
 
-async function decomposeIdea(idea: string): Promise<SubQ[]> {
+async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<SubQ[]> {
   const cfg = loadSettings() as LLMConfig;
-  const userPrompt =
-    `研究思路:\n"""\n${idea.trim()}\n"""\n\n` +
-    `请输出 3-7 个可独立检索的子方向(严格 JSON 数组,不要其它文字):`;
+  let userPrompt = `研究思路:\n"""\n${idea.trim()}\n"""\n\n`;
+  // 参考论文(若 selection 非空)拼成上下文。用户可能选 0 篇,这时逻辑与原版完全一致。
+  if (seeds && seeds.length > 0) {
+    // trunc 风格抄 exploreFromSeeds:每篇 500 字符上限,块与块之间空行
+    const trunc = (v: string | undefined, max = 500): string => {
+      const s = (v ?? '').trim();
+      if (!s) return '';
+      return s.length > max ? s.slice(0, max) + '…' : s;
+    };
+    const blocks: string[] = [];
+    seeds.forEach((p, i) => {
+      const lines: string[] = [];
+      lines.push(`[参考论文 ${i + 1}] arXiv:${p.arxivId}`);
+      lines.push(`标题: ${p.title}${p.title_zh ? ' / ' + p.title_zh : ''}`);
+      if (p.tldr) lines.push(`TLDR: ${trunc(p.tldr)}`);
+      if (p.motivation) lines.push(`动机: ${trunc(p.motivation)}`);
+      if (p.method) lines.push(`方法: ${trunc(p.method)}`);
+      if (p.result) lines.push(`结果: ${trunc(p.result)}`);
+      if (p.conclusion) lines.push(`结论: ${trunc(p.conclusion)}`);
+      if (p.tags && p.tags.length) lines.push(`标签: ${p.tags.join(', ')}`);
+      blocks.push(lines.join('\n'));
+    });
+    const seedsBlock = blocks.join('\n\n');
+    userPrompt +=
+      `用户已选 ${seeds.length} 篇参考论文(用于迁移/借鉴,不限从中衍生):\n"""\n${seedsBlock}\n"""\n\n` +
+      `请结合研究思路与参考论文,综合出 3-7 个可独立检索的子方向,允许「直接借鉴参考论文的方法路径」` +
+      `与「主题在参考论文之外的新方向」并存。务必混合,不要只输出从参考论文衍生的方向。\n\n`;
+  }
+  userPrompt += `请输出 3-7 个可独立检索的子方向(严格 JSON 数组,不要其它文字):`;
   let raw = '';
   let arr: any[] = [];
   let attempt = 0;
@@ -546,6 +580,9 @@ async function decomposeIdea(idea: string): Promise<SubQ[]> {
     // 否则自动重试
     await new Promise((r) => setTimeout(r, 300));
   }
+  // 主题报告不需 rebuild,因为 report.relatedArxivIds 跟主题独立 — 用户重新点"📊
+  // 生成报告"按钮就会按新的 summaries + 同样的 prevDimensions 重新生成。
+  const hasSeeds = !!(seeds && seeds.length > 0);
   return arr.slice(0, 7).map((x: any, i: number) => {
     const rawQuery = String(x.query ?? '').trim();
     const cleaned = normalizeQuery(rawQuery);
@@ -555,6 +592,7 @@ async function decomposeIdea(idea: string): Promise<SubQ[]> {
       query: cleaned || rawQuery, // 兜底清洗后为空就保留原文,仍交给用户手动改
       reason: String(x.reason ?? '').trim(),
       selected: true,
+      source: hasSeeds ? ('manual-with-seeds' as const) : ('manual' as const),
     };
   }).filter((q: SubQ) => q.query);
 }
@@ -849,6 +887,28 @@ function renderInputStage(): void {
   $('input-hint').textContent = current
     ? '已拆解过 — 修改后再次点拆解会覆盖现有子方向。'
     : '提示:思路越具体,拆解出的子方向越精准。';
+  renderStageInputSeedsBanner();
+}
+
+// 阶段 1 banner:当选了 N > 0 篇参考论文时显示,告诉用户这些论文会被拆解 prompt 看到。
+function renderStageInputSeedsBanner(): void {
+  const banner = document.getElementById('stage-input-seeds-banner');
+  if (!banner) return;
+  const countEl = document.getElementById('stage-input-seeds-count');
+  const detailEl = document.getElementById('stage-input-seeds-detail');
+  const seeds = loadSelection();
+  if (seeds.length === 0) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  if (countEl) countEl.textContent = String(seeds.length);
+  if (detailEl) {
+    // 列首 3 篇标题,多则折叠 (+N)
+    const display = seeds.slice(0, 3).map((s) => s.title).join(' · ');
+    const more = seeds.length > 3 ? ` +${seeds.length - 3}` : '';
+    detailEl.textContent = display ? `${display}${more}` : '';
+  }
 }
 
 function renderSubqStage(): void {
@@ -868,9 +928,12 @@ function renderSubqStage(): void {
     const badgeHtml = q.explorationType
       ? `<span class="topic-subq-card-badge topic-subq-card-badge--${escapeHtml(q.explorationType)}" title="迁移范式:${escapeHtml(explorationTypeLabel(q.explorationType))}"><span class="topic-subq-card-badge-dot"></span>${escapeHtml(explorationTypeLabel(q.explorationType))}</span>`
       : '';
-    const sourceTag = q.source === 'seeds'
-      ? `<span class="topic-subq-card-source" title="从已选论文生成">📚 来自已选论文</span>`
-      : '';
+    const sourceTag =
+      q.source === 'seeds'
+        ? `<span class="topic-subq-card-source" title="从已选论文迁移探索">📚 来自已选论文</span>`
+        : q.source === 'manual-with-seeds'
+          ? `<span class="topic-subq-card-source topic-subq-card-source--seeds" title="拆解时同时参考了你在「添加参考论文」里选的论文">📚 参考论文+主题</span>`
+          : '';
     return `
     <div class="topic-subq-card ${q.selected ? 'selected' : ''}" data-id="${q.id}">
       <input type="checkbox" class="topic-subq-check" ${q.selected ? 'checked' : ''} aria-label="勾选子方向 ${i + 1}" />
@@ -1373,18 +1436,27 @@ async function doDecompose(): Promise<void> {
   setStatus('🔍 拆解思路中...');
   ($<HTMLButtonElement>('decompose-btn')).disabled = true;
   try {
-    const subqs = await decomposeIdea(idea);
+    // 用户在 modal 里选的论文一并喂给 LLM(同时支持 ?from=selection 入口,会
+    // 跳过手动 textarea 走 doExploreFromSeeds 单独路径,这里不会与它冲突)。
+    const seeds = loadSelection();
+    const subqs = await decomposeIdea(idea, seeds);
     current.topic = idea;
     current.subqs = subqs;
+    // 记录拆解时参考了的论文 ID(用于阶段 5 报告剔除重复时参考,以及
+    // UI 提示"这些论文作为前提"),不参与后续逻辑判定。
+    current.referenceSeedArxivIds = seeds.map((s) => canonicalId(s.arxivId));
     // 清掉旧的候选/总结(主题变了)
     current.candidatesBySubq = {};
     current.summaries = [];
     current.chats = {};
+    // 主题报告也跟着清:旧报告基于上一次的总结,但主题/参考论文变了,旧报告过期
+    current.report = undefined;
     ($('stage-subqs') as HTMLDetailsElement).open = true;
     renderAll();
     persistSession(current!);
-    setStatus(`✓ 已拆解为 ${subqs.length} 个子方向`);
-    setTimeout(clearStatus, 1500);
+    const seedNote = seeds.length > 0 ? ` · 已参考 ${seeds.length} 篇已选论文` : '';
+    setStatus(`✓ 已拆解为 ${subqs.length} 个子方向${seedNote}`);
+    setTimeout(clearStatus, 2000);
   } catch (e) {
     setStatusErrorWithAction(`拆解失败: ${(e as Error).message}`, '🔄 重试', () => doDecompose());
   } finally {
@@ -1937,6 +2009,8 @@ function updateSeedsCounter(): void {
   chip.hidden = n === 0;
   const modalCount = document.getElementById('add-seeds-count');
   if (modalCount) modalCount.textContent = String(n);
+  // 阶段 1 banner 也要随 selection 变化(增/减论文都该立刻反映)
+  renderStageInputSeedsBanner();
 }
 
 async function submitAddSeedsUrl(_form: HTMLFormElement): Promise<void> {
@@ -2201,6 +2275,7 @@ function init(): void {
 
   // 阶段 1:📚 添加参考论文弹层
   $<HTMLButtonElement>('add-seeds-btn').addEventListener('click', openAddSeedsModal);
+  document.getElementById('stage-input-seeds-edit')?.addEventListener('click', openAddSeedsModal);
   document.getElementById('add-seeds-modal')?.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
     if (target.dataset.act === 'close-mask' || target.dataset.act === 'close-modal') {

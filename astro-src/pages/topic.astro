@@ -91,6 +91,15 @@ import '../styles/topic-search.css';
         <span class="topic-stage-toggle">▾</span>
       </summary>
       <div class="topic-stage-body">
+        <!-- 阶段 1 banner:当选了参考论文时展示给用户,告诉他这些论文会被拆解 prompt 看到 -->
+        <div class="topic-stage-seeds-banner topic-hidden" id="stage-input-seeds-banner" hidden>
+          <span class="topic-stage-seeds-banner-icon">📚</span>
+          <span class="topic-stage-seeds-banner-text">
+            已选 <strong id="stage-input-seeds-count">0</strong> 篇参考论文会参与「拆解思路」。
+            <span class="topic-stage-seeds-banner-detail" id="stage-input-seeds-detail"></span>
+          </span>
+          <button type="button" class="topic-btn ghost topic-stage-seeds-banner-btn" id="stage-input-seeds-edit" title="打开添加参考论文">管理</button>
+        </div>
         <textarea
           id="topic-input"
           class="topic-textarea"
