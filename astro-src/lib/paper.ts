@@ -44,7 +44,9 @@ export interface PaperFrontmatter {
   score?: number;
   evidence?: string;
   tldr?: string;
-  source?: string;
+  source?: string;        // 论文数据来源 ID(arxiv / biorxiv / icml-openreview 等)
+  venue?: string;         // 人类可读会议名,如 "ICML 2025"。非会议论文为空字符串,前端不渲染。
+  accepted?: boolean;     // 是否被会议接收(仅会议论文有值)
   selection_source?: string;
   figures_json?: string;
   tables_json?: string;
@@ -173,6 +175,7 @@ export async function readPaper(id: string): Promise<Paper | null> {
   const day = parsed.data.date && typeof parsed.data.date === 'string'
     ? parsed.data.date.slice(8, 10)
     : '';
+  const { venue, accepted } = deriveVenue(parsed.data.source);
   return {
     ...parsed.data,
     id,
@@ -180,11 +183,62 @@ export async function readPaper(id: string): Promise<Paper | null> {
     yearMonth,
     day,
     arxivId,
+    venue,
+    accepted,
     body: parsed.body,
     isBroken: false,
     figures: parseFigureList(parsed.data.figures_json),
     tables: parseFigureList(parsed.data.tables_json),
   };
+}
+
+/**
+ * Derive a human-readable venue label from a paper's raw `source` field.
+ *
+ * Mirrors `astro-src/lib/venue.ts::extractVenue` for the front-end path; the
+ * pure function lives in venue.ts so the Python backfill tool
+ * (`scripts/backfill_paper_venue.py`) can call it via a Node subprocess.
+ * Keep both implementations in sync.
+ */
+function deriveVenue(rawSource: string | undefined): { venue: string; accepted: boolean } {
+  if (!rawSource) return { venue: '', accepted: false };
+  const source = String(rawSource).trim();
+  if (!source) return { venue: '', accepted: false };
+  // Tagged value like "ICML-2025-Accepted" or "NeurIPS-2023-Poster".
+  // Allow mixed-case tag (NeurIPS contains lowercase s).
+  const tagged = source.match(/^([A-Za-z]+)-(\d{4})-(.+)$/);
+  if (tagged) {
+    const [, tag, year, status] = tagged;
+    const labels: Record<string, string> = {
+      AAAI: 'AAAI',
+      ACL: 'ACL',
+      EMNLP: 'EMNLP',
+      ICLR: 'ICLR',
+      ICML: 'ICML',
+      NIPS: 'NeurIPS',
+      NEURIPS: 'NeurIPS',
+    };
+    const label = labels[String(tag).toUpperCase()];
+    if (label) {
+      const accepted = ['accepted', 'oral', 'poster', 'spotlight'].includes(
+        status.toLowerCase(),
+      );
+      return { venue: `${label} ${year}`, accepted };
+    }
+  }
+  // Plain source-id (e.g. "icml-openreview" or "icml_openreview").
+  const normalized = source.toLowerCase().replace(/-/g, '_');
+  const plain: Record<string, string> = {
+    aaai: 'AAAI',
+    acl: 'ACL',
+    emnlp: 'EMNLP',
+    iclr_openreview: 'ICLR',
+    icml_openreview: 'ICML',
+    neurips_openreview: 'NeurIPS',
+  };
+  const label = plain[normalized];
+  if (label) return { venue: label, accepted: false };
+  return { venue: '', accepted: false };
 }
 
 export interface PaperListItem {
@@ -202,6 +256,9 @@ export interface PaperListItem {
   yearMonth: string;
   day: string;
   arxivId: string;
+  source?: string;       // 论文数据来源 ID(arxiv / biorxiv / icml-openreview 等)
+  venue?: string;        // 人类可读会议名,如 "ICML 2025"。非会议论文为空字符串,前端不渲染。
+  accepted?: boolean;    // 是否被会议接收(仅会议论文有值)
 }
 
 async function walk(dir: string, out: string[]): Promise<void> {
@@ -304,6 +361,9 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       yearMonth: p.yearMonth,
       day: p.day,
       arxivId: p.arxivId,
+      source: p.source,
+      venue: p.venue,
+      accepted: p.accepted,
     });
   }
   // Filter

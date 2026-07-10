@@ -122,6 +122,17 @@ const base = import.meta.env.BASE_URL;
                     <span class="meta-value">{paper.generated_at}</span>
                   </div>
                 )}
+                {paper.venue && (
+                  <div class="meta-row">
+                    <span class="meta-label">VENUE</span>
+                    <span class="meta-value">
+                      <span class={paper.accepted ? 'venue-badge venue-badge--accepted' : 'venue-badge'}>
+                        {paper.venue}
+                        {paper.accepted && <span class="venue-badge-tick">✓ Accepted</span>}
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
           </header>
@@ -356,6 +367,31 @@ const base = import.meta.env.BASE_URL;
     margin-right: 0.3em;
   }
   .pdf-link { color: var(--accent); font-family: var(--font-mono); font-size: 0.9rem; }
+
+  /* 会议接受徽章 — 论文被会议接收时显示,非会议论文 venue="" 整体不渲染 */
+  .venue-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    padding: 0.15em 0.6em;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    font-family: var(--font-mono);
+    background: var(--bg);
+    color: var(--fg-muted);
+  }
+  .venue-badge--accepted {
+    background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .venue-badge-tick {
+    font-size: 0.75em;
+    padding-left: 0.4em;
+    border-left: 1px solid currentColor;
+  }
 
   .paper-glance {
     padding: 1.5rem 0;

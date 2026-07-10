@@ -133,6 +133,11 @@ const latestDateLabel = latestDate
                         ★ {p.score.toFixed(1)}
                       </span>
                     )}
+                    {p.venue && (
+                      <span class={p.accepted ? 'venue-chip venue-chip--accepted' : 'venue-chip'} title={p.accepted ? '会议接收论文' : '会议论文'}>
+                        {p.venue}{p.accepted ? ' ✓' : ''}
+                      </span>
+                    )}
                   </div>
                   <h3 class="paper-title">{p.title_zh || p.title}</h3>
                   {p.title_zh && p.title && p.title !== p.title_zh && (
