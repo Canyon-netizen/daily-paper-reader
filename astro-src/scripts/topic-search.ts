@@ -14,10 +14,14 @@ import {
   getCustomProxy,
   loadHiddenPapers,
   loadSelection,
+  addToSelection,
+  removeFromSelection,
+  clearSelection,
   type SelectionItem,
 } from './settings';
 import {
   searchArxiv,
+  searchArxivById,
   fetchArxivPdf,
   extractBalancedJson,
   callLLM,
@@ -74,6 +78,35 @@ interface TopicSession {
   candidatesBySubq: Record<string, Candidate[]>;
   summaries: Summary[];
   chats: Record<string, ChatMsg[]>; // 按 arxivId 分组
+  // 主题报告(阶段 5 产物)。老 session 没这个字段 → undefined,所有
+  // `if (current.report) ...` / `current.report?.` 走兜底,不需要 schema 迁移。
+  report?: TopicReport;
+}
+
+interface TopicReportDimensionPaper {
+  arxivId: string;
+  role: string;       // 在该维度下的定位, 截断 24
+  key: string;        // 与维度的连接点, 截断 120
+  method?: string;    // 截断 120
+  result?: string;    // 截断 120
+  note?: string;      // 截断 120
+}
+
+interface TopicReportDimension {
+  name: string;                                  // 截断 30
+  description?: string;                          // 截断 160
+  papers: TopicReportDimensionPaper[];           // ≥ 1
+}
+
+interface TopicReport {
+  overview: string;                              // 截断 800
+  dimensions: TopicReportDimension[];            // 2-6
+  sharedFindings: string[];                      // 截断 120/条, 最长 8
+  gaps: string[];                                // 截断 120/条, 最长 6
+  nextSteps: string[];                           // 截断 120/条, 最长 6
+  generatedAt: number;
+  relatedArxivIds: string[];                     // 用于 UI 排序
+  incrementallyAddedArxivIds?: string[];         // 仅 incremental 模式
 }
 
 interface SessionStore {
@@ -94,6 +127,10 @@ const MAX_QA_FOR_LLM = 30;
 const TOTAL_BYTES_LIMIT = 4 * 1024 * 1024;
 // 单会话字节上限
 const PER_SESSION_BYTES_LIMIT = 800 * 1024;
+// 主题报告增量追加节流(同 session 内 N 篇并发完成时,8 秒内最多触发 1 次)
+const REPORT_INC_THROTTLE_MS = 8000;
+// 报告生成 LLM 重试次数
+const REPORT_LLM_RETRY = 2;
 
 // ============================================================================
 // Prompt 模板
@@ -187,6 +224,47 @@ abstract 和已有的速览内容,回答用户的追问。
 - 中文回答,术语首次出现给中英对照
 - 答案控制在 200 字以内,除非用户明确要求展开`;
 
+const TOPIC_REPORT_SYSTEM = `你是研究主题整合助手。用户给你 M 篇论文的中文速览笔记(每篇包含标题、
+TLDR / 方法 / 结果 / 结论 / 主题语境),以及一个研究主题的种子描述。
+
+你需要做"主题级横向整合",输出一份适合研究者 5 分钟内掌握全局的中文报告。
+
+【输出格式 — 必须严格遵守】
+- 只输出一个 JSON 对象,不要任何其它文字 / markdown 围栏 / 思考块
+- 不要写 <think> 思考块
+- 第一行必须是 {,最后一行必须是 }
+- 字段如下,字段名/类型严格匹配:
+  - overview: 字符串,主题总览(2-3 段),≤ 400 字
+  - dimensions: 数组,2-6 个维度,每个元素:
+      - name: 字符串,维度名,≤ 14 字
+      - description: 字符串,维度概述,≤ 80 字(可省略)
+      - papers: 数组,≥ 1 篇该维度下的论文,每篇:
+          - arxivId: 字符串,严格匹配输入(去掉版本号后)
+          - role: 字符串,≤ 12 字
+          - key: 字符串,一句话连接点,≤ 60 字
+          - method: 字符串,≤ 60 字(可省略)
+          - result: 字符串,≤ 60 字(可省略)
+          - note: 字符串,≤ 60 字(可省略)
+  - sharedFindings: 字符串数组,3-6 条共同发现,每条 ≤ 60 字
+  - gaps: 字符串数组,2-5 条研究空白,每条 ≤ 60 字
+  - nextSteps: 字符串数组,3-5 条下一步建议,每条 ≤ 60 字
+
+【归纳纪律 — 非常重要】
+- dimensions 是"归纳出来的横向比较轴",不要每个论文一个维度;当 M>3 时尤其要合并
+  (例如多篇同做 RLHF 合并成"RLHF 对齐范式")
+- 每篇论文必须在至少一个维度里出现;理想是 1-2 次出现(过度散开说明维度没归纳)
+- overview 不要照抄单篇 TLDR,要写"这堆论文研究的是什么 / 主要分歧点 / 适用场景"
+- sharedFindings 是"多篇一致或收敛的方向",gaps 是"论文没解决或互相矛盾的地方",
+  nextSteps 给读者(下一步读什么 / 哪个方向有空间)
+- 当 incrementalMode = true 时,你会收到 prevDimensions 列表 — 把它当作"已经发现的维度",
+  新的 dimensions 应优先复用 / 扩展已有维度,只在确实无法归入时才新增;
+  newPapers 请确保每篇都至少进 1 个维度
+
+【写作风格】
+- 中文,术语首次出现可给中英对照(如"近端策略优化(PPO)")
+- 简短信息密度优先,不要散文
+- 直接陈述观点,不要"我们认为 / 总的来说"等套话`;
+
 // ============================================================================
 // 工具函数
 // ============================================================================
@@ -230,6 +308,7 @@ async function runConcurrent<T, R>(
   limit: number,
   fn: (item: T, idx: number) => Promise<R>,
   onProgress?: (done: number, total: number) => void,
+  onDoneItem?: (item: T, idx: number, result: R | null, error: Error | null) => void,
 ): Promise<{ ok: Array<{ item: T; result: R }>; err: Array<{ item: T; error: Error }> }> {
   const results: Array<{ item: T; result: R } | null> = new Array(items.length).fill(null);
   const errors: Array<{ item: T; error: Error } | null> = new Array(items.length).fill(null);
@@ -241,9 +320,13 @@ async function runConcurrent<T, R>(
       const idx = cursor++;
       if (idx >= items.length) return;
       try {
-        results[idx] = { item: items[idx], result: await fn(items[idx], idx) };
+        const result = await fn(items[idx], idx);
+        results[idx] = { item: items[idx], result };
+        onDoneItem?.(items[idx], idx, result, null);
       } catch (e) {
-        errors[idx] = { item: items[idx], error: e as Error };
+        const err = e as Error;
+        errors[idx] = { item: items[idx], error: err };
+        onDoneItem?.(items[idx], idx, null, err);
       } finally {
         done++;
         onProgress?.(done, items.length);
@@ -1138,17 +1221,141 @@ async function sendChat(card: HTMLElement): Promise<void> {
   }
 }
 
+// ============================================================================
+// 阶段 5:主题报告渲染
+// ============================================================================
+
+function renderReportToHTML(r: TopicReport): string {
+  const dimsHTML = r.dimensions
+    .map(
+      (d) => `
+    <details class="topic-report-dim" open>
+      <summary class="topic-report-dim-header">
+        <strong>${escapeHtml(d.name)}</strong>
+        <span class="topic-report-dim-count">${d.papers.length} 篇</span>
+      </summary>
+      ${d.description ? `<div class="topic-report-dim-desc">${escapeHtml(d.description)}</div>` : ''}
+      <ul class="topic-report-dim-papers">
+        ${d.papers
+          .map(
+            (p) => `
+          <li>
+            <a href="/papers/${encodeURIComponent(p.arxivId)}/" class="topic-link" target="_blank" rel="noopener">arXiv:${escapeHtml(p.arxivId)}</a>
+            <span class="topic-report-dim-role">${escapeHtml(p.role)}</span>
+            — ${escapeHtml(p.key)}
+            ${p.method ? `<div class="topic-report-dim-meta">方法: ${escapeHtml(p.method)}</div>` : ''}
+            ${p.result ? `<div class="topic-report-dim-meta">结果: ${escapeHtml(p.result)}</div>` : ''}
+            ${p.note ? `<div class="topic-report-dim-meta">注: ${escapeHtml(p.note)}</div>` : ''}
+          </li>`,
+          )
+          .join('')}
+      </ul>
+    </details>`,
+    )
+    .join('');
+  const section = (title: string, items: string[]): string =>
+    !items.length
+      ? ''
+      : `<section class="topic-report-section"><h3>${escapeHtml(title)}</h3><ul>${items
+          .map((s) => `<li>${escapeHtml(s)}</li>`)
+          .join('')}</ul></section>`;
+  return `
+    <section class="topic-report-section">
+      <h3>主题总览</h3>
+      <p>${escapeHtml(r.overview).replace(/\n/g, '<br>')}</p>
+    </section>
+    <section class="topic-report-section">
+      <h3>论文横向对比</h3>
+      ${dimsHTML}
+    </section>
+    ${section('共同发现', r.sharedFindings)}
+    ${section('研究空白', r.gaps)}
+    ${section('下一步建议', r.nextSteps)}
+  `;
+}
+
+function renderReportStage(): void {
+  const meta = $('report-meta');
+  const out = $('report-output');
+  const genBtn = $<HTMLButtonElement>('report-gen-btn');
+  const copyBtn = $<HTMLButtonElement>('report-copy-btn');
+  const n = current?.summaries.length ?? 0;
+  if (!current || n === 0) {
+    meta.textContent = '需要先有至少 1 篇速览';
+    genBtn.disabled = true;
+    copyBtn.disabled = true;
+    out.innerHTML = '<div class="topic-empty">尚未总结 — 在第 4 步完成速览后再来生成报告。</div>';
+    return;
+  }
+  genBtn.disabled = false;
+  if (!current.report) {
+    meta.textContent = '尚未生成';
+    copyBtn.disabled = true;
+    out.innerHTML = `<div class="topic-empty">点击"📊 生成报告"开始基于 ${n} 篇速览整合主题报告。</div>`;
+    return;
+  }
+  const r = current.report;
+  const incNote = r.incrementallyAddedArxivIds?.length
+    ? ` · 本次 +${r.incrementallyAddedArxivIds.length}`
+    : '';
+  meta.textContent = `已生成 · ${r.dimensions.length} 个维度 · ${r.relatedArxivIds.length} 篇${incNote}`;
+  copyBtn.disabled = false;
+  out.innerHTML = renderReportToHTML(r);
+}
+
 function renderAll(): void {
   renderSessionMeta();
   renderInputStage();
   renderSubqStage();
   renderCandStage();
   renderSummaryStage();
+  renderReportStage();
+  updateSeedsCounter();
 }
 
 // ============================================================================
 // 阶段动作(用户触发)
 // ============================================================================
+
+async function doGenerateReport(): Promise<void> {
+  if (!current) return;
+  if (current.summaries.length === 0) {
+    setStatus('需要至少 1 篇速览笔记才能生成报告', 'error');
+    return;
+  }
+  const cfg = loadSettings() as LLMConfig;
+  if (!cfg.apiKey) {
+    renderBanner('请先在 <a href="/settings/">设置</a> 页面填 LLM API Key。');
+    return;
+  }
+  clearBanner();
+  ($<HTMLButtonElement>('report-gen-btn')).disabled = true;
+  ($('stage-report') as HTMLDetailsElement).open = true;
+  inFlightController = new AbortController();
+  const n = current.summaries.length;
+  setStatus(`📊 正在为 ${n} 篇论文生成主题报告...`);
+  try {
+    const report = await generateTopicReport(
+      current.topic,
+      current.summaries,
+      cfg,
+      current.report ? 'incremental' : 'full',
+      current.report,
+    );
+    current.report = report;
+    renderReportStage();
+    persistSession(current!);
+    setStatus(
+      `✓ 报告完成: ${report.dimensions.length} 个维度 · ${report.relatedArxivIds.length} 篇论文`,
+    );
+    setTimeout(clearStatus, 2000);
+  } catch (e) {
+    setStatusErrorWithAction(`生成报告失败: ${(e as Error).message}`, '🔄 重试', () => doGenerateReport());
+  } finally {
+    ($<HTMLButtonElement>('report-gen-btn')).disabled = false;
+    inFlightController = null;
+  }
+}
 
 async function doDecompose(): Promise<void> {
   if (!current) return;
@@ -1271,16 +1478,28 @@ async function doSummarize(): Promise<void> {
   const result = await runConcurrent(
     unique,
     SUMMARIZE_CONCURRENCY,
-    async ({ cand, subqId }) => {
-      const sum = await summarizeOne(cand.entry, subqId);
-      current!.summaries.push(sum);
-      return sum;
-    },
+    async ({ cand, subqId }) => summarizeOne(cand.entry, subqId),
     (d, total) => {
       setStatus(`🚀 总结中 ${d}/${total} ...`);
       renderSummaryStage();
       renderSessionMeta();
       persistSession(current!);
+    },
+    (_item, _idx, sum, err) => {
+      // 每篇一完成即 push + 触发可能的增量报告草稿
+      if (sum && current) {
+        current.summaries.push(sum);
+        renderSummaryStage();
+        renderSessionMeta();
+        persistSession(current!);
+        renderReportStage(); // 阶段 5 meta 计数会更新
+        if (incrementalReportEnabled() && current.report) {
+          void triggerIncrementalReportDraft(current);
+        }
+      } else if (err) {
+        // 单篇失败不阻塞其他;但保留总数可见
+        console.warn('[topic] summarize failed:', err.message);
+      }
     },
   );
 
@@ -1295,6 +1514,228 @@ async function doSummarize(): Promise<void> {
   renderSessionMeta();
   persistSession(current!);
   inFlightController = null;
+}
+
+// ============================================================================
+// 主题报告(阶段 5):topic + 已总结论文 → 结构化中文报告
+// ============================================================================
+
+// 把字符串截到 max 字符,空值返回空串。复用 exploreFromSeeds 的 trunc 风格(topic-search.ts:480)。
+function truncReport(s: string | undefined, max: number): string {
+  const v = (s ?? '').trim();
+  if (!v) return '';
+  return v.length > max ? v.slice(0, max) + '…' : v;
+}
+
+// 手工规范化 LLM 输出的报告。失败边界都兜底成空串。
+function normalizeReportTopic(obj: any, prev: TopicReport | undefined, mode: 'full' | 'incremental'): TopicReport | null {
+  if (!obj || typeof obj !== 'object' || !Array.isArray(obj.dimensions)) return null;
+  const normDim = (d: any): TopicReportDimension | null => {
+    const name = String(d?.name ?? '').trim().slice(0, 30);
+    if (!name) return null;
+    const papers: TopicReportDimensionPaper[] = [];
+    if (Array.isArray(d?.papers)) {
+      for (const p of d.papers) {
+        const id = canonicalId(String(p?.arxivId ?? '').trim());
+        const key = truncReport(p?.key, 120);
+        if (!id || !key) continue;
+        const role = truncReport(p?.role, 24) || '相关';
+        papers.push({
+          arxivId: id,
+          role,
+          key,
+          method: p?.method ? truncReport(p.method, 120) : undefined,
+          result: p?.result ? truncReport(p.result, 120) : undefined,
+          note: p?.note ? truncReport(p.note, 120) : undefined,
+        });
+      }
+    }
+    if (papers.length === 0) return null;
+    return {
+      name,
+      description: d?.description ? truncReport(d.description, 160) : undefined,
+      papers,
+    };
+  };
+  const dims: TopicReportDimension[] = [];
+  for (const d of obj.dimensions.slice(0, 6)) {
+    const n = normDim(d);
+    if (n) dims.push(n);
+  }
+  if (dims.length === 0) return null;
+  const arrOf = (k: string, max: number): string[] => {
+    if (!Array.isArray(obj[k])) return [];
+    const out: string[] = [];
+    for (const s of obj[k]) {
+      if (typeof s !== 'string') continue;
+      const t = truncReport(s, 120);
+      if (t) out.push(t);
+      if (out.length >= max) break;
+    }
+    return out;
+  };
+  const relatedSet = new Set<string>();
+  for (const d of dims) for (const p of d.papers) relatedSet.add(p.arxivId);
+  const related: string[] = [...relatedSet];
+  const prevIds = new Set(prev?.relatedArxivIds ?? []);
+  return {
+    overview: truncReport(obj.overview, 800) || '(未生成总览)',
+    dimensions: dims,
+    sharedFindings: arrOf('sharedFindings', 8),
+    gaps: arrOf('gaps', 6),
+    nextSteps: arrOf('nextSteps', 6),
+    generatedAt: Date.now(),
+    relatedArxivIds: related,
+    incrementallyAddedArxivIds:
+      mode === 'incremental' ? related.filter((id) => !prevIds.has(id)) : undefined,
+  };
+}
+
+async function generateTopicReport(
+  topic: string,
+  summaries: Summary[],
+  cfg: LLMConfig,
+  mode: 'full' | 'incremental',
+  prev?: TopicReport,
+): Promise<TopicReport> {
+  if (summaries.length === 0) {
+    throw new Error('需要至少 1 篇已总结论文才能生成报告');
+  }
+
+  // 每篇拼块,字段截断 600 防 prompt 过长。
+  const blocks: string[] = [];
+  summaries.forEach((s, i) => {
+    const r = s.summary;
+    const lines: string[] = [`[论文 ${i + 1}] arXiv:${s.arxivId}`];
+    if (r.title) lines.push(`标题: ${r.title}${r.title_en ? ' / ' + r.title_en : ''}`);
+    lines.push(`TLDR: ${truncReport(r.tldr, 600)}`);
+    if (r.motivation) lines.push(`动机: ${truncReport(r.motivation, 600)}`);
+    if (r.method) lines.push(`方法: ${truncReport(r.method, 600)}`);
+    if (r.result) lines.push(`结果: ${truncReport(r.result, 600)}`);
+    if (r.conclusion) lines.push(`结论: ${truncReport(r.conclusion, 600)}`);
+    if (r.context) lines.push(`主题语境: ${truncReport(r.context, 600)}`);
+    blocks.push(lines.join('\n'));
+  });
+  const papersContext = blocks.join('\n\n');
+
+  let incrementalSection = '';
+  if (mode === 'incremental' && prev) {
+    const prevDims = prev.dimensions
+      .map((d) => `  - ${d.name}: ${d.description ?? '(无描述)'} (含 ${d.papers.length} 篇)`)
+      .join('\n');
+    incrementalSection =
+      `\n\n【增量模式】本会话之前已经基于 ${prev.relatedArxivIds.length} 篇论文生成过报告;` +
+      `当前再整合全部 ${summaries.length} 篇。请复用 / 扩展 prevDimensions,只在确实无法归入时才新增维度。\n\n` +
+      `prevDimensions:\n${prevDims}\n`;
+  }
+
+  const userPrompt =
+    `研究主题: ${topic}\n\n` +
+    `论文速览 (${summaries.length} 篇):\n"""\n${papersContext}\n"""` +
+    incrementalSection +
+    `\n请输出 JSON 对象,字段严格遵循 system prompt 定义:`;
+
+  // 2 次重试,网络/LLM 报错和 JSON 解析失败都重试一次(沿用 exploreFromSeeds 模式)
+  let lastErr = '';
+  for (let attempt = 1; attempt <= REPORT_LLM_RETRY; attempt++) {
+    try {
+      const raw = await callLLMRaw(TOPIC_REPORT_SYSTEM, userPrompt, cfg, true);
+      try {
+        const obj = JSON.parse(raw);
+        const report = normalizeReportTopic(obj, prev, mode);
+        if (report) return report;
+        lastErr = '维度数组为空';
+      } catch (e) {
+        lastErr = `JSON 解析失败: ${(e as Error).message}`;
+      }
+    } catch (e) {
+      lastErr = (e as Error).message;
+    }
+    if (attempt < REPORT_LLM_RETRY) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  }
+  throw new Error(`主题报告生成失败 (${lastErr || '未知原因'})`);
+}
+
+function incrementalReportEnabled(): boolean {
+  const cb = document.getElementById('report-incremental-toggle') as HTMLInputElement | null;
+  return !!cb?.checked;
+}
+
+// 增量追加入口。同 session 内 8 秒最多触发 1 次,防止 N 篇并发完成时连环 LLM 调用。
+async function triggerIncrementalReportDraft(s: TopicSession): Promise<void> {
+  if (!s.report || s.summaries.length === 0) return;
+  const incKey = '__reportIncLastTs__';
+  const last = (s as unknown as Record<string, number>)[incKey] ?? 0;
+  const now = Date.now();
+  if (now - last < REPORT_INC_THROTTLE_MS) return;
+  (s as unknown as Record<string, number>)[incKey] = now;
+  try {
+    const cfg = loadSettings() as LLMConfig;
+    if (!cfg.apiKey) return;
+    setStatus(`📊 正在增量更新报告(共 ${s.summaries.length} 篇)...`);
+    const newReport = await generateTopicReport(s.topic, s.summaries, cfg, 'incremental', s.report);
+    s.report = newReport;
+    renderReportStage();
+    persistSession(s);
+    setStatus(`✓ 报告已增量更新 · ${newReport.dimensions.length} 个维度`);
+    setTimeout(clearStatus, 2000);
+  } catch (e) {
+    // 增量失败静默 — 不要打断总结流程
+    console.warn('[topic] incremental report draft failed:', (e as Error).message);
+    clearStatus();
+  }
+}
+
+function copyReportAsMarkdown(): void {
+  if (!current?.report) return;
+  const r = current.report;
+  const lines: string[] = [];
+  lines.push(`# 主题报告: ${current.topic || '(主题探索)'}`);
+  lines.push('');
+  lines.push(
+    `> 生成于 ${new Date(r.generatedAt).toLocaleString()} · 整合 ${r.relatedArxivIds.length} 篇论文` +
+      (r.incrementallyAddedArxivIds && r.incrementallyAddedArxivIds.length
+        ? ` · 本次新增 ${r.incrementallyAddedArxivIds.length} 篇`
+        : ''),
+  );
+  lines.push('');
+  lines.push('## 主题总览');
+  lines.push(r.overview);
+  lines.push('');
+  lines.push('## 论文横向对比');
+  r.dimensions.forEach((d) => {
+    lines.push(`### ${d.name}`);
+    if (d.description) lines.push(`*${d.description}*`);
+    lines.push('');
+    d.papers.forEach((p) => {
+      lines.push(`- **arXiv:${p.arxivId}** — *${p.role}* — ${p.key}`);
+      if (p.method) lines.push(`  - 方法: ${p.method}`);
+      if (p.result) lines.push(`  - 结果: ${p.result}`);
+      if (p.note) lines.push(`  - 注: ${p.note}`);
+    });
+    lines.push('');
+  });
+  if (r.sharedFindings.length) {
+    lines.push('## 共同发现');
+    r.sharedFindings.forEach((s) => lines.push(`- ${s}`));
+    lines.push('');
+  }
+  if (r.gaps.length) {
+    lines.push('## 研究空白');
+    r.gaps.forEach((s) => lines.push(`- ${s}`));
+    lines.push('');
+  }
+  if (r.nextSteps.length) {
+    lines.push('## 下一步建议');
+    r.nextSteps.forEach((s) => lines.push(`- ${s}`));
+    lines.push('');
+  }
+  navigator.clipboard.writeText(lines.join('\n')).then(
+    () => setStatus('✓ 报告已复制为 Markdown'),
+    () => setStatus('复制失败,请手动选择', 'error'),
+  );
 }
 
 function copyAllAsMarkdown(): void {
@@ -1434,6 +1875,112 @@ async function doExploreFromSeeds(): Promise<void> {
 }
 
 // ============================================================================
+// Modal 状态:📚 添加参考论文
+// ============================================================================
+
+let modalOpen = false;
+
+function openAddSeedsModal(): void {
+  const modal = document.getElementById('add-seeds-modal');
+  if (!modal) return;
+  renderAddSeedsModalList();
+  modal.classList.remove('topic-hidden');
+  modalOpen = true;
+  document.getElementById('add-seeds-url-input')?.focus();
+}
+
+function closeAddSeedsModal(): void {
+  const modal = document.getElementById('add-seeds-modal');
+  if (!modal) return;
+  modal.classList.add('topic-hidden');
+  modalOpen = false;
+}
+
+function renderAddSeedsModalList(): void {
+  const wrap = document.getElementById('add-seeds-list');
+  if (!wrap) return;
+  const items = loadSelection();
+  if (items.length === 0) {
+    wrap.innerHTML =
+      '<div class="topic-modal-empty">还没有参考论文 — 请在「论文库」多选,或在上方输入框按 arXiv URL 单条添加。</div>';
+    return;
+  }
+  wrap.innerHTML = items
+    .map(
+      (it) => `
+    <div class="topic-modal-list-item" data-arxiv="${escapeHtml(it.arxivId)}">
+      <label>
+        <input type="checkbox" checked data-act="check" />
+        <a href="/papers/${encodeURIComponent(it.arxivId)}/" target="_blank" rel="noopener" class="topic-link">
+          arXiv:${escapeHtml(it.arxivId)}
+        </a>
+        <span class="topic-modal-list-title">${escapeHtml(it.title)}</span>
+      </label>
+      <button type="button" class="topic-btn ghost" data-act="remove" title="从参考列表移除">✕</button>
+    </div>`,
+    )
+    .join('');
+  wrap.querySelectorAll<HTMLElement>('.topic-modal-list-item').forEach((row) => {
+    const ax = row.dataset.arxiv!;
+    row.querySelector<HTMLInputElement>('[data-act="check"]')!.addEventListener('change', (e) => {
+      if (!(e.target as HTMLInputElement).checked) {
+        removeFromSelection(ax);
+      }
+    });
+    row.querySelector<HTMLButtonElement>('[data-act="remove"]')!.addEventListener('click', () => {
+      removeFromSelection(ax);
+    });
+  });
+}
+
+function updateSeedsCounter(): void {
+  const chip = document.getElementById('seeds-counter-chip');
+  const nEl = document.getElementById('seeds-counter-n');
+  if (!chip || !nEl) return;
+  const n = loadSelection().length;
+  nEl.textContent = String(n);
+  chip.hidden = n === 0;
+}
+
+async function submitAddSeedsUrl(_form: HTMLFormElement): Promise<void> {
+  const input = document.getElementById('add-seeds-url-input') as HTMLInputElement | null;
+  if (!input) return;
+  const raw = input.value.trim();
+  if (!raw) {
+    input.focus();
+    return;
+  }
+  const m = raw.match(/(\d{4}\.\d{4,5})(v\d+)?/);
+  if (!m) {
+    setStatus(`无法从 "${raw}" 识别 arXiv ID`, 'error');
+    return;
+  }
+  try {
+    setStatus(`📥 正在获取 arXiv:${m[1]} 的元数据...`);
+    const entries = await searchArxivById(m[1]);
+    if (!entries.length) throw new Error('未找到该论文');
+    const e = entries[0];
+    // 用 arXiv abstract 作为 tldr 占位 — exploreFromSeeds 的 useful filter
+    // 会因 method 缺失而跳过,所以"从 URL 加"只适合作为显示/复制种子,
+    // 想用作迁移探索种子请从论文库选。
+    addToSelection({
+      arxivId: e.arxivId,
+      title: e.title,
+      tldr: e.summary.slice(0, 400),
+      method: '',
+      result: '',
+      tags: [],
+      addedAt: Date.now(),
+    });
+    input.value = '';
+    setStatus(`✓ 已加入 arXiv:${e.arxivId}`);
+    setTimeout(clearStatus, 1500);
+  } catch (err) {
+    setStatus(`获取失败: ${(err as Error).message}`, 'error');
+  }
+}
+
+// ============================================================================
 // Init
 // ============================================================================
 
@@ -1463,6 +2010,10 @@ function ensureSession(): void {
 }
 
 function init(): void {
+  // 主题页自己管 selection 弹层,与 paper-selection.ts 的浮动 action-bar 重复,
+  // 且会自指跳到 /topic/?from=selection。打标记让 paper-selection.ts 跳过。
+  document.body.dataset.noSelectionBar = '';
+
   // 检查 LLM key
   const cfg = loadSettings() as LLMConfig;
   if (!cfg.apiKey) {
@@ -1502,6 +2053,45 @@ function init(): void {
   // 顶栏
   $<HTMLButtonElement>('new-session-btn').addEventListener('click', startNewSession);
   $<HTMLButtonElement>('copy-all-btn').addEventListener('click', copyAllAsMarkdown);
+
+  // 阶段 1:📚 添加参考论文弹层
+  $<HTMLButtonElement>('add-seeds-btn').addEventListener('click', openAddSeedsModal);
+  document.getElementById('add-seeds-modal')?.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.dataset.act === 'close-mask' || target.dataset.act === 'close-modal') {
+      closeAddSeedsModal();
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modalOpen) closeAddSeedsModal();
+  });
+  document.getElementById('add-seeds-clear-all')?.addEventListener('click', () => {
+    const items = loadSelection();
+    if (items.length === 0) return;
+    if (items.length >= 3 && !confirm(`确定清空已选 ${items.length} 篇参考论文?`)) return;
+    clearSelection();
+  });
+  document.getElementById('add-seeds-url-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    void submitAddSeedsUrl(e.currentTarget as HTMLFormElement);
+  });
+  document.addEventListener('paper-selection-change', () => {
+    updateSeedsCounter();
+    if (modalOpen) renderAddSeedsModalList();
+  });
+
+  // 阶段 5:报告按钮 + 增量开关
+  $<HTMLButtonElement>('report-gen-btn').addEventListener('click', doGenerateReport);
+  $<HTMLButtonElement>('report-copy-btn').addEventListener('click', copyReportAsMarkdown);
+  $<HTMLInputElement>('report-incremental-toggle').addEventListener('change', (e) => {
+    setStatus(
+      (e.target as HTMLInputElement).checked
+        ? '✓ 已开启增量更新 — 后续每篇速览完成会自动刷新报告'
+        : '已关闭增量更新',
+      '',
+    );
+    setTimeout(clearStatus, 1800);
+  });
 
   // ?from=selection 入口 — 在 stage 1 之前注入"📚 基于已选 N 篇论文探索"卡片
   // 用 try/catch 包裹,避免 seeds 相关 bug 影响主页面

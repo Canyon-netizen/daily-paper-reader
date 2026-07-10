@@ -39,6 +39,32 @@ import '../styles/topic-search.css';
     <!-- ?from=selection 入口:由 topic-search.ts 动态注入"基于已选论文"探索卡片 -->
     <div id="seeds-pill-slot"></div>
 
+    <!-- "📚 添加参考论文" modal(由 topic-search.ts 渲染列表内容) -->
+    <div id="add-seeds-modal" class="topic-modal topic-hidden" role="dialog" aria-modal="true" aria-labelledby="add-seeds-modal-title">
+      <div class="topic-modal-mask" data-act="close-mask"></div>
+      <div class="topic-modal-panel">
+        <header class="topic-modal-header">
+          <h2 id="add-seeds-modal-title">📚 添加参考论文</h2>
+          <button type="button" class="topic-btn ghost" data-act="close-modal" aria-label="关闭">✕</button>
+        </header>
+        <div class="topic-modal-body">
+          <p class="topic-modal-hint">
+            勾选要加入参考的论文,可在 <a href="/papers/" class="topic-link">论文库</a> 多选凑齐再来。
+            没有目标论文时也可从 arXiv 链接单条添加(只填元数据,不进速览)。
+          </p>
+          <form class="topic-modal-url-form" id="add-seeds-url-form">
+            <input type="url" id="add-seeds-url-input" placeholder="arXiv 链接或 ID,例如 1706.03762 或 https://arxiv.org/abs/1706.03762" />
+            <button type="submit" class="topic-btn primary">➕ 添加</button>
+          </form>
+          <div id="add-seeds-list" class="topic-modal-list"></div>
+        </div>
+        <footer class="topic-modal-footer">
+          <button type="button" class="topic-btn danger" id="add-seeds-clear-all">🗑 全部清空</button>
+          <button type="button" class="topic-btn primary" data-act="close-modal">完成</button>
+        </footer>
+      </div>
+    </div>
+
     <!-- 阶段 1:思路输入 -->
     <details class="topic-stage" id="stage-input" open>
       <summary class="topic-stage-header">
@@ -56,6 +82,10 @@ import '../styles/topic-search.css';
         ></textarea>
         <div class="topic-stage-foot">
           <span class="topic-stage-foot-hint" id="input-hint">提示:思路越具体,拆解出的子方向越精准。</span>
+          <span class="topic-seeds-counter" id="seeds-counter-chip" hidden>
+            📚 已选 <strong id="seeds-counter-n">0</strong> 篇作为参考
+          </span>
+          <button type="button" class="topic-btn ghost" id="add-seeds-btn" title="选择 / 管理参考论文">📚 添加参考论文</button>
           <button type="button" class="topic-btn primary" id="decompose-btn" disabled>🔍 拆解思路</button>
         </div>
       </div>
@@ -114,6 +144,29 @@ import '../styles/topic-search.css';
       </summary>
       <div class="topic-stage-body">
         <div id="summary-list" class="topic-summary-list"></div>
+      </div>
+    </details>
+
+    <!-- 阶段 5:主题报告 -->
+    <details class="topic-stage" id="stage-report">
+      <summary class="topic-stage-header">
+        <span class="topic-stage-title">
+          <span class="topic-stage-title-num">5</span>
+          主题报告
+          <span class="topic-stage-title-meta" id="report-meta">尚未生成</span>
+        </span>
+        <span class="topic-stage-toggle">▾</span>
+      </summary>
+      <div class="topic-stage-body">
+        <div class="topic-report-actions">
+          <button type="button" class="topic-btn primary" id="report-gen-btn" disabled>📊 生成报告</button>
+          <label class="topic-report-toggle">
+            <input type="checkbox" id="report-incremental-toggle" />
+            <span>每完成一篇速览,自动追加到草稿</span>
+          </label>
+          <button type="button" class="topic-btn ghost" id="report-copy-btn" disabled>📋 复制为 Markdown</button>
+        </div>
+        <div id="report-output"></div>
       </div>
     </details>
 
