@@ -182,8 +182,20 @@ class LLMClient:
         return ""
 
     @staticmethod
+    def _strip_reasoning_blocks(text: str) -> str:
+        """剥掉推理模型在正文前后混入的  think / thinking  思考块。"""
+        if not text:
+            return text
+        return re.sub(
+            r"<(?:think|thinking)\b[^>]*>.*?</(?:think|thinking)>",
+            "",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        ).strip()
+
+    @staticmethod
     def _strip_json_wrappers(text: str) -> str:
-        cleaned = (text or "").strip()
+        cleaned = LLMClient._strip_reasoning_blocks(text or "")
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
         return cleaned.strip()

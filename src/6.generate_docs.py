@@ -123,7 +123,18 @@ def call_llm_structured_json(
         log(f"[WARN] Structured output 未完成：finish_reason={resp.get('finish_reason')}")
         return None
     if resp.get("parse_error") is not None:
-        raise ValueError(f"模型未返回合法 JSON：{resp.get('content')}")
+        content = resp.get("content") or ""
+        stripped = LLMClient._strip_reasoning_blocks(content)
+        if stripped and stripped != content:
+            try:
+                recovered = LLMClient.parse_json_content(stripped)
+            except Exception as exc2:
+                raise ValueError(
+                    f"模型未返回合法 JSON(已尝试剥离 think 块):{stripped[:500]}"
+                ) from exc2
+            if isinstance(recovered, dict):
+                return recovered
+        raise ValueError(f"模型未返回合法 JSON：{stripped[:500] if stripped else content[:500]}")
 
     parsed = resp.get("parsed")
     if not isinstance(parsed, dict):
