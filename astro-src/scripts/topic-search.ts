@@ -53,6 +53,10 @@ interface SubQ {
   //   manual-with-seeds: 用户输入思路 + 同时选了一些参考论文 → 拆解 prompt 既看思路也看参考
   //   seeds: 来自 ?from=selection 入口,完全替代主题,纯靠 seeds 生成迁移方向
   source?: 'manual' | 'manual-with-seeds' | 'seeds';
+  // arXiv 真实常见写法(3-5 个独立英文关键词/短语)。
+  // searchForDirection 会逐个打 arXiv 后按 canonicalArxivId 合并去重。
+  // 老 session 没这个字段 → undefined,走 ?? [] 兜底。
+  aliases?: string[];
 }
 
 interface Candidate {
@@ -157,6 +161,10 @@ const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研
   - label: 子方向中文短标题(8-20 字)
   - query: arXiv 检索关键词,**必须是英文单词,2-3 个独立的 arXiv 关键词,空格分隔**,
           例如 ["episodic memory", "long-term agent"],不要写完整短语或句子
+  - aliases: **3-5 个 arXiv 真实常见写法**(用于 searchForDirection 多别名单跑),
+          字符串数组,每个元素是 2-4 个英文关键词空格分隔的短语,
+          例如 ["memory-augmented agent", "retrieval memory", "long context memory"];
+          不要与 query 重复,也不要写中文
   - reason: 一句话中文说明为什么这个子方向值得检索
 
 【检索纪律 - 非常重要】
@@ -164,13 +172,19 @@ const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研
   即使用户输入的是中文思路,query 也要全部用英文专业术语
 - query 用 2-3 个独立的英文关键词(arXiv 习惯用 all: 全文匹配,独立关键词召回更高);
   写成完整短语(超过 3 词) 在 arXiv 上几乎 0 召回 — 拆短、拆开
+- aliases 是"arXiv 上真正有人用的关键词组合",必须贴近 arXiv 论文的真实写法;
+  不要硬塞自定义短语,挑 arXiv 搜索栏输入会出现的词组;3-5 个,不能与 query 完全一样
 - 子方向之间要尽量不重叠,覆盖思路的不同侧面(方法/应用/评测/理论)
 - 数量 2-5 个都可以;思路很短时 2 个也行,不要为了凑数而编造不相关的方向
 
 【示例输出】
 [
-  {"label":"情节记忆与长期记忆","query":"episodic memory long-term","reason":"对应思路中关于智能体跨会话记忆的核心方法"},
-  {"label":"游戏智能体记忆基准","query":"game agent memory benchmark","reason":"对应评测层面,检索游戏场景下记忆模块的基准与对比"}
+  {"label":"情节记忆与长期记忆","query":"episodic memory long-term",
+   "aliases":["memory-augmented agent","long context memory","retrieval memory"],
+   "reason":"对应思路中关于智能体跨会话记忆的核心方法"},
+  {"label":"游戏智能体记忆基准","query":"game agent memory benchmark",
+   "aliases":["agent memory benchmark","memory evaluation"],
+   "reason":"对应评测层面,检索游戏场景下记忆模块的基准与对比"}
 ]`;
 
 const EXPLORE_FROM_SEEDS_SYSTEM = `你是研究迁移/探索助手。用户已选 N 篇相关性较高的论文,你需要基于这些论文的核心思路,
@@ -192,22 +206,34 @@ const EXPLORE_FROM_SEEDS_SYSTEM = `你是研究迁移/探索助手。用户已�
 - 每个元素字段:
   - label: 中文短标题(8-20 字)
   - query: **2-3 个英文独立 arXiv 关键词,空格分隔**(例如 "reinforcement learning protein design")
+  - aliases: **3-5 个 arXiv 真实常见写法的英文短语**,字符串数组;
+          必须贴近 arXiv 搜索栏的真实输入(你"会"在 arXiv 上敲的词组),不能与 query 完全相同;
+          例如 ["RLHF protein","reward model design","policy optimization biology"]
   - reason: 一句话中文,**明确引用至少 1 篇已选论文(用标题或核心方法名)+ 它提供的可迁移点**
   - explorationType: 必须是 cross_domain / method_transfer / reverse / combination 之一
 
 【检索纪律 - 非常重要】
 - query 必须是纯英文单词组合,**绝对不要在 query 里出现中文字符**
 - query 用 2-3 个独立的英文关键词,不要写完整短语或句子(arXiv all: 全文模式,短词召回更高)
+- aliases 必须贴近 arXiv 真实写作习惯,挑会在 arXiv 搜索栏里"会敲"的那类词组;3-5 个
 - reason 必须能让人看出"这个方向和已选论文的具体连接点",不要泛泛而谈"可借鉴 X 方法"
 - 当 N >= 3 时,**4 种 explorationType 至少各出现 1 次**(避免只输出 cross_domain)
 - 当 N < 3 时,允许某种范式重复,但仍要覆盖至少 2 种不同范式
 
 【示例输出】
 [
-  {"label":"RLHF 思想迁移到蛋白质序列设计","query":"reinforcement learning protein design","reason":"已选论文《Aligning Language Models》把 PPO 用于 LLM 对齐,核心 trick(reward model + KL 约束)可迁移到蛋白质生成中提升稳定性","explorationType":"cross_domain"},
-  {"label":"借用对比解码做摘要事实性","query":"contrastive decoding summarization","reason":"论文《Contrastive Decoding》提出的正负 prompt 对比解码,可直接套用到摘要生成中缓解幻觉","explorationType":"method_transfer"},
-  {"label":"反用幻觉检测做对抗训练","query":"adversarial training hallucination","reason":"把论文《Detecting Hallucinations》的检测器反过来当攻击器,生成对抗样本增强模型鲁棒性","explorationType":"reverse"},
-  {"label":"长上下文 + 思维链融合","query":"long-context chain-of-thought","reason":"结合论文 A 的 100k 上下文窗口与论文 B 的多步 CoT prompting,探索超长文档上的多步推理","explorationType":"combination"}
+  {"label":"RLHF 思想迁移到蛋白质序列设计","query":"reinforcement learning protein design",
+   "aliases":["RLHF protein","reward model design","policy optimization biology"],
+   "reason":"已选论文《Aligning Language Models》把 PPO 用于 LLM 对齐,核心 trick(reward model + KL 约束)可迁移到蛋白质生成中提升稳定性","explorationType":"cross_domain"},
+  {"label":"借用对比解码做摘要事实性","query":"contrastive decoding summarization",
+   "aliases":["contrastive decoding","faithful summarization","hallucination mitigation"],
+   "reason":"论文《Contrastive Decoding》提出的正负 prompt 对比解码,可直接套用到摘要生成中缓解幻觉","explorationType":"method_transfer"},
+  {"label":"反用幻觉检测做对抗训练","query":"adversarial training hallucination",
+   "aliases":["adversarial NLG","hallucination detection","robust generation"],
+   "reason":"把论文《Detecting Hallucinations》的检测器反过来当攻击器,生成对抗样本增强模型鲁棒性","explorationType":"reverse"},
+  {"label":"长上下文 + 思维链融合","query":"long-context chain-of-thought",
+   "aliases":["long context reasoning","chain-of-thought prompting","extended context LLM"],
+   "reason":"结合论文 A 的 100k 上下文窗口与论文 B 的多步 CoT prompting,探索超长文档上的多步推理","explorationType":"combination"}
 ]`;
 
 export function normalizeQuery(q: string): string {
@@ -566,6 +592,13 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Sub
   return arr.slice(0, 7).map((x: any, i: number) => {
     const rawQuery = String(x.query ?? '').trim();
     const cleaned = normalizeQuery(rawQuery);
+    // aliases 白名单拷字段:每个元素去中文字符 + 仅保留 ASCII token。
+    // 保证 searchForDirection 收到的是干净英文,避免主 query 已 0 命中、alias 又因
+    // LLM 偶发混入中文/标点而白白浪费一次 arXiv 调用。
+    const rawAliases = Array.isArray(x.aliases)
+      ? x.aliases.map((a: any) => normalizeQuery(String(a ?? ''))).filter(Boolean)
+      : [];
+    const aliases: string[] = Array.from(new Set<string>(rawAliases)).filter((a) => a !== cleaned);
     return {
       id: uid('q'),
       label: String(x.label ?? `子方向 ${i + 1}`).slice(0, 60),
@@ -573,6 +606,7 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Sub
       reason: String(x.reason ?? '').trim(),
       selected: true,
       source: hasSeeds ? ('manual-with-seeds' as const) : ('manual' as const),
+      aliases,
     };
   }).filter((q: SubQ) => q.query);
 }
@@ -651,6 +685,10 @@ export async function exploreFromSeeds(
     const cleaned = normalizeQuery(rawQuery);
     const rawType = String(x.explorationType ?? '').trim().toLowerCase();
     const explorationType = (ALLOWED_TYPES.has(rawType) ? rawType : undefined) as SubQ['explorationType'];
+    const rawAliases = Array.isArray(x.aliases)
+      ? x.aliases.map((a: any) => normalizeQuery(String(a ?? ''))).filter(Boolean)
+      : [];
+    const aliases: string[] = Array.from(new Set<string>(rawAliases)).filter((a) => a !== cleaned);
     return {
       id: uid('q'),
       label: String(x.label ?? `迁移方向 ${i + 1}`).slice(0, 60),
@@ -659,13 +697,22 @@ export async function exploreFromSeeds(
       selected: true,
       source: 'seeds' as const,
       explorationType,
+      aliases,
     };
   }).filter((q: SubQ) => q.query);
 }
 
 async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
-  // 主题探索场景下 query 通常是关键词组合(如 "episodic memory long-term"),用 all: 全文匹配
-  // 召回更高;冷门 query 也能搜到。返回后再按时间/相关性让用户挑。
+  // 主 query + aliases 多别名单跑,按 canonicalArxivId 合并去重。
+  //
+  // 为什么需要 aliases: arXiv all:"..." 是整短语精确匹配 — LLM 拆出来的 query 太
+  // "学术短语化"(例如 "parameterized skill injection activation"),真实 arXiv
+  // 论文几乎没人会在摘要里逐字写这种复合词,主 query 总是 0 命中。
+  // aliases 是 LLM 同步产出的 3-5 个 arXiv 真实常见写法,逐个跑一遍能极大提高召回。
+  //
+  // 顺序:aliases 顺序由 LLM 产出顺序决定,主 query 命中的不参与排序(等同空);
+  // 跨 alias 按 canonicalArxivId 去重,首次出现的 canonical id 占位(对应 alias
+  // 顺序在先)。这样 UI 上能看到"哪一条 alias 拯救了命中"。
   //
   // 兜底:即使 UI 输入框被填了中文,这里也做一次清洗;如果洗不出任何英文 token
   // (整段中文),直接抛错让 doSearch 显示成"0 命中 + 重试"状态,而不是浪费一次请求。
@@ -675,7 +722,46 @@ async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
   if (!hasAscii) {
     throw new Error(`子方向 "${subq.label}" 的 query 不含英文,无法在 arXiv 搜索: ${subq.query}`);
   }
-  const entries = await searchArxiv(queryForArxiv, { dedupeLatestVersion: true, mode: 'all' });
+
+  // 构造别名列表 — 与主 query 互不重叠(已经在构造 SubQ 时 Set 去重一次了,这里
+  // 再做一次兜底以防外部直接构造的 SubQ)。
+  const rawAliases = (subq.aliases ?? [])
+    .map((a) => normalizeQuery(a))
+    .filter(Boolean);
+  const queries = [queryForArxiv, ...rawAliases.filter((a) => a !== queryForArxiv)];
+
+  // 单子方向内顺序跑别名 — arXiv 限速 1 req/s,避免 429。doSearch 顶层的
+  // runConcurrent(SUMMARIZE_CONCURRENCY=2) 只管子方向之间并发,这里再串行
+  // 避免同子方向内触发 arXiv 限速。
+  const seen = new Set<string>();
+  const merged: ArxivEntry[] = [];
+  for (const q of queries) {
+    let entries: ArxivEntry[] = [];
+    try {
+      entries = await searchArxiv(q, { dedupeLatestVersion: true, mode: 'all' });
+    } catch (e) {
+      // 单个别名出错时不让整个子方向 fail — 阶段 2 应该容忍个别失败,继续合并。
+      // UI 上不会暴露这次失败(因为主 query 那次可能正常)。在控制台留 trace 即可。
+      if (q === queryForArxiv) {
+        // 主 query 失败:不可静默吞,向上抛错让 doSearch 显示。
+        throw e;
+      }
+      console.warn(`[topic] alias "${q}" 检索失败,跳过:`, e);
+      await new Promise((r) => setTimeout(r, 1000));
+      continue;
+    }
+    for (const e of entries) {
+      const key = canonicalId(e.arxivId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(e);
+    }
+    // 别名之间 sleep 1s 避免 arXiv 429
+    if (q !== queries[queries.length - 1]) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  const entries = merged;
   return entries.map((e) => ({
     arxivId: e.arxivId,
     entry: e,
@@ -930,6 +1016,9 @@ function renderSubqStage(): void {
         <div class="topic-subq-card-row">
           <input type="text" class="query-input" value="${escapeHtml(q.query)}" data-field="query" placeholder="arXiv 检索 query(英文)" />
         </div>
+        <div class="topic-subq-card-row">
+          <input type="text" class="aliases-input" value="${escapeHtml((q.aliases ?? []).join(' '))}" data-field="aliases" placeholder="arXiv 别名(空格分隔,3-5 个真实常见写法)" aria-label="arXiv 别名" />
+        </div>
         <textarea data-field="reason" placeholder="为什么这个子方向值得检索">${escapeHtml(q.reason)}</textarea>
       </div>
     </div>
@@ -948,8 +1037,18 @@ function renderSubqStage(): void {
     });
     card.querySelectorAll<HTMLInputElement>('input[data-field], textarea[data-field]').forEach((inp) => {
       inp.addEventListener('input', () => {
-        const field = inp.dataset.field as 'label' | 'query' | 'reason';
-        (subq as any)[field] = inp.value;
+        const field = inp.dataset.field as 'label' | 'query' | 'reason' | 'aliases';
+        if (field === 'aliases') {
+          // 空格 / 逗号 / 多个空白都当分隔符,空字符串视为清空 aliases。
+          const arr = inp.value
+            .split(/[\s,]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+          // 去空去重(避免用户键入空格导致重复)
+          subq.aliases = Array.from(new Set(arr));
+        } else {
+          (subq as any)[field] = inp.value;
+        }
         persistSession(current!);
       });
     });
@@ -970,11 +1069,15 @@ function renderSubqStage(): void {
         setStatus(`重新生成子方向 ${subq.label}...`);
         const newOne = await decomposeIdea(current.topic);
         if (newOne.length > 0) {
-          // 只替换这一个
+          // 只替换这一个;aliases 沿用旧值(用户手动写的优先级 > LLM 一次性产出),
+          // 如果新 LLM 输出有 aliases 而旧值为空,则填充。
           const replacement = newOne[0];
           subq.label = replacement.label;
           subq.query = replacement.query;
           subq.reason = replacement.reason;
+          if ((!subq.aliases || subq.aliases.length === 0) && replacement.aliases) {
+            subq.aliases = replacement.aliases;
+          }
           renderSubqStage();
           persistSession(current!);
         }
@@ -1061,6 +1164,17 @@ function renderCandidateGroupFor(subqId: string): string {
   const grpSelected = list.filter((c) => c.selected).length;
   const subq = current!.subqs.find((q) => q.id === subqId);
   const label = subq?.label ?? subqId;
+  // 让用户能看出"是哪个 query / alias 拯救了命中"。aliases 留空或主 query 没
+  // 别名时仅展示 query,保持视觉简洁。
+  const queryLine = subq && (subq.query || (subq.aliases ?? []).length > 0)
+    ? `<div class="topic-candidate-group-query">
+        query: <code>${escapeHtml(subq.query || '')}</code>${
+          (subq.aliases ?? []).length > 0
+            ? ` <span class="topic-candidate-group-aliases">· 别名: ${subq.aliases!.map((a) => escapeHtml(a)).join(', ')}</span>`
+            : ''
+        }
+      </div>`
+    : '';
   const emptyHint = list.length === 0 && allList.length > 0
     ? `<div style="padding:0.7rem 0.9rem;color:var(--fg-subtle);font-size:0.85rem">该子方向下 ${allList.length} 篇候选全部被隐藏。可在 设置页"已隐藏论文"面板 恢复。</div>`
     : list.length === 0
@@ -1086,6 +1200,7 @@ function renderCandidateGroupFor(subqId: string): string {
         <div class="topic-candidate-group-title">📂 ${escapeHtml(label)}</div>
         <div class="topic-candidate-group-meta">${metaHtml}</div>
       </div>
+      ${queryLine}
       ${list.length === 0 ? emptyHint : `<div class="topic-candidate-list">${itemsHtml}</div>`}
     </div>`;
 }
