@@ -2703,6 +2703,9 @@ async function doSummarize(limit?: number): Promise<void> {
   // LLM 主任务(SUMMARIZE_CONCURRENCY=4 路)同时从 pdfTextCache 拿 text。
   // 每篇 LLM 完成时,顺手把还没预热的 PDF 加入预热队列(由 LLM 阶段的 worker 触发)。
   pdfTextCache.clear();
+  // 启动合并式增量报告定时器:每 8s 检查"自从上次报告以来新加了 ≥1 篇",是则触发
+  // 一次增量 LLM(避免 4 路 worker 各自触发 LLM 把配额打爆)。
+  startIncrementalReportTimer(current);
   // 后台预热任务:fire-and-forget。不 await,跟 LLM 主任务并发。
   void (async () => {
     try {
@@ -2780,9 +2783,8 @@ async function doSummarize(limit?: number): Promise<void> {
           renderSessionMeta();
           persistSession(current!);
           renderReportStage();
-          if (incrementalReportEnabled() && current.report) {
-            void triggerIncrementalReportDraft(current);
-          }
+          // 增量报告由合并式定时器统一处理(避免 4 路 worker 各自
+          // 触发 LLM)。doSummarize 启动时调用 startIncrementalReportTimer。
         } else if (err) {
           console.warn('[topic] summarize failed:', err.message);
         }
@@ -2793,6 +2795,9 @@ async function doSummarize(limit?: number): Promise<void> {
     clearInterval(heartbeat);
     inFlightController = null;
   }
+
+  // 停掉合并式增量报告定时器(doSummarize 结束 = 任务完成,不再触发增量)
+  stopIncrementalReportTimer();
 
   // 等待后台预热结束(避免 cache 在 LLM 完成后被 clear 时还有 pending)。
   // 给预热最多 60s grace period,超时也不阻塞。
@@ -3007,6 +3012,46 @@ async function triggerIncrementalReportDraft(s: TopicSession): Promise<void> {
     // 增量失败静默 — 不要打断总结流程
     console.warn('[topic] incremental report draft failed:', (e as Error).message);
     clearStatus();
+  }
+}
+
+// 合并式增量报告触发:同一 doSummarize 阶段内多篇同时完成时,只触发
+// 一次增量报告(避免每篇 worker 各自触发 LLM,4 路并发变 4 路 LLM 并发
+// 加 N 次增量 LLM 调用,把 LLM 配额打爆)。
+// 机制:setInterval 每 2s 检查一次"距上次报告以来是否新加了 ≥1 篇",
+// 是则触发增量报告。否则不触发。任务结束后 clearInterval。
+let reportIncTimer: ReturnType<typeof setInterval> | null = null;
+let reportIncLastCount = 0;
+function startIncrementalReportTimer(s: TopicSession): void {
+  stopIncrementalReportTimer();
+  reportIncLastCount = s.summaries.length;
+  if (!s.report) return; // 没报告就不启动定时器(用户还没点「生成报告」)
+  reportIncTimer = setInterval(async () => {
+    if (!incrementalReportEnabled()) return;
+    if (s.summaries.length === reportIncLastCount) return; // 没人完成
+    if (!s.report) return;
+    const cur = s.summaries.length;
+    reportIncLastCount = cur;
+    try {
+      const cfg = loadSettings() as LLMConfig;
+      if (!cfg.apiKey) return;
+      setStatus(`📊 正在增量更新报告(共 ${cur} 篇)...`);
+      const newReport = await generateTopicReport(s.topic, s.summaries, cfg, 'incremental', s.report);
+      s.report = newReport;
+      renderReportStage();
+      persistSession(s);
+      setStatus(`✓ 报告已增量更新 · ${newReport.dimensions.length} 个维度`);
+      setTimeout(clearStatus, 2000);
+    } catch (e) {
+      console.warn('[topic] incremental report draft failed:', (e as Error).message);
+      clearStatus();
+    }
+  }, REPORT_INC_THROTTLE_MS);
+}
+function stopIncrementalReportTimer(): void {
+  if (reportIncTimer) {
+    clearInterval(reportIncTimer);
+    reportIncTimer = null;
   }
 }
 
