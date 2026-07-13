@@ -321,6 +321,135 @@ const EXPLORE_FROM_SEEDS_SYSTEM = `你是研究迁移/探索助手。用户已�
    "reason":"结合论文 A 的 100k 上下文窗口与论文 B 的多步 CoT prompting,探索超长文档上的多步推理","explorationType":"combination"}
 ]`;
 
+// 阶段 3.5:AI 筛论文 system prompt
+// 用户在阶段 3 搜出 N 篇候选(常 100+),LLM 基于「主题 + 子方向 + 论文标题/摘要」
+// 选出最相关的 M 篇(默认 30),把 candidatesBySubq 的 selected 状态对齐。
+const FILTER_CANDIDATES_SYSTEM = `你是研究主题的论文筛选助手。用户已经基于子方向去 arXiv 搜了 N
+篇候选论文(通常 50-300),主题是 [topic]。现在请你从 N 篇里挑出 M 篇(默认 30)
+最相关的论文。
+
+【评估标准】
+- 主题契合度(50%):论文是否真正解决该主题的核心问题,而不是边缘相关
+- 方法代表性(25%):是否在子方向上具有里程碑意义 / 经典算法 / SOTA
+- 时间新鲜度(15%):优先近年(2023+)的论文,经典老论文只在「奠基性」明显时入选
+- 来源可信度(10%):顶会 / 顶刊 / 知名机构优先
+
+【输出格式 — 必须严格遵守】
+- 只输出一个 JSON 数组,不要任何其它文字 / markdown 围栏 / 思考块
+- 第一行必须是 [,最后一行必须是 ]
+- 每个元素: { "arxivId": "1706.03762", "reason": "一句话中文入选理由" }
+- 元素数量严格 = M(不要多也不要少)
+- arxivId 必须严格匹配输入(去版本号)`;
+
+// AI 筛论文入口:从 candidatesBySubq 全集中选 M 篇最相关。
+async function filterCandidatesByLLM(targetN: number): Promise<void> {
+  if (!current) return;
+  // 收集所有候选(去重,保留第一条;过 hidden)
+  const hidden = new Set(loadHiddenPapers());
+  const allEntries: Array<{ cand: Candidate; subqId: string }> = [];
+  for (const [subqId, list] of Object.entries(current.candidatesBySubq)) {
+    for (const c of list) {
+      if (hidden.has(c.arxivId)) continue;
+      allEntries.push({ cand: c, subqId });
+    }
+  }
+  // 同一篇跨子方向只算一次,保留首条 subqId
+  const seen = new Set<string>();
+  const unique = allEntries.filter((e) => {
+    const k = canonicalId(e.cand.arxivId);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (unique.length === 0) {
+    setStatus('没有候选论文可筛选', 'error');
+    return;
+  }
+  if (unique.length <= targetN) {
+    // 已经 <= M 篇,直接全选
+    for (const e of unique) e.cand.selected = true;
+    // 清掉同 subq 内不在 unique 列表的勾选
+    for (const e of allEntries) {
+      if (!unique.some((u) => u.cand.arxivId === e.cand.arxivId)) e.cand.selected = false;
+    }
+    renderCandStage();
+    setStatus(`✓ 候选 ${unique.length} 篇,已全部勾选`);
+    return;
+  }
+  const cfg = loadSettings() as LLMConfig;
+  if (!cfg.apiKey) {
+    renderBanner('请先在 <a href="/settings/">设置</a> 页面填 LLM API Key。');
+    return;
+  }
+  clearBanner();
+  inFlightController = new AbortController();
+  setStatus(`🤖 AI 筛论文中:从 ${unique.length} 篇候选选最相关的 ${targetN} 篇...`);
+
+  // 拼 userPrompt:每篇一个 block(标题 + 摘要前 200 字 + 来自子方向)
+  const blocks: string[] = [];
+  unique.forEach((e, i) => {
+    const subq = current!.subqs.find((q) => q.id === e.subqId);
+    const label = subq?.label ?? '?';
+    blocks.push(
+      `[${i + 1}] arXiv:${e.cand.arxivId} (子方向: ${label})\n` +
+      `标题: ${e.cand.entry.title}\n` +
+      `摘要: ${(e.cand.entry.summary || '').slice(0, 200).replace(/\s+/g, ' ')}`,
+    );
+  });
+  const userPrompt =
+    `研究主题: ${current.topic}\n\n` +
+    `请从以下 ${unique.length} 篇候选中选最相关的 ${targetN} 篇:\n\n` +
+    blocks.join('\n\n') +
+    `\n\n请输出 JSON 数组,严格 ${targetN} 个元素:`;
+
+  let raw = '';
+  let arr: any[] = [];
+  const MAX = 2;
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    try {
+      raw = await callLLMRaw(FILTER_CANDIDATES_SYSTEM, userPrompt, cfg, true);
+    } catch (e) {
+      if (attempt >= MAX) {
+        setStatusErrorWithAction(`AI 筛论文失败: ${(e as Error).message}`, '🔄 重试', () => filterCandidatesByLLM(targetN));
+        inFlightController = null;
+        return;
+      }
+      continue;
+    }
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      if (attempt >= MAX) {
+        setStatusErrorWithAction(`AI 筛论文返回不是 JSON: ${raw.slice(0, 100)}`, '🔄 重试', () => filterCandidatesByLLM(targetN));
+        inFlightController = null;
+        return;
+      }
+      continue;
+    }
+    if (Array.isArray(arr) && arr.length > 0) break;
+  }
+  // 把 LLM 选出的 arxivId 转成 Set
+  const picked = new Set<string>();
+  for (const item of arr) {
+    const id = String(item.arxivId ?? '').trim();
+    if (id) picked.add(canonicalId(id));
+  }
+  if (picked.size === 0) {
+    setStatusErrorWithAction('AI 没选出任何论文', '🔄 重试', () => filterCandidatesByLLM(targetN));
+    inFlightController = null;
+    return;
+  }
+
+  // 应用勾选:在 picked 里的设 true,其他全 false
+  for (const e of allEntries) {
+    e.cand.selected = picked.has(canonicalId(e.cand.arxivId));
+  }
+  renderCandStage();
+  persistSession(current!);
+  setStatus(`✓ AI 筛论文完成:从 ${unique.length} 篇中选了 ${picked.size} 篇。点「🚀 总结选中论文」开始总结。`, );
+  inFlightController = null;
+}
+
 export function normalizeQuery(q: string): string {
   // 兜底:即使 LLM 不守规矩返回了中文 / 长短语,也尽量清洗成 arXiv 友好的英文关键词。
   // 1. 去中文字符
@@ -1356,9 +1485,17 @@ function setStatus(msg: string, kind: '' | 'error' = ''): void {
   const el = $('status-bar');
   el.classList.remove('topic-hidden');
   el.classList.toggle('error', kind === 'error');
+  // 任务进行中时,自动附 ⏹ 停止按钮(在 status-action-btn 位置复用),
+  // 让用户随时能中断 inFlightController 控制的 LLM/PDF 任务。
+  const stopBtn = inFlightController
+    ? `<button type="button" class="topic-btn ghost" id="status-stop-btn" style="margin-left:auto">⏹ 停止</button>`
+    : '';
   el.innerHTML = kind === 'error'
-    ? `<span>⚠️</span><span>${escapeHtml(msg)}</span>`
-    : `<span class="topic-status-spinner"></span><span>${escapeHtml(msg)}</span>`;
+    ? `<span>⚠️</span><span>${escapeHtml(msg)}</span>${stopBtn}`
+    : `<span class="topic-status-spinner"></span><span>${escapeHtml(msg)}</span>${stopBtn}`;
+  if (inFlightController) {
+    document.getElementById('status-stop-btn')?.addEventListener('click', stopInFlight);
+  }
 }
 
 // 失败时挂一个按钮(label + onClick),方便用户一键重试
@@ -1377,6 +1514,16 @@ function clearStatus(): void {
   const el = $('status-bar');
   el.classList.add('topic-hidden');
   el.innerHTML = '';
+}
+
+// 全局「⏹ 停止」按钮触发。AbortController 中断正在跑的 LLM fetch / PDF 下载;
+// runConcurrent 的 in-flight Promise 会被 reject,然后 doSearch / doSummarize
+// 的 finally 把 inFlightController 置 null,UI 状态条变 error。
+function stopInFlight(): void {
+  if (inFlightController) {
+    inFlightController.abort();
+    setStatus('⏹ 已停止当前任务', 'error');
+  }
 }
 
 function renderBanner(msg: string, info = false): void {
@@ -1598,12 +1745,14 @@ function renderCandStage(): void {
   const summarizeBtn = $<HTMLButtonElement>('summarize-btn');
   const summarizeTopBtn = $<HTMLButtonElement>('summarize-top-btn');
   const summarizeAllBtn = $<HTMLButtonElement>('summarize-all-btn');
+  const filterCandBtn = $<HTMLButtonElement>('filter-cand-btn');
   if (!current || Object.keys(current.candidatesBySubq).length === 0) {
     wrap.innerHTML = '<div style="color:var(--fg-subtle);font-size:0.88rem">尚未搜索 — 在第 2 步勾选子方向后点"📚 搜索论文"。</div>';
     meta.textContent = '尚未搜索';
     summarizeBtn.disabled = true;
     summarizeTopBtn.disabled = true;
     summarizeAllBtn.disabled = true;
+    filterCandBtn.disabled = true;
     return;
   }
   const allCands: Candidate[] = [];
@@ -1614,6 +1763,8 @@ function renderCandStage(): void {
   summarizeAllBtn.disabled = selected === 0;
   // 「总结全部」按钮显示实际待总结数(去重后的 selected 数)
   summarizeAllBtn.textContent = `🚀 总结全部 (${selected})`;
+  // AI 筛按钮:候选数 ≥ 10 才启用(太少没意义)
+  filterCandBtn.disabled = allCands.length < 10;
   // 全局「全部展开/收起」:展开的 group 数 = sum(expanded[id] === true);默认折叠。
   // 整个 stage 至少有一个 group,这个判断才有意义。
   const subqIds = Object.keys(current.candidatesBySubq);
@@ -2561,13 +2712,25 @@ async function doSummarize(limit?: number): Promise<void> {
       const pendingN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'pending').length;
       const failN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
       let eta = '';
-      if (sampleDurations.length >= 2) {
-        const avg = sampleDurations.reduce((a, b) => a + b, 0) / sampleDurations.length;
+      // ETA 算法:样本 ≥ 5 后用中位数(比均值更稳,不被一两篇异常拖偏),
+      // 并且 `remain × median / CONCURRENCY` 上限 6h 防止估算炸(7.7s/篇 × 391 剩 / 4 路
+      // = 12.5 分钟,但样本里有 5s 和 60s 混着时均值会跳)。样本 < 5 时只显示已用时间。
+      if (sampleDurations.length >= 5) {
+        const sorted = [...sampleDurations].sort((a, b) => a - b);
+        const median = sorted[Math.floor(sorted.length / 2)];
         const remain = Math.max(0, total - d);
-        const etaSec = Math.round((avg / SUMMARIZE_CONCURRENCY) * remain);
-        eta = ` · 已用 ${elapsed}s · 预计还需 ${formatEta(etaSec)}`;
+        // elapsed / d 给出真实吞吐(秒/篇),比 median/CONCURRENCY 更准(因为
+        // LLM 4 路 + PDF 6 路 实际串了 PDF,吞吐不会无限逼近 4×LLM 速度)
+        const observedTput = elapsed / Math.max(d, 1); // 秒/篇
+        let etaSec = Math.round(observedTput * remain);
+        // 钳制:大于 6 小时显示「>6h」提示用户中断
+        if (etaSec > 6 * 3600) {
+          eta = ` · 已用 ${elapsed}s · 预计 >6h(建议 ⏹ 停止,用「总结前 20 篇」)`;
+        } else {
+          eta = ` · 已用 ${elapsed}s · 预计还需 ${formatEta(etaSec)}`;
+        }
       } else if (d > 0) {
-        eta = ` · 已用 ${elapsed}s`;
+        eta = ` · 已用 ${elapsed}s · 采样中(还需 ${5 - sampleDurations.length} 篇)`;
       }
       const prefetchInfo = ` · PDF 预热 ${readyN}/${total} ready` +
         (pendingN > 0 ? ` · ${pendingN} 下载中` : '') +
@@ -2575,7 +2738,12 @@ async function doSummarize(limit?: number): Promise<void> {
       setStatus(`🚀 总结 ${limitDesc}... ${d}/${total}${eta}${prefetchInfo}`);
       renderSummaryStage();
       renderSessionMeta();
-      persistSession(current!);
+      // 节流 persistSession:每 5 篇 + 最后 1 篇才写 localStorage,避免 LLM 完成
+      // 太频繁时 JSON.stringify + localStorage.setItem 阻塞主线程(主线程挂起
+      // 表现为「界面卡住」)
+      if (d % 5 === 0 || d === total) {
+        persistSession(current!);
+      }
     },
     (_item, _idx, sum, err) => {
       if (sum && current) {
@@ -3348,6 +3516,8 @@ function init(): void {
   $<HTMLButtonElement>('summarize-top-btn').addEventListener('click', () => doSummarize(20));
   // 总结全部:不传 limit(走 unique.length 全量).
   $<HTMLButtonElement>('summarize-all-btn').addEventListener('click', () => doSummarize());
+  // 阶段 3.5:AI 筛论文 → 从所有候选中选最相关的 30 篇
+  $<HTMLButtonElement>('filter-cand-btn').addEventListener('click', () => filterCandidatesByLLM(30));
   $<HTMLButtonElement>('subq-add-btn').addEventListener('click', () => {
     if (!current) return;
     current.subqs.push({
