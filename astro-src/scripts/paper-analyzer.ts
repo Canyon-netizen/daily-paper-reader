@@ -1251,7 +1251,10 @@ export async function callLLM(
   if (!content) throw new Error(`LLM 返回为空 (finish_reason=${finishReason})`);
 
   // 提取 JSON:reasoning 模型(DeepSeek-R1 等)会在前面输出 <think>...</think>,
-  // 也要兼容 markdown fence ```json ... ```。先剥这些外壳,再用栈匹配找配对 JSON。
+// 也要兼容 markdown fence ```json ... ```。先剥这些外壳,再用栈匹配找配对 JSON。
+  // 兜底:即使 LLM 没正确闭合 think / 没用 markdown fence,只要 stripped
+  // 里含 `{`,就从第一个 `{` 截取,再让 extractBalancedJson 找配对 JSON。
+  // 这是关键修复 — 否则 LLM 输出"中文分析 + JSON"混合时,栈匹配会失败。
   let stripped = content
     // 剥 <think>...</think>(reasoning 模型)
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
@@ -1259,6 +1262,12 @@ export async function callLLM(
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
     .trim();
+  // 兜底:从第一个 `{` 截取。如果 LLM 在 JSON 之前输出了中文思考段落
+  // 且没用 think 标签闭合,栈匹配会拿到第一个 `{` 提前结束。强制从首个
+  // `{` 截取后,extractBalancedJson 重新找配对。
+  if (stripped.indexOf('{') > 0) {
+    stripped = stripped.slice(stripped.indexOf('{'));
+  }
   let jsonText = extractBalancedJson(stripped);
 
   // Truncation self-heal: if LLM output was cut at max_tokens, the JSON

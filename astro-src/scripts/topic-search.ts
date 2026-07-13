@@ -744,8 +744,12 @@ async function callLLMRaw(
   if (jsonOnly) {
     // 先看顶层是数组还是对象。extractBalancedJson 只识别 {...},对顶层数组 [...](包括嵌套的)会
     // 错误地把第一个 {...} 截出来,丢掉外层的 [ 和后面的元素。所以顶层是 [ 时走数组路径。
+    // 兜底:如果 LLM 在 JSON 之前输出了中文思考段落(没正确用 think 标签闭合),
+    // stripped 第一个非空字符不是 [ 也不是 {,此时直接从首个 { 截取,再让
+    // extractBalancedJson 找配对对象。
     const headIdx = stripped.search(/\S/);
-    const head = headIdx >= 0 ? stripped[headIdx] : '';
+    if (headIdx < 0) throw new Error(`LLM 返回为空(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+    const head = stripped[headIdx];
     if (head === '[') {
       const arrStart = stripped.indexOf('[');
       const arrEnd = stripped.lastIndexOf(']');
@@ -754,13 +758,19 @@ async function callLLMRaw(
       } else {
         throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
       }
+    } else if (head === '{') {
+      // 已经在 JSON 起点,直接交给 extractBalancedJson
     } else {
-      const obj = extractBalancedJson(stripped);
-      if (obj) {
-        stripped = obj;
-      } else {
-        throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
-      }
+      // 第一个非空字符既不是 [ 也不是 { → LLM 输出了思考/说明文字,
+      // 从首个 { 截取,重新让 extractBalancedJson 找配对 JSON
+      const objStart = stripped.indexOf('{');
+      if (objStart > 0) stripped = stripped.slice(objStart);
+    }
+    const obj = extractBalancedJson(stripped);
+    if (obj) {
+      stripped = obj;
+    } else {
+      throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
     }
   }
   return stripped;
