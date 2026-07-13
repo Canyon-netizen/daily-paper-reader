@@ -1227,6 +1227,8 @@ export async function callLLM(
       { role: 'user', content: buildUserPrompt(title, abstract, paperBody) },
     ],
     temperature: 0.2,
+    // cap LLM output so JSON is not truncated mid-field
+    max_tokens: 4000,
   };
   if (isDeepSeek && isReasoning) {
     requestBody.thinking = { type: 'disabled' };
@@ -1245,7 +1247,8 @@ export async function callLLM(
   }
   const data = await res.json();
   const content: string = data?.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('LLM 返回为空');
+  const finishReason: string = data?.choices?.[0]?.finish_reason ?? '';
+  if (!content) throw new Error(`LLM 返回为空 (finish_reason=${finishReason})`);
 
   // 提取 JSON:reasoning 模型(DeepSeek-R1 等)会在前面输出 <think>...</think>,
   // 也要兼容 markdown fence ```json ... ```。先剥这些外壳,再用栈匹配找配对 JSON。
@@ -1256,15 +1259,41 @@ export async function callLLM(
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
     .trim();
-  const jsonText = extractBalancedJson(stripped);
+  let jsonText = extractBalancedJson(stripped);
+
+  // Truncation self-heal: if LLM output was cut at max_tokens, the JSON
+  // may be missing trailing `}` or `"`. Try to close them and re-parse.
+  if (!jsonText && stripped.includes('{')) {
+    const lastBrace = stripped.lastIndexOf('{');
+    if (lastBrace >= 0) {
+      let trial = stripped.slice(lastBrace);
+      let opens = 0;
+      let inStr = false;
+      let esc = false;
+      for (const ch of trial) {
+        if (esc) { esc = false; continue; }
+        if (inStr) {
+          if (ch === '\\') esc = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') inStr = true;
+        else if (ch === '{') opens++;
+        else if (ch === '}') opens--;
+      }
+      if (inStr) trial += '"';
+      while (opens > 0) { trial += '}'; opens--; }
+      jsonText = trial;
+    }
+  }
   if (!jsonText) {
-    throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+    throw new Error(`LLM 未输出 JSON (finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
   }
   let parsed: AnalysisResult;
   try {
     parsed = JSON.parse(jsonText);
   } catch (e) {
-    throw new Error(`JSON 解析失败: ${(e as Error).message} | LLM 输出前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')}`);
+    throw new Error(`JSON 解析失败: ${(e as Error).message} | finish_reason=${finishReason} | LLM 输出前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')}`);
   }
   // 必要字段兜底
   return {
