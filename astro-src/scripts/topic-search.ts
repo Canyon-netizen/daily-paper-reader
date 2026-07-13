@@ -53,6 +53,14 @@ interface SubQ {
   //   manual-with-seeds: 用户输入思路 + 同时选了一些参考论文 → 拆解 prompt 既看思路也看参考
   //   seeds: 来自 ?from=selection 入口,完全替代主题,纯靠 seeds 生成迁移方向
   source?: 'manual' | 'manual-with-seeds' | 'seeds';
+  // 实测 arXiv 召回数(decomposeIdea / decompose-edit 后异步验证填充):
+  //   undefined  → 还没验证(或网络失败)
+  //   number     → 实测前 5 条中真正命中的不同 canonical id 数(0 表示完全 0 召回)
+  // 用户在阶段 2 UI 上能看到这个标签 + 命中为 0 时变红警示。
+  hitCount?: number;
+  // 实测命中的标题样本(命中 >0 时填充最多 3 条),用于阶段 2 UI 鼠标悬停提示,也作为
+  // 闭环重写 LLM 的「已验证真实写法」证据。命中为 0 时为空数组。
+  hitSamples?: string[];
   // arXiv 真实常见写法(3-5 个独立英文关键词/短语)。
   // searchForDirection 会逐个打 arXiv 后按 canonicalArxivId 合并去重。
   // 老 session 没这个字段 → undefined,走 ?? [] 兜底。
@@ -155,42 +163,103 @@ const REPORT_LLM_RETRY = 2;
 // Prompt 模板
 // ============================================================================
 
-const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研究思路(中英文均可),
-请把它拆解成 2-5 个可独立检索的子方向,每个子方向对应一个 arXiv 检索 query。
+const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研究思路(中英文均可),你要把它拆成
+**3-5 个可独立在 arXiv 检索的子方向**。拆解分两步,每一步都按下面规范执行。
 
-【输出格式 — 必须严格遵守】
-- 只输出一个 JSON 数组,不要任何其它文字、markdown 围栏、思考块
-- 不要写 <think> 思考块,不要写解释
-- 第一行必须是 [ ,最后一行必须是 ]
-- 每个元素字段:
-  - label: 子方向中文短标题(8-20 字)
-  - query: arXiv 检索关键词,**必须是英文单词,2-3 个独立的 arXiv 关键词,空格分隔**,
-          例如 ["episodic memory", "long-term agent"],不要写完整短语或句子
-  - aliases: **3-5 个 arXiv 真实常见写法**(用于 searchForDirection 多别名单跑),
-          字符串数组,每个元素是 2-4 个英文关键词空格分隔的短语,
-          例如 ["memory-augmented agent", "retrieval memory", "long context memory"];
-          不要与 query 重复,也不要写中文
-  - reason: 一句话中文说明为什么这个子方向值得检索
+═══════════════════════════════════════════════════════════
+【STEP 1 — 领域 facet 清单】(先认知,再拆解)
+═══════════════════════════════════════════════════════════
 
-【检索纪律 - 非常重要】
-- query 必须是纯英文单词组合,**绝对不要在 query 里出现中文字符**;
-  即使用户输入的是中文思路,query 也要全部用英文专业术语
-- query 用 2-3 个独立的英文关键词(arXiv 习惯用 all: 全文匹配,独立关键词召回更高);
-  写成完整短语(超过 3 词) 在 arXiv 上几乎 0 召回 — 拆短、拆开
-- aliases 是"arXiv 上真正有人用的关键词组合",必须贴近 arXiv 论文的真实写法;
-  不要硬塞自定义短语,挑 arXiv 搜索栏输入会出现的词组;3-5 个,不能与 query 完全一样
-- 子方向之间要尽量不重叠,覆盖思路的不同侧面(方法/应用/评测/理论)
-- 数量 2-5 个都可以;思路很短时 2 个也行,不要为了凑数而编造不相关的方向
+不要直接拍脑袋拆方向。先针对这个研究主题,**列出 5-7 个"该主题特有的研究侧面"
+(我们称之为 facet)**,每个 facet 用 4-8 字中文短语表达,覆盖以下五类至少其中 4 类:
 
-【示例输出】
+  ① 方法侧 (How):该主题有哪些主流技术路线 / 学习范式
+  ② 数据/任务侧 (What):该主题处理的核心数据形态或任务类型
+  ③ 结构/性质侧 (Why):该主题的内部结构、几何性质、理论保证
+  ④ 应用/迁移侧 (Where):该主题落到哪些下游应用 / 跨域迁移
+  ⑤ 评测/基准侧 (Bench):该主题有哪些评测协议、数据集、leaderboard
+
+不同主题的 facet 完全不同,例如:
+  - "智能体记忆" → facet 包括:长程记忆 / 工作记忆 / 检索式记忆 / 记忆压缩 / 记忆评测
+  - "代码生成"   → facet 包括:语言模型主干 / 仓库级检索 / 测试时验证 / 执行反馈 / 评测基准
+  - "技能向量化" → facet 应包括:表征学习 / 库检索组合 / 几何结构 / 迁移规划 / 评测基准
+
+**这一步只是让你想清楚,你不需要把 facet 输出给用户,只用于引导你下一步拆方向。**
+
+═══════════════════════════════════════════════════════════
+【STEP 2 — 按 facet 拆解成 JSON 数组】
+═══════════════════════════════════════════════════════════
+
+基于 STEP 1 的 facet 清单,**从不同 facet 各挑 1 个,组合成 3-5 个子方向**,确保:
+  - 子方向之间**尽量不重叠**(不同 facet)
+  - 尽量覆盖方法/应用/评测/结构 4 类(参考 STEP 1 五类)
+  - 数量灵活:**思路很短时 2-3 个也行,不要为了凑数而编造不相关的方向**
+
+每个子方向严格遵循下面的 JSON schema:
+  - label:       子方向中文短标题(8-20 字),要让用户一眼看懂"这条在搜什么"
+  - query:       **arXiv 真实检索关键词**,必须是 2-3 个独立的英文单词空格分隔
+                 (arXiv all:"..." 是整短语精确匹配,短语化会 0 召回)
+  - aliases:     **3-5 个 arXiv 真实常见写法**,字符串数组,每个元素是 2-4 个英文
+                 关键词空格分隔的短语,贴近 arXiv 论文摘要真实用词
+  - reason:      一句话中文说明为什么这个子方向值得检索(可以引用 STEP 1 的 facet 名字)
+
+═══════════════════════════════════════════════════════════
+【query 真实度纪律 — 非常重要,直接决定 arXiv 召回率】
+═══════════════════════════════════════════════════════════
+
+- query 用 **2-3 个独立的英文单词**空格分隔,不要写完整短语或句子
+  ✓ 正确: "episodic memory", "skill embedding", "tool retrieval"
+  ✗ 错误: "long-term episodic memory architecture"(太长)
+  ✗ 错误: "skill latent geometry"(LLM 自创短语,arXiv 几乎没人这样写)
+
+- aliases 是 **arXiv 上真实有人用的关键词组合**——
+  - 想一想 arXiv 论文摘要里,这个子方向的论文**实际怎么写标题**:
+    "Skill-Based Reinforcement Learning" / "Tool Retrieval for LLMs" 这种标题风格
+  - 把这些标题拆成 2-4 词的别名,而不是堆 LLM 自己的术语组合
+  - 3-5 个,不能与 query 完全一样
+  - **如果 LLM 自己也不确定某个 alias 是不是 arXiv 真实写法,就换成更短、更通用、更早出现的词**
+
+- ❌ **禁止的写法**(arXiv 0 召回典型坑):
+  - 自创复合短语:"skill vectorial representation", "latent geometry", "tool-use augmented agent"
+  - 论文标题风格的完整句子:"learning skills for hierarchical planning"
+  - 用破折号 / 驼峰 / 下划线连接多个词
+  - 中英混杂(必须纯英文单词)
+
+- ✓ **推荐的写法**(arXiv 真实常见):
+  - 单词对:"skill embedding", "task representation"
+  - 三词组合:"hierarchical reinforcement learning", "tool-augmented language model"
+
+- 如果用户输入的是中文思路,query / aliases **全部用英文专业术语**(不混中文)。
+
+═══════════════════════════════════════════════════════════
+【示例 — "智能体长程记忆"主题】
+═══════════════════════════════════════════════════════════
+
+STEP 1 facets(模型内部思考,不出现在输出里):
+  - 长程记忆机制 / 检索式记忆 / 记忆压缩与抽象 / 记忆评测基准 /
+    多模态记忆 / 记忆的隐私与遗忘
+
+STEP 2 输出(只输出 JSON 数组,不要解释):
 [
   {"label":"情节记忆与长期记忆","query":"episodic memory long-term",
-   "aliases":["memory-augmented agent","long context memory","retrieval memory"],
-   "reason":"对应思路中关于智能体跨会话记忆的核心方法"},
-  {"label":"游戏智能体记忆基准","query":"game agent memory benchmark",
-   "aliases":["agent memory benchmark","memory evaluation"],
-   "reason":"对应评测层面,检索游戏场景下记忆模块的基准与对比"}
-]`;
+   "aliases":["memory-augmented agent","long context memory","retrieval memory agent"],
+   "reason":"对应方法侧:检索式长期记忆是主流实现路径(facet: 长程记忆机制)"},
+  {"label":"记忆压缩与抽象","query":"memory consolidation",
+   "aliases":["memory compression agent","memory abstraction hierarchical","summarized memory agent"],
+   "reason":"对应结构侧:记忆摘要 / 抽象的研究(facet: 记忆压缩与抽象)"},
+  {"label":"记忆评测基准","query":"agent memory benchmark",
+   "aliases":["long-term memory benchmark","memory evaluation LLM agent","LOCOMO benchmark"],
+   "reason":"对应评测侧:LoCoMo / LongMemEval 等基准(facet: 记忆评测基准)"}
+]
+
+═══════════════════════════════════════════════════════════
+【输出格式 — 必须严格遵守】
+═══════════════════════════════════════════════════════════
+
+- 只输出 STEP 2 的 JSON 数组,不要任何其它文字、markdown 围栏、思考块
+- 不要写 <think> 思考块,不要写解释
+- 第一行必须是 [ ,最后一行必须是 ]
+`;
 
 const EXPLORE_FROM_SEEDS_SYSTEM = `你是研究迁移/探索助手。用户已选 N 篇相关性较高的论文,你需要基于这些论文的核心思路,
 生成 4-6 个"迁移或探索"方向,用于在 arXiv 上检索新论文。
@@ -623,7 +692,7 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Sub
   // 主题报告不需 rebuild,因为 report.relatedArxivIds 跟主题独立 — 用户重新点"📊
   // 生成报告"按钮就会按新的 summaries + 同样的 prevDimensions 重新生成。
   const hasSeeds = !!(seeds && seeds.length > 0);
-  return arr.slice(0, 7).map((x: any, i: number) => {
+  const built = arr.slice(0, 7).map((x: any, i: number) => {
     const rawQuery = String(x.query ?? '').trim();
     const cleaned = normalizeQuery(rawQuery);
     // aliases 白名单拷字段:每个元素去中文字符 + 仅保留 ASCII token。
@@ -643,6 +712,12 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Sub
       aliases,
     };
   }).filter((q: SubQ) => q.query);
+  // 实测 arXiv 召回 + 命中 0 自动让 LLM 改写闭环;失败时静默返回原数组。
+  try {
+    return await validateAndRewriteSubqs(built, cfg);
+  } catch {
+    return built;
+  }
 }
 
 // 基于已选论文生成"迁移/探索"子方向 — 复用 decomposeIdea 的重试/解析模式。
@@ -714,7 +789,7 @@ export async function exploreFromSeeds(
 
   // 把 explorationType 限制在白名单内(LLM 偶尔会写错大小写或拼写)
   const ALLOWED_TYPES = new Set(['cross_domain', 'method_transfer', 'reverse', 'combination']);
-  return arr.slice(0, 6).map((x: any, i: number) => {
+  const built = arr.slice(0, 6).map((x: any, i: number) => {
     const rawQuery = String(x.query ?? '').trim();
     const cleaned = normalizeQuery(rawQuery);
     const rawType = String(x.explorationType ?? '').trim().toLowerCase();
@@ -734,6 +809,148 @@ export async function exploreFromSeeds(
       aliases,
     };
   }).filter((q: SubQ) => q.query);
+  // 实测 arXiv 召回 + 命中 0 自动让 LLM 改写闭环
+  try {
+    return await validateAndRewriteSubqs(built, cfg);
+  } catch {
+    return built;
+  }
+}
+
+// 轻量实测 arXiv 命中数 — 不下载 PDF、不调 searchArxiv(它会 parse ArxivEntry 浪费),
+// 直接打 arXiv API 拿 top 5 条只数不同 canonical id,够用来判断"这个 query 有没有论文"。
+// 单次调用 ~300ms,arXiv 限速 1 req/s。
+async function validateSubqHitCount(q: string): Promise<{ count: number; samples: string[] }> {
+  const url = `https://export.arxiv.org/api/query?search_query=all%3A%22${encodeURIComponent(q)}%22&max_results=5&sortBy=relevance&sortOrder=descending`;
+  try {
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) return { count: 0, samples: [] };
+    const xml = await res.text();
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const ids = new Set<string>();
+    const samples: string[] = [];
+    doc.querySelectorAll('entry').forEach((e) => {
+      const idEl = e.querySelector('id');
+      const titleEl = e.querySelector('title');
+      if (!idEl) return;
+      const idText = (idEl.textContent ?? '').trim();
+      // arXiv API 返回的 id 形如 "http://arxiv.org/abs/2405.14790v1",取最后一段再 strip /v\d+/
+      const m = idText.match(/abs\/([\d.]+)(?:v\d+)?/);
+      if (!m) return;
+      ids.add(m[1].replace(/v\d+$/, ''));
+      if (titleEl && samples.length < 3) samples.push((titleEl.textContent ?? '').trim().replace(/\s+/g, ' '));
+    });
+    return { count: ids.size, samples };
+  } catch {
+    // 网络/CORS 错误不要让整个拆解挂掉 — 视为 0 命中,UI 上会显示"⚠ 无法验证"
+    return { count: 0, samples: [] };
+  }
+}
+
+// 子方向 query 改写 system prompt(只在命中 0 时触发一次,提供 arXiv 真实命中样本作证据)
+const SUBQ_REWRITE_SYSTEM = `你是研究思路拆解助手的"query 修复"模块。
+
+你刚拆出的若干子方向在 arXiv 上**主 query 0 召回**。请基于我提供的"已验证召回的样本"作为
+真实写法的证据,**只对 0 召回的那几个子方向**重新生成 query + aliases。
+
+【硬性约束】
+- 只输出一个 JSON 数组,元素数量 = 0 召回子方向的数量(不要新增、不要删除)
+- 每个元素严格匹配 schema: { id, label, query, aliases, reason }
+  - id 必须等于下面给到的原 id(用于在调用方替换原条目,不是新增)
+  - label 保留原文(用户已看过)
+  - reason 保留原文
+  - query + aliases 是要重新生成的
+- query / aliases 必须遵守 DECOMPOSE_SYSTEM 的【query 真实度纪律】(2-3 个独立英文词,贴近 arXiv 真实标题)
+
+【关键证据 — 已验证召回的真实样本】
+你会拿到 1 个或多个「从其他子方向测出来确实召回的论文标题」。这些标题的关键词拆解后
+可以直接复用,作为新 query / aliases 的种子。例如「Skill-Based Reinforcement Learning」可
+拆出 "skill-based reinforcement" / "skill reinforcement learning" 等合法 alias。
+
+【推荐策略】
+1. **优先复用其他子方向的真实命中样本的关键词组合**,而不是再生成新短语
+2. 如果样本不足,就用**更短、更通用、更早出现的英文术语**(比如把"latent geometry"换成"skill space")
+3. aliases 多给一些(可达 5-7 个),用 arXiv 标题里真实出现过的小词组合
+
+【输出】
+第一行 [,最后一行 ],中间严格 JSON,不要任何其它文字。`;
+
+// 命中 0 闭环重写:把"0 命中子方向列表 + 其他子方向实测命中样本"反馈给 LLM,
+// 让它基于样本证据改写 0 命中的 query。
+async function rewriteZeroHitSubqs(
+  zeros: SubQ[],
+  samplesByLabel: Map<string, string[]>,
+  cfg: LLMConfig,
+): Promise<Map<string, { query: string; aliases: string[] }>> {
+  if (zeros.length === 0) return new Map();
+  // 收集样本(去重 + 截前 6 个标题)
+  const allSamples: string[] = [];
+  for (const samples of samplesByLabel.values()) {
+    for (const s of samples) if (!allSamples.includes(s)) allSamples.push(s);
+  }
+  const evidenceBlock = allSamples.length > 0
+    ? `\n【已验证召回的样本标题(共 ${allSamples.length} 个,作为新 query 的关键词证据)】\n` +
+      allSamples.slice(0, 6).map((s, i) => `  ${i + 1}. ${s}`).join('\n') + '\n'
+    : '\n【注意】其他子方向也都没命中 — 整体 query 可能太冷门,建议把 query 换成更通用的英文术语。\n';
+
+  const zerosBlock =
+    `\n【0 召回子方向(共 ${zeros.length} 个,需要重新生成 query / aliases)】\n` +
+    zeros.map((z, i) => `  ${i + 1}. id=${z.id}\n     label: ${z.label}\n     当前 query: ${z.query}\n     当前 aliases: ${JSON.stringify(z.aliases)}`).join('\n');
+  const userPrompt = `研究主题相关拆解,以下 ${zeros.length} 个子方向的主 query 在 arXiv 上 0 召回,请改写。${evidenceBlock}${zerosBlock}\n请只输出改写后的 JSON 数组:`;
+
+  try {
+    const raw = await callLLMRaw(SUBQ_REWRITE_SYSTEM, userPrompt, cfg, true);
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr)) return new Map();
+    const out = new Map<string, { query: string; aliases: string[] }>();
+    for (const item of arr) {
+      const id = String(item.id ?? '');
+      if (!id) continue;
+      const newQuery = normalizeQuery(String(item.query ?? ''));
+      const newAliases = Array.isArray(item.aliases)
+        ? item.aliases.map((a: any) => normalizeQuery(String(a ?? ''))).filter(Boolean)
+        : [];
+      out.set(id, { query: newQuery, aliases: newAliases });
+    }
+    return out;
+  } catch {
+    // 改写失败也不要阻塞 — 保留原 query,UI 上仍标 0 召回警告
+    return new Map();
+  }
+}
+
+// decomposeIdea 后置处理:实测每个 subq 的 arXiv 召回,命中 0 触发一次 LLM 改写闭环。
+// 串行测(arXiv 限速 1 req/s),预计 3-5 个子方向共 3-5s;命中 0 时再调 1 次 LLM(~3-10s)。
+export async function validateAndRewriteSubqs(subqs: SubQ[], cfg: LLMConfig): Promise<SubQ[]> {
+  if (subqs.length === 0) return subqs;
+  // 并行 3 路实测(arXiv API 实际支持一定并发,实测 3 路并发也没问题;但串行更稳,arXiv
+  // 偶尔会 429)。先串行,实测后改写循环一次性调 LLM。
+  const samplesByLabel = new Map<string, string[]>();
+  const zeros: SubQ[] = [];
+  for (const sq of subqs) {
+    const { count, samples } = await validateSubqHitCount(sq.query);
+    sq.hitCount = count;
+    sq.hitSamples = samples;
+    if (count > 0) samplesByLabel.set(sq.label, samples);
+    else if (sq.query && /[A-Za-z]/.test(sq.query)) zeros.push(sq);
+  }
+  if (zeros.length === 0) return subqs;
+
+  // 命中 0 → 让 LLM 改写一次(基于其他子方向的命中样本作为关键词证据)
+  const rewriteMap = await rewriteZeroHitSubqs(zeros, samplesByLabel, cfg);
+  // 把改写结果应用回原 subqs,并对改写后的 query 再实测一次
+  for (const sq of zeros) {
+    const rw = rewriteMap.get(sq.id);
+    if (rw && rw.query) {
+      sq.query = rw.query;
+      sq.aliases = Array.from(new Set(rw.aliases)).filter((a) => a !== rw.query);
+      // 再实测改写后的 query;若仍 0 命中,保留 warning,不再二次改写(避免无限循环)
+      const { count, samples } = await validateSubqHitCount(sq.query);
+      sq.hitCount = count;
+      sq.hitSamples = samples;
+    }
+  }
+  return subqs;
 }
 
 async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
@@ -1118,15 +1335,28 @@ function renderSubqStage(): void {
         : q.source === 'manual-with-seeds'
           ? `<span class="topic-subq-card-source topic-subq-card-source--seeds" title="拆解时同时参考了你在「添加参考论文」里选的论文">📚 参考论文+主题</span>`
           : '';
+    // arXiv 命中标签:hitCount undefined → "验证中...";0 → 红色 0 命中;>=1 → 绿色 N 篇
+    let hitTag = '';
+    let cardClass = q.selected ? 'selected' : '';
+    if (q.hitCount === undefined) {
+      hitTag = '<span class="topic-subq-hit topic-subq-hit--pending">arXiv 验证中…</span>';
+    } else if (q.hitCount === 0) {
+      hitTag = `<span class="topic-subq-hit topic-subq-hit--zero" title="主 query 在 arXiv 上 0 召回,试试改英文关键词或加更多 aliases">⚠ 0 命中</span>`;
+      cardClass += ' topic-subq-card--zero-hit';
+    } else {
+      hitTag = `<span class="topic-subq-hit topic-subq-hit--ok" title="实测 arXiv 前 5 条命中 ${q.hitCount} 篇${q.hitSamples?.length ? '\\n样例:\\n' + q.hitSamples.slice(0, 3).join('\\n') : ''}">arXiv 命中 ${q.hitCount} 篇</span>`;
+    }
     return `
-    <div class="topic-subq-card ${q.selected ? 'selected' : ''}" data-id="${q.id}">
+    <div class="topic-subq-card ${cardClass}" data-id="${q.id}">
       <input type="checkbox" class="topic-subq-check" ${q.selected ? 'checked' : ''} aria-label="勾选子方向 ${i + 1}" />
       <div class="topic-subq-card-main">
         <div class="topic-subq-card-row">
           <input type="text" class="label-input" value="${escapeHtml(q.label)}" data-field="label" placeholder="子方向标题" />
           ${badgeHtml}
           ${sourceTag}
+          ${hitTag}
           <div class="topic-subq-card-actions">
+            <button type="button" class="topic-btn ghost" data-act="verify-hit" title="用当前 query 实测 arXiv 命中数">🔬 验证</button>
             <button type="button" class="topic-btn ghost" data-act="regen" title="重新生成此子方向">🔄</button>
             <button type="button" class="topic-btn ghost" data-act="del" title="删除此子方向">✕</button>
           </div>
@@ -1179,6 +1409,24 @@ function renderSubqStage(): void {
       renderSummaryStage();
       renderSessionMeta();
       persistSession(current!);
+    });
+    card.querySelector<HTMLButtonElement>('[data-act="verify-hit"]')!.addEventListener('click', async () => {
+      if (!current) return;
+      const btn = card.querySelector<HTMLButtonElement>('[data-act="verify-hit"]')!;
+      btn.disabled = true;
+      setStatus(`🔬 实测 arXiv: ${subq.label}...`);
+      try {
+        const { count, samples } = await validateSubqHitCount(subq.query);
+        subq.hitCount = count;
+        subq.hitSamples = samples;
+        renderSubqStage();
+        persistSession(current!);
+        setStatus(count > 0 ? `✓ 命中 ${count} 篇` : '⚠ 0 命中 — 改 query 或加 aliases');
+      } catch (e) {
+        setStatus(`验证失败: ${(e as Error).message}`, 'error');
+      } finally {
+        btn.disabled = false;
+      }
     });
     card.querySelector<HTMLButtonElement>('[data-act="regen"]')!.addEventListener('click', async () => {
       if (!current) return;

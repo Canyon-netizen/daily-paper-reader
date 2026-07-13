@@ -233,6 +233,35 @@
   transition: border-color var(--transition);
 }
 .topic-subq-card.selected { border-color: var(--accent); }
+/* arXiv 0 召回警告:0 命中子方向加红边,让用户在阶段 2 一眼看到需要改 */
+.topic-subq-card--zero-hit {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.08);
+}
+.topic-subq-card--zero-hit.selected { border-color: #ef4444; }
+.topic-subq-hit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.topic-subq-hit--ok {
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+}
+.topic-subq-hit--zero {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  font-weight: 600;
+}
+.topic-subq-hit--pending {
+  background: rgba(148, 163, 184, 0.15);
+  color: #64748b;
+}
 .topic-subq-card-main { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
 .topic-subq-card-row {
   display: flex;
