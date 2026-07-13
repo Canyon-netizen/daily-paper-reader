@@ -87,6 +87,9 @@ interface TopicSession {
   candidatesBySubq: Record<string, Candidate[]>;
   summaries: Summary[];
   chats: Record<string, ChatMsg[]>; // 按 arxivId 分组
+  // 报告追问历史(阶段 5 报告生成后,用户与模型围绕报告的对话)。可选,老 session 缺这字段 → undefined,所有
+  // `current.reportChats ?? []` 走兜底,不需要 schema 迁移。
+  reportChats?: ChatMsg[];
   // 主题报告(阶段 5 产物)。老 session 没这个字段 → undefined,所有
   // `if (current.report) ...` / `current.report?.` 走兜底,不需要 schema 迁移。
   report?: TopicReport;
@@ -137,6 +140,8 @@ const SUMMARIZE_CONCURRENCY = 2;
 const MAX_QA_PER_PAPER = 50;
 // 喂 LLM 的最近条数
 const MAX_QA_FOR_LLM = 30;
+// 报告追问历史上限(报告对话相对单篇短,设小一些)
+const MAX_QA_FOR_REPORT = 20;
 // 总 sessions 字节上限(留 ~1MB 给别的 key)
 const TOTAL_BYTES_LIMIT = 4 * 1024 * 1024;
 // 单会话字节上限
@@ -301,6 +306,32 @@ TLDR / 方法 / 结果 / 结论 / 主题语境),以及一个研究主题的种�
 - 简短信息密度优先,不要散文
 - 直接陈述观点,不要"我们认为 / 总的来说"等套话`;
 
+const REPORT_CHAT_SYSTEM = `你是主题报告交互助手。用户的会话刚刚由 LLM 生成了一份「主题报告」,现在他/她在
+围绕这份报告提问或要求修改。请按下面两类意图分别处理:
+
+【意图 1:提问 / 澄清 / 求证】
+- 用户问"为什么把 X 论文归到 Y 维度"、"某个数字从哪来"、"对比是否公平"等
+- 你需要基于报告内容、已给的论文速览、abstract 上下文回答
+- 信息不足时明确说"原报告 / 速览 / abstract 中未涉及此细节"
+- 不要编造公式、数字、作者观点
+- 中文回答,术语首次出现给中英对照
+- 默认 ≤ 250 字;用户明确要求展开除外
+
+【意图 2:修改 / 重写 / 增删 / 调整语气或顺序】
+- 用户说"改"、"调整"、"重写"、"删掉"、"加上"、"把 X 换成 Y"、"语气更口语化"等
+- 你**不要直接修改报告并回写**,而是输出"修改建议":
+  - 用项目符号列出每条建议,每条说明: ① 要改的位置(报告哪个 section / 哪条 / 哪个字段)
+                              ② 改后的内容(直接给出建议的替换文本,≤ 200 字)
+                              ③ 改动理由(1 句话)
+- 末尾固定加一行: "——\n📥 点报告下方的「🔄 应用此修改并重新生成」即可让模型基于这些建议重生成报告。"
+- 用户可以多次迭代修改建议
+
+【共性纪律】
+- 始终保持中文回答
+- 不要重新编报告 JSON 全文,只在「修改建议」模式下给"点位 + 替换文本"
+- 不要越界讨论报告以外的话题
+- 不要承诺会"自动应用"任何修改 — 应用由用户点按钮触发`;
+
 // ============================================================================
 // 工具函数
 // ============================================================================
@@ -418,6 +449,9 @@ function trimSessionToLimit(s: TopicSession): TopicSession {
     if (copy.chats[k].length > MAX_QA_PER_PAPER) {
       copy.chats[k] = copy.chats[k].slice(-MAX_QA_PER_PAPER);
     }
+  }
+  if (copy.reportChats && copy.reportChats.length > MAX_QA_FOR_REPORT) {
+    copy.reportChats = copy.reportChats.slice(-MAX_QA_FOR_REPORT);
   }
   let ser = JSON.stringify(copy);
   if (ser.length <= PER_SESSION_BYTES_LIMIT) return copy;
@@ -856,6 +890,90 @@ async function chatWithPaper(arxivId: string, question: string): Promise<string>
     { role: 'system', content: PAPER_CHAT_SYSTEM + '\n\n' + sysContext },
   ];
   for (const m of history) messages.push({ role: m.role, content: m.content });
+  messages.push({ role: 'user', content: question });
+
+  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
+  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
+  const body: Record<string, unknown> = {
+    model: cfg.model,
+    messages,
+    temperature: 0.4,
+  };
+  if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
+  const res = await fetch(url, {
+    method: 'POST',
+    signal: inFlightController?.signal,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`LLM API 错误 (${res.status}): ${t.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  let content: string = data?.choices?.[0]?.message?.content ?? '';
+  if (!content) throw new Error('LLM 返回为空');
+  content = content
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/^```(?:markdown)?\s*/i, '')
+    .replace(/\s*```\s*$/, '')
+    .trim();
+  return content;
+}
+
+async function chatWithReport(
+  report: TopicReport,
+  topic: string,
+  summaries: Summary[],
+  question: string,
+  history: ChatMsg[],
+): Promise<string> {
+  const cfg = loadSettings() as LLMConfig;
+  if (!cfg.apiKey) throw new Error('请先在设置页填 LLM API Key');
+
+  // 把整份报告 + 已用论文速览拼成 sysContext,长度可控
+  const dimLines = report.dimensions
+    .map(
+      (d, i) =>
+        `[维度 ${i + 1}] ${d.name}` +
+        (d.description ? ` — ${d.description}` : '') +
+        '\n' +
+        d.papers
+          .map(
+            (p) =>
+              `  - arXiv:${p.arxivId} — role=${p.role} — key=${p.key}` +
+              (p.method ? `\n    方法:${p.method}` : '') +
+              (p.result ? `\n    结果:${p.result}` : '') +
+              (p.note ? `\n    注:${p.note}` : ''),
+          )
+          .join('\n'),
+    )
+    .join('\n');
+  const sysContext =
+    `[研究主题] ${topic}\n` +
+    `[主题报告 — 生成于 ${new Date(report.generatedAt).toLocaleString()}]\n` +
+    `[覆盖论文数] ${report.relatedArxivIds.length}\n\n` +
+    `[主题总览]\n${report.overview}\n\n` +
+    `[论文横向对比]\n${dimLines}\n\n` +
+    (report.sharedFindings.length ? `[共同发现]\n${report.sharedFindings.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
+    (report.gaps.length ? `[研究空白]\n${report.gaps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
+    (report.nextSteps.length ? `[下一步建议]\n${report.nextSteps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
+    `[可引用的论文速览(节选)] —— 供你(模型)在回答细节问题时交叉验证:\n` +
+    summaries
+      .slice(0, 30)
+      .map(
+        (s, i) =>
+          `  ${i + 1}. arXiv:${s.arxivId} TLDR:${(s.summary.tldr ?? '').slice(0, 200)}\n` +
+          `     方法:${(s.summary.method ?? '').slice(0, 200)}` +
+          (s.summary.result ? `\n     结果:${(s.summary.result ?? '').slice(0, 200)}` : ''),
+      )
+      .join('\n');
+
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: REPORT_CHAT_SYSTEM + '\n\n' + sysContext },
+  ];
+  for (const m of history.slice(-MAX_QA_FOR_LLM)) messages.push({ role: m.role, content: m.content });
   messages.push({ role: 'user', content: question });
 
   const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
@@ -1489,6 +1607,42 @@ function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionItem[]): s
     ${section('共同发现', r.sharedFindings)}
     ${section('研究空白', r.gaps)}
     ${section('下一步建议', r.nextSteps)}
+    ${renderReportNextStepsHTML()}
+  `;
+}
+
+// 报告生成完后的「下一步」操作面板:导出 / 重新生成 / 补论文增量更新 / 追问报告
+function renderReportNextStepsHTML(): string {
+  return `
+    <section class="topic-report-next-steps">
+      <h3>👉 下一步可以做什么</h3>
+      <p class="topic-report-next-steps-hint">报告已经生成。下面是常见的几种后续操作,挑一个继续:</p>
+      <div class="topic-report-next-steps-actions">
+        <button type="button" class="topic-btn primary" data-act="report-dl">💾 下载报告 .md</button>
+        <button type="button" class="topic-btn ghost" data-act="report-copy">📋 复制为 Markdown</button>
+        <button type="button" class="topic-btn ghost" data-act="report-regen">🔄 用相同速览重新生成报告</button>
+        <button type="button" class="topic-btn ghost" data-act="report-add-more">➕ 去阶段 3 补论文(完成后会触发增量更新)</button>
+        <button type="button" class="topic-btn ghost" data-act="report-edit-topic">↩ 改思路重新探索(回到阶段 1)</button>
+      </div>
+      <div class="topic-report-chat" data-role="report-chat">
+        <div class="topic-report-chat-head">
+          <button type="button" class="topic-btn ghost" data-act="toggle-report-chat">💬 追问 / 修改报告</button>
+          <span class="topic-report-chat-hint">围绕这份报告提问,或让模型给出修改建议后点「应用此修改」</span>
+        </div>
+        <div class="topic-chat topic-hidden" data-role="report-chat-body">
+          <div class="topic-chat-history" data-role="report-chat-history"></div>
+          <div class="topic-chat-input">
+            <input type="text" placeholder="例如:为什么把 ASE 归到「表征学习」? / 把共同发现第 2 条改得更具体" />
+            <button type="button" class="topic-btn primary" data-act="send-report-chat">发送</button>
+          </div>
+          <div class="topic-chat-foot">
+            <span>本地仅保留最近 ${MAX_QA_FOR_REPORT} 轮</span>
+            <button type="button" class="topic-btn ghost" data-act="apply-report-suggestion">📥 应用最近一轮「修改建议」并重新生成报告</button>
+            <button type="button" class="topic-btn ghost" data-act="clear-report-chat">清空追问</button>
+          </div>
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -1528,6 +1682,62 @@ function renderReportStage(): void {
   copyBtn.disabled = false;
   dlBtn.disabled = false;
   out.innerHTML = renderReportToHTML(r, refSeeds);
+  // 阶段 5 报告生成后:绑「下一步」面板 + 报告追问 chat 事件
+  bindReportNextStepsActions(out);
+  renderReportChat();
+}
+
+// 把「下一步」面板里的按钮 / 报告追问 chat 控件事件一次性绑好。
+// out.innerHTML 每次 renderReportStage 都会被重写,所以每次重渲染后都要重新绑一次。
+function bindReportNextStepsActions(out: HTMLElement): void {
+  out.querySelector<HTMLButtonElement>('[data-act="report-dl"]')?.addEventListener('click', () => downloadReportAsMarkdown());
+  out.querySelector<HTMLButtonElement>('[data-act="report-copy"]')?.addEventListener('click', () => copyReportAsMarkdown());
+  out.querySelector<HTMLButtonElement>('[data-act="report-regen"]')?.addEventListener('click', () => doGenerateReport());
+  out.querySelector<HTMLButtonElement>('[data-act="report-add-more"]')?.addEventListener('click', () => {
+    ($('stage-candidates') as HTMLDetailsElement).open = true;
+    ($('stage-candidates') as HTMLDetailsElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setStatus('📚 去阶段 3 勾选/搜索新论文,完成后回这里会自动增量更新报告');
+  });
+  out.querySelector<HTMLButtonElement>('[data-act="report-edit-topic"]')?.addEventListener('click', () => {
+    ($('stage-input') as HTMLDetailsElement).open = true;
+    ($('stage-input') as HTMLDetailsElement).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setStatus('↩ 回到阶段 1 改思路,点「🔍 拆解思路」会重新跑后续阶段');
+  });
+
+  const toggleBtn = out.querySelector<HTMLButtonElement>('[data-act="toggle-report-chat"]');
+  const chatBody = out.querySelector<HTMLElement>('[data-role="report-chat-body"]');
+  toggleBtn?.addEventListener('click', () => {
+    if (!chatBody) return;
+    chatBody.classList.toggle('topic-hidden');
+    if (!chatBody.classList.contains('topic-hidden')) {
+      // 展开时自动滚动到 chat 区域
+      chatBody.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+  const sendBtn = out.querySelector<HTMLButtonElement>('[data-act="send-report-chat"]');
+  const input = out.querySelector<HTMLInputElement>('[data-role="report-chat-body"] .topic-chat-input input');
+  const doSend = () => void doSendReportChat();
+  sendBtn?.addEventListener('click', doSend);
+  input?.addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') { e.preventDefault(); doSend(); }
+  });
+  out.querySelector<HTMLButtonElement>('[data-act="clear-report-chat"]')?.addEventListener('click', () => doClearReportChat());
+  out.querySelector<HTMLButtonElement>('[data-act="apply-report-suggestion"]')?.addEventListener('click', () => doApplyReportSuggestion());
+}
+
+function renderReportChat(): void {
+  if (!current) return;
+  const historyEl = document.querySelector<HTMLElement>('[data-role="report-chat-history"]');
+  if (!historyEl) return;
+  const msgs = current.reportChats ?? [];
+  if (msgs.length === 0) {
+    historyEl.innerHTML = '<div class="topic-chat-empty">还没有追问 — 输入问题开始,或要求模型给「修改建议」</div>';
+    return;
+  }
+  historyEl.innerHTML = msgs.map((m) => `
+    <div class="topic-chat-msg ${m.role}">${escapeHtml(m.content).replace(/\n/g, '<br>')}</div>
+  `).join('');
+  historyEl.scrollTop = historyEl.scrollHeight;
 }
 
 function renderAll(): void {
@@ -1589,6 +1799,125 @@ async function doGenerateReport(): Promise<void> {
     setStatusErrorWithAction(`生成报告失败: ${(e as Error).message}`, '🔄 重试', () => doGenerateReport());
   } finally {
     clearInterval(waitTimer);
+    ($<HTMLButtonElement>('report-gen-btn')).disabled = false;
+    inFlightController = null;
+  }
+}
+
+// ============================================================================
+// 报告追问 / 修改建议(阶段 5 chat)
+// ============================================================================
+
+async function doSendReportChat(): Promise<void> {
+  if (!current?.report) {
+    setStatus('需要先有报告才能追问 — 请先生成报告', 'error');
+    return;
+  }
+  const input = document.querySelector<HTMLInputElement>('[data-role="report-chat-body"] .topic-chat-input input');
+  if (!input) return;
+  const q = input.value.trim();
+  if (!q) return;
+  input.value = '';
+  if (!current.reportChats) current.reportChats = [];
+  current.reportChats.push({ role: 'user', content: q, ts: Date.now() });
+  if (current.reportChats.length > MAX_QA_FOR_REPORT) {
+    current.reportChats = current.reportChats.slice(-MAX_QA_FOR_REPORT);
+  }
+  renderReportChat();
+  persistSession(current!);
+
+  const sendBtn = document.querySelector<HTMLButtonElement>('[data-act="send-report-chat"]');
+  if (sendBtn) sendBtn.disabled = true;
+  setStatus('💬 报告追问中...');
+  try {
+    inFlightController = new AbortController();
+    const a = await chatWithReport(
+      current.report,
+      current.topic,
+      current.summaries,
+      q,
+      current.reportChats.slice(0, -1), // 不含本轮 user 消息
+    );
+    current.reportChats.push({ role: 'assistant', content: a, ts: Date.now() });
+    if (current.reportChats.length > MAX_QA_FOR_REPORT) {
+      current.reportChats = current.reportChats.slice(-MAX_QA_FOR_REPORT);
+    }
+    renderReportChat();
+    persistSession(current!);
+    setStatus('✓ 追问完成');
+    setTimeout(clearStatus, 1500);
+  } catch (e) {
+    setStatusErrorWithAction(`追问失败: ${(e as Error).message}`, '🔄 重试', () => doSendReportChat());
+  } finally {
+    if (sendBtn) sendBtn.disabled = false;
+    inFlightController = null;
+  }
+}
+
+function doClearReportChat(): void {
+  if (!current) return;
+  if (!current.reportChats || current.reportChats.length === 0) return;
+  if (!confirm('清空报告追问历史?此操作不可撤销。')) return;
+  current.reportChats = [];
+  renderReportChat();
+  persistSession(current!);
+  setStatus('✓ 已清空报告追问');
+  setTimeout(clearStatus, 1500);
+}
+
+// 用户点「应用最近一轮修改建议并重新生成报告」
+// 实现:从最近一轮 assistant 消息中抽取 user 在前面要求的修改建议,作为 userNotes 拼进
+//       generateTopicReport 的 prompt(走 'incremental' 模式保留 prevDimensions),让 LLM
+//       基于建议重写报告。如果最近一轮 assistant 并不是修改建议(只是普通回答),则提示用户。
+async function doApplyReportSuggestion(): Promise<void> {
+  if (!current?.report) return;
+  if (!current.reportChats || current.reportChats.length < 2) {
+    setStatus('没有可应用的修改建议 — 先在追问里要求模型给出修改建议', 'error');
+    return;
+  }
+  const lastAssistant = [...current.reportChats].reverse().find((m) => m.role === 'assistant');
+  if (!lastAssistant) {
+    setStatus('找不到最近一轮模型回复', 'error');
+    return;
+  }
+  // 启发式:assistant 消息以「修改建议」「建议:」或含「改」/「调整」/「重写」等动词开头 → 视为修改建议。
+  const isSuggestion = /(修改建议|建议[:：]|建议如下|^[\s\S]*?(改写|调整|把.+改成|把.+换|删除|加上|重排|改.+为))/m.test(lastAssistant.content)
+    || /^[「『]/.test(lastAssistant.content.trim());
+  if (!isSuggestion) {
+    setStatus('最近一轮不是「修改建议」格式,无法应用 — 请明确告诉模型「请给修改建议」', 'error');
+    return;
+  }
+  if (!confirm('将基于最近一轮「修改建议」重新生成报告?原报告会作为 prevDimensions 被复用/扩展。')) return;
+  const cfg = loadSettings() as LLMConfig;
+  if (!cfg.apiKey) {
+    renderBanner('请先在 <a href="/settings/">设置</a> 页面填 LLM API Key。');
+    return;
+  }
+  clearBanner();
+  inFlightController = new AbortController();
+  ($<HTMLButtonElement>('report-gen-btn')).disabled = true;
+  setStatus('🔄 正在按修改建议重生成报告...');
+  try {
+    // 把建议拼到 topic 后面,作为 userNotes 带入 prompt
+    const topicWithNotes =
+      current.topic +
+      '\n\n【用户上一轮提出的修改建议 — 请基于这些建议重写报告(走 incremental 模式)】\n' +
+      lastAssistant.content;
+    const newReport = await generateTopicReport(
+      topicWithNotes,
+      current.summaries,
+      cfg,
+      'incremental',
+      current.report,
+    );
+    current.report = newReport;
+    renderReportStage();
+    persistSession(current!);
+    setStatus(`✓ 报告已按建议重生成 · ${newReport.dimensions.length} 个维度 · ${newReport.relatedArxivIds.length} 篇`);
+    setTimeout(clearStatus, 2500);
+  } catch (e) {
+    setStatusErrorWithAction(`应用建议失败: ${(e as Error).message}`, '🔄 重试', () => doApplyReportSuggestion());
+  } finally {
     ($<HTMLButtonElement>('report-gen-btn')).disabled = false;
     inFlightController = null;
   }
