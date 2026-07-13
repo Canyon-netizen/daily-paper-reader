@@ -2682,6 +2682,22 @@ async function doSummarize(limit?: number): Promise<void> {
   const limitDesc = limit && limit < totalCandidates ? `前 ${totalToSummarize}/${totalCandidates} 篇` : `${totalToSummarize} 篇`;
   setStatus(`🚀 总结 ${limitDesc}(并发 LLM ${SUMMARIZE_CONCURRENCY} + PDF 预热 ${PDF_PREFETCH_CONCURRENCY},流水线)...`);
 
+  // 心跳定时器:LLM 慢时(单篇 30-60s)onProgress 很久不触发,状态条文本
+  // 不变 → 用户以为卡住。每 2s 强制刷一次状态条,显示已用时间 + 当前
+  // 预热池状态(用 setStatus 重渲染会被 inFlightController 检测逻辑
+  // 自动附 ⏹ 停止按钮,顺手做也加在这里)。
+  const heartbeat = setInterval(() => {
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    const readyN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'ready').length;
+    const pendingN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'pending').length;
+    const failN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
+    const completed = current?.summaries.length ?? 0;
+    const prefetchInfo = ` · PDF 预热 ${readyN}/${totalToSummarize} ready` +
+      (pendingN > 0 ? ` · ${pendingN} 下载中` : '') +
+      (failN > 0 ? ` · ${failN} 失败` : '');
+    setStatus(`🚀 总结 ${limitDesc} · 已用 ${formatEta(elapsed)} · 完成 ${completed}/${totalToSummarize}${prefetchInfo}`);
+  }, 2000);
+
   // 阶段 1+2 流水线:PDF 预热和 LLM 总结并发跑(不阻塞等所有 PDF 下完再开 LLM)。
   // 启动一个独立的后台任务跑 PDF 预热(PDF_PREFETCH_CONCURRENCY=6 路并发),
   // LLM 主任务(SUMMARIZE_CONCURRENCY=4 路)同时从 pdfTextCache 拿 text。
@@ -2705,71 +2721,78 @@ async function doSummarize(limit?: number): Promise<void> {
 
   // LLM 阶段:4 路并发跑 summarizeOne。summarizeOne 内部会从 pdfTextCache 拿 text,
   // 拿不到就阻塞同步预热这一篇(预热池同时在跑别的,基本不会撞车)。
-  const result = await runConcurrent(
-    unique,
-    SUMMARIZE_CONCURRENCY,
-    async ({ cand, subqId }) => {
-      const t0 = Date.now();
-      const sum = await summarizeOne(cand.entry, subqId);
-      const dt = Date.now() - t0;
-      sampleDurations.push(dt);
-      return sum;
-    },
-    (d, total) => {
-      const elapsed = Math.round((Date.now() - startedAt) / 1000);
-      // 实时统计预热状态
-      const readyN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'ready').length;
-      const pendingN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'pending').length;
-      const failN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
-      let eta = '';
-      // ETA 算法:样本 ≥ 5 后用中位数(比均值更稳,不被一两篇异常拖偏),
-      // 并且 `remain × median / CONCURRENCY` 上限 6h 防止估算炸(7.7s/篇 × 391 剩 / 4 路
-      // = 12.5 分钟,但样本里有 5s 和 60s 混着时均值会跳)。样本 < 5 时只显示已用时间。
-      if (sampleDurations.length >= 5) {
-        const sorted = [...sampleDurations].sort((a, b) => a - b);
-        const median = sorted[Math.floor(sorted.length / 2)];
-        const remain = Math.max(0, total - d);
-        // elapsed / d 给出真实吞吐(秒/篇),比 median/CONCURRENCY 更准(因为
-        // LLM 4 路 + PDF 6 路 实际串了 PDF,吞吐不会无限逼近 4×LLM 速度)
-        const observedTput = elapsed / Math.max(d, 1); // 秒/篇
-        let etaSec = Math.round(observedTput * remain);
-        // 钳制:大于 6 小时显示「>6h」提示用户中断
-        if (etaSec > 6 * 3600) {
-          eta = ` · 已用 ${elapsed}s · 预计 >6h(建议 ⏹ 停止,用「总结前 20 篇」)`;
-        } else {
-          eta = ` · 已用 ${elapsed}s · 预计还需 ${formatEta(etaSec)}`;
+  let result: { ok: Array<{ item: { cand: Candidate; subqId: string }; result: Summary }>; err: Array<{ item: { cand: Candidate; subqId: string }; error: Error }> };
+  try {
+    result = await runConcurrent(
+      unique,
+      SUMMARIZE_CONCURRENCY,
+      async ({ cand, subqId }) => {
+        const t0 = Date.now();
+        const sum = await summarizeOne(cand.entry, subqId);
+        const dt = Date.now() - t0;
+        sampleDurations.push(dt);
+        return sum;
+      },
+      (d, total) => {
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        // 实时统计预热状态
+        const readyN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'ready').length;
+        const pendingN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'pending').length;
+        const failN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
+        let eta = '';
+        // ETA 算法:样本 ≥ 5 后用中位数(比均值更稳,不被一两篇异常拖偏),
+        // 并且 `remain × median / CONCURRENCY` 上限 6h 防止估算炸(7.7s/篇 × 391 剩 / 4 路
+        // = 12.5 分钟,但样本里有 5s 和 60s 混着时均值会跳)。样本 < 5 时只显示已用时间。
+        if (sampleDurations.length >= 5) {
+          const sorted = [...sampleDurations].sort((a, b) => a - b);
+          const median = sorted[Math.floor(sorted.length / 2)];
+          const remain = Math.max(0, total - d);
+          // elapsed / d 给出真实吞吐(秒/篇),比 median/CONCURRENCY 更准(因为
+          // LLM 4 路 + PDF 6 路 实际串了 PDF,吞吐不会无限逼近 4×LLM 速度)
+          const observedTput = elapsed / Math.max(d, 1); // 秒/篇
+          let etaSec = Math.round(observedTput * remain);
+          // 钳制:大于 6 小时显示「>6h」提示用户中断
+          if (etaSec > 6 * 3600) {
+            eta = ` · 已用 ${formatEta(elapsed)} · 预计 >6h(建议 ⏹ 停止,用「总结前 20 篇」)`;
+          } else {
+            eta = ` · 已用 ${formatEta(elapsed)} · 预计还需 ${formatEta(etaSec)}`;
+          }
+        } else if (d > 0) {
+          eta = ` · 已用 ${formatEta(elapsed)} · 采样中(还需 ${5 - sampleDurations.length} 篇)`;
         }
-      } else if (d > 0) {
-        eta = ` · 已用 ${elapsed}s · 采样中(还需 ${5 - sampleDurations.length} 篇)`;
-      }
-      const prefetchInfo = ` · PDF 预热 ${readyN}/${total} ready` +
-        (pendingN > 0 ? ` · ${pendingN} 下载中` : '') +
-        (failN > 0 ? ` · ${failN} 失败` : '');
-      setStatus(`🚀 总结 ${limitDesc}... ${d}/${total}${eta}${prefetchInfo}`);
-      renderSummaryStage();
-      renderSessionMeta();
-      // 节流 persistSession:每 5 篇 + 最后 1 篇才写 localStorage,避免 LLM 完成
-      // 太频繁时 JSON.stringify + localStorage.setItem 阻塞主线程(主线程挂起
-      // 表现为「界面卡住」)
-      if (d % 5 === 0 || d === total) {
-        persistSession(current!);
-      }
-    },
-    (_item, _idx, sum, err) => {
-      if (sum && current) {
-        current.summaries.push(sum);
+        const prefetchInfo = ` · PDF 预热 ${readyN}/${total} ready` +
+          (pendingN > 0 ? ` · ${pendingN} 下载中` : '') +
+          (failN > 0 ? ` · ${failN} 失败` : '');
+        setStatus(`🚀 总结 ${limitDesc}... ${d}/${total}${eta}${prefetchInfo}`);
         renderSummaryStage();
         renderSessionMeta();
-        persistSession(current!);
-        renderReportStage();
-        if (incrementalReportEnabled() && current.report) {
-          void triggerIncrementalReportDraft(current);
+        // 节流 persistSession:每 5 篇 + 最后 1 篇才写 localStorage,避免 LLM 完成
+        // 太频繁时 JSON.stringify + localStorage.setItem 阻塞主线程(主线程挂起
+        // 表现为「界面卡住」)
+        if (d % 5 === 0 || d === total) {
+          persistSession(current!);
         }
-      } else if (err) {
-        console.warn('[topic] summarize failed:', err.message);
-      }
-    },
-  );
+      },
+      (_item, _idx, sum, err) => {
+        if (sum && current) {
+          current.summaries.push(sum);
+          renderSummaryStage();
+          renderSessionMeta();
+          persistSession(current!);
+          renderReportStage();
+          if (incrementalReportEnabled() && current.report) {
+            void triggerIncrementalReportDraft(current);
+          }
+        } else if (err) {
+          console.warn('[topic] summarize failed:', err.message);
+        }
+      },
+    );
+  } finally {
+    // 任何路径下都清心跳和 controller,避免定时器泄漏
+    clearInterval(heartbeat);
+    inFlightController = null;
+  }
 
   // 等待后台预热结束(避免 cache 在 LLM 完成后被 clear 时还有 pending)。
   // 给预热最多 60s grace period,超时也不阻塞。
@@ -2802,7 +2825,6 @@ async function doSummarize(limit?: number): Promise<void> {
   renderSummaryStage();
   renderSessionMeta();
   persistSession(current!);
-  inFlightController = null;
 }
 
 // 把秒数格式化为人类可读:75s / 1m 23s / 1h 5m
