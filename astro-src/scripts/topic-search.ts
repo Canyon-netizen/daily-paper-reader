@@ -1497,11 +1497,13 @@ function renderReportStage(): void {
   const out = $('report-output');
   const genBtn = $<HTMLButtonElement>('report-gen-btn');
   const copyBtn = $<HTMLButtonElement>('report-copy-btn');
+  const dlBtn = $<HTMLButtonElement>('report-download-btn');
   const n = current?.summaries.length ?? 0;
   if (!current || n === 0) {
     meta.textContent = '需要先有至少 1 篇速览';
     genBtn.disabled = true;
     copyBtn.disabled = true;
+    dlBtn.disabled = true;
     out.innerHTML = '<div class="topic-empty">尚未总结 — 在第 4 步完成速览后再来生成报告。</div>';
     return;
   }
@@ -1509,6 +1511,7 @@ function renderReportStage(): void {
   if (!current.report) {
     meta.textContent = '尚未生成';
     copyBtn.disabled = true;
+    dlBtn.disabled = true;
     out.innerHTML = `<div class="topic-empty">点击"📊 生成报告"开始基于 ${n} 篇速览整合主题报告。</div>`;
     return;
   }
@@ -1523,6 +1526,7 @@ function renderReportStage(): void {
   const refNote = refSeeds.length > 0 ? ` · ${refSeeds.length} 篇参考论文` : '';
   meta.textContent = `已生成 · ${r.dimensions.length} 个维度 · ${r.relatedArxivIds.length} 篇${incNote}${refNote}`;
   copyBtn.disabled = false;
+  dlBtn.disabled = false;
   out.innerHTML = renderReportToHTML(r, refSeeds);
 }
 
@@ -1556,7 +1560,15 @@ async function doGenerateReport(): Promise<void> {
   ($('stage-report') as HTMLDetailsElement).open = true;
   inFlightController = new AbortController();
   const n = current.summaries.length;
+  const startedAt = Date.now();
   setStatus(`📊 正在为 ${n} 篇论文生成主题报告...`);
+  // 等计时器:报告生成是单次 LLM 调用 + 最多 2 次重试,30s-3min 没中间反馈,
+  // 状态条加个「已等待 X 秒」让用户知道还活着。
+  let elapsedTick = 0;
+  const waitTimer = setInterval(() => {
+    elapsedTick += 5;
+    setStatus(`📊 正在为 ${n} 篇论文生成主题报告... (已等待 ${elapsedTick}s)`);
+  }, 5000);
   try {
     const report = await generateTopicReport(
       current.topic,
@@ -1568,13 +1580,15 @@ async function doGenerateReport(): Promise<void> {
     current.report = report;
     renderReportStage();
     persistSession(current!);
+    const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
     setStatus(
-      `✓ 报告完成: ${report.dimensions.length} 个维度 · ${report.relatedArxivIds.length} 篇论文`,
+      `✓ 报告完成 · ${report.dimensions.length} 个维度 · ${report.relatedArxivIds.length} 篇论文 · 耗时 ${seconds}s`,
     );
-    setTimeout(clearStatus, 2000);
+    setTimeout(clearStatus, 2500);
   } catch (e) {
     setStatusErrorWithAction(`生成报告失败: ${(e as Error).message}`, '🔄 重试', () => doGenerateReport());
   } finally {
+    clearInterval(waitTimer);
     ($<HTMLButtonElement>('report-gen-btn')).disabled = false;
     inFlightController = null;
   }
@@ -1952,8 +1966,8 @@ async function triggerIncrementalReportDraft(s: TopicSession): Promise<void> {
   }
 }
 
-function copyReportAsMarkdown(): void {
-  if (!current?.report) return;
+function buildReportMarkdown(): string | null {
+  if (!current?.report) return null;
   const r = current.report;
   const lines: string[] = [];
   lines.push(`# 主题报告: ${current.topic || '(主题探索)'}`);
@@ -1996,10 +2010,49 @@ function copyReportAsMarkdown(): void {
     r.nextSteps.forEach((s) => lines.push(`- ${s}`));
     lines.push('');
   }
-  navigator.clipboard.writeText(lines.join('\n')).then(
+  return lines.join('\n');
+}
+
+function copyReportAsMarkdown(): void {
+  const md = buildReportMarkdown();
+  if (!md) return;
+  navigator.clipboard.writeText(md).then(
     () => setStatus('✓ 报告已复制为 Markdown'),
     () => setStatus('复制失败,请手动选择', 'error'),
   );
+}
+
+// 文件名:主题报告-<topic 安全 slug>-<YYYYMMDD-HHmmss>.md
+function reportFileName(): string {
+  const topicSlug = (current?.topic || '主题探索')
+    .replace(/[\\/:*?"<>|\s]+/g, '_')
+    .slice(0, 40)
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '') || 'topic';
+  const d = new Date();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  return `主题报告-${topicSlug}-${stamp}.md`;
+}
+
+function downloadReportAsMarkdown(): void {
+  const md = buildReportMarkdown();
+  if (!md) return;
+  try {
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = reportFileName();
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    setStatus('✓ 报告已下载');
+    setTimeout(clearStatus, 2000);
+  } catch (e) {
+    setStatus(`下载失败: ${(e as Error).message}`, 'error');
+  }
 }
 
 function copyAllAsMarkdown(): void {
@@ -2495,6 +2548,7 @@ function init(): void {
   // 阶段 5:报告按钮 + 增量开关
   $<HTMLButtonElement>('report-gen-btn').addEventListener('click', doGenerateReport);
   $<HTMLButtonElement>('report-copy-btn').addEventListener('click', copyReportAsMarkdown);
+  $<HTMLButtonElement>('report-download-btn').addEventListener('click', downloadReportAsMarkdown);
   $<HTMLInputElement>('report-incremental-toggle').addEventListener('change', (e) => {
     setStatus(
       (e.target as HTMLInputElement).checked
