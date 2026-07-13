@@ -2519,20 +2519,31 @@ async function doSummarize(limit?: number): Promise<void> {
   const sampleDurations: number[] = [];
 
   const limitDesc = limit && limit < totalCandidates ? `前 ${totalToSummarize}/${totalCandidates} 篇` : `${totalToSummarize} 篇`;
-  setStatus(`🚀 准备总结 ${limitDesc}(并发 LLM ${SUMMARIZE_CONCURRENCY} + PDF 预热 ${PDF_PREFETCH_CONCURRENCY})...`);
+  setStatus(`🚀 总结 ${limitDesc}(并发 LLM ${SUMMARIZE_CONCURRENCY} + PDF 预热 ${PDF_PREFETCH_CONCURRENCY},流水线)...`);
 
-  // 阶段 1:并发预热所有 PDF(下载 + 抽文本),独立于 LLM 阶段。
-  // PDF_PREFETCH_CONCURRENCY=6 路并发把 PDF 池子灌满,LLM 阶段直接从池子拿 text。
+  // 阶段 1+2 流水线:PDF 预热和 LLM 总结并发跑(不阻塞等所有 PDF 下完再开 LLM)。
+  // 启动一个独立的后台任务跑 PDF 预热(PDF_PREFETCH_CONCURRENCY=6 路并发),
+  // LLM 主任务(SUMMARIZE_CONCURRENCY=4 路)同时从 pdfTextCache 拿 text。
+  // 每篇 LLM 完成时,顺手把还没预热的 PDF 加入预热队列(由 LLM 阶段的 worker 触发)。
   pdfTextCache.clear();
-  await runConcurrent(unique, PDF_PREFETCH_CONCURRENCY, async ({ cand }) => prefetchOnePdf(cand.entry));
-  // 预热阶段完成后,统计失败数(不影响 LLM 阶段,summarizeOne 会读 failed 状态抛错)
-  const prefetchFailed = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
-  if (prefetchFailed > 0) {
-    console.warn(`[topic] ${prefetchFailed}/${unique.length} 篇 PDF 预热失败,LLM 阶段会逐个报错`);
-  }
+  // 后台预热任务:fire-and-forget。不 await,跟 LLM 主任务并发。
+  void (async () => {
+    try {
+      await runConcurrent(unique, PDF_PREFETCH_CONCURRENCY, async ({ cand }) => {
+        // 如果 cache 里没 pending/ready(可能被 LLM 抢先同步预热过),跳过
+        if (pdfTextCache.has(cand.entry.arxivId)) {
+          const cur = pdfTextCache.get(cand.entry.arxivId)!;
+          if (cur.status !== 'pending') return;
+        }
+        await prefetchOnePdf(cand.entry);
+      });
+    } catch (e) {
+      console.warn('[topic] prefetch background loop failed:', e);
+    }
+  })();
 
-  // 阶段 2:LLM 总结(从 pdfTextCache 拿已就绪的 text)
-  setStatus(`🚀 总结 ${limitDesc}... 0/${totalToSummarize}`);
+  // LLM 阶段:4 路并发跑 summarizeOne。summarizeOne 内部会从 pdfTextCache 拿 text,
+  // 拿不到就阻塞同步预热这一篇(预热池同时在跑别的,基本不会撞车)。
   const result = await runConcurrent(
     unique,
     SUMMARIZE_CONCURRENCY,
@@ -2545,41 +2556,61 @@ async function doSummarize(limit?: number): Promise<void> {
     },
     (d, total) => {
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
-      // 基于已完成样本估算剩余时间;样本少时(<=2)用 25s 默认;样本多时用均值。
+      // 实时统计预热状态
+      const readyN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'ready').length;
+      const pendingN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'pending').length;
+      const failN = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
       let eta = '';
       if (sampleDurations.length >= 2) {
         const avg = sampleDurations.reduce((a, b) => a + b, 0) / sampleDurations.length;
         const remain = Math.max(0, total - d);
-        // LLM 并发 4,PDF 预热已经完成,后续每篇耗时约 avg / SUMMARIZE_CONCURRENCY 流水线化
         const etaSec = Math.round((avg / SUMMARIZE_CONCURRENCY) * remain);
         eta = ` · 已用 ${elapsed}s · 预计还需 ${formatEta(etaSec)}`;
       } else if (d > 0) {
         eta = ` · 已用 ${elapsed}s`;
       }
-      setStatus(`🚀 总结 ${limitDesc}... ${d}/${total}${eta}`);
+      const prefetchInfo = ` · PDF 预热 ${readyN}/${total} ready` +
+        (pendingN > 0 ? ` · ${pendingN} 下载中` : '') +
+        (failN > 0 ? ` · ${failN} 失败` : '');
+      setStatus(`🚀 总结 ${limitDesc}... ${d}/${total}${eta}${prefetchInfo}`);
       renderSummaryStage();
       renderSessionMeta();
       persistSession(current!);
     },
     (_item, _idx, sum, err) => {
-      // 每篇一完成即 push + 触发可能的增量报告草稿
       if (sum && current) {
         current.summaries.push(sum);
         renderSummaryStage();
         renderSessionMeta();
         persistSession(current!);
-        renderReportStage(); // 阶段 5 meta 计数会更新
+        renderReportStage();
         if (incrementalReportEnabled() && current.report) {
           void triggerIncrementalReportDraft(current);
         }
       } else if (err) {
-        // 单篇失败不阻塞其他;但保留总数可见
         console.warn('[topic] summarize failed:', err.message);
       }
     },
   );
 
-  pdfTextCache.clear(); // 释放内存
+  // 等待后台预热结束(避免 cache 在 LLM 完成后被 clear 时还有 pending)。
+  // 给预热最多 60s grace period,超时也不阻塞。
+  await new Promise((resolve) => {
+    const deadline = Date.now() + 60_000;
+    const tick = () => {
+      const stillPending = Array.from(pdfTextCache.values()).some((v) => v.status === 'pending');
+      if (!stillPending || Date.now() > deadline) {
+        resolve(undefined);
+        return;
+      }
+      setTimeout(tick, 500);
+    };
+    tick();
+  });
+
+  // 阶段 1 + 2 都已完成,清 PDF 缓存
+  const finalPrefetchFailed = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
+  pdfTextCache.clear();
   if (result.err.length > 0) {
     setStatus(`部分总结失败(${result.err.length}/${totalToSummarize}): ${result.err[0].error.message.slice(0, 100)}${result.err.length > 1 ? ` …` : ''}`, 'error');
   } else {
