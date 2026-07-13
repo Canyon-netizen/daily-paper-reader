@@ -61,6 +61,9 @@ interface SubQ {
   // 实测命中的标题样本(命中 >0 时填充最多 3 条),用于阶段 2 UI 鼠标悬停提示,也作为
   // 闭环重写 LLM 的「已验证真实写法」证据。命中为 0 时为空数组。
   hitSamples?: string[];
+  // 阶段 3 searchForDirection 失败的错误信息(主 query 抛错时填充),让用户在 UI 上
+  // 看到「为什么这个子方向 0 命中」,而不只是 0 命中的红 badge。undefined → 还没跑 / 成功。
+  searchError?: string;
   // arXiv 真实常见写法(3-5 个独立英文关键词/短语)。
   // searchForDirection 会逐个打 arXiv 后按 canonicalArxivId 合并去重。
   // 老 session 没这个字段 → undefined,走 ?? [] 兜底。
@@ -850,6 +853,41 @@ async function validateSubqHitCount(q: string): Promise<{ count: number; samples
   }
 }
 
+// searchForDirection 主 query 失败时的 fallback:不走 searchArxiv(带 cat 过滤),而是
+// 直接打 arXiv API(不带 cat 过滤,max_results=12),parse 出 ArxivEntry[] 用于合并。
+// 这样即使 cat 过滤在某个边缘 case 下完全 0 命中,fallback 仍能给用户至少几条候选。
+async function fetchEntriesNoCatFilter(q: string): Promise<ArxivEntry[]> {
+  const url = `https://export.arxiv.org/api/query?search_query=all%3A%22${encodeURIComponent(q)}%22&max_results=12&sortBy=relevance&sortOrder=descending`;
+  try {
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    const doc = new DOMParser().parseFromString(xml, 'application/xml');
+    const entries: ArxivEntry[] = [];
+    const seen = new Set<string>();
+    doc.querySelectorAll('entry').forEach((e) => {
+      const idFull = e.querySelector('id')?.textContent?.trim() ?? '';
+      const arxivId = idFull.split('/abs/').pop() ?? '';
+      const canon = canonicalId(arxivId);
+      if (seen.has(canon)) return;
+      const title = (e.querySelector('title')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+      if (!title || title.toLowerCase() === 'error' || title.length < 3) return;
+      const summary = (e.querySelector('summary')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+      const authors = Array.from(e.querySelectorAll('author name')).map((n) => (n.textContent ?? '').trim()).filter(Boolean);
+      const published = e.querySelector('published')?.textContent?.trim() ?? '';
+      const updated = e.querySelector('updated')?.textContent?.trim() ?? '';
+      seen.add(canon);
+      entries.push({
+        id: idFull, arxivId, title, authors, summary, published, updated,
+        pdfUrl: `https://arxiv.org/pdf/${arxivId}`,
+      });
+    });
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
 // 子方向 query 改写 system prompt(只在命中 0 时触发一次,提供 arXiv 真实命中样本作证据)
 const SUBQ_REWRITE_SYSTEM = `你是研究思路拆解助手的"query 修复"模块。
 
@@ -941,16 +979,30 @@ export async function validateAndRewriteSubqs(subqs: SubQ[], cfg: LLMConfig): Pr
 
   // 命中 0 → 让 LLM 改写一次(基于其他子方向的命中样本作为关键词证据)
   const rewriteMap = await rewriteZeroHitSubqs(zeros, samplesByLabel, cfg);
-  // 把改写结果应用回原 subqs,并对改写后的 query 再实测一次
+  // 把改写结果应用回原 subqs,并对改写后的 query 再实测一次。
+  // 重要:若改写后实测仍 0 命中,立即**还原** LLM 改写前的原始 query + aliases,
+  // 避免「改写把原本命中的 query 改成不命中的」(LLM 看到其他子方向的命中样本后
+  // 可能强行套用「skill / tool / embedding」等高频词,把 "hierarchical reinforcement
+  // learning" 改成 "hierarchical skill learning" 反而 0 命中)。还原后 hitCount 仍
+  // 为 0,UI 显示红 badge 让用户手动改。
   for (const sq of zeros) {
     const rw = rewriteMap.get(sq.id);
-    if (rw && rw.query) {
-      sq.query = rw.query;
-      sq.aliases = Array.from(new Set(rw.aliases)).filter((a) => a !== rw.query);
-      // 再实测改写后的 query;若仍 0 命中,保留 warning,不再二次改写(避免无限循环)
-      const { count, samples } = await validateSubqHitCount(sq.query);
+    if (!rw || !rw.query) continue;
+    // 留一份原 query / aliases,改写后再实测一次,如果仍然 0 命中就还原。
+    const origQuery = sq.query;
+    const origAliases = sq.aliases;
+    sq.query = rw.query;
+    sq.aliases = Array.from(new Set(rw.aliases)).filter((a) => a !== rw.query);
+    const { count, samples } = await validateSubqHitCount(sq.query);
+    if (count > 0) {
       sq.hitCount = count;
       sq.hitSamples = samples;
+    } else {
+      // 还原原 query + aliases —— 宁可保留「验证过 0 命中」也不要换上更糟糕的
+      sq.query = origQuery;
+      sq.aliases = origAliases;
+      sq.hitCount = 0;
+      sq.hitSamples = [];
     }
   }
   return subqs;
@@ -970,11 +1022,16 @@ async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
   //
   // 兜底:即使 UI 输入框被填了中文,这里也做一次清洗;如果洗不出任何英文 token
   // (整段中文),直接抛错让 doSearch 显示成"0 命中 + 重试"状态,而不是浪费一次请求。
+  // 注意:searchForDirection 是被 runConcurrent 调的,throw 会让 candidatesBySubq[id]
+  // 保持 [] 空数组(doSearch 的初始清空),UI 显示"0 命中"但用户不知道原因。把错误
+  // 信息先 attach 到 subq.searchError,再 throw,让 doSearch 把这个错误摘出来报告。
   const cleaned = normalizeQuery(subq.query);
   const queryForArxiv = cleaned || subq.query.trim();
   const hasAscii = /[A-Za-z]/.test(queryForArxiv);
   if (!hasAscii) {
-    throw new Error(`子方向 "${subq.label}" 的 query 不含英文,无法在 arXiv 搜索: ${subq.query}`);
+    const msg = `子方向 "${subq.label}" 的 query 不含英文,无法在 arXiv 搜索: ${subq.query}`;
+    subq.searchError = msg;
+    throw new Error(msg);
   }
 
   // 构造别名列表 — 与主 query 互不重叠(已经在构造 SubQ 时 Set 去重一次了,这里
@@ -997,8 +1054,26 @@ async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
       // 单个别名出错时不让整个子方向 fail — 阶段 2 应该容忍个别失败,继续合并。
       // UI 上不会暴露这次失败(因为主 query 那次可能正常)。在控制台留 trace 即可。
       if (q === queryForArxiv) {
-        // 主 query 失败:不可静默吞,向上抛错让 doSearch 显示。
-        throw e;
+        // 主 query 失败:不要让整个子方向 fail(candidatesBySubq[id] 会保持 [] 让用户看到
+        // "0 命中",但其实是有救的 — cat 过滤可能在某些查询下 0 命中,而直接打 arXiv
+        // API 不带 cat 过滤就命中)。fallback 到轻量 URL(validateSubqHitCount 那种
+        // 不带 cat 过滤的 fetch,parse 头部几个 entry 拿过来用)。
+        console.warn(`[topic] 主 query "${queryForArxiv}" searchArxiv 失败,fallback 到无 cat 过滤 URL:`, e);
+        const fb = await fetchEntriesNoCatFilter(q);
+        if (fb.length > 0) {
+          for (const e of fb) {
+            const key = canonicalId(e.arxivId);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            merged.push(e);
+          }
+        } else {
+          // 兜底也失败 → 真没命中,记录错误后让 doSearch 显示
+          const msg = (e as Error).message.slice(0, 240);
+          subq.searchError = `主 query "${queryForArxiv}" arXiv 调用失败: ${msg}`;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
       }
       console.warn(`[topic] alias "${q}" 检索失败,跳过:`, e);
       await new Promise((r) => setTimeout(r, 1000));
@@ -2280,13 +2355,19 @@ async function doSearch(): Promise<void> {
   const totalCands = Object.values(current.candidatesBySubq).reduce((a, b) => a + b.length, 0);
   const subqsSearched = Object.values(current.candidatesBySubq).filter((l) => l !== undefined).length;
   const subqsHit = Object.values(current.candidatesBySubq).filter((l) => (l || []).length > 0).length;
+  // 收集 searchForDirection 失败的子方向错误信息(主 query 抛错时附在 subq.searchError)
+  const failedDetails = result.err.map((e) => {
+    const sq = e.item as SubQ;
+    const detail = sq.searchError ? `\n  · ${sq.label}: ${sq.searchError}` : `\n  · ${sq.label}: ${(e.error as Error).message.slice(0, 120)}`;
+    return detail;
+  }).join('');
   if (result.err.length > 0) {
     const msg = result.err.map((e) => (e.error as Error).message).join('; ');
     if (totalCands === 0) {
-      // 完全没拿到论文 — 提示重试
-      setStatusErrorWithAction(`所有子方向都未命中(代理或网络问题): ${msg.slice(0, 100)}`, '🔄 重试', () => doSearch());
+      // 完全没拿到论文 — 提示重试 + 给出失败详情
+      setStatusErrorWithAction(`所有子方向都未命中(代理或网络问题): ${msg.slice(0, 100)}${failedDetails}`, '🔄 重试', () => doSearch());
     } else {
-      setStatus(`部分子方向失败,共拿到 ${totalCands} 篇候选`, 'error');
+      setStatus(`部分子方向失败${failedDetails ? ` — 详情:${failedDetails}` : ''},共拿到 ${totalCands} 篇候选`, 'error');
       setTimeout(clearStatus, 3000);
     }
   } else if (totalCands === 0) {
