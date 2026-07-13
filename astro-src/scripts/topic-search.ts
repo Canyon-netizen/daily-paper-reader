@@ -148,8 +148,13 @@ interface SessionStore {
 
 const SESSION_KEY = 'dpr_topic_session_v1';
 const SCHEMA_VERSION = 1;
-// 并发上限:避免 LLM 429。沿用 plan 决策 N=2。
-const SUMMARIZE_CONCURRENCY = 2;
+// 并发上限。注:每篇 summarizeOne 内部含 PDF 下载(走 8123 / arxiv)+ PDF.js 抽文本 +
+// LLM 调用三段,瓶颈在 PDF 下载(网络)+ LLM(API 限流),PDF.js worker 共享无锁竞争。
+// 上限 4 在本地 8123 + 主流 LLM 下稳定;更高容易被 arXiv 429 / LLM 限流。
+const SUMMARIZE_CONCURRENCY = 4;
+// PDF 下载预热池并发上限 — 独立于 LLM 阶段,提前把 PDF 下载 + 抽文本做完,避免
+// LLM 阶段被网络 IO 阻塞。预热池跑得比 LLM 池快(没 LLM 限流),6 路够吃满 8123 代理带宽。
+const PDF_PREFETCH_CONCURRENCY = 6;
 // 追问历史单篇上限(避免撑爆 context)
 const MAX_QA_PER_PAPER = 50;
 // 喂 LLM 的最近条数
@@ -1098,19 +1103,39 @@ async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
   }));
 }
 
-async function summarizeOne(entry: ArxivEntry, subqId: string): Promise<Summary> {
-  const cfg = loadSettings() as LLMConfig;
-  // 下载 + 抽 PDF 文本(走 paper-analyzer 的兜底链)
-  const buf = await fetchArxivPdf(entry.pdfUrl, (msg) => setStatus(msg));
-  const head = new Uint8Array(buf.slice(0, 4));
-  const isPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
-  if (!isPdf) {
-    throw new Error('PDF 下载失败(proxy 可能返回了 HTML 错误页),请检查网络或切换自定义代理');
+// PDF 文本缓存 — 让 PDF 下载 + 抽文本在 LLM 阶段之前并行预热。结构:
+//   { arxivId: { status: 'pending'|'ready'|'failed', text?, error?, startedAt } }
+// 单次 doSummarize 期间有效;doSummarize 完成后整体清空(避免内存泄漏)。
+// 不持久化(下次 doSummarize 重新下载即可,反正下载被 8123 代理缓存)。
+const pdfTextCache = new Map<string, { status: 'pending' | 'ready' | 'failed'; text?: string; error?: string; startedAt: number }>();
+
+// 预热一篇 PDF:下载 + 抽文本 → 写入 pdfTextCache。失败写 'failed' + error。
+async function prefetchOnePdf(entry: ArxivEntry): Promise<void> {
+  const cached = pdfTextCache.get(entry.arxivId);
+  if (cached && (cached.status === 'ready' || cached.status === 'failed')) return;
+  pdfTextCache.set(entry.arxivId, { status: 'pending', startedAt: Date.now() });
+  try {
+    const buf = await fetchArxivPdf(entry.pdfUrl, () => { /* 预热阶段不打扰 UI status */ });
+    const head = new Uint8Array(buf.slice(0, 4));
+    const isPdf = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+    if (!isPdf) {
+      throw new Error('PDF 下载失败(proxy 可能返回了 HTML 错误页),请检查网络或切换自定义代理');
+    }
+    const text = await extractPdfTextFromBuffer(buf);
+    pdfTextCache.set(entry.arxivId, { status: 'ready', text, startedAt: Date.now() });
+  } catch (e) {
+    pdfTextCache.set(entry.arxivId, {
+      status: 'failed',
+      error: (e as Error).message.slice(0, 240),
+      startedAt: Date.now(),
+    });
   }
-  // 复用 paper-analyzer.ts 的 ensurePdfJs/extractPdfTextFromBuffer 是模块内私有函数。
-  // 这里自己解析(避免重新打开大文件太多次)。最多 25 页 / 50k 字符。
-  // PDF worker 走 settings 的 CORS 代理(同 paper-analyzer 一套),
-  // 避免生产部署时硬编码 localhost:8123 直接挂。
+}
+
+// PDF → 文本,最多 25 页 / 50k 字符。从 paper-analyzer 内部复用逻辑。
+// PDF worker 走 settings 的 CORS 代理(同 paper-analyzer 一套),避免生产部署时
+// 硬编码 localhost:8123 直接挂。
+async function extractPdfTextFromBuffer(buf: ArrayBuffer): Promise<string> {
   const pdfjsLib = await (async () => {
     const lib = await import('pdfjs-dist');
     const workerTarget = 'https://cdn.bootcdn.net/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs';
@@ -1145,8 +1170,30 @@ async function summarizeOne(entry: ArxivEntry, subqId: string): Promise<Summary>
   if (text.length < 200) {
     throw new Error(`抽取出的正文太短 (${text.length} 字符),可能是扫描版 PDF / 加密文档`);
   }
+  return text;
+}
+
+async function summarizeOne(entry: ArxivEntry, subqId: string): Promise<Summary> {
+  const cfg = loadSettings() as LLMConfig;
+  // 等预热池就绪(预热池在 doSummarize 阶段 1 已并发跑);若预热失败回退到同步下载+抽文本。
+  let text: string | undefined;
+  const cached = pdfTextCache.get(entry.arxivId);
+  if (cached?.status === 'ready' && cached.text) {
+    text = cached.text;
+  } else if (cached?.status === 'failed') {
+    throw new Error(`PDF 预热失败: ${cached.error}`);
+  } else {
+    // 预热还没轮到这篇 → 阻塞同步下载(预热并发 6 但 LLM 并发 4,有可能 LLM 抢在预热前)
+    await prefetchOnePdf(entry);
+    const r = pdfTextCache.get(entry.arxivId);
+    if (r?.status === 'ready' && r.text) {
+      text = r.text;
+    } else {
+      throw new Error(`PDF 处理失败: ${r?.error ?? '未知'}`);
+    }
+  }
   // callLLM 已经 export,且支持 statusCb。复用 paper-analyzer 的 SYSTEM_PROMPT。
-  const summary = await callLLM(entry.title, entry.summary, text, cfg, () => { /* status silent */ });
+  const summary = await callLLM(entry.title, entry.summary, text!, cfg, () => { /* status silent */ });
   return {
     arxivId: entry.arxivId,
     subqId,
@@ -1549,15 +1596,24 @@ function renderCandStage(): void {
   const wrap = $('cand-list');
   const meta = $('cand-meta');
   const summarizeBtn = $<HTMLButtonElement>('summarize-btn');
+  const summarizeTopBtn = $<HTMLButtonElement>('summarize-top-btn');
+  const summarizeAllBtn = $<HTMLButtonElement>('summarize-all-btn');
   if (!current || Object.keys(current.candidatesBySubq).length === 0) {
     wrap.innerHTML = '<div style="color:var(--fg-subtle);font-size:0.88rem">尚未搜索 — 在第 2 步勾选子方向后点"📚 搜索论文"。</div>';
     meta.textContent = '尚未搜索';
     summarizeBtn.disabled = true;
+    summarizeTopBtn.disabled = true;
+    summarizeAllBtn.disabled = true;
     return;
   }
   const allCands: Candidate[] = [];
   for (const list of Object.values(current.candidatesBySubq)) allCands.push(...list);
   const selected = allCands.filter((c) => c.selected).length;
+  summarizeBtn.disabled = selected === 0;
+  summarizeTopBtn.disabled = selected === 0;
+  summarizeAllBtn.disabled = selected === 0;
+  // 「总结全部」按钮显示实际待总结数(去重后的 selected 数)
+  summarizeAllBtn.textContent = `🚀 总结全部 (${selected})`;
   // 全局「全部展开/收起」:展开的 group 数 = sum(expanded[id] === true);默认折叠。
   // 整个 stage 至少有一个 group,这个判断才有意义。
   const subqIds = Object.keys(current.candidatesBySubq);
@@ -2417,7 +2473,7 @@ async function doSearch(): Promise<void> {
   inFlightController = null;
 }
 
-async function doSummarize(): Promise<void> {
+async function doSummarize(limit?: number): Promise<void> {
   if (!current) return;
   // 收集所有勾选的候选
   const picks: Array<{ cand: Candidate; subqId: string }> = [];
@@ -2434,6 +2490,17 @@ async function doSummarize(): Promise<void> {
     return true;
   });
 
+  // top-N 限制:用户论文多时(>100)默认只总结前 N 篇,避免几小时等待;
+  // limit = undefined 或 0 = 总结全部;limit = N = 只总结前 N 篇。
+  // 排序按 arXiv id 升序(新论文 id 数字更大,放在后面 — 但保持稳定)。
+  // 实际排序:candidates 已经按 searchForDirection 的 query+alias 命中顺序排过,
+  // 这里直接截前 N 篇,保留命中顺序作为「重要度」近似。
+  const totalCandidates = unique.length;
+  if (limit && limit > 0 && limit < unique.length) {
+    unique.length = limit;
+  }
+  const totalToSummarize = unique.length;
+
   // 清掉旧总结(只清这批论文的)
   const ids = new Set(unique.map((p) => p.cand.arxivId));
   current.summaries = current.summaries.filter((s) => !ids.has(s.arxivId));
@@ -2441,16 +2508,55 @@ async function doSummarize(): Promise<void> {
   for (const id of ids) delete current.chats[id];
 
   ($<HTMLButtonElement>('summarize-btn')).disabled = true;
+  ($<HTMLButtonElement>('summarize-top-btn'))?.setAttribute('disabled', 'true');
+  ($<HTMLButtonElement>('summarize-all-btn'))?.setAttribute('disabled', 'true');
   inFlightController = new AbortController();
   ($('stage-summaries') as HTMLDetailsElement).open = true;
-  setStatus(`🚀 总结 ${unique.length} 篇论文(并发上限 ${SUMMARIZE_CONCURRENCY})...`);
 
+  // ETA 计算:用前 3 篇的平均耗时做样本,推断剩余。论文很多时(>50)立刻有样本;
+  // 论文少时(<5)用 25s 默认估计。
+  const startedAt = Date.now();
+  const sampleDurations: number[] = [];
+
+  const limitDesc = limit && limit < totalCandidates ? `前 ${totalToSummarize}/${totalCandidates} 篇` : `${totalToSummarize} 篇`;
+  setStatus(`🚀 准备总结 ${limitDesc}(并发 LLM ${SUMMARIZE_CONCURRENCY} + PDF 预热 ${PDF_PREFETCH_CONCURRENCY})...`);
+
+  // 阶段 1:并发预热所有 PDF(下载 + 抽文本),独立于 LLM 阶段。
+  // PDF_PREFETCH_CONCURRENCY=6 路并发把 PDF 池子灌满,LLM 阶段直接从池子拿 text。
+  pdfTextCache.clear();
+  await runConcurrent(unique, PDF_PREFETCH_CONCURRENCY, async ({ cand }) => prefetchOnePdf(cand.entry));
+  // 预热阶段完成后,统计失败数(不影响 LLM 阶段,summarizeOne 会读 failed 状态抛错)
+  const prefetchFailed = Array.from(pdfTextCache.values()).filter((v) => v.status === 'failed').length;
+  if (prefetchFailed > 0) {
+    console.warn(`[topic] ${prefetchFailed}/${unique.length} 篇 PDF 预热失败,LLM 阶段会逐个报错`);
+  }
+
+  // 阶段 2:LLM 总结(从 pdfTextCache 拿已就绪的 text)
+  setStatus(`🚀 总结 ${limitDesc}... 0/${totalToSummarize}`);
   const result = await runConcurrent(
     unique,
     SUMMARIZE_CONCURRENCY,
-    async ({ cand, subqId }) => summarizeOne(cand.entry, subqId),
+    async ({ cand, subqId }) => {
+      const t0 = Date.now();
+      const sum = await summarizeOne(cand.entry, subqId);
+      const dt = Date.now() - t0;
+      sampleDurations.push(dt);
+      return sum;
+    },
     (d, total) => {
-      setStatus(`🚀 总结中 ${d}/${total} ...`);
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      // 基于已完成样本估算剩余时间;样本少时(<=2)用 25s 默认;样本多时用均值。
+      let eta = '';
+      if (sampleDurations.length >= 2) {
+        const avg = sampleDurations.reduce((a, b) => a + b, 0) / sampleDurations.length;
+        const remain = Math.max(0, total - d);
+        // LLM 并发 4,PDF 预热已经完成,后续每篇耗时约 avg / SUMMARIZE_CONCURRENCY 流水线化
+        const etaSec = Math.round((avg / SUMMARIZE_CONCURRENCY) * remain);
+        eta = ` · 已用 ${elapsed}s · 预计还需 ${formatEta(etaSec)}`;
+      } else if (d > 0) {
+        eta = ` · 已用 ${elapsed}s`;
+      }
+      setStatus(`🚀 总结 ${limitDesc}... ${d}/${total}${eta}`);
       renderSummaryStage();
       renderSessionMeta();
       persistSession(current!);
@@ -2473,17 +2579,32 @@ async function doSummarize(): Promise<void> {
     },
   );
 
+  pdfTextCache.clear(); // 释放内存
   if (result.err.length > 0) {
-    setStatus(`部分总结失败: ${result.err.map((e) => (e.error as Error).message).join('; ')}`, 'error');
+    setStatus(`部分总结失败(${result.err.length}/${totalToSummarize}): ${result.err[0].error.message.slice(0, 100)}${result.err.length > 1 ? ` …` : ''}`, 'error');
   } else {
-    setStatus('✓ 全部总结完成');
-    setTimeout(clearStatus, 1500);
+    const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+    setStatus(`✓ ${limitDesc}总结完成 · 耗时 ${formatEta(seconds)}`);
+    setTimeout(clearStatus, 2000);
   }
   ($<HTMLButtonElement>('summarize-btn')).disabled = false;
+  ($<HTMLButtonElement>('summarize-top-btn'))?.removeAttribute('disabled');
+  ($<HTMLButtonElement>('summarize-all-btn'))?.removeAttribute('disabled');
   renderSummaryStage();
   renderSessionMeta();
   persistSession(current!);
   inFlightController = null;
+}
+
+// 把秒数格式化为人类可读:75s / 1m 23s / 1h 5m
+function formatEta(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return mm > 0 ? `${h}h ${mm}m` : `${h}h`;
 }
 
 // ============================================================================
@@ -3191,7 +3312,11 @@ function init(): void {
   // 主按钮
   $<HTMLButtonElement>('decompose-btn').addEventListener('click', doDecompose);
   $<HTMLButtonElement>('search-btn').addEventListener('click', doSearch);
-  $<HTMLButtonElement>('summarize-btn').addEventListener('click', doSummarize);
+  $<HTMLButtonElement>('summarize-btn').addEventListener('click', () => doSummarize());
+  // top-N 按钮:论文多时只总结前 20 篇,避免长时间等待(用户可继续追加).
+  $<HTMLButtonElement>('summarize-top-btn').addEventListener('click', () => doSummarize(20));
+  // 总结全部:不传 limit(走 unique.length 全量).
+  $<HTMLButtonElement>('summarize-all-btn').addEventListener('click', () => doSummarize());
   $<HTMLButtonElement>('subq-add-btn').addEventListener('click', () => {
     if (!current) return;
     current.subqs.push({
