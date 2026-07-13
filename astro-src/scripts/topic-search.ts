@@ -93,6 +93,9 @@ interface TopicSession {
   updatedAt: number;
   subqs: SubQ[];
   candidatesBySubq: Record<string, Candidate[]>;
+  // 阶段 3 子方向 group 折叠状态:subqId → 是否展开。可选,老 session 缺这字段 → undefined,
+  // 渲染时走 `?? {}` 默认全部折叠(避免一次性展开上百篇论文)。
+  candGroupExpanded?: Record<string, boolean>;
   summaries: Summary[];
   chats: Record<string, ChatMsg[]>; // 按 arxivId 分组
   // 报告追问历史(阶段 5 报告生成后,用户与模型围绕报告的对话)。可选,老 session 缺这字段 → undefined,所有
@@ -1480,7 +1483,15 @@ function renderCandStage(): void {
   const allCands: Candidate[] = [];
   for (const list of Object.values(current.candidatesBySubq)) allCands.push(...list);
   const selected = allCands.filter((c) => c.selected).length;
-  meta.textContent = `共 ${allCands.length} 篇候选,已选 ${selected}`;
+  // 全局「全部展开/收起」:展开的 group 数 = sum(expanded[id] === true);默认折叠。
+  // 整个 stage 至少有一个 group,这个判断才有意义。
+  const subqIds = Object.keys(current.candidatesBySubq);
+  const expandedCount = subqIds.filter((id) => current!.candGroupExpanded?.[id] === true).length;
+  const allExpanded = expandedCount === subqIds.length && subqIds.length > 0;
+  meta.innerHTML = `共 ${allCands.length} 篇候选,已选 ${selected}` +
+    (subqIds.length > 0
+      ? ` · <a href="#" data-act="expand-all-grps" style="margin-left:0.4rem">${allExpanded ? '全部收起' : '全部展开'}</a>`
+      : '');
   summarizeBtn.disabled = selected === 0;
 
   // 按 subq 分组渲染 — 即使某个子方向 0 命中也要显示,这样用户能看到"哪些没搜到"
@@ -1517,6 +1528,25 @@ function renderCandStage(): void {
       renderCandStage();
       persistSession(current!);
     });
+    // group header 点击折叠/展开 — 仅命中>0 的 group 才有意义(0 命中已显示 emptyHint)
+    const header = grp.querySelector<HTMLElement>('[data-act="toggle-grp"]');
+    header?.addEventListener('click', (e) => {
+      // 点 "全选/全不选" 链接时不应该触发折叠,链接自己阻止冒泡即可;这里再保险一次
+      if ((e.target as HTMLElement).closest('[data-act="toggle-all"]')) return;
+      if (!current!.candGroupExpanded) current!.candGroupExpanded = {};
+      current!.candGroupExpanded[subqId] = !(current!.candGroupExpanded[subqId] === true);
+      renderCandStage();
+      persistSession(current!);
+    });
+  });
+  // 全局「全部展开/收起」:链接嵌在 #cand-meta.innerHTML 里,这里绑事件。
+  $('cand-meta').querySelector<HTMLElement>('[data-act="expand-all-grps"]')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!current!.candGroupExpanded) current!.candGroupExpanded = {};
+    const target = !allExpanded; // 当前全部展开 → 点一下 = 全部收起
+    for (const id of subqIds) current!.candGroupExpanded[id] = target;
+    renderCandStage();
+    persistSession(current!);
   });
 }
 
@@ -1530,6 +1560,9 @@ function renderCandidateGroupFor(subqId: string): string {
   const grpSelected = list.filter((c) => c.selected).length;
   const subq = current!.subqs.find((q) => q.id === subqId);
   const label = subq?.label ?? subqId;
+  // 默认折叠:用户研究主题时常有 80+ 篇候选,一次性全展开视觉密度太大;
+  // 折叠状态从 current.candGroupExpanded 读,缺省视为折叠(老 session / 第一次搜索)。
+  const expanded = current!.candGroupExpanded?.[subqId] === true;
   // 让用户能看出"是哪个 query / alias 拯救了命中"。aliases 留空或主 query 没
   // 别名时仅展示 query,保持视觉简洁。
   const queryLine = subq && (subq.query || (subq.aliases ?? []).length > 0)
@@ -1560,14 +1593,15 @@ function renderCandidateGroupFor(subqId: string): string {
               <div></div>
             </div>
           `).join('');
+  const chevron = expanded ? '▾' : '▸';
   return `
-    <div class="topic-candidate-group" data-subq="${subqId}">
+    <div class="topic-candidate-group ${expanded ? 'expanded' : 'collapsed'}" data-subq="${subqId}">
       <div class="topic-candidate-group-header" data-act="toggle-grp">
-        <div class="topic-candidate-group-title">📂 ${escapeHtml(label)}</div>
+        <div class="topic-candidate-group-title"><span class="topic-candidate-group-chevron">${chevron}</span> 📂 ${escapeHtml(label)}</div>
         <div class="topic-candidate-group-meta">${metaHtml}</div>
       </div>
       ${queryLine}
-      ${list.length === 0 ? emptyHint : `<div class="topic-candidate-list">${itemsHtml}</div>`}
+      ${list.length === 0 ? emptyHint : expanded ? `<div class="topic-candidate-list">${itemsHtml}</div>` : ''}
     </div>`;
 }
 
