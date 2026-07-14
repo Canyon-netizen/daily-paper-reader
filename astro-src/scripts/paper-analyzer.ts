@@ -1256,12 +1256,24 @@ export async function callLLM(
   // 里含 `{`,就从第一个 `{` 截取,再让 extractBalancedJson 找配对 JSON。
   // 这是关键修复 — 否则 LLM 输出"中文分析 + JSON"混合时,栈匹配会失败。
   let stripped = content
-    // 剥 <think>...</think>(reasoning 模型)
+    // 剥 <think>...</think>(reasoning 模型,闭合形态)
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     // 剥 markdown fence
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
     .trim();
+  // 兜底:剥离未闭合的 <think> 块。某些推理模型(MiniMax 等)会输出
+  // "<think>...中文思考..." 但忘了写 </think>,导致 1260 行的非贪婪正则
+  // 不命中,think 文本里的伪 JSON 字符污染后续 extractBalancedJson 的栈匹配。
+  // 这里:只要还没看到 JSON 起始的 `{`,就把 <think> 之后的整段当作思考,直到首个 `{`。
+  if (/<think>/i.test(stripped) && !/<\/think>/i.test(stripped)) {
+    const firstBrace = stripped.indexOf('{');
+    if (firstBrace > 0) {
+      const head = stripped.slice(0, firstBrace);
+      const openIdx = head.search(/<think>/i);
+      if (openIdx >= 0) stripped = stripped.slice(firstBrace);
+    }
+  }
   // 兜底:从第一个 `{` 截取。如果 LLM 在 JSON 之前输出了中文思考段落
   // 且没用 think 标签闭合,栈匹配会拿到第一个 `{` 提前结束。强制从首个
   // `{` 截取后,extractBalancedJson 重新找配对。

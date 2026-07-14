@@ -1323,9 +1323,12 @@ async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
 const pdfTextCache = new Map<string, { status: 'pending' | 'ready' | 'failed'; text?: string; error?: string; startedAt: number }>();
 
 // 预热一篇 PDF:下载 + 抽文本 → 写入 pdfTextCache。失败写 'failed' + error。
+// failed 状态有 5 分钟 TTL:代理刚起来 / 网络瞬断后用户重试,不会被旧错误永远卡死。
+const PREFETCH_FAIL_TTL_MS = 5 * 60_000;
 async function prefetchOnePdf(entry: ArxivEntry): Promise<void> {
   const cached = pdfTextCache.get(entry.arxivId);
-  if (cached && (cached.status === 'ready' || cached.status === 'failed')) return;
+  if (cached?.status === 'ready') return;
+  if (cached?.status === 'failed' && Date.now() - cached.startedAt < PREFETCH_FAIL_TTL_MS) return;
   pdfTextCache.set(entry.arxivId, { status: 'pending', startedAt: Date.now() });
   try {
     const buf = await fetchArxivPdf(entry.pdfUrl, () => { /* 预热阶段不打扰 UI status */ });
