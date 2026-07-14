@@ -372,7 +372,7 @@ async function filterCandidatesByLLM(targetN: number): Promise<void> {
       if (!unique.some((u) => u.cand.arxivId === e.cand.arxivId)) e.cand.selected = false;
     }
     renderCandStage();
-    setStatus(`✓ 候选 ${unique.length} 篇,已全部勾选`);
+    setStatus(`✓ 候选 ${unique.length} 篇,已全部勾选`, 'success');
     return;
   }
   const cfg = loadSettings() as LLMConfig;
@@ -445,8 +445,8 @@ async function filterCandidatesByLLM(targetN: number): Promise<void> {
   }
   renderCandStage();
   persistSession(current!);
-  setStatus(`✓ AI 筛论文完成:从 ${unique.length} 篇中选了 ${picked.size} 篇。点「🚀 总结选中论文」开始总结。`, );
-  inFlightController = null;
+  inFlightController = null; // 先置空,再报成功 — 否则 setStatus 会误判为「仍在飞」而挂 spinner/停止按钮
+  setStatus(`✓ AI 筛论文完成:从 ${unique.length} 篇中选了 ${picked.size} 篇。点「🚀 总结选中论文」开始总结。`, 'success');
 }
 
 export function normalizeQuery(q: string): string {
@@ -1534,19 +1534,27 @@ async function chatWithReport(
 // DOM 渲染
 // ============================================================================
 
-function setStatus(msg: string, kind: '' | 'error' = ''): void {
+function setStatus(msg: string, kind: '' | 'error' | 'success' = ''): void {
   const el = $('status-bar');
   el.classList.remove('topic-hidden');
   el.classList.toggle('error', kind === 'error');
-  // 任务进行中时,自动附 ⏹ 停止按钮(在 status-action-btn 位置复用),
-  // 让用户随时能中断 inFlightController 控制的 LLM/PDF 任务。
-  const stopBtn = inFlightController
+  el.classList.toggle('success', kind === 'success');
+  // spinner + ⏹ 停止按钮只在「确实有任务在飞」(inFlightController 非空) 且非完成态时出现。
+  // 之前无条件渲染 spinner,导致每条 ✓ 完成/已复制/已下载 消息都一直转圈,
+  // 误导用户以为还在忙。success / error 是明确的终态,永不转圈、永不挂停止按钮。
+  const busy = kind === '' && inFlightController !== null;
+  const stopBtn = busy
     ? `<button type="button" class="topic-btn ghost" id="status-stop-btn" style="margin-left:auto">⏹ 停止</button>`
     : '';
-  el.innerHTML = kind === 'error'
-    ? `<span>⚠️</span><span>${escapeHtml(msg)}</span>${stopBtn}`
-    : `<span class="topic-status-spinner"></span><span>${escapeHtml(msg)}</span>${stopBtn}`;
-  if (inFlightController) {
+  const icon = kind === 'error'
+    ? '<span>⚠️</span>'
+    : kind === 'success'
+      ? '<span>✅</span>'
+      : busy
+        ? '<span class="topic-status-spinner"></span>'
+        : '<span>ℹ️</span>';
+  el.innerHTML = `${icon}<span>${escapeHtml(msg)}</span>${stopBtn}`;
+  if (busy) {
     document.getElementById('status-stop-btn')?.addEventListener('click', stopInFlight);
   }
 }
@@ -1746,7 +1754,7 @@ function renderSubqStage(): void {
         subq.hitSamples = samples;
         renderSubqStage();
         persistSession(current!);
-        setStatus(count > 0 ? `✓ 命中 ${count} 篇` : '⚠ 0 命中 — 改 query 或加 aliases');
+        setStatus(count > 0 ? `✓ 命中 ${count} 篇` : '⚠ 0 命中 — 改 query 或加 aliases', count > 0 ? 'success' : '');
       } catch (e) {
         setStatus(`验证失败: ${(e as Error).message}`, 'error');
       } finally {
@@ -2461,7 +2469,7 @@ async function doSendReportChat(): Promise<void> {
     }
     renderReportChat();
     persistSession(current!);
-    setStatus('✓ 追问完成');
+    setStatus('✓ 追问完成', 'success');
     setTimeout(clearStatus, 1500);
   } catch (e) {
     setStatusErrorWithAction(`追问失败: ${(e as Error).message}`, '🔄 重试', () => doSendReportChat());
@@ -2478,7 +2486,7 @@ function doClearReportChat(): void {
   current.reportChats = [];
   renderReportChat();
   persistSession(current!);
-  setStatus('✓ 已清空报告追问');
+  setStatus('✓ 已清空报告追问', 'success');
   setTimeout(clearStatus, 1500);
 }
 
@@ -2530,7 +2538,7 @@ async function doApplyReportSuggestion(): Promise<void> {
     current.report = newReport;
     renderReportStage();
     persistSession(current!);
-    setStatus(`✓ 报告已按建议重生成 · ${newReport.dimensions.length} 个维度 · ${newReport.relatedArxivIds.length} 篇`);
+    setStatus(`✓ 报告已按建议重生成 · ${newReport.dimensions.length} 个维度 · ${newReport.relatedArxivIds.length} 篇`, 'success');
     setTimeout(clearStatus, 2500);
   } catch (e) {
     setStatusErrorWithAction(`应用建议失败: ${(e as Error).message}`, '🔄 重试', () => doApplyReportSuggestion());
@@ -2574,7 +2582,7 @@ async function doDecompose(): Promise<void> {
     renderAll();
     persistSession(current!);
     const seedNote = seeds.length > 0 ? ` · 已参考 ${seeds.length} 篇已选论文` : '';
-    setStatus(`✓ 已拆解为 ${subqs.length} 个子方向${seedNote}`);
+    setStatus(`✓ 已拆解为 ${subqs.length} 个子方向${seedNote}`, 'success');
     setTimeout(clearStatus, 2000);
   } catch (e) {
     setStatusErrorWithAction(`拆解失败: ${(e as Error).message}`, '🔄 重试', () => doDecompose());
@@ -2634,7 +2642,7 @@ async function doSearch(): Promise<void> {
     // 搜索成功但 0 命中 — 提示用户改 query
     setStatusErrorWithAction(`搜索完成但 ${subqsSearched} 个子方向都未命中论文。可能是 query 太冷门,试试改英文关键词。`, '🔄 重新搜索', () => doSearch());
   } else {
-    setStatus(`✓ ${subqsHit}/${subqsSearched} 个子方向命中,共 ${totalCands} 篇候选`);
+    setStatus(`✓ ${subqsHit}/${subqsSearched} 个子方向命中,共 ${totalCands} 篇候选`, 'success');
     setTimeout(clearStatus, 1500);
   }
   // 把当前会话里用户主动选的"参考论文"作为虚拟候选注入到 candidatesBySubq['__seeds__']
@@ -2864,7 +2872,7 @@ async function doSummarize(limit?: number): Promise<void> {
     setStatus(`部分总结失败(${result.err.length}/${totalToSummarize}): ${result.err[0].error.message.slice(0, 100)}${result.err.length > 1 ? ` …` : ''}`, 'error');
   } else {
     const seconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
-    setStatus(`✓ ${limitDesc}总结完成 · 耗时 ${formatEta(seconds)}`);
+    setStatus(`✓ ${limitDesc}总结完成 · 耗时 ${formatEta(seconds)}`, 'success');
     setTimeout(clearStatus, 2000);
   }
   ($<HTMLButtonElement>('summarize-btn')).disabled = false;
@@ -3049,7 +3057,7 @@ async function triggerIncrementalReportDraft(s: TopicSession): Promise<void> {
     s.report = newReport;
     renderReportStage();
     persistSession(s);
-    setStatus(`✓ 报告已增量更新 · ${newReport.dimensions.length} 个维度`);
+    setStatus(`✓ 报告已增量更新 · ${newReport.dimensions.length} 个维度`, 'success');
     setTimeout(clearStatus, 2000);
   } catch (e) {
     // 增量失败静默 — 不要打断总结流程
@@ -3083,7 +3091,7 @@ function startIncrementalReportTimer(s: TopicSession): void {
       s.report = newReport;
       renderReportStage();
       persistSession(s);
-      setStatus(`✓ 报告已增量更新 · ${newReport.dimensions.length} 个维度`);
+      setStatus(`✓ 报告已增量更新 · ${newReport.dimensions.length} 个维度`, 'success');
       setTimeout(clearStatus, 2000);
     } catch (e) {
       console.warn('[topic] incremental report draft failed:', (e as Error).message);
@@ -3149,7 +3157,7 @@ function copyReportAsMarkdown(): void {
   const md = buildReportMarkdown();
   if (!md) return;
   navigator.clipboard.writeText(md).then(
-    () => setStatus('✓ 报告已复制为 Markdown'),
+    () => setStatus('✓ 报告已复制为 Markdown', 'success'),
     () => setStatus('复制失败,请手动选择', 'error'),
   );
 }
@@ -3180,7 +3188,7 @@ function downloadReportAsMarkdown(): void {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 0);
-    setStatus('✓ 报告已下载');
+    setStatus('✓ 报告已下载', 'success');
     setTimeout(clearStatus, 2000);
   } catch (e) {
     setStatus(`下载失败: ${(e as Error).message}`, 'error');
@@ -3214,7 +3222,7 @@ function copyAllAsMarkdown(): void {
   }
   const md = lines.join('\n');
   navigator.clipboard.writeText(md).then(
-    () => setStatus('✓ 已复制全部为 Markdown'),
+    () => setStatus('✓ 已复制全部为 Markdown', 'success'),
     () => setStatus('复制失败,请手动选择', 'error'),
   );
 }
@@ -3314,7 +3322,7 @@ async function doExploreFromSeeds(): Promise<void> {
     ($('stage-subqs') as HTMLDetailsElement).open = true;
     renderAll();
     persistSession(current!);
-    setStatus(`✓ 已生成 ${subqs.length} 个迁移方向,勾选后搜索 arXiv`);
+    setStatus(`✓ 已生成 ${subqs.length} 个迁移方向,勾选后搜索 arXiv`, 'success');
     setTimeout(clearStatus, 2000);
   } catch (e) {
     setStatusErrorWithAction(`迁移探索失败: ${(e as Error).message}`, '🔄 重试', () => doExploreFromSeeds());
@@ -3420,7 +3428,7 @@ async function submitAddSeedsUrl(_form: HTMLFormElement): Promise<void> {
       addedAt: Date.now(),
     });
     input.value = '';
-    setStatus(`✓ 已加入 arXiv:${e.arxivId}`);
+    setStatus(`✓ 已加入 arXiv:${e.arxivId}`, 'success');
     setTimeout(clearStatus, 1500);
   } catch (err) {
     setStatus(`获取失败: ${(err as Error).message}`, 'error');
@@ -3533,7 +3541,7 @@ function addSearchResultToSelection(arxivId: string): void {
     tags: [],
     addedAt: Date.now(),
   });
-  setStatus(`✓ 已加入 arXiv:${canonId}`, '');
+  setStatus(`✓ 已加入 arXiv:${canonId}`, 'success');
   setTimeout(clearStatus, 1500);
   // 屏蔽重复添加 — 把按钮 disabled
   if (card) {
@@ -3584,7 +3592,7 @@ function ensureSession(): void {
   const store = loadStore();
   if (store.currentId && store.sessions[store.currentId]) {
     current = store.sessions[store.currentId];
-    setStatus('✓ 已恢复上次会话');
+    setStatus('✓ 已恢复上次会话', 'success');
     setTimeout(clearStatus, 1500);
   } else {
     current = {
