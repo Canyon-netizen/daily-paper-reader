@@ -1,4 +1,5 @@
-// Build public/assets/ — 镜像 docs/assets/ 里的 figures/tables 到 public/assets/。
+// Build public/ — 镜像 docs/ 里的 figures/tables 到 public/assets/,以及
+// docs/papers/*.txt 到 public/papers/(给 paper-chat 全文模式用)。
 //
 // 背景:Astro 只把 public/ 目录复制到 dist/(网站根)。
 // docs/assets/ 里的 fig-XXX.webp 是论文配图,但 Astro 不感知,所以 dist/assets/ 是空的。
@@ -22,6 +23,15 @@
 //   - Cloudflare Pages 单文件 ≤ 25 MiB。个别论文(物理仿真/数据集类)的超大配图会触发上限,
 //     部署校验直接失败。复制阶段遇到 >24 MiB 的图片,自动降采样到长边 4096 重新编码,
 //     既能过阈值,又保留论文配图的辨识度。
+//
+// 同步 docs/papers/*.txt → public/papers/:
+//   - daily pipeline 抓 arXiv PDF 抽正文,生成 docs/papers/{arxivId}v#-slug.txt。
+//   - paper-chat 的全文模式(paper-fulltext.ts::loadFulltextSkeleton)优先读
+//     /papers/{id}.txt 作为 LLM 上下文 — 比 ar5iv 快、不依赖 8123 CORS 代理。
+//   - 同一 id 可能 v1 / v2 共存,跟 figures 一样按 canonical id 去重,
+//     只拷最高版本那一份,避免 LLM 看到旧版 + 减少 dist 体积。
+//   - 体积兜底:个别论文 .txt 太大(>1 MiB)→ 截断到 1 MiB,够 LLM 看完整结构,
+//     也避免 Cloudflare 25 MiB 单文件限制被撞穿。
 //
 // 跑法: node astro-src/scripts/copy-docs-assets.mjs
 //     或: bun astro-src/scripts/copy-docs-assets.mjs
@@ -221,12 +231,104 @@ async function main() {
     totalBytesOut += r.bytesOut;
     totalDropped += r.dropped || 0;
   }
+
+  // 同步 docs/papers/*.txt → public/papers/ — paper-chat 全文模式用
+  const papersR = await copyPapersTxt();
+  totalCount += papersR.count;
+  totalBytesIn += papersR.bytesIn;
+  totalBytesOut += papersR.bytesOut;
+  totalDropped += papersR.dropped;
+  if (papersR.count > 0) {
+    const inMB = (papersR.bytesIn / 1024 / 1024).toFixed(1);
+    const outMB = (papersR.bytesOut / 1024 / 1024).toFixed(1);
+    let line = `[copy-docs-assets] papers/*.txt: ${papersR.count} 个文件, ${inMB} → ${outMB} MiB`;
+    if (papersR.truncated) line += `,截断 ${papersR.truncated} 个大文件`;
+    console.log(line);
+  }
+
   const elapsed = Date.now() - start;
   const inMB = (totalBytesIn / 1024 / 1024).toFixed(1);
   const outMB = (totalBytesOut / 1024 / 1024).toFixed(1);
   let tail = `共 ${totalCount} 个文件, ${inMB} → ${outMB} MiB, ${elapsed} ms`;
-  if (totalDropped) tail += `,跳过 ${totalDropped} 个老版本目录`;
+  if (totalDropped) tail += `,跳过 ${totalDropped} 个老版本`;
   console.log(`[copy-docs-assets] 完成:${tail}`);
+}
+
+// ============================================================================
+// docs/papers/*.txt → public/papers/
+// 版本去重 + 超大文件截断。
+// ============================================================================
+
+const PAPERS_SRC = join(ROOT, 'docs', 'papers');
+const PAPERS_DST = join(ROOT, 'public', 'papers');
+const TXT_MAX_BYTES = 1024 * 1024;  // 1 MiB 上限,够 LLM 看完整结构
+
+async function copyPapersTxt() {
+  if (!existsSync(PAPERS_SRC)) return { count: 0, bytesIn: 0, bytesOut: 0, dropped: 0, truncated: 0 };
+  const entries = readdirSync(PAPERS_SRC).filter((n) => n.endsWith('.txt'));
+  // 按 canonical id 分组,取最高版本
+  const latestPerId = new Map();  // arxiv id → { filename, version }
+  const dropped = [];
+  for (const name of entries) {
+    const m = name.match(/^(\d{4}\.\d{4,5})v(\d+)-.+\.txt$/);
+    if (!m) continue;  // 非标准命名(如 biorxiv-)先跳过,后续单独处理
+    const arxivId = m[1];
+    const ver = parseInt(m[2], 10);
+    const cur = latestPerId.get(arxivId);
+    if (!cur || ver > cur.version) {
+      if (cur) dropped.push(cur.filename);
+      latestPerId.set(arxivId, { filename: name, version: ver });
+    } else {
+      dropped.push(name);
+    }
+  }
+  // 先清空目标目录
+  if (existsSync(PAPERS_DST)) rmSync(PAPERS_DST, { recursive: true, force: true });
+  mkdirSync(PAPERS_DST, { recursive: true });
+  let count = 0;
+  let bytesIn = 0;
+  let bytesOut = 0;
+  let truncated = 0;
+  for (const { filename } of latestPerId.values()) {
+    const src = join(PAPERS_SRC, filename);
+    const dst = join(PAPERS_DST, filename);
+    const st = statSync(src);
+    bytesIn += st.size;
+    try {
+      if (st.size > TXT_MAX_BYTES) {
+        // 截断到 1 MiB,保留前 N 行(按双换行分段)
+        const buf = await readFileChunk(src, TXT_MAX_BYTES);
+        writeFileSync(dst, buf);
+        bytesOut += buf.length;
+        truncated++;
+      } else {
+        copyFileSync(src, dst);
+        bytesOut += st.size;
+      }
+      count++;
+    } catch (e) {
+      console.warn(`[copy-docs-assets] ${filename} 复制失败:${e?.message || e}`);
+    }
+  }
+  return { count, bytesIn, bytesOut, dropped: dropped.length, truncated };
+}
+
+// 用 fs.openSync 分块读,避免 readFileSync 把几 MB 整块塞进内存(冷启动便宜些)
+async function readFileChunk(path, maxBytes) {
+  const { open } = await import('node:fs/promises');
+  const fh = await open(path, 'r');
+  try {
+    const buf = Buffer.alloc(maxBytes);
+    const { bytesRead } = await fh.read(buf, 0, maxBytes, 0);
+    // 截断到最后一个完整段落边界(双换行),避免 LLM 看到半截句
+    let end = bytesRead;
+    const slice = buf.subarray(0, bytesRead).toString('utf-8');
+    const lastParaBreak = slice.lastIndexOf('\n\n');
+    if (lastParaBreak > maxBytes * 0.8) end = lastParaBreak + 2;  // 至少保留 80%
+    return buf.subarray(0, end);
+  } finally {
+    await fh.close();
+  }
 }
 
 main();

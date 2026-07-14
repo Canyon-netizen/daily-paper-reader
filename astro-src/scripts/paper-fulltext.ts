@@ -3,8 +3,12 @@
 // 目标:让 paper-chat 的 system prompt 能拿到论文的章节结构 + 每段首句,
 // 而不是只有结构化摘要。回答细节问题时不再说"摘要里没提到"。
 //
-// 数据源优先级:ar5iv.org/html/<id> (LaTeXML 渲染,自带结构化 HTML)
-//   备选:arxiv.org/pdf/<id> + pdf.js (extractPdfTextFromBuffer,已存在于 paper-analyzer.ts)
+// 数据源优先级:
+//   1) 本地 /papers/{id}.txt — daily pipeline 已抓 PDF 抽正文落在仓库里,
+//      SSR 阶段 copy-docs-assets 拷到 public/。秒开、无网络成本、不依赖 8123 代理。
+//      但部分新论文可能 .txt 还没生成(早期 pipeline / 漏抓),缺失时降级到 ar5iv。
+//   2) ar5iv.org/html/<id> (LaTeXML 渲染,自带结构化 HTML)
+//   3) arxiv.org/pdf/<id> + pdf.js (extractPdfTextFromBuffer,已存在于 paper-analyzer.ts)
 //   最终回退:摘要模式 (永远不阻断 chat)
 //
 // 复用约定:fetchWithDiagnosis / canonicalArxivId / CORS_PROXIES 都从 paper-analyzer.ts import。
@@ -29,6 +33,9 @@ export interface SkeletonSection {
 export interface FulltextSkeleton {
   // sections 已按文档顺序排好,按重要性给 LLM 看的顺序在 toPromptText() 里再处理
   sections: SkeletonSection[];
+  // 本地 .txt 来源时填的完整纯文本(可能比 sections 更全),用于按段落切 8KB 喂 LLM。
+  // sections 来源(ar5iv / pdf fallback)通常不带这个字段。
+  plainText?: string;
   // 元数据,不一定有
   abstract?: string;
   // arxiv id 的规范化形(无 v# 后缀),用于缓存 key
@@ -36,7 +43,7 @@ export interface FulltextSkeleton {
   // 缓存时的版本号,如 'v1' / 'v2'
   version: string;
   // 抓取来源标签
-  source: 'ar5iv' | 'pdf' | 'abs';
+  source: 'ar5iv' | 'pdf' | 'abs' | 'txt';
 }
 
 export interface FulltextResult {
@@ -166,6 +173,39 @@ export function arxivIdVersion(id: string): string {
 
 function ar5ivUrl(arxivId: string): string {
   return `https://ar5iv.org/html/${canonicalArxivId(arxivId)}`;
+}
+
+// ============================================================================
+// 本地 .txt 来源 — daily pipeline 抓 PDF 抽正文,SSR 时已拷到 public/papers/。
+// 优先用这个,避免依赖 8123 CORS 代理 + ar5iv 网络抖动。
+// ============================================================================
+
+/**
+ * 读 /papers/{arxivId}.txt。
+ * 返回纯文本;文件不存在 / 太小(< 1KB,通常是 404 HTML 错误页或空)返回 null。
+ * 调用方 catch 网络异常继续走 ar5iv 兜底。
+ */
+export async function loadLocalTxt(arxivId: string): Promise<string | null> {
+  const id = canonicalArxivId(arxivId);
+  // arxivId 形如 "2606.30015v1" / "2606.30015" → 都要尝试 .txt 后缀
+  const candidates = [
+    `${id}.txt`,
+    `${arxivId}.txt`,  // 兜底带 v# 形式(虽然 public 里只放去重后的,但万一)
+  ];
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+  for (const name of candidates) {
+    try {
+      const res = await fetch(`${base}/papers/${name}`);
+      if (!res.ok) continue;
+      const text = await res.text();
+      // sanity check:太短可能是错误页(404 HTML 也很小)
+      if (text.length < 1000) continue;
+      return text;
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 // ============================================================================
@@ -305,6 +345,25 @@ export async function loadFulltextSkeleton(
     } catch { /* 缓存层异常,继续走抓取 */ }
   }
 
+  // 2) 优先读本地 /papers/{id}.txt — daily pipeline 已抓的 PDF 正文,
+  //    SSR 阶段 copy-docs-assets 拷到 public/。秒开、无网络成本、不依赖 8123 代理。
+  //    没有 .txt 的论文(如新抓还没生成 / pipeline 漏抓)再走 ar5iv 兜底。
+  try {
+    const localTxt = await loadLocalTxt(arxivId);
+    if (localTxt && localTxt.length > 1000) {
+      const sk: FulltextSkeleton = {
+        sections: [],  // 本地 .txt 不分章节,直接走 plainText
+        plainText: localTxt,
+        canonicalId,
+        version,
+        source: 'txt',
+      };
+      // 写缓存
+      cacheSet({ canonicalId, version, skeleton: sk, fetchedAt: Date.now() }).catch(() => {});
+      return { state: 'fresh', skeleton: sk, hasFulltext: true };
+    }
+  } catch { /* 本地 txt 读取失败,继续走 ar5iv */ }
+
   // 2) 抓 ar5iv
   if (!opts.skipAr5iv) {
     try {
@@ -419,6 +478,30 @@ function pdfTextToSkeleton(text: string, canonicalId: string, version: string): 
 // ============================================================================
 
 export function skeletonToPromptText(sk: FulltextSkeleton, maxBytes = 8 * 1024): string {
+  // 本地 .txt 来源:plainText 优先级最高,直接喂纯文本。
+  // 论文完整正文比章节骨架信息量大,LLM 回答细节更准;
+  // maxBytes 8KB 截断(~3000 字,3-5 个核心章节)避免 token 浪费。
+  if (sk.plainText) {
+    const lines: string[] = [];
+    lines.push('论文全文(由 daily pipeline 从 arXiv PDF 抽取):');
+    lines.push('');
+    let bytes = lines.join('\n').length;
+    const text = sk.plainText;
+    if (text.length <= maxBytes - bytes) {
+      lines.push(text);
+      return lines.join('\n');
+    }
+    // 截断到最后一个完整段落(双换行)边界,避免半截句子
+    const targetEnd = maxBytes - bytes;
+    const slice = text.slice(0, targetEnd);
+    const lastParaBreak = slice.lastIndexOf('\n\n');
+    const end = lastParaBreak > targetEnd * 0.8 ? lastParaBreak + 2 : targetEnd;
+    lines.push(text.slice(0, end));
+    lines.push('(后续内容已截断,完整正文请查看原文链接)');
+    return lines.join('\n');
+  }
+
+  // ar5iv / pdf fallback 来源:按章节骨架输出
   // 按"重要性"排序:Method > Experiments > Conclusion > Introduction > Related Work > Appendix
   // 但 ar5iv 顺序一般就是 Introduction→Method→Experiments→Conclusion,所以基本按顺序即可
   // 只在尾部追加章节 anchor map,方便 LLM 引用

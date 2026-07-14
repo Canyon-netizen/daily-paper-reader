@@ -40,6 +40,11 @@ dist/
 # 不入库:docs/assets/ 才是源,这里只是给 Astro 构建用
 public/assets/
 
+# 同步自 docs/papers/*.txt 的论文正文副本(由 copy-docs-assets.mjs 在 build 前生成)
+# 用途:paper-chat 全文模式优先读 /papers/{id}.txt 喂 LLM,比 ar5iv 快、不依赖 8123 代理
+# 不入库:docs/papers/*.txt 才是源,这里只是给 Astro 构建用
+public/papers/
+
 # prebuild 自动生成的索引文件(build-arxiv-index.mjs 跑出来的)
 public/arxiv-index.json
 
