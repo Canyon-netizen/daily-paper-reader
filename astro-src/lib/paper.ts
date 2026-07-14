@@ -270,7 +270,12 @@ async function walk(dir: string, out: string[]): Promise<void> {
       await walk(p, out);
       continue;
     }
-    if (e.name.endsWith('.md') && e.name !== 'README.md') {
+    // 文件层过滤:
+    // - `_xxx.md` 是页面 chrome(404 / sidebar / 公告),不是论文
+    // - `path-spec.md` / `zotero-usage.md` 是仓库说明文档,顶层手工保留
+    // 没有这个过滤,walk 会把 6 个非论文 .md 当成论文 id,首页统计虚高。
+    if (e.name.endsWith('.md') && !e.name.startsWith('_') && e.name !== 'README.md'
+        && e.name !== 'path-spec.md' && e.name !== 'zotero-usage.md') {
       const p = join(dir, e.name);
       const rel = relative(DOCS_DIR, p).replace(/\\/g, '/');
       const id = rel.replace(/\.md$/, '');

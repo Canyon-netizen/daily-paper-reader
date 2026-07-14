@@ -6,7 +6,7 @@
 // 4) 按主题分类:折叠式 tag 列表
 // 5) How it works:3 步工作流介绍
 // 数据为空时仍能展示 hero/stats/empty-state,避免 Vercel 首次部署"全空"观感
-import { listPapers, listAllPapersByTag, listAllPaperIds } from '../lib/paper';
+import { listPapers, listAllPapersByTag } from '../lib/paper';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
@@ -14,7 +14,6 @@ import '../styles/home.css';
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
-const allIds = await listAllPaperIds();
 // 编辑精选:近 7 天内按 LLM 评分排序的 Top 6(库内不足 6 时自动回退到不限时间的同排序)。
 const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7 });
 const byTag = await listAllPapersByTag();
@@ -35,7 +34,10 @@ const tagLabels: Record<string, string> = {
 };
 
 // 统计
-const totalPapers = allIds.length;
+// totalPapers 用 listPapers({dedup:true}) 与 /papers/ 论文库对齐:
+//   同 arxiv id 多版本 (v1/v2/...) 只算一篇,避免首页显示 220 而论文库显示 205。
+//   旧实现 listAllPaperIds().length 含全部版本数,跟论文库不同步。
+const totalPapers = (await listPapers({ dedup: true })).length;
 const totalTopics = byTag.size;
 const sources = ['arXiv', 'bioRxiv', 'medRxiv', 'ChemRxiv', 'OpenReview']; // pipeline 支持的来源
 // 最近更新:用按 date desc 排后的第一篇论文 date (dedup 后),
