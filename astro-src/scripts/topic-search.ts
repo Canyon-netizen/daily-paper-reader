@@ -751,6 +751,10 @@ async function callLLMRaw(
     if (headIdx < 0) throw new Error(`LLM 返回为空(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
     const head = stripped[headIdx];
     if (head === '[') {
+      // 顶层数组:直接用 [ ... ] 边界截取,**绝不能**再交给 extractBalancedJson —
+      // 它只识别第一个配对的 {...},会把 [{a},{b},{c}] 截成单个 {a},丢掉外层数组和
+      // 其余元素,导致调用方 JSON.parse 得到一个对象、Array.isArray 判为 false,最终
+      // 误报「LLM 未返回任何子方向」(738c10a 的回归)。
       const arrStart = stripped.indexOf('[');
       const arrEnd = stripped.lastIndexOf(']');
       if (arrStart !== -1 && arrEnd > arrStart) {
@@ -758,19 +762,19 @@ async function callLLMRaw(
       } else {
         throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
       }
-    } else if (head === '{') {
-      // 已经在 JSON 起点,直接交给 extractBalancedJson
     } else {
-      // 第一个非空字符既不是 [ 也不是 { → LLM 输出了思考/说明文字,
-      // 从首个 { 截取,重新让 extractBalancedJson 找配对 JSON
-      const objStart = stripped.indexOf('{');
-      if (objStart > 0) stripped = stripped.slice(objStart);
-    }
-    const obj = extractBalancedJson(stripped);
-    if (obj) {
-      stripped = obj;
-    } else {
-      throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+      // 顶层对象 / 思考文字:head 不是 { 时说明 LLM 先输出了思考/说明文字,
+      // 从首个 { 截取,再交给 extractBalancedJson 找配对对象。
+      if (head !== '{') {
+        const objStart = stripped.indexOf('{');
+        if (objStart > 0) stripped = stripped.slice(objStart);
+      }
+      const obj = extractBalancedJson(stripped);
+      if (obj) {
+        stripped = obj;
+      } else {
+        throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+      }
     }
   }
   return stripped;
