@@ -24,7 +24,6 @@ import {
   searchArxiv,
   searchArxivById,
   fetchArxivPdf,
-  extractBalancedJson,
   callLLM,
 } from './paper-analyzer';
 import type { ArxivEntry, AnalysisResult } from './paper-analyzer';
@@ -702,6 +701,51 @@ let inFlightController: AbortController | null = null;
 // LLM 调用(独立的轻量调用,与 callLLM 解耦 — 这里用于拆解和追问)
 // ============================================================================
 
+// 从已剥壳文本里提取顶层 JSON(数组或对象),带**截断自愈**。
+// 为什么不用 lastIndexOf(']'):LLM 被 max_tokens 截断时,尾部的外层 ] 根本没输出,
+// lastIndexOf(']') 会误取某个内层 aliases 数组的 ],得到 `[{..},{.."aliases":[..]`
+// 这种括号不配对的串,JSON.parse 直接抛「不是合法 JSON」(就是用户看到的报错)。
+// 这里改用括号栈扫描:
+//   - 扫到与 opener 配对的闭合 → 返回完整片段;
+//   - 扫到结尾仍未闭合(被截断)→ 按未闭合的括号栈补齐 " / } / ],丢掉末尾残缺一小段,
+//     尽量还原成可 parse 的 JSON。
+// opener 由调用方按首个结构字符给定('[' 或 '{'),避免误抓另一种括号。
+function extractTopLevelJsonWithHeal(stripped: string, opener: '[' | '{'): string | null {
+  const startIdx = stripped.indexOf(opener);
+  if (startIdx < 0) return null;
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = startIdx; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (esc) { esc = false; continue; }
+    if (inStr) {
+      if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') stack.push('}');
+    else if (ch === '[') stack.push(']');
+    else if (ch === '}' || ch === ']') {
+      stack.pop();
+      if (stack.length === 0) return stripped.slice(startIdx, i + 1); // 完整闭合
+    }
+  }
+  // 未闭合 → 截断自愈
+  let trial = stripped.slice(startIdx);
+  if (inStr) {
+    // 截在字符串值中间(如 "reason":"…核心路)→ 先补收尾引号
+    trial += '"';
+  } else {
+    // 截在元素之间留了悬挂逗号(如 [{a},{b},)→ 去掉,否则 [..,] 非法
+    trial = trial.replace(/,\s*$/, '');
+  }
+  // 按未闭合的括号栈 LIFO 补齐(最内层先闭合)
+  for (let i = stack.length - 1; i >= 0; i--) trial += stack[i];
+  return trial;
+}
+
 async function callLLMRaw(
   systemPrompt: string,
   userContent: string,
@@ -718,6 +762,10 @@ async function callLLMRaw(
       { role: 'user', content: userContent },
     ],
     temperature: 0.3,
+    // 拆解/迁移/筛选/报告的 JSON 数组可能不短(每个子方向含 label+query+5 aliases+reason),
+    // 不设上限时部分 provider 会用很小的默认 max_tokens 把 JSON 从中间截断,
+    // 导致「拆解结果不是合法 JSON」。给足 4000 token 输出空间。
+    max_tokens: 4000,
   };
   if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
   const res = await fetch(url, {
@@ -735,46 +783,37 @@ async function callLLMRaw(
   }
   const data = await res.json();
   const content: string = data?.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new Error('LLM 返回为空');
+  const finishReason: string = data?.choices?.[0]?.finish_reason ?? '';
+  if (!content) throw new Error(`LLM 返回为空 (finish_reason=${finishReason})`);
   let stripped = content
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
     .trim();
   if (jsonOnly) {
-    // 先看顶层是数组还是对象。extractBalancedJson 只识别 {...},对顶层数组 [...](包括嵌套的)会
-    // 错误地把第一个 {...} 截出来,丢掉外层的 [ 和后面的元素。所以顶层是 [ 时走数组路径。
-    // 兜底:如果 LLM 在 JSON 之前输出了中文思考段落(没正确用 think 标签闭合),
-    // stripped 第一个非空字符不是 [ 也不是 {,此时直接从首个 { 截取,再让
-    // extractBalancedJson 找配对对象。
+    // 先看顶层是数组还是对象,再用带截断自愈的括号栈扫描提取。
+    // 关键:顶层数组**不能**用 extractBalancedJson(只识别第一个 {...},会把
+    // [{a},{b},{c}] 截成单个 {a});也不能用 lastIndexOf(']')(截断时会误取内层
+    // aliases 的 ],得到括号不配对的串)。统一走 extractTopLevelJsonWithHeal,
+    // 它对完整/被 max_tokens 截断两种情况都能还原成可 parse 的 JSON。
     const headIdx = stripped.search(/\S/);
-    if (headIdx < 0) throw new Error(`LLM 返回为空(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+    if (headIdx < 0) throw new Error(`LLM 返回为空(finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
     const head = stripped[headIdx];
-    if (head === '[') {
-      // 顶层数组:直接用 [ ... ] 边界截取,**绝不能**再交给 extractBalancedJson —
-      // 它只识别第一个配对的 {...},会把 [{a},{b},{c}] 截成单个 {a},丢掉外层数组和
-      // 其余元素,导致调用方 JSON.parse 得到一个对象、Array.isArray 判为 false,最终
-      // 误报「LLM 未返回任何子方向」(738c10a 的回归)。
-      const arrStart = stripped.indexOf('[');
-      const arrEnd = stripped.lastIndexOf(']');
-      if (arrStart !== -1 && arrEnd > arrStart) {
-        stripped = stripped.slice(arrStart, arrEnd + 1);
-      } else {
-        throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
-      }
+    // head 不是 [ / { 时说明 LLM 先输出了思考/说明文字。此时按"数组优先"猜 opener:
+    // 首个 [ 若出现在首个 { 之前就当数组,否则当对象。
+    let opener: '[' | '{';
+    if (head === '[') opener = '[';
+    else if (head === '{') opener = '{';
+    else {
+      const bi = stripped.indexOf('[');
+      const oi = stripped.indexOf('{');
+      opener = bi !== -1 && (oi === -1 || bi < oi) ? '[' : '{';
+    }
+    const extracted = extractTopLevelJsonWithHeal(stripped, opener);
+    if (extracted) {
+      stripped = extracted;
     } else {
-      // 顶层对象 / 思考文字:head 不是 { 时说明 LLM 先输出了思考/说明文字,
-      // 从首个 { 截取,再交给 extractBalancedJson 找配对对象。
-      if (head !== '{') {
-        const objStart = stripped.indexOf('{');
-        if (objStart > 0) stripped = stripped.slice(objStart);
-      }
-      const obj = extractBalancedJson(stripped);
-      if (obj) {
-        stripped = obj;
-      } else {
-        throw new Error(`LLM 未输出 JSON(返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
-      }
+      throw new Error(`LLM 未输出 JSON(finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
     }
   }
   return stripped;
