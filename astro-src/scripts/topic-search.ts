@@ -406,7 +406,10 @@ async function filterCandidatesByLLM(targetN: number): Promise<void> {
   const MAX = 2;
   for (let attempt = 1; attempt <= MAX; attempt++) {
     try {
-      raw = await callLLMRaw(FILTER_CANDIDATES_SYSTEM, userPrompt, cfg, true);
+      // 筛论文是重任务:输入含 N 篇候选(常 100-300)的标题+摘要,推理模型的
+      // <think> 逐篇分析会很长。给足 8000 初始预算(callLLMRaw 内部再按
+      // finish_reason=length 自动加倍到 16000),避免思考吃光预算导致正文为空。
+      raw = await callLLMRaw(FILTER_CANDIDATES_SYSTEM, userPrompt, cfg, true, 8000);
     } catch (e) {
       if (attempt >= MAX) {
         setStatusErrorWithAction(`AI 筛论文失败: ${(e as Error).message}`, '🔄 重试', () => filterCandidatesByLLM(targetN));
@@ -751,72 +754,100 @@ async function callLLMRaw(
   userContent: string,
   cfg: LLMConfig,
   jsonOnly = true,
+  maxTokens = 4000,
 ): Promise<string> {
   const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
   const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
-  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
-  const body: Record<string, unknown> = {
-    model: cfg.model,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent },
-    ],
-    temperature: 0.3,
-    // 拆解/迁移/筛选/报告的 JSON 数组可能不短(每个子方向含 label+query+5 aliases+reason),
-    // 不设上限时部分 provider 会用很小的默认 max_tokens 把 JSON 从中间截断,
-    // 导致「拆解结果不是合法 JSON」。给足 4000 token 输出空间。
-    max_tokens: 4000,
-  };
-  if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
-  const res = await fetch(url, {
-    method: 'POST',
-    signal: inFlightController?.signal,
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.apiKey}`,
-    },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`LLM API 错误 (${res.status}): ${t.slice(0, 200)}`);
-  }
-  const data = await res.json();
-  const content: string = data?.choices?.[0]?.message?.content ?? '';
-  const finishReason: string = data?.choices?.[0]?.finish_reason ?? '';
-  if (!content) throw new Error(`LLM 返回为空 (finish_reason=${finishReason})`);
-  let stripped = content
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/, '')
-    .trim();
-  if (jsonOnly) {
-    // 先看顶层是数组还是对象,再用带截断自愈的括号栈扫描提取。
-    // 关键:顶层数组**不能**用 extractBalancedJson(只识别第一个 {...},会把
-    // [{a},{b},{c}] 截成单个 {a});也不能用 lastIndexOf(']')(截断时会误取内层
-    // aliases 的 ],得到括号不配对的串)。统一走 extractTopLevelJsonWithHeal,
-    // 它对完整/被 max_tokens 截断两种情况都能还原成可 parse 的 JSON。
-    const headIdx = stripped.search(/\S/);
-    if (headIdx < 0) throw new Error(`LLM 返回为空(finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
-    const head = stripped[headIdx];
-    // head 不是 [ / { 时说明 LLM 先输出了思考/说明文字。此时按"数组优先"猜 opener:
-    // 首个 [ 若出现在首个 { 之前就当数组,否则当对象。
-    let opener: '[' | '{';
-    if (head === '[') opener = '[';
-    else if (head === '{') opener = '{';
-    else {
-      const bi = stripped.indexOf('[');
-      const oi = stripped.indexOf('{');
-      opener = bi !== -1 && (oi === -1 || bi < oi) ? '[' : '{';
+  const isReasoning = /reasoner|reasoning|r1|think/i.test(cfg.model);
+  // finish_reason=length(被输出预算截断)时,自动加倍预算重试一次。
+  // 主要救推理模型:它会先输出一大段 <think>...</think>,重任务(如从 164 篇筛 30 篇)
+  // 的思考很长,可能把整个 maxTokens 烧在 think 里,剥掉 think 后正文为空 →
+  // 「LLM 返回为空(finish_reason=length)」。加倍预算给思考+正文都留够空间。
+  let budget = maxTokens;
+  const MAX_BUDGET = 16000;
+  for (let attempt = 0; ; attempt++) {
+    const body: Record<string, unknown> = {
+      model: cfg.model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userContent },
+      ],
+      temperature: 0.3,
+      max_tokens: budget,
+    };
+    if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
+    const res = await fetch(url, {
+      method: 'POST',
+      signal: inFlightController?.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`LLM API 错误 (${res.status}): ${t.slice(0, 200)}`);
     }
-    const extracted = extractTopLevelJsonWithHeal(stripped, opener);
-    if (extracted) {
-      stripped = extracted;
-    } else {
-      throw new Error(`LLM 未输出 JSON(finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+    const data = await res.json();
+    const content: string = data?.choices?.[0]?.message?.content ?? '';
+    const finishReason: string = data?.choices?.[0]?.finish_reason ?? '';
+    // 剥 think / fence,判断剥完后是否还有正文
+    const stripped = content
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      // 未闭合的 <think>(被 length 截断,只有开标签没有闭标签)→ 整段当思考丢掉
+      .replace(/<think>[\s\S]*$/i, '')
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/, '')
+      .trim();
+    // 被预算截断且正文为空/过短 → 加倍预算重试(思考吃光了预算,没轮到输出 JSON)
+    if (
+      finishReason === 'length' &&
+      stripped.length < 20 &&
+      budget < MAX_BUDGET &&
+      attempt < 3
+    ) {
+      budget = Math.min(budget * 2, MAX_BUDGET);
+      continue;
     }
+    return finalizeLLMJson(content, stripped, finishReason, jsonOnly);
   }
-  return stripped;
+}
+
+// 从(已剥 think/fence 的)stripped 里提取顶层 JSON;jsonOnly=false 时原样返回 stripped。
+function finalizeLLMJson(
+  content: string,
+  stripped: string,
+  finishReason: string,
+  jsonOnly: boolean,
+): string {
+  if (!jsonOnly) {
+    if (!stripped) throw new Error(`LLM 返回为空 (finish_reason=${finishReason})`);
+    return stripped;
+  }
+  // jsonOnly:用带截断自愈的括号栈扫描提取顶层 JSON(数组或对象)。
+  // 关键:顶层数组**不能**用 extractBalancedJson(只识别第一个 {...},会把
+  // [{a},{b},{c}] 截成单个 {a});也不能用 lastIndexOf(']')(截断时会误取内层
+  // aliases 的 ],得到括号不配对的串)。extractTopLevelJsonWithHeal 对完整/被
+  // max_tokens 截断两种情况都能还原成可 parse 的 JSON。
+  const headIdx = stripped.search(/\S/);
+  if (headIdx < 0) throw new Error(`LLM 返回为空(finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+  const head = stripped[headIdx];
+  // head 不是 [ / { 时说明 LLM 先输出了思考/说明文字。此时按"数组优先"猜 opener:
+  // 首个 [ 若出现在首个 { 之前就当数组,否则当对象。
+  let opener: '[' | '{';
+  if (head === '[') opener = '[';
+  else if (head === '{') opener = '{';
+  else {
+    const bi = stripped.indexOf('[');
+    const oi = stripped.indexOf('{');
+    opener = bi !== -1 && (oi === -1 || bi < oi) ? '[' : '{';
+  }
+  const extracted = extractTopLevelJsonWithHeal(stripped, opener);
+  if (!extracted) {
+    throw new Error(`LLM 未输出 JSON(finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
+  }
+  return extracted;
 }
 
 // ============================================================================
@@ -3017,7 +3048,8 @@ async function generateTopicReport(
   let lastErr = '';
   for (let attempt = 1; attempt <= REPORT_LLM_RETRY; attempt++) {
     try {
-      const raw = await callLLMRaw(TOPIC_REPORT_SYSTEM, userPrompt, cfg, true);
+      // 主题报告也是重任务:输入含 M 篇速览,输出多维度 JSON 对象。给 8000 初始预算。
+      const raw = await callLLMRaw(TOPIC_REPORT_SYSTEM, userPrompt, cfg, true, 8000);
       try {
         const obj = JSON.parse(raw);
         const report = normalizeReportTopic(obj, prev, mode);
