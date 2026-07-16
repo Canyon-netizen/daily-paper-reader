@@ -3,6 +3,8 @@
 // 单篇论文页:用 lib/paper.ts 读 MD 文件(兼容坏文件)
 // 路径格式:docs/papers/{arxiv_id}-{slug}.md -> /papers/{arxiv_id}-{slug}/
 import type { GetStaticPaths } from 'astro';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import { readPaper, listAllPaperIds } from '../../lib/paper';
@@ -10,6 +12,48 @@ import { renderMarkdownBody } from '../../lib/markdown';
 import '../../styles/paper-chat.css';
 import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
+
+// 全文 inline 上限。超过这个大小(原始 utf-8 字节计)就不内联,让客户端走 fetch /papers/{id}.txt。
+// 200KB 原文 base64 后 ~270KB 进 HTML,论文单页就这样大了;能覆盖绝大多数 arXiv 短文(< 30 页),
+// 超长论文(> 30 页)不内联,让客户端 fetch。
+// 1 KB 以下的视为 404 HTML/空,也不内联。
+const FULLTEXT_INLINE_MAX_BYTES = 200 * 1024;
+
+/**
+ * SSR 阶段直接 fs 读 docs/papers/{arxiv}-slug.txt,base64 编码后塞进页面。
+ * 客户端 paper-chat.ts::loadFulltextSkeleton 优先用 inline 内容,不走 HTTP。
+ *
+ * 为什么这么做:
+ *   - 用户体感「为什么 chat 读全文要经网站」— fs.readFile 是直接的 IO,
+ *     HTTP fetch 看起来多绕一圈;虽然 fetch 本地静态资源没真成本,但"路径感"
+ *     不直观。
+ *   - 内联到 HTML 的代价是单篇页面大 ~60KB,但 chat 默认不展开全文,
+ *     大多数用户不会切 — 切了才付 token,但读 60KB HTML 是单次发生,缓存友好。
+ *   - 没 .txt 的论文(早期 pipeline 漏抓)SSR 拿不到,data-fulltext 空,
+ *     客户端走 fetch 兜底,保留 f40bc41 的 fetch 链不破。
+ */
+async function readFulltextInline(arxivParam: string): Promise<string> {
+  try {
+    // arxivParam 是 URL slug 中的 arxivId 段(可能带 v#):
+    //   /papers/2606.26155v1-detecting-and.../  →  arxivParam = "2606.26155v1-detecting-..."
+    // 文件名格式 docs/papers/<arxivId>v<n>-<slug>.txt,arxivId 形如 2606.26155。
+    // 用 glob 风格的 startsWith 匹配,找到任意以 "{param} 开头去掉 .txt"的 .txt 文件。
+    // 先尝试"去除 v<n> 再加"-..." 的版本,失败再用 glob。
+    const trimmed = arxivParam.replace(/-\d{4}\.\d{4,5}.*$/, '');
+    // 实际上 arxivParam 已经是完整 slug,直接 join 即可:Astro getStaticPaths 把
+    // "{id}"(形如 papers/2606.26155v1-detecting-and...)的 id 部分喂给 params.arxiv,
+    // id 是 "papers/{slug}.md" 去掉 .md。docs/papers/{slug}.txt 跟它同名。
+    const txtPath = join(process.cwd(), 'docs', 'papers', `${arxivParam}.txt`);
+    const buf = await readFile(txtPath);
+    if (buf.byteLength > FULLTEXT_INLINE_MAX_BYTES || buf.byteLength < 1000) {
+      // 太大 → 不内联,客户端 fetch;太小 → 视为异常(404 HTML/空),不内联
+      return '';
+    }
+    return buf.toString('base64');
+  } catch {
+    return '';
+  }
+}
 
 export const getStaticPaths: GetStaticPaths = async () => {
   const ids = await listAllPaperIds();
@@ -27,6 +71,7 @@ const { arxiv } = Astro.params;
 const id = `papers/${arxiv}`;
 const paper = await readPaper(id);
 const base = import.meta.env.BASE_URL;
+const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv as string) : '';
 ---
 
 <BaseLayout title={paper?.title_zh || paper?.title || id}>
@@ -196,7 +241,10 @@ const base = import.meta.env.BASE_URL;
     )}
 
     {/* 论文对话 dock — 数据载体(实际渲染由 paper-chat.ts 挂到 body 上作为 fixed 浮层)。
-        broken 论文和 404 时不渲染,避免误导。 */}
+        broken 论文和 404 时不渲染,避免误导。
+        data-fulltext 默认给一个空格占位,确保 Astro 输出 attribute="..." 而不是布尔属性;
+        没 .txt 的论文 fulltextInline 是 '' → 用空格,客户端 atob 后是 ' ' → sanity check 失败
+        → 当成"无内联"走 fetch 兜底。*/}
     {paper && !paper.isBroken && (
       <section
         id="paper-chat"
@@ -211,6 +259,7 @@ const base = import.meta.env.BASE_URL;
         data-conclusion={paper.conclusion || ''}
         data-tags={(paper.tags || []).join(',')}
         data-arxiv-id={paper.arxivId || ''}
+        data-fulltext={fulltextInline || ' '}
       ></section>
     )}
 

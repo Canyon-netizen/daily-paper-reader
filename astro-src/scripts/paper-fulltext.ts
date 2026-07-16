@@ -208,6 +208,30 @@ export async function loadLocalTxt(arxivId: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * SSR 内联全文 — 论文页 <section id="paper-chat" data-fulltext="<base64">">
+ * 直接嵌入的 docs/papers/{id}.txt base64 内容。decoder 在客户端 atob 即可。
+ *
+ * 优先用这个,避免 fetch 网络路径(ss34xxxx — 用户反馈"为什么 chat 读全文
+ * 要经网站"):
+ * - 打开论文页 SSR 时已经 fs.readFile 进了 HTML,数据已经在浏览器内存
+ * - chat 切到「全文」立即可用,无需任何网络请求
+ * - 数据只在该论文页存在,跨页不携带(单论文最大 67KB base64)
+ *
+ * 没内联(server 返回空 / 太大不内联)→ 返回 '' 让调用方走 fetch 兜底。
+ */
+function getInlineFulltext(): string {
+  try {
+    if (typeof document === 'undefined') return '';
+    const el = document.getElementById('paper-chat');
+    if (!el) return '';
+    const v = el.dataset.fulltext || '';
+    return v;
+  } catch {
+    return '';
+  }
+}
+
 // ============================================================================
 // 数据获取 — ar5iv HTML(优先)
 // ============================================================================
@@ -344,6 +368,30 @@ export async function loadFulltextSkeleton(
       }
     } catch { /* 缓存层异常,继续走抓取 */ }
   }
+
+  // 1.5) SSR 内联优先 — f4xxxx 加的 fs.readFile 路径,论文页
+  //   <section id="paper-chat" data-fulltext="<base64>"> 直接把
+  //   docs/papers/{id}.txt 内容(已经过 200KB 截断)base64 后嵌进 HTML。
+  //   浏览器打开论文页那刻就有全文,根本不用网络请求,体感最直接。
+  //   没内联 → 走下面的本地 .txt fetch → ar5iv。
+  try {
+    const inlineB64 = getInlineFulltext();
+    if (inlineB64 && inlineB64.length > 200) {
+      const decoded = atob(inlineB64);
+      // 再做一次 sanity check(最大 200KB ≈ base64 270KB;超过说明 SSR 漏掉截断逻辑)
+      if (decoded.length >= 1000 && decoded.length <= 250 * 1024) {
+        const sk: FulltextSkeleton = {
+          sections: [],
+          plainText: decoded,
+          canonicalId,
+          version,
+          source: 'txt',
+        };
+        cacheSet({ canonicalId, version, skeleton: sk, fetchedAt: Date.now() }).catch(() => {});
+        return { state: 'fresh', skeleton: sk, hasFulltext: true };
+      }
+    }
+  } catch { /* inline 解码失败,继续走 fetch */ }
 
   // 2) 优先读本地 /papers/{id}.txt — daily pipeline 已抓的 PDF 正文,
   //    SSR 阶段 copy-docs-assets 拷到 public/。秒开、无网络成本、不依赖 8123 代理。
