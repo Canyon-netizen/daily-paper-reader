@@ -1,18 +1,33 @@
-"""Regression tests for P2-2: docs/config.yaml commit gap.
+"""Regression tests for P2-2: docs/config.yaml commit + P3-2 split commits.
 
-The daily workflow (`.github/workflows/daily-paper-reader.yml`) ends main
-with `cp -f config.yaml docs/config.yaml` so the static site can serve a
-read-only snapshot without GitHub Token. The "Commit results" step adds
-`paths=(docs config.yaml)`, where the `docs` argument expands to everything
-under `docs/`. This test pins that contract:
+P2-2: The daily workflow ends main with `cp -f config.yaml docs/config.yaml`
+so the static site can serve a read-only snapshot without GitHub Token.
 
-- `git add docs` MUST stage `docs/config.yaml` when it differs from HEAD.
-- The workflow YAML MUST contain the `cp -f config.yaml docs/config.yaml` step.
+P3-2 (new in this round): the workflow's "Commit results" step is split into
+TWO commits instead of one:
 
-If either invariant breaks (e.g. someone narrows the commit step to a
-specific subpath and forgets the snapshot), the static site will silently
-serve a stale `docs/config.yaml` while `config.yaml` advances — a confusing
-state for downstream Gist / settings consumers.
+  1. `[chore] daily config snapshot` — config.yaml + docs/config.yaml +
+     archive state json files. Reflects fork user's localStorage settings
+     overlay after daily pipeline applies it.
+
+  2. `[chore] daily paper pipeline` — docs/papers/* metadata +
+     archive/*/recommend.
+
+Why split: git log distinguishes "config change" from "content update",
+reviewing changes is easier, and rollback is more precise (revert content
+without losing config).
+
+This test pins both contracts:
+- `git add docs` MUST stage `docs/config.yaml` when it differs from HEAD
+  (P2-2 unchanged).
+- The workflow YAML MUST contain both `cp -f config.yaml docs/config.yaml`
+  (P2-2) and the two distinct commit messages "daily config snapshot" +
+  "daily paper pipeline" (P3-2).
+
+If either invariant breaks (e.g. someone merges the two commits back,
+or narrows the commit step to a specific subpath and forgets the snapshot),
+the static site will silently serve a stale `docs/config.yaml` while
+`config.yaml` advances, or git history loses the snapshot/paper distinction.
 """
 
 import os
@@ -84,12 +99,39 @@ class WorkflowHasConfigSnapshotStepTest(unittest.TestCase):
             "daily workflow missing the cp -f config.yaml docs/config.yaml step",
         )
 
-    def test_daily_workflow_commit_step_adds_docs(self):
-        """`git add docs` is what causes docs/config.yaml to be staged — pin it."""
+    def test_daily_workflow_uses_split_commit_messages(self):
+        """P3-2: 'Commit results' step must emit two distinct commits so git
+        log can distinguish config snapshot vs paper pipeline."""
         workflow = (ROOT / ".github" / "workflows" / "daily-paper-reader.yml").read_text(encoding="utf-8")
-        # The commit step uses `paths=(docs config.yaml)` then `git add "${paths[@]}"`.
-        self.assertIn('paths=(docs config.yaml)', workflow)
-        self.assertIn('git add "${paths[@]}"', workflow)
+        # Both commit messages must exist in the YAML.
+        self.assertIn(
+            "[chore] daily config snapshot",
+            workflow,
+            "daily workflow missing the '[chore] daily config snapshot' commit message",
+        )
+        self.assertIn(
+            "[chore] daily paper pipeline",
+            workflow,
+            "daily workflow missing the '[chore] daily paper pipeline' commit message",
+        )
+        # The old merged message must NOT be present (we want two commits, not one).
+        self.assertNotIn(
+            "[chore] daily pipeline\"",
+            workflow,
+            "daily workflow still emits a single '[chore] daily pipeline' commit — "
+            "P3-2 split was reverted",
+        )
+
+    def test_daily_workflow_commit_step_paths_separated(self):
+        """The two commits must stage disjoint path groups. We assert the
+        `snapshot_paths` and `paper_paths` arrays exist and are separate."""
+        workflow = (ROOT / ".github" / "workflows" / "daily-paper-reader.yml").read_text(encoding="utf-8")
+        self.assertIn("snapshot_paths=", workflow)
+        self.assertIn("paper_paths=", workflow)
+        # `snapshot_paths` should mention config.yaml + archive state jsons.
+        self.assertIn("docs/config.yaml", workflow.split("paper_paths=")[0])
+        # `paper_paths` should mention archive/*/recommend.
+        self.assertIn("recommend", workflow.split("snapshot_paths=")[1])
 
 
 if __name__ == "__main__":

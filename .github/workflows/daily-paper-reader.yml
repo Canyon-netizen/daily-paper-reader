@@ -227,28 +227,57 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           branch="${GITHUB_REF_NAME:-main}"
 
+          # P3-2: 拆成两个 commit。
+          #   1) config snapshot — config.yaml + docs/config.yaml + archive state
+          #      json 文件;反映 fork 用户在 paper-analyzer 改的配置。
+          #   2) paper pipeline — docs/papers/* 元数据 + archive/*/recommend。
+          # 这样 git log 里能区分"配置快照"和"内容增量",review 更易读;
+          # rollback 也更精确(回滚内容不影响配置)。
+
           shopt -s nullglob
-          paths=(docs config.yaml)
+          snapshot_paths=(docs/config.yaml config.yaml)
           if [ -f archive/arxiv_seen.json ]; then
-            paths+=(archive/arxiv_seen.json)
+            snapshot_paths+=(archive/arxiv_seen.json)
           fi
           if [ -f archive/crawl_state.json ]; then
-            paths+=(archive/crawl_state.json)
+            snapshot_paths+=(archive/crawl_state.json)
           fi
           if [ -f archive/carryover.json ]; then
-            paths+=(archive/carryover.json)
+            snapshot_paths+=(archive/carryover.json)
           fi
+
+          paper_paths=(docs)
           for d in archive/*/recommend; do
-            paths+=("$d")
+            paper_paths+=("$d")
           done
 
-          git add "${paths[@]}"
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+          # 先 reset 任何残留 staged 内容,确保两个 commit 互不污染。
+          git reset --quiet
+
+          echo "--- staging config snapshot ---"
+          git add "${snapshot_paths[@]}" 2>/dev/null || true
+          if ! git diff --cached --quiet; then
+            echo "  -> commit 1: config snapshot"
+            git commit -m "[chore] daily config snapshot"
+          else
+            echo "  -> no config changes; skipping commit 1"
           fi
 
-          git commit -m "[chore] daily pipeline"
+          echo "--- staging paper pipeline ---"
+          git add "${paper_paths[@]}"
+          if ! git diff --cached --quiet; then
+            echo "  -> commit 2: paper pipeline"
+            git commit -m "[chore] daily paper pipeline"
+          else
+            echo "  -> no paper changes; skipping commit 2"
+          fi
+
+          if git log -1 --format="%s" HEAD | grep -q "daily"; then
+            :  # at least one commit landed — proceed to push
+          else
+            echo "No daily commits to push."
+            exit 0
+          fi
 
           git fetch origin "$branch"
           git merge --no-ff "origin/$branch" -m "Merge origin/$branch into workflow branch"
