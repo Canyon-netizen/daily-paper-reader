@@ -26,8 +26,24 @@ import {
   fetchArxivPdf,
   callLLM,
 } from './paper-analyzer';
-import type { ArxivEntry, AnalysisResult } from './paper-analyzer';
+import type { ArxivEntry } from './paper-analyzer';
 import { debounce, canonicalArxivId as canonicalId, escapeHtml } from '../lib/dom-utils';
+import {
+  buildRegenSubQ,
+  buildSubQ,
+  normalizeAliases,
+  normalizeQuery,
+  type Candidate,
+  type ChatMsg,
+  type SessionStore,
+  type SubQ,
+  type SubqRewrite,
+  type Summary,
+  type TopicReport,
+  type TopicReportDimension,
+  type TopicReportDimensionPaper,
+  type TopicSession,
+} from '../lib/schemas';
 
 // ============================================================================
 // 类型 + 常量
@@ -39,111 +55,9 @@ interface LLMConfig {
   model: string;
 }
 
-interface SubQ {
-  id: string;
-  label: string;
-  query: string;
-  reason: string;
-  selected: boolean;
-  // 新增:从已选论文来的方向带这个标签 — 标记迁移范式
-  explorationType?: 'cross_domain' | 'method_transfer' | 'reverse' | 'combination';
-  // 新增:
-  //   manual: 用户输入思路 + 没选参考论文 → 纯手动拆解
-  //   manual-with-seeds: 用户输入思路 + 同时选了一些参考论文 → 拆解 prompt 既看思路也看参考
-  //   seeds: 来自 ?from=selection 入口,完全替代主题,纯靠 seeds 生成迁移方向
-  source?: 'manual' | 'manual-with-seeds' | 'seeds';
-  // 实测 arXiv 召回数(decomposeIdea / decompose-edit 后异步验证填充):
-  //   undefined  → 还没验证(或网络失败)
-  //   number     → 实测前 5 条中真正命中的不同 canonical id 数(0 表示完全 0 召回)
-  // 用户在阶段 2 UI 上能看到这个标签 + 命中为 0 时变红警示。
-  hitCount?: number;
-  // 实测命中的标题样本(命中 >0 时填充最多 3 条),用于阶段 2 UI 鼠标悬停提示,也作为
-  // 闭环重写 LLM 的「已验证真实写法」证据。命中为 0 时为空数组。
-  hitSamples?: string[];
-  // 阶段 3 searchForDirection 失败的错误信息(主 query 抛错时填充),让用户在 UI 上
-  // 看到「为什么这个子方向 0 命中」,而不只是 0 命中的红 badge。undefined → 还没跑 / 成功。
-  searchError?: string;
-  // arXiv 真实常见写法(3-5 个独立英文关键词/短语)。
-  // searchForDirection 会逐个打 arXiv 后按 canonicalArxivId 合并去重。
-  // 老 session 没这个字段 → undefined,走 ?? [] 兜底。
-  aliases?: string[];
-}
-
-interface Candidate {
-  arxivId: string;
-  entry: ArxivEntry;
-  selected: boolean;
-}
-
-interface Summary {
-  arxivId: string;
-  subqId: string;
-  summary: AnalysisResult;
-  generatedAt: number;
-}
-
-interface ChatMsg {
-  role: 'user' | 'assistant';
-  content: string;
-  ts: number;
-}
-
-interface TopicSession {
-  id: string;
-  topic: string;
-  createdAt: number;
-  updatedAt: number;
-  subqs: SubQ[];
-  candidatesBySubq: Record<string, Candidate[]>;
-  // 阶段 3 子方向 group 折叠状态:subqId → 是否展开。可选,老 session 缺这字段 → undefined,
-  // 渲染时走 `?? {}` 默认全部折叠(避免一次性展开上百篇论文)。
-  candGroupExpanded?: Record<string, boolean>;
-  summaries: Summary[];
-  chats: Record<string, ChatMsg[]>; // 按 arxivId 分组
-  // 报告追问历史(阶段 5 报告生成后,用户与模型围绕报告的对话)。可选,老 session 缺这字段 → undefined,所有
-  // `current.reportChats ?? []` 走兜底,不需要 schema 迁移。
-  reportChats?: ChatMsg[];
-  // 主题报告(阶段 5 产物)。老 session 没这个字段 → undefined,所有
-  // `if (current.report) ...` / `current.report?.` 走兜底,不需要 schema 迁移。
-  report?: TopicReport;
-  // 最近一次 doDecompose 拆解时参考的论文 ID(来自 modal 加进 selection 的那批);
-  // 用于阶段 1 banner 渲染"你选了 N 篇论文参与本次拆解"。不影响搜索/总结逻辑。
-  // 复选框手动选子方向时同样有效。如果用户后续又点了一次 🔍 拆解思路,这里会
-  // 被覆盖成最新一批 seeds 的 ID。
-  referenceSeedArxivIds?: string[];
-}
-
-interface TopicReportDimensionPaper {
-  arxivId: string;
-  role: string;       // 在该维度下的定位, 截断 24
-  key: string;        // 与维度的连接点, 截断 120
-  method?: string;    // 截断 120
-  result?: string;    // 截断 120
-  note?: string;      // 截断 120
-}
-
-interface TopicReportDimension {
-  name: string;                                  // 截断 30
-  description?: string;                          // 截断 160
-  papers: TopicReportDimensionPaper[];           // ≥ 1
-}
-
-interface TopicReport {
-  overview: string;                              // 截断 800
-  dimensions: TopicReportDimension[];            // 2-6
-  sharedFindings: string[];                      // 截断 120/条, 最长 8
-  gaps: string[];                                // 截断 120/条, 最长 6
-  nextSteps: string[];                           // 截断 120/条, 最长 6
-  generatedAt: number;
-  relatedArxivIds: string[];                     // 用于 UI 排序
-  incrementallyAddedArxivIds?: string[];         // 仅 incremental 模式
-}
-
-interface SessionStore {
-  version: number;
-  currentId: string | null;
-  sessions: Record<string, TopicSession>;
-}
+// (SubQ / Candidate / Summary / ChatMsg / TopicSession / SessionStore / TopicReport(/Dimension/DimensionPaper)
+//  都从 ../lib/schemas 导入。构造 SubQ 必须走 buildSubQ / buildRegenSubQ。
+// 见 [[feedback_subq_fields_whitelist]]。)
 
 const SESSION_KEY = 'dpr_topic_session_v1';
 const SCHEMA_VERSION = 1;
@@ -452,20 +366,6 @@ async function filterCandidatesByLLM(targetN: number): Promise<void> {
   setStatus(`✓ AI 筛论文完成:从 ${unique.length} 篇中选了 ${picked.size} 篇。点「🚀 总结选中论文」开始总结。`, 'success');
 }
 
-export function normalizeQuery(q: string): string {
-  // 兜底:即使 LLM 不守规矩返回了中文 / 长短语,也尽量清洗成 arXiv 友好的英文关键词。
-  // 1. 去中文字符
-  let s = (q ?? '').replace(/[一-鿿]+/g, ' ').trim();
-  if (!s) return '';
-  // 2. 只保留字母 / 数字 / 空格 / 连字符 / 下划线;其余(逗号、句号、引号等)当分隔符
-  s = s.replace(/[^A-Za-z0-9\s\-_]+/g, ' ').replace(/\s+/g, ' ').trim();
-  if (!s) return '';
-  // 3. 截到前 6 个 token(arXiv all: 全文模式允许多词组合,6 个覆盖"5-6 个关键词"的需求;
-  //    再多 arXiv 会召回过低且容易命中噪声论文)
-  const toks = s.split(' ').filter(Boolean);
-  if (toks.length > 6) s = toks.slice(0, 6).join(' ');
-  return s;
-}
 
 const PAPER_CHAT_SYSTEM = `你是论文问答助手。用户已经看过一篇论文的速览笔记,你需要基于这篇论文的
 abstract 和已有的速览内容,回答用户的追问。
@@ -916,26 +816,15 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Sub
   // 主题报告不需 rebuild,因为 report.relatedArxivIds 跟主题独立 — 用户重新点"📊
   // 生成报告"按钮就会按新的 summaries + 同样的 prevDimensions 重新生成。
   const hasSeeds = !!(seeds && seeds.length > 0);
-  const built = arr.slice(0, 7).map((x: any, i: number) => {
-    const rawQuery = String(x.query ?? '').trim();
-    const cleaned = normalizeQuery(rawQuery);
-    // aliases 白名单拷字段:每个元素去中文字符 + 仅保留 ASCII token。
-    // 保证 searchForDirection 收到的是干净英文,避免主 query 已 0 命中、alias 又因
-    // LLM 偶发混入中文/标点而白白浪费一次 arXiv 调用。
-    const rawAliases = Array.isArray(x.aliases)
-      ? x.aliases.map((a: any) => normalizeQuery(String(a ?? ''))).filter(Boolean)
-      : [];
-    const aliases: string[] = Array.from(new Set<string>(rawAliases)).filter((a) => a !== cleaned);
-    return {
-      id: uid('q'),
-      label: String(x.label ?? `子方向 ${i + 1}`).slice(0, 60),
-      query: cleaned || rawQuery, // 兜底清洗后为空就保留原文,仍交给用户手动改
-      reason: String(x.reason ?? '').trim(),
-      selected: true,
-      source: hasSeeds ? ('manual-with-seeds' as const) : ('manual' as const),
-      aliases,
-    };
-  }).filter((q: SubQ) => q.query);
+  const built = arr.slice(0, 7).map((x: any, i: number) => buildSubQ({
+    id: uid('q'),
+    label: x.label ?? `子方向 ${i + 1}`,
+    query: x.query,
+    reason: x.reason,
+    selected: true,
+    source: hasSeeds ? 'manual-with-seeds' : 'manual',
+    aliases: x.aliases,
+  })).filter((q: SubQ) => q.query);
   // 实测 arXiv 召回 + 命中 0 自动让 LLM 改写闭环;失败时静默返回原数组。
   try {
     return await validateAndRewriteSubqs(built, cfg);
@@ -1011,28 +900,18 @@ export async function exploreFromSeeds(
     await new Promise((r) => setTimeout(r, 300));
   }
 
-  // 把 explorationType 限制在白名单内(LLM 偶尔会写错大小写或拼写)
-  const ALLOWED_TYPES = new Set(['cross_domain', 'method_transfer', 'reverse', 'combination']);
-  const built = arr.slice(0, 6).map((x: any, i: number) => {
-    const rawQuery = String(x.query ?? '').trim();
-    const cleaned = normalizeQuery(rawQuery);
-    const rawType = String(x.explorationType ?? '').trim().toLowerCase();
-    const explorationType = (ALLOWED_TYPES.has(rawType) ? rawType : undefined) as SubQ['explorationType'];
-    const rawAliases = Array.isArray(x.aliases)
-      ? x.aliases.map((a: any) => normalizeQuery(String(a ?? ''))).filter(Boolean)
-      : [];
-    const aliases: string[] = Array.from(new Set<string>(rawAliases)).filter((a) => a !== cleaned);
-    return {
-      id: uid('q'),
-      label: String(x.label ?? `迁移方向 ${i + 1}`).slice(0, 60),
-      query: cleaned || rawQuery,
-      reason: String(x.reason ?? '').trim(),
-      selected: true,
-      source: 'seeds' as const,
-      explorationType,
-      aliases,
-    };
-  }).filter((q: SubQ) => q.query);
+  // 把 explorationType 限制在白名单内(LLM 偶尔会写错大小写或拼写)。
+  // ALLOWED_EXPLORATION_TYPES 已在 ../lib/schemas 集中维护,buildSubQ 自动收敛。
+  const built = arr.slice(0, 6).map((x: any, i: number) => buildSubQ({
+    id: uid('q'),
+    label: x.label ?? `迁移方向 ${i + 1}`,
+    query: x.query,
+    reason: x.reason,
+    selected: true,
+    source: 'seeds',
+    explorationType: x.explorationType,
+    aliases: x.aliases,
+  })).filter((q: SubQ) => q.query);
   // 实测 arXiv 召回 + 命中 0 自动让 LLM 改写闭环
   try {
     return await validateAndRewriteSubqs(built, cfg);
@@ -1161,14 +1040,12 @@ async function rewriteZeroHitSubqs(
     const raw = await callLLMRaw(SUBQ_REWRITE_SYSTEM, userPrompt, cfg, true);
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return new Map();
-    const out = new Map<string, { query: string; aliases: string[] }>();
+    const out = new Map<string, SubqRewrite>();
     for (const item of arr) {
       const id = String(item.id ?? '');
       if (!id) continue;
       const newQuery = normalizeQuery(String(item.query ?? ''));
-      const newAliases = Array.isArray(item.aliases)
-        ? item.aliases.map((a: any) => normalizeQuery(String(a ?? ''))).filter(Boolean)
-        : [];
+      const newAliases = normalizeAliases(item.aliases, newQuery);
       out.set(id, { query: newQuery, aliases: newAliases });
     }
     return out;
@@ -1254,10 +1131,8 @@ async function searchForDirection(subq: SubQ): Promise<Candidate[]> {
 
   // 构造别名列表 — 与主 query 互不重叠(已经在构造 SubQ 时 Set 去重一次了,这里
   // 再做一次兜底以防外部直接构造的 SubQ)。
-  const rawAliases = (subq.aliases ?? [])
-    .map((a) => normalizeQuery(a))
-    .filter(Boolean);
-  const queries = [queryForArxiv, ...rawAliases.filter((a) => a !== queryForArxiv)];
+  const aliasList = normalizeAliases(subq.aliases, queryForArxiv);
+  const queries = [queryForArxiv, ...aliasList.filter((a) => a !== queryForArxiv)];
 
   // 单子方向内顺序跑别名 — arXiv 限速 1 req/s,避免 429。doSearch 顶层的
   // runConcurrent(SUMMARIZE_CONCURRENCY=2) 只管子方向之间并发,这里再串行
@@ -1802,15 +1677,12 @@ function renderSubqStage(): void {
         setStatus(`重新生成子方向 ${subq.label}...`);
         const newOne = await decomposeIdea(current.topic);
         if (newOne.length > 0) {
-          // 只替换这一个;aliases 沿用旧值(用户手动写的优先级 > LLM 一次性产出),
-          // 如果新 LLM 输出有 aliases 而旧值为空,则填充。
-          const replacement = newOne[0];
-          subq.label = replacement.label;
-          subq.query = replacement.query;
-          subq.reason = replacement.reason;
-          if ((!subq.aliases || subq.aliases.length === 0) && replacement.aliases) {
-            subq.aliases = replacement.aliases;
-          }
+          // regen 路径走 buildRegenSubQ:label/query/reason 用 LLM 新值;
+          // aliases/explorationType/hitCount/hitSamples 等"用户手动 / 阶段 3 实测"的值
+          // 沿用 base(LLM 一次性产出不应覆盖)。这避免了 [[feedback_subq_fields_whitelist]]
+          // 在 regen 路径上的字段漏拷。
+          const merged = buildRegenSubQ({ base: subq, replacement: newOne[0] });
+          Object.assign(subq, merged);
           renderSubqStage();
           persistSession(current!);
         }
