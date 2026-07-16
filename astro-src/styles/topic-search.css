@@ -36,8 +36,8 @@
   max-width: 1080px;
   margin: 1rem auto;
   padding: 0.85rem 1.2rem;
-  background: color-mix(in srgb, #ef4444 14%, var(--bg-elevated));
-  border-left: 3px solid #ef4444;
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg-elevated));
+  border-left: 3px solid var(--danger);
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   font-size: 0.9rem;
   color: var(--fg);
@@ -118,11 +118,11 @@
   background: color-mix(in srgb, var(--accent) 85%, #000);
 }
 .topic-btn.danger {
-  color: #ef4444;
-  border-color: color-mix(in srgb, #ef4444 35%, var(--border));
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
 }
 .topic-btn.danger:hover {
-  background: color-mix(in srgb, #ef4444 12%, var(--bg-elevated));
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-elevated));
 }
 .topic-btn.ghost {
   border-color: transparent;
@@ -235,10 +235,10 @@
 .topic-subq-card.selected { border-color: var(--accent); }
 /* arXiv 0 召回警告:0 命中子方向加红边,让用户在阶段 2 一眼看到需要改 */
 .topic-subq-card--zero-hit {
-  border-color: #ef4444;
+  border-color: var(--danger);
   box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.08);
 }
-.topic-subq-card--zero-hit.selected { border-color: #ef4444; }
+.topic-subq-card--zero-hit.selected { border-color: var(--danger); }
 .topic-subq-hit {
   display: inline-flex;
   align-items: center;
@@ -251,11 +251,11 @@
 }
 .topic-subq-hit--ok {
   background: rgba(16, 185, 129, 0.12);
-  color: #047857;
+  color: var(--success);
 }
 .topic-subq-hit--zero {
   background: rgba(239, 68, 68, 0.12);
-  color: #b91c1c;
+  color: var(--danger);
   font-weight: 600;
 }
 .topic-subq-hit--pending {
@@ -498,7 +498,7 @@
   background: var(--bg-muted);
   border-top: 1px solid var(--border);
 }
-.topic-summary-status.error { color: #ef4444; background: color-mix(in srgb, #ef4444 12%, var(--bg-muted)); }
+.topic-summary-status.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, var(--bg-muted)); }
 
 /* ===== 追问抽屉(内嵌在卡片里) ===== */
 .topic-chat {
@@ -583,10 +583,10 @@
   gap: 0.5rem;
   box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
-.topic-status.error { border-color: #ef4444; color: #ef4444; }
+.topic-status.error { border-color: var(--danger); color: var(--danger); }
 /* 完成态:绿色边框 + 绿字,明确区别于「进行中」(转圈) 和「出错」(红)。
    配合 setStatus('...', 'success') — 该态不渲染 spinner,避免完成后还一直转圈。 */
-.topic-status.success { border-color: #22c55e; color: #16a34a; }
+.topic-status.success { border-color: var(--success); color: var(--success); }
 .topic-status-spinner {
   display: inline-block;
   width: 14px;
@@ -671,29 +671,29 @@
   flex-shrink: 0;
 }
 .topic-subq-card-badge--cross_domain {
-  background: color-mix(in srgb, #3b82f6 14%, var(--bg-elevated));
-  border-color: color-mix(in srgb, #3b82f6 40%, var(--border));
-  color: #1d4ed8;
+  background: color-mix(in srgb, var(--info) 14%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--info) 40%, var(--border));
+  color: var(--info);
 }
-.topic-subq-card-badge--cross_domain .topic-subq-card-badge-dot { background: #3b82f6; }
+.topic-subq-card-badge--cross_domain .topic-subq-card-badge-dot { background: var(--info); }
 .topic-subq-card-badge--method_transfer {
-  background: color-mix(in srgb, #10b981 14%, var(--bg-elevated));
-  border-color: color-mix(in srgb, #10b981 40%, var(--border));
-  color: #047857;
+  background: color-mix(in srgb, var(--success) 14%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  color: var(--success);
 }
-.topic-subq-card-badge--method_transfer .topic-subq-card-badge-dot { background: #10b981; }
+.topic-subq-card-badge--method_transfer .topic-subq-card-badge-dot { background: var(--success); }
 .topic-subq-card-badge--reverse {
-  background: color-mix(in srgb, #f59e0b 14%, var(--bg-elevated));
-  border-color: color-mix(in srgb, #f59e0b 40%, var(--border));
-  color: #b45309;
+  background: color-mix(in srgb, var(--warning) 14%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+  color: var(--warning);
 }
-.topic-subq-card-badge--reverse .topic-subq-card-badge-dot { background: #f59e0b; }
+.topic-subq-card-badge--reverse .topic-subq-card-badge-dot { background: var(--warning); }
 .topic-subq-card-badge--combination {
-  background: color-mix(in srgb, #8b5cf6 14%, var(--bg-elevated));
-  border-color: color-mix(in srgb, #8b5cf6 40%, var(--border));
-  color: #6d28d9;
+  background: color-mix(in srgb, var(--info) 14%, var(--bg-elevated));
+  border-color: color-mix(in srgb, var(--info) 40%, var(--border));
+  color: var(--info);
 }
-.topic-subq-card-badge--combination .topic-subq-card-badge-dot { background: #8b5cf6; }
+.topic-subq-card-badge--combination .topic-subq-card-badge-dot { background: var(--info); }
 
 .topic-subq-card-source {
   display: inline-flex;
@@ -709,9 +709,9 @@
   flex-shrink: 0;
 }
 .topic-subq-card-source--seeds {
-  background: color-mix(in srgb, #22c55e 14%, var(--bg-elevated));
-  color: #15803d;
-  border-color: color-mix(in srgb, #22c55e 38%, var(--border));
+  background: color-mix(in srgb, var(--success) 14%, var(--bg-elevated));
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 38%, var(--border));
 }
 /* ==========================================================================
  * 阶段 1:参考论文 chip(counter)
@@ -735,9 +735,9 @@
 .topic-report-next-steps {
   margin-top: 1.4rem;
   padding: 1.1rem 1.2rem;
-  border: 1px dashed var(--border, #c8c8d0);
+  border: 1px dashed var(--border, var(--border));
   border-radius: 8px;
-  background: var(--surface-elevated, #fafbfd);
+  background: var(--surface-elevated, var(--bg-elevated));
 }
 .topic-report-next-steps h3 {
   margin: 0 0 0.4rem;
@@ -746,7 +746,7 @@
 .topic-report-next-steps-hint {
   margin: 0 0 0.9rem;
   font-size: 0.85rem;
-  color: var(--text-muted, #6b7280);
+  color: var(--text-muted, var(--fg-muted));
 }
 .topic-report-next-steps-actions {
   display: flex;
@@ -757,7 +757,7 @@
 .topic-report-chat {
   margin-top: 0.6rem;
   padding-top: 0.8rem;
-  border-top: 1px solid var(--border-subtle, #ececef);
+  border-top: 1px solid var(--border-subtle, var(--border));
 }
 .topic-report-chat-head {
   display: flex;
@@ -767,7 +767,7 @@
 }
 .topic-report-chat-hint {
   font-size: 0.78rem;
-  color: var(--text-muted, #6b7280);
+  color: var(--text-muted, var(--fg-muted));
 }
 
 .topic-report-actions {
@@ -960,9 +960,9 @@
   padding: 0.12rem 0.5rem;
   font-size: 0.7rem;
   font-weight: 600;
-  color: #15803d;
-  background: color-mix(in srgb, #22c55e 12%, var(--bg-base));
-  border: 1px solid color-mix(in srgb, #22c55e 35%, var(--border));
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, var(--bg-base));
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border));
   border-radius: 999px;
   white-space: nowrap;
 }
@@ -1045,9 +1045,9 @@
   border-radius: var(--radius-md);
 }
 .topic-modal-search-error {
-  color: #c0392b;
-  border-color: color-mix(in srgb, #c0392b 35%, var(--border));
-  background: color-mix(in srgb, #c0392b 6%, var(--bg-base));
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, var(--bg-base));
 }
 
 .topic-modal-search-item {
@@ -1142,11 +1142,11 @@
   gap: 0.6rem;
   padding: 0.7rem 1rem;
   margin-bottom: 0.8rem;
-  background: color-mix(in srgb, #22c55e 8%, var(--bg-elevated));
-  border: 1px solid color-mix(in srgb, #22c55e 35%, var(--border));
+  background: color-mix(in srgb, var(--success) 8%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border));
   border-radius: var(--radius-md);
   font-size: 0.88rem;
-  color: #15803d;
+  color: var(--success);
 }
 .topic-stage-seeds-banner-icon {
   flex-shrink: 0;
@@ -1179,8 +1179,8 @@
  * 阶段 3:参考论文 group 视觉区分(user 主动选 vs arXiv 搜)
  * ========================================================================== */
 .topic-candidate-group--seeds {
-  border-color: color-mix(in srgb, #22c55e 40%, var(--border));
-  background: color-mix(in srgb, #22c55e 5%, var(--bg));
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  background: color-mix(in srgb, var(--success) 5%, var(--bg));
 }
 .topic-candidate-group-badge--seeds {
   display: inline-flex;
@@ -1190,12 +1190,12 @@
   font-size: 0.78rem;
   font-weight: 600;
   border-radius: 999px;
-  background: color-mix(in srgb, #22c55e 14%, var(--bg-base));
-  color: #15803d;
-  border: 1px solid color-mix(in srgb, #22c55e 38%, var(--border));
+  background: color-mix(in srgb, var(--success) 14%, var(--bg-base));
+  color: var(--success);
+  border: 1px solid color-mix(in srgb, var(--success) 38%, var(--border));
 }
 .topic-candidate-item--seed {
-  border-left: 3px solid #22c55e;
+  border-left: 3px solid var(--success);
 }
 .topic-candidate-seed-tag {
   display: inline-block;
@@ -1204,8 +1204,8 @@
   font-size: 0.7rem;
   font-weight: 600;
   border-radius: 6px;
-  background: color-mix(in srgb, #22c55e 14%, var(--bg-base));
-  color: #15803d;
+  background: color-mix(in srgb, var(--success) 14%, var(--bg-base));
+  color: var(--success);
 }
 
 /* ==========================================================================
@@ -1214,14 +1214,14 @@
 .topic-report-seeds {
   margin-bottom: 1.5rem;
   padding: 1rem 1.2rem;
-  background: color-mix(in srgb, #22c55e 6%, var(--bg-elevated));
-  border: 1px solid color-mix(in srgb, #22c55e 35%, var(--border));
+  background: color-mix(in srgb, var(--success) 6%, var(--bg-elevated));
+  border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border));
   border-radius: var(--radius-md);
 }
 .topic-report-seeds h3 {
   margin: 0 0 0.6rem;
   font-size: 1.02rem;
-  color: #15803d;
+  color: var(--success);
   display: flex;
   align-items: center;
   gap: 0.4rem;
