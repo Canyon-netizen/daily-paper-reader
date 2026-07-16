@@ -230,19 +230,22 @@ Cloudflare Pages Function (/api/proxy)            GitHub Gist (私有 secret)
 │  ci.yml                     PR 检查                            │
 └──────────────────────────────────────────────────────────────┘
                              ▲
-                             │ (本地调试可选)
+                             │ (本地调试可选,仅存活检查)
 ┌──────────────────── scripts/local_debug.sh ────────────────────┐
 │  启动 8567 本地后端 (src/local_debug_server.py)                  │
-│  /api/local/workflows/dispatch ─► 本机 Python 子进程跑 pipeline   │
-│  前端通过 window.DPR_LOCAL_API_BASE = 'http://127.0.0.1:8567'   │
-│  切到本地模式,不调 GitHub Actions                                │
+│  /api/local/health ─► {ok, mode, time} JSON                      │
+│  P1-6 之后 8567 不再承载 workflow_dispatch;触发 workflow 走      │
+│  GitHub UI 或 GitHub REST workflow_dispatch (前端 100% 走        │
+│  api.github.com,见 astro-src/pages/conferences/index.astro)。   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
 每个 workflow 的具体步骤见对应的 `.yml` 文件（[`.github/workflows/`](.github/workflows/)）。补充说明：
 
 - **`daily-paper-reader.yml`** 是站点内容生产的主入口；其余 maintain 系列只往 Supabase 写向量、不写 `docs/`。
-- **`conference-init.yml`** 由 `/conferences/` 页面前端通过 GitHub REST `workflow_dispatch` 触发，参数 `{conferences, year_end, year_count, skip_fetch}`。
+  - **P0-1 fetch 失败兜底**：[`src/main.py`](src/main.py) Step 1 外包 try/except `CalledProcessError`——arXiv 抖动时不再让 daily pipeline 直接 exit 1，而是写空 `raw/arxiv_papers_<token>.json` + `raw/fetch_status.json` sentinel（记录 `{status, returncode, stderr_tail, timestamp, run_date_token}`），让后续 BM25/Embedding/RRF 跑空数据、workflow Commit step 把 sentinel 写进 git history。次日 PR review 能看到"前一天 fetch 失败"的可观察信号，而不是 GitHub Actions UI 上一闪而过的红 ❌。
+  - **P3-2 拆 commit**："Commit results" step 拆成两个独立 commit——`[chore] daily config snapshot`（`config.yaml` + `docs/config.yaml` + `archive/*state*.json`，反映 fork 用户的本地配置变更）和 `[chore] daily paper pipeline`（`docs/papers/*` + `archive/*/recommend`，内容增量）。git log 区分配置变更 vs 内容增量，review 与 rollback 都更精确。
+- **`conference-init.yml`** 由 `/conferences/` 页面前端通过 GitHub REST `workflow_dispatch` 触发，参数 `{conferences, year_end, year_count, skip_fetch}`。**P0-3 修复**：[`astro-src/scripts/conferences.ts`](astro-src/scripts/conferences.ts) 把 `dispatchWorkflow` + `pollRun` 抽成可单元测试模块，pollRun 加 401 / 403 / 其它非 ok 响应分支立即 bail + return，避免 UI 在 GitHub API 限流时 stall 10 分钟。
 - **`maintain-version-refresh.yml`**（每周一定时，或手动 `workflow_dispatch`）跑 [`src/maintain/refresh_versions.py`](src/maintain/refresh_versions.py)，扫描 `docs/papers/` 里每篇论文、查询 arXiv 最新版本，落后的自动用 `src/6.generate_docs.py --paper-id` 重生成新版本笔记（精读→全文总结+图，速读→速览），并删除旧版本 `.md`/`.txt`/图目录。支持 `--dry-run` / `--limit` / `--only-id`。
 
 ---

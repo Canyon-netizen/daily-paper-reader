@@ -35,6 +35,7 @@ import {
   loadHiddenPapers,
   saveHiddenPapersRaw,
   removeHiddenPaper,
+  clearHiddenPapers,
   pullHiddenPapersFromGist,
   pushHiddenPapersToGist,
 } from './settings';
@@ -563,6 +564,14 @@ function initHiddenPanel(): void {
   // 异步拉 arxiv-index.json 补全标题(不阻塞面板渲染)
   void refreshHiddenTitles();
 
+  // P1-5: 监听 settings.ts emit 的 'hidden-papers-change' 事件,任意位置
+  // 隐藏/恢复论文(paper-hide.ts 等)后本面板自动刷新。emit 端已经在
+  // addHiddenPaper / removeHiddenPaper / saveHiddenPapersRaw 里调用
+  // emitHiddenPapersChange(),这里只挂监听。
+  document.addEventListener('hidden-papers-change', () => {
+    renderHiddenList();
+  });
+
   // 单条"恢复"
   listEl.addEventListener('click', (e) => {
     const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-act="restore"]');
@@ -622,9 +631,9 @@ function initHiddenPanel(): void {
       return;
     }
     if (!confirm(`确定清空本地 ${ids.length} 条隐藏记录?(不影响 Gist)`)) return;
-    // 直接重写 localStorage
-    saveHiddenPapersRaw([]);
-    renderHiddenList();
+    // P1-5: 走 clearHiddenPapers() 而不是直接 saveHiddenPapersRaw([]),
+    // 让 'hidden-papers-change' 事件被 emit,面板自动刷新。
+    clearHiddenPapers();
     setHiddenStatus('✓ 已清空本地', 'ok');
     if (getGistToken() && getGistId()) {
       pushHiddenPapersToGist().catch((err) =>
@@ -708,6 +717,15 @@ function initUserTagsPanel(): void {
   if (!listEl) return; // panel not on this page
 
   renderUserTagsList();
+
+  // P1-5: 监听 settings.ts emit 的 'user-tags-change' 事件,任意位置写 userTags
+  // (PaperLibrary 抽屉、topic 页、保存论文流程)后,本面板自动重渲染。
+  // 之前只有手动点 pull/push/clear 才刷新;抽屉里改 tag 后这个面板是
+  // 旧的,需要 F5 才能看到 — 这是 memory feedback_settings_selection_must_emit
+  // 提到的 selection 同一类问题的姊妹问题。
+  document.addEventListener('user-tags-change', () => {
+    renderUserTagsList();
+  });
 
   $<HTMLButtonElement>('user-tags-pull-btn').addEventListener('click', async () => {
     if (!getGistToken() || !getGistId()) {

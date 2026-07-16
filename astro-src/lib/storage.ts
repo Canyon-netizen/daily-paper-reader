@@ -25,6 +25,15 @@ export {
   getGistId,
   setGistId,
   GIST_FILENAME,
+  loadUserTags,
+  saveUserTagsRaw,
+  getUserTags,
+  setUserTags,
+  addTag,
+  removeTag,
+  clearAllUserTags,
+  pullUserTagsFromGist,
+  pushUserTagsToGist,
 } from '../scripts/settings';
 
-export type { LLMConfig, GitHubRepoConfig } from '../scripts/settings';
+export type { LLMConfig, GitHubRepoConfig, UserTag, UserTagMap, GistUserTagsResult } from '../scripts/settings';

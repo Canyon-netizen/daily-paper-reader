@@ -46,6 +46,10 @@ export const STORAGE_KEYS = {
   // 已隐藏论文列表 — 论文详情页"隐藏"按钮的持久化层。
   // 不写 Gist(避免污染 CI $GITHUB_ENV),纯 localStorage。
   hiddenPapers: 'dpr_hidden_papers_v1',
+  // 用户标签 — 论文抽屉"打标签"面板 + /settings/ 用户标签面板的持久化层。
+  // 与 hiddenPapers 一样纯 localStorage,Gist 同步在 settings.ts 里有专门
+  // pullUserTagsFromGist / pushUserTagsToGist,不污染其它字段。
+  userTags: 'dpr_user_tags_v1',
   // 已选论文列表 — 多选论文 → 送去 /topic/?from=selection 当种子上下文。
   // 仅 localStorage,不上 Gist(选择是临时工作流,跨设备无意义)。
   selection: 'dpr_paper_selection_v1',
@@ -233,6 +237,18 @@ function saveHiddenPapersRaw(ids: string[]): void {
   }
 }
 
+// 在 hiddenPapers 任何写操作后触发。settings 页等消费者监听后实时刷新。
+// 与 emitSelectionChange / emitUserTagsChange 同模式。
+function emitHiddenPapersChange(): void {
+  try {
+    if (typeof document !== 'undefined' && typeof CustomEvent !== 'undefined') {
+      document.dispatchEvent(new CustomEvent('hidden-papers-change'));
+    }
+  } catch {
+    /* 静默 */
+  }
+}
+
 // 导出给 settings-page.ts 的"清空本地"按钮用 — 它要一次写空数组,不走逐条 remove。
 export { saveHiddenPapersRaw };
 
@@ -248,6 +264,7 @@ export function addHiddenPaper(arxivId: string): boolean {
   if (ids.includes(arxivId)) return false;
   ids.push(arxivId);
   saveHiddenPapersRaw(ids);
+  emitHiddenPapersChange();
   return true;
 }
 
@@ -258,6 +275,17 @@ export function removeHiddenPaper(arxivId: string): boolean {
   const next = ids.filter((x) => x !== arxivId);
   if (next.length === ids.length) return false;
   saveHiddenPapersRaw(next);
+  emitHiddenPapersChange();
+  return true;
+}
+
+// 清空所有已隐藏论文 — 提供给 settings-page "清空本地" 按钮用。
+// 走 emit 而非 saveHiddenPapersRaw,确保事件触发。
+export function clearHiddenPapers(): boolean {
+  const ids = loadHiddenPapers();
+  if (ids.length === 0) return false;
+  saveHiddenPapersRaw([]);
+  emitHiddenPapersChange();
   return true;
 }
 
@@ -655,6 +683,278 @@ export interface ArxivCategory {
   code: string;        // arXiv 类目代号,如 "cs.AI"
   label: string;       // 中文说明
   group: string;       // 分组:cs / stat / math / eess / q-bio / 其他
+}
+
+// ============================================================================
+// 用户标签(从 lib/user-tags.ts 收回中央仓库)
+// 数据结构: Record<arxivId, UserTag[]>,UserTag = { kind, label, addedAt }
+// 写入触发 'user-tags-change' 事件,settings 页等消费者监听后实时刷新。
+// Gist 跨设备同步仅动 dpr-config.json 的 userTags 字段,不污染其它字段。
+// ============================================================================
+
+/** 用户标签类型 — 与 lib/user-tags.ts 同义,这里是 source of truth。 */
+export interface UserTag {
+  kind: string;
+  label: string;
+  /** Date.now() — 仅用于 UI 排序 / 显示「3 天前添加」,不做去重判断。 */
+  addedAt: number;
+}
+
+export type UserTagMap = Record<string, UserTag[]>;
+
+/** 规整任意 Record 为 UserTagMap — 用于读旧数据 / Gist 远端容错。 */
+function normalizeUserTags(input: Record<string, unknown>): UserTagMap {
+  const out: UserTagMap = {};
+  for (const [arxivId, val] of Object.entries(input || {})) {
+    if (!arxivId) continue;
+    if (!Array.isArray(val)) continue;
+    const seen = new Set<string>();
+    const list: UserTag[] = [];
+    for (const item of val) {
+      if (!item || typeof item !== 'object') continue;
+      const obj = item as Record<string, unknown>;
+      const kind = typeof obj.kind === 'string' ? obj.kind.trim() : '';
+      const label = typeof obj.label === 'string' ? obj.label.trim() : '';
+      if (!kind || !label) continue;
+      const k = `${kind} ${label}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      const addedAt = typeof obj.addedAt === 'number' && Number.isFinite(obj.addedAt)
+        ? obj.addedAt
+        : 0;
+      list.push({ kind, label, addedAt });
+    }
+    if (list.length > 0) out[arxivId] = list;
+  }
+  return out;
+}
+
+/** 读 localStorage 用户标签。容错:JSON 坏掉 / 非对象 / 字段缺失 → 返回空 map。 */
+export function loadUserTags(): UserTagMap {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(STORAGE_KEYS.userTags);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    return normalizeUserTags(parsed as Record<string, unknown>);
+  } catch {
+    return {};
+  }
+}
+
+export function saveUserTagsRaw(map: UserTagMap): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const normalized = normalizeUserTags(map);
+    localStorage.setItem(STORAGE_KEYS.userTags, JSON.stringify(normalized));
+  } catch {
+    /* localStorage 不可用(隐私模式 / SSR)静默忽略 */
+  }
+}
+
+/** 比较两个 tag list 是否完全等价(顺序无关,按 kind+label+addedAt 比对)。 */
+function isSameTagList(a: UserTag[], b: UserTag[]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (t: UserTag): string => `${t.kind} ${t.label} ${t.addedAt}`;
+  const aSorted = a.map(key).sort();
+  const bSorted = b.map(key).sort();
+  for (let i = 0; i < aSorted.length; i++) {
+    if (aSorted[i] !== bSorted[i]) return false;
+  }
+  return true;
+}
+
+/** 在 userTags 任何写操作后触发。settings 页等消费者监听后实时刷新。 */
+function emitUserTagsChange(): void {
+  try {
+    if (typeof document !== 'undefined' && typeof CustomEvent !== 'undefined') {
+      document.dispatchEvent(new CustomEvent('user-tags-change'));
+    }
+  } catch {
+    /* 静默 — userTags 只在浏览器使用,events 失败不影响主逻辑 */
+  }
+}
+
+/** 读某篇论文的全部用户标签(返回新数组,调用方改它不影响存储)。 */
+export function getUserTags(arxivId: string): UserTag[] {
+  if (!arxivId) return [];
+  const map = loadUserTags();
+  return (map[arxivId] || []).slice();
+}
+
+/** 整体覆盖某篇论文的标签列表。返回 true = 真的写入了。 */
+export function setUserTags(arxivId: string, tags: UserTag[] | null): boolean {
+  if (!arxivId) return false;
+  const map = loadUserTags();
+  if (tags === null || tags.length === 0) {
+    if (!map[arxivId]) return false;
+    delete map[arxivId];
+    saveUserTagsRaw(map);
+    emitUserTagsChange();
+    return true;
+  }
+  const normalized = normalizeUserTags({ [arxivId]: tags })[arxivId] || [];
+  if (normalized.length === 0) {
+    if (!map[arxivId]) return false;
+    delete map[arxivId];
+    saveUserTagsRaw(map);
+    emitUserTagsChange();
+    return true;
+  }
+  if (isSameTagList(map[arxivId] || [], normalized)) return false;
+  map[arxivId] = normalized;
+  saveUserTagsRaw(map);
+  emitUserTagsChange();
+  return true;
+}
+
+/** 给论文加一个标签。返回 true = 新增。 */
+export function addTag(arxivId: string, kind: string, label: string, addedAt?: number): boolean {
+  if (!arxivId || !kind || !label) return false;
+  const map = loadUserTags();
+  const cur = map[arxivId] || [];
+  const dupKey = `${kind.trim()} ${label.trim()}`;
+  if (cur.some((t) => `${t.kind} ${t.label}` === dupKey)) return false;
+  cur.push({ kind: kind.trim(), label: label.trim(), addedAt: addedAt ?? Date.now() });
+  map[arxivId] = cur;
+  saveUserTagsRaw(map);
+  emitUserTagsChange();
+  return true;
+}
+
+/** 从论文上移除一个标签(精确匹配 kind + label)。返回 true = 真的移除了。 */
+export function removeTag(arxivId: string, kind: string, label: string): boolean {
+  if (!arxivId || !kind || !label) return false;
+  const map = loadUserTags();
+  const cur = map[arxivId];
+  if (!cur) return false;
+  const dupKey = `${kind.trim()} ${label.trim()}`;
+  const next = cur.filter((t) => `${t.kind} ${t.label}` !== dupKey);
+  if (next.length === cur.length) return false;
+  if (next.length === 0) delete map[arxivId];
+  else map[arxivId] = next;
+  saveUserTagsRaw(map);
+  emitUserTagsChange();
+  return true;
+}
+
+/** 清空全部用户标签(谨慎 — UI 上需要二次确认)。返回删除的 arxivId 数。 */
+export function clearAllUserTags(): number {
+  const map = loadUserTags();
+  const n = Object.keys(map).length;
+  if (n === 0) return 0;
+  saveUserTagsRaw({});
+  emitUserTagsChange();
+  return n;
+}
+
+// ============================================================================
+// userTags Gist 同步 — 与 hiddenPapers / selection 一样仅动 dpr-config.json
+// 对应字段(userTags),不污染其它字段。
+// ============================================================================
+
+export interface GistUserTagsResult {
+  ok: boolean;
+  reason?: string;
+  /** pull 时:本次新合入的标签数(用于 UI「已同步 N 条」提示)。 */
+  mergedCount?: number;
+  /** push 时:实际写入的标签总数。 */
+  writtenCount?: number;
+}
+
+async function readGistUserTags(): Promise<UserTagMap | null> {
+  const token = getGistToken();
+  const gistId = getGistId();
+  if (!token || !gistId) return null;
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+    },
+  });
+  if (!res.ok) throw new Error(`Gist GET HTTP ${res.status}`);
+  const data = await res.json();
+  const files = data?.files || {};
+  const target = files[GIST_FILENAME] as { content?: string } | undefined;
+  if (!target?.content) return {};
+  let payload: unknown;
+  try { payload = JSON.parse(target.content); } catch { return {}; }
+  const ut = (payload as { userTags?: unknown })?.userTags;
+  if (!ut || typeof ut !== 'object' || Array.isArray(ut)) return {};
+  return normalizeUserTags(ut as Record<string, unknown>);
+}
+
+/** 启动时调用:Gist 远端 userTags 与 localStorage union 去重 → 写回 localStorage。 */
+export async function pullUserTagsFromGist(): Promise<GistUserTagsResult> {
+  try {
+    const remote = await readGistUserTags();
+    if (remote === null) return { ok: false, reason: 'no_token' };
+    const local = loadUserTags();
+    let mergedCount = 0;
+    for (const [arxivId, remoteTags] of Object.entries(remote)) {
+      const localTags = local[arxivId] || [];
+      const localSet = new Set(localTags.map((t) => `${t.kind} ${t.label}`));
+      const next = localTags.slice();
+      for (const t of remoteTags) {
+        const k = `${t.kind} ${t.label}`;
+        if (!localSet.has(k)) {
+          localSet.add(k);
+          next.push(t);
+          mergedCount++;
+        }
+      }
+      if (next.length > localTags.length) local[arxivId] = next;
+    }
+    if (mergedCount > 0) {
+      saveUserTagsRaw(local);
+      emitUserTagsChange();
+    }
+    return { ok: true, mergedCount };
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message || String(e) };
+  }
+}
+
+/** 点保存 / 主动同步时调用:GET → 把当前 localStorage 写回 userTags 字段 → PATCH。 */
+export async function pushUserTagsToGist(): Promise<GistUserTagsResult> {
+  const token = getGistToken();
+  const gistId = getGistId();
+  if (!token || !gistId) return { ok: false, reason: 'no_token' };
+  try {
+    const getRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+    if (!getRes.ok) throw new Error(`Gist GET HTTP ${getRes.status}`);
+    const getData = await getRes.json();
+    const target = getData?.files?.[GIST_FILENAME] as { content?: string } | undefined;
+    let payload: Record<string, unknown> = {};
+    if (target?.content) {
+      try { payload = JSON.parse(target.content) as Record<string, unknown>; }
+      catch { payload = {}; }
+    }
+    const local = loadUserTags();
+    payload.userTags = local;
+    const writtenCount = Object.values(local).reduce((s, arr) => s + arr.length, 0);
+    const patchRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        files: { [GIST_FILENAME]: { content: JSON.stringify(payload, null, 2) } },
+      }),
+    });
+    if (!patchRes.ok) throw new Error(`Gist PATCH HTTP ${patchRes.status}`);
+    return { ok: true, writtenCount };
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message || String(e) };
+  }
 }
 
 export const ARXIV_CATEGORIES: ArxivCategory[] = [
