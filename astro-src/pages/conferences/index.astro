@@ -148,107 +148,14 @@ const CONFERENCES = [
 
 <script>
   import { loadGitHubToken, loadGitHubRepo } from '../../scripts/settings';
+  import { dispatchWorkflow, pollRun } from '../../scripts/conferences';
 
-  // 固定触发这个 workflow 文件（不用 settings 里的 repo.workflow，那默认是 save-paper.yml）
-  const WORKFLOW_FILE = 'conference-init.yml';
-  const REF = 'main';
-
-  type GhRun = {
-    id: number;
-    status: string; // queued | in_progress | completed
-    conclusion: string | null; // success | failure | cancelled | ...
-    html_url: string;
-    created_at: string;
-    display_title?: string;
-  };
-
-  function authHeaders(token: string) {
-    return {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-    };
-  }
-
+  // 卡片状态 setter — 与 ./conferences.ts 内部默认值同语义,只暴露给本文件。
   function setCardStatus(conf: string, state: 'idle' | 'running' | 'success' | 'failure', html: string) {
     const el = document.querySelector(`[data-conf-status="${conf}"]`);
     if (!el) return;
     el.className = `conf-card-status is-${state}`;
     el.innerHTML = `<span class="conf-status-label">${html}</span>`;
-  }
-
-  // -------- 触发 workflow_dispatch --------
-  async function dispatchWorkflow(
-    owner: string,
-    repo: string,
-    token: string,
-    inputs: Record<string, string>,
-  ): Promise<void> {
-    const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${WORKFLOW_FILE}/dispatches`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ref: REF, inputs }),
-    });
-    if (res.ok) return;
-    const body = await res.text().catch(() => '');
-    if (res.status === 404)
-      throw new Error(`Workflow 未找到: 确认 ${owner}/${repo} 存在,且 ${WORKFLOW_FILE} 已合并到 ${REF} 分支的 .github/workflows/ 下`);
-    if (res.status === 401) throw new Error('GitHub Token 无效或过期(需 repo + workflow scope)');
-    if (res.status === 403) throw new Error('GitHub 拒绝触发(检查 token 是否有 workflow 权限,或 Actions 是否已启用)');
-    if (res.status === 422) throw new Error(`inputs 校验失败: ${body.slice(0, 200)}`);
-    throw new Error(`GitHub API ${res.status}: ${body.slice(0, 200)}`);
-  }
-
-  // 找到本次 dispatch 触发的 run:取 created_at 晚于触发时刻的最新一条。
-  // 注意:绝不能用 runs[0] 做兜底 — 老 run 也命中 latest,会让前端一直误报
-  // 「刚才触发的就是它」,而无视新 dispatch 实际有没有排上队。
-  async function findRun(owner: string, repo: string, token: string, since: number): Promise<GhRun | null> {
-    const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=5`;
-    const res = await fetch(url, { headers: authHeaders(token) });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const runs: GhRun[] = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
-    const margin = since - 10_000; // GitHub 时钟/延迟容差
-    return runs.find((r) => new Date(r.created_at).getTime() >= margin) ?? null;
-  }
-
-  // 轮询直到 completed,更新每张卡片状态
-  async function pollRun(owner: string, repo: string, token: string, since: number, confList: string[]) {
-    let run: GhRun | null = null;
-    // 先等 run 排上队(最多 ~50s)
-    for (let i = 0; i < 25; i++) {
-      run = await findRun(owner, repo, token, since);
-      if (run) break;
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-    if (!run) {
-      for (const c of confList)
-        setCardStatus(c, 'failure', '✗ 50s 内未排上队,稍后到 GitHub Actions 查看');
-      return;
-    }
-    const runUrl = run.html_url;
-    const link = (text: string) => `<a href="${runUrl}" target="_blank" rel="noopener">${text}</a>`;
-
-    // 轮询状态(最多 ~10min)
-    for (let i = 0; i < 300; i++) {
-      const res = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}`,
-        { headers: authHeaders(token) },
-      );
-      if (res.ok) {
-        const info: GhRun = await res.json();
-        if (info.status === 'completed') {
-          const ok = info.conclusion === 'success';
-          for (const c of confList)
-            setCardStatus(c, ok ? 'success' : 'failure', ok ? link('✓ 成功') : link(`✗ ${info.conclusion || '失败'}`));
-          return;
-        }
-        for (const c of confList) setCardStatus(c, 'running', link(`运行中 (${info.status})…`));
-      }
-      await new Promise((r) => setTimeout(r, 2000));
-    }
-    for (const c of confList) setCardStatus(c, 'running', link('运行超时未结束,点此查看'));
   }
 
   // -------- 事件入口 --------
