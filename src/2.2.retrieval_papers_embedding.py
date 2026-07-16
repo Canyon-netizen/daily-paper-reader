@@ -19,6 +19,16 @@ import re
 import numpy as np
 
 from src.filter import E5_QUERY_PREFIX, EmbeddingCoarseFilter, encode_queries
+from src.retrieval import (
+  SUPABASE_VECTOR_SHARD_DAYS,
+  multi_source_rpc_enabled,
+  resolve_supabase_recall_window,
+  split_supabase_time_window,
+)
+from src.retrieval.time_window import (
+  _format_supabase_window_for_log,
+  _normalize_utc_datetime,
+)
 from src.source_backend_router import group_queries_by_source, merge_pipeline_results
 from src.source_config import ARXIV_SOURCE_KEY, get_source_backend, load_config_with_source_migration, normalize_source_list
 from src.subscription_plan import build_pipeline_inputs
@@ -28,7 +38,6 @@ from src.supabase_source import (
   match_papers_by_embedding,
 )
 
-
 # 当前脚本位于 src/ 下，config.yaml 在上一级目录
 SCRIPT_DIR = os.path.dirname(__file__)
 CONFIG_FILE = os.getenv("DPR_CONFIG_FILE") or os.path.abspath(os.path.join(SCRIPT_DIR, "..", "config.yaml"))
@@ -37,10 +46,7 @@ TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezon
 ARCHIVE_DIR = os.path.join(ROOT_DIR, "archive", TODAY_STR)
 RAW_DIR = os.path.join(ARCHIVE_DIR, "raw")
 FILTERED_DIR = os.path.join(ARCHIVE_DIR, "filtered")
-DATE_RE_DAY = re.compile(r"^\d{8}$")
-DATE_RE_RANGE = re.compile(r"^\d{8}-\d{8}$")
 SUPABASE_TIME_FIELDS = ("published",)
-SUPABASE_VECTOR_SHARD_DAYS = 7
 EMBEDDING_CACHE_VERSION = 1
 EMBEDDING_CACHE_FIELD = "embedding_cache"
 LEGACY_EMBEDDING_CACHE_KEY = "embedding_cache"
@@ -48,11 +54,6 @@ LEGACY_EMBEDDING_CACHE_KEY = "embedding_cache"
 def log(message: str) -> None:
   ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
   print(f"[{ts}] {message}", flush=True)
-
-
-def multi_source_rpc_enabled() -> bool:
-  return str(os.getenv("DPR_ENABLE_MULTI_SOURCE_RPC") or "").strip().lower() in ("1", "true", "yes", "on")
-
 
 def resolve_multi_source_vector_backend(config: Dict[str, Any], queries: List[dict]) -> Dict[str, Any] | None:
   all_sources: List[str] = []
@@ -100,47 +101,11 @@ def resolve_multi_source_vector_backend(config: Dict[str, Any], queries: List[di
     "vector_rpc_exact": rpc_name,
   }
 
-
-def resolve_supabase_recall_window(config: Dict[str, Any], end_dt: datetime | None = None) -> tuple[datetime, datetime]:
-  paper_setting = (config or {}).get("arxiv_paper_setting") or {}
-  try:
-    days = int(paper_setting.get("days_window") or 9)
-  except Exception:
-    days = 9
-  safe_days = max(days, 1)
-
-  anchor = end_dt or datetime.now(timezone.utc)
-  if anchor.tzinfo is None:
-    anchor = anchor.replace(tzinfo=timezone.utc)
-  anchor = anchor.astimezone(timezone.utc)
-  token = str(os.getenv("DPR_RUN_DATE") or "").strip()
-
-  if DATE_RE_RANGE.fullmatch(token):
-    start_text, end_text = token.split("-", 1)
-    try:
-      start_dt = datetime.strptime(start_text, "%Y%m%d").replace(tzinfo=timezone.utc)
-      end_day = datetime.strptime(end_text, "%Y%m%d").replace(tzinfo=timezone.utc)
-      if end_day >= start_dt:
-        return start_dt, end_day + timedelta(days=1)
-    except Exception:
-      pass
-
-  if DATE_RE_DAY.fullmatch(token):
-    day_start = datetime.strptime(token, "%Y%m%d").replace(tzinfo=timezone.utc)
-    if safe_days > 1:
-      return anchor - timedelta(days=safe_days), anchor
-    return day_start, day_start + timedelta(days=1)
-
-  return anchor - timedelta(days=safe_days), anchor
-
-
 def group_start(title: str) -> None:
   print(f"::group::{title}", flush=True)
 
-
 def group_end() -> None:
   print("::endgroup::", flush=True)
-
 
 @dataclass
 class Paper:
@@ -188,7 +153,6 @@ class Paper:
       "tags": sorted(self.tags),
     }
 
-
 def load_config() -> dict:
   """
   从仓库根目录读取 config.yaml。
@@ -208,18 +172,15 @@ def load_config() -> dict:
     log(f"[WARN] 读取 config.yaml 失败：{e}")
     return {}
 
-
 def build_prefixed_query_text(text: str) -> str:
   value = str(text or "").strip()
   if not value:
     return ""
   return f"{E5_QUERY_PREFIX}{value}"
 
-
 def build_query_embedding_hash(model_name: str, query_text: str) -> str:
   payload = f"v1|{str(model_name or '').strip().lower()}|{build_prefixed_query_text(query_text)}"
   return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
 
 def _remove_legacy_embedding_cache(config: Dict[str, Any]) -> None:
   if not isinstance(config, dict):
@@ -230,7 +191,6 @@ def _remove_legacy_embedding_cache(config: Dict[str, Any]) -> None:
   legacy = subs.get(LEGACY_EMBEDDING_CACHE_KEY)
   if isinstance(legacy, dict) and "query_vectors" in legacy:
     subs.pop(LEGACY_EMBEDDING_CACHE_KEY, None)
-
 
 def _parse_cached_query_embedding(entry: Dict[str, Any], expected_model: str, expected_text: str) -> Optional[np.ndarray]:
   if not isinstance(entry, dict):
@@ -263,7 +223,6 @@ def _parse_cached_query_embedding(entry: Dict[str, Any], expected_model: str, ex
     return None
   return vec
 
-
 def save_config_with_embedding_cache(config: Dict[str, Any], path: str = CONFIG_FILE) -> bool:
   try:
     import yaml  # type: ignore
@@ -274,7 +233,6 @@ def save_config_with_embedding_cache(config: Dict[str, Any], path: str = CONFIG_
   with open(path, "w", encoding="utf-8") as f:
     yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False, width=10**9)
   return True
-
 
 def _build_query_cache_payload(model_name: str, query_text: str, vec: np.ndarray, now_iso: str) -> Dict[str, Any]:
   cache_hash = build_query_embedding_hash(model_name, query_text)
@@ -288,7 +246,6 @@ def _build_query_cache_payload(model_name: str, query_text: str, vec: np.ndarray
     "embedding_json": json.dumps(rounded, ensure_ascii=False, separators=(",", ":")),
     "updated_at": now_iso,
   }
-
 
 def _ensure_query_cache_target(config: Dict[str, Any], cache_ref: Dict[str, Any], query: Dict[str, Any]) -> Optional[Dict[str, Any]]:
   if not isinstance(config, dict) or not isinstance(cache_ref, dict):
@@ -335,10 +292,8 @@ def _ensure_query_cache_target(config: Dict[str, Any], cache_ref: Dict[str, Any]
     return None
   return current
 
-
 def _cache_entry_matches_query(entry: Dict[str, Any], model_name: str, query_text: str) -> bool:
   return _parse_cached_query_embedding(entry, expected_model=model_name, expected_text=build_prefixed_query_text(query_text)) is not None
-
 
 def hydrate_query_embeddings_from_config(
   *,
@@ -435,7 +390,6 @@ def hydrate_query_embeddings_from_config(
     "written": written,
   }
 
-
 def load_paper_pool(path: str) -> List[Paper]:
   """
   读取 arxiv_fetch_raw.py 生成的 JSON：
@@ -472,56 +426,6 @@ def load_paper_pool(path: str) -> List[Paper]:
   log(f"[INFO] 从 {path} 读取到 {len(papers)} 篇论文。")
   return papers
 
-
-def _format_supabase_window_for_log(
-  start_dt: datetime | None,
-  end_dt: datetime | None,
-  time_fields: tuple[str, ...],
-) -> tuple[str, str, str]:
-  safe_fields = {str(f).strip() for f in (time_fields or ()) if str(f).strip()}
-  if start_dt is None or end_dt is None:
-    published = "N/A"
-    updated = "N/A"
-  else:
-    window = f"{start_dt.isoformat()} ~ {end_dt.isoformat()}"
-    published = window if "published" in safe_fields else "N/A"
-    updated = window if "updated_at" in safe_fields else "N/A"
-  return published, updated, ",".join(sorted(safe_fields))
-
-
-def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
-  if not isinstance(value, datetime):
-    return None
-  if value.tzinfo is None:
-    return value.replace(tzinfo=timezone.utc)
-  return value.astimezone(timezone.utc)
-
-
-def split_supabase_time_window(
-  start_dt: datetime | None,
-  end_dt: datetime | None,
-  *,
-  shard_days: int = SUPABASE_VECTOR_SHARD_DAYS,
-) -> list[tuple[datetime, datetime]]:
-  safe_start = _normalize_utc_datetime(start_dt)
-  safe_end = _normalize_utc_datetime(end_dt)
-  if safe_start is None or safe_end is None or safe_end <= safe_start:
-    return []
-
-  safe_shard_days = max(int(shard_days or 1), 1)
-  step = timedelta(days=safe_shard_days)
-  if safe_end - safe_start <= step:
-    return [(safe_start, safe_end)]
-
-  shards: list[tuple[datetime, datetime]] = []
-  cursor = safe_start
-  while cursor < safe_end:
-    next_dt = min(cursor + step, safe_end)
-    shards.append((cursor, next_dt))
-    cursor = next_dt
-  return shards
-
-
 def _resolve_supabase_similarity(row: Dict[str, Any]) -> float:
   score_raw = row.get("similarity")
   if score_raw is None:
@@ -530,7 +434,6 @@ def _resolve_supabase_similarity(row: Dict[str, Any]) -> float:
     return float(score_raw)
   except Exception:
     return 0.0
-
 
 def merge_supabase_vector_rows(
   rows_per_shard: list[list[Dict[str, Any]]],
@@ -589,7 +492,6 @@ def merge_supabase_vector_rows(
     item.pop("_merged_shard_idx", None)
     item.pop("_merged_local_rank", None)
   return merged
-
 
 def _query_supabase_vector_window(
   *,
@@ -697,7 +599,6 @@ def _query_supabase_vector_window(
     return (rows_per_shard, success_count, failure_messages)
   return ([], 0, [failure_message, *failure_messages])
 
-
 def query_supabase_vector_with_shards(
   *,
   url: str,
@@ -776,7 +677,6 @@ def query_supabase_vector_with_shards(
     summary += f" | partial_failures={len(failure_messages)}"
   return (merged_rows, summary)
 
-
 def parse_embedding_value(value: Any) -> Optional[np.ndarray]:
   if isinstance(value, np.ndarray):
     vec = value.astype(np.float32)
@@ -807,7 +707,6 @@ def parse_embedding_value(value: Any) -> Optional[np.ndarray]:
   if norm <= 0:
     return None
   return vec / norm
-
 
 def try_use_precomputed_embeddings(
   papers: List[Paper],
@@ -843,7 +742,6 @@ def try_use_precomputed_embeddings(
 
   return np.vstack(vectors)
 
-
 def estimate_dynamic_top_k(total_papers: int | None) -> int:
   try:
     total = int(total_papers or 0)
@@ -853,7 +751,6 @@ def estimate_dynamic_top_k(total_papers: int | None) -> int:
     return 50
   blocks = (total - 1) // 1000
   return 50 * (blocks + 1)
-
 
 def rank_papers_for_queries(
   model,
@@ -939,7 +836,6 @@ def rank_papers_for_queries(
     "queries": results_per_query,
     "papers": id_to_paper,
   }
-
 
 def rank_papers_for_queries_via_supabase(
   model,
@@ -1092,7 +988,6 @@ def rank_papers_for_queries_via_supabase(
     "non_empty_queries": non_empty_queries,
   }
 
-
 def save_tagged_results(
   result: dict,
   output_path: str,
@@ -1141,7 +1036,6 @@ def save_tagged_results(
 
   log(f"[INFO] 已将带 tag 的论文和每个查询的 top_k 结果写入：{output_path}")
   log(f"[INFO] 其中带 tag 的论文数：{len(tagged_papers)}")
-
 
 def main() -> None:
   parser = argparse.ArgumentParser(
@@ -1533,7 +1427,6 @@ def main() -> None:
         base = base[:-5]
       output_path = os.path.join(FILTERED_DIR, f"{base}.embedding.json")
       process_single_file(input_path, output_path)
-
 
 if __name__ == "__main__":
   main()

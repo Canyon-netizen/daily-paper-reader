@@ -23,6 +23,16 @@ from src.query_boolean import (
   clean_expr_for_embedding,
   match_term,
 )
+from src.retrieval import (
+  SUPABASE_BM25_SHARD_DAYS,
+  multi_source_rpc_enabled,
+  resolve_supabase_recall_window,
+  split_supabase_time_window,
+)
+from src.retrieval.time_window import (
+  _format_supabase_window_for_log,
+  _normalize_utc_datetime,
+)
 from src.source_backend_router import group_queries_by_source, merge_pipeline_results
 from src.source_config import ARXIV_SOURCE_KEY, get_source_backend, load_config_with_source_migration, normalize_source_list
 from subscription_plan import build_pipeline_inputs
@@ -32,7 +42,6 @@ from supabase_source import (
   match_papers_by_bm25,
 )
 
-
 # 当前脚本位于 src/ 下，config.yaml 在上一级目录
 SCRIPT_DIR = os.path.dirname(__file__)
 CONFIG_FILE = os.getenv("DPR_CONFIG_FILE") or os.path.abspath(os.path.join(SCRIPT_DIR, "..", "config.yaml"))
@@ -41,11 +50,7 @@ TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezon
 ARCHIVE_DIR = os.path.join(ROOT_DIR, "archive", TODAY_STR)
 RAW_DIR = os.path.join(ARCHIVE_DIR, "raw")
 FILTERED_DIR = os.path.join(ARCHIVE_DIR, "filtered")
-DATE_RE_DAY = re.compile(r"^\d{8}$")
-DATE_RE_RANGE = re.compile(r"^\d{8}-\d{8}$")
 SUPABASE_TIME_FIELDS = ("published",)
-SUPABASE_BM25_SHARD_DAYS = 7
-
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]")
 MAIN_TERM_WEIGHT = 1.0
@@ -53,59 +58,21 @@ RELATED_TERM_WEIGHT = 0.5
 QUERY_TEXT_WEIGHT = 0
 DEFAULT_OR_SOFT_WEIGHT = 0.3
 
-
 def log(message: str) -> None:
   ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
   print(f"[{ts}] {message}", flush=True)
 
-
-def resolve_supabase_recall_window(config: Dict[str, Any], end_dt: datetime | None = None) -> tuple[datetime, datetime]:
-  paper_setting = (config or {}).get("arxiv_paper_setting") or {}
-  try:
-    days = int(paper_setting.get("days_window") or 9)
-  except Exception:
-    days = 9
-  safe_days = max(days, 1)
-
-  anchor = end_dt or datetime.now(timezone.utc)
-  if anchor.tzinfo is None:
-    anchor = anchor.replace(tzinfo=timezone.utc)
-  anchor = anchor.astimezone(timezone.utc)
-  token = str(os.getenv("DPR_RUN_DATE") or "").strip()
-
-  if DATE_RE_RANGE.fullmatch(token):
-    start_text, end_text = token.split("-", 1)
-    try:
-      start_dt = datetime.strptime(start_text, "%Y%m%d").replace(tzinfo=timezone.utc)
-      end_day = datetime.strptime(end_text, "%Y%m%d").replace(tzinfo=timezone.utc)
-      if end_day >= start_dt:
-        return start_dt, end_day + timedelta(days=1)
-    except Exception:
-      pass
-
-  if DATE_RE_DAY.fullmatch(token):
-    day_start = datetime.strptime(token, "%Y%m%d").replace(tzinfo=timezone.utc)
-    if safe_days > 1:
-      return anchor - timedelta(days=safe_days), anchor
-    return day_start, day_start + timedelta(days=1)
-
-  return anchor - timedelta(days=safe_days), anchor
-
-
 def group_start(title: str) -> None:
   print(f"::group::{title}", flush=True)
 
-
 def group_end() -> None:
   print("::endgroup::", flush=True)
-
 
 def tokenize(text: str) -> List[str]:
   """简单分词：英文按词，中文按单字。"""
   if not text:
     return []
   return TOKEN_RE.findall(text.lower())
-
 
 @dataclass
 class Paper:
@@ -149,7 +116,6 @@ class Paper:
       "link": self.link,
       "tags": sorted(self.tags),
     }
-
 
 class BM25Index:
   """轻量 BM25 实现，避免额外依赖。"""
@@ -201,7 +167,6 @@ class BM25Index:
 
     return scores
 
-
 def load_config() -> dict:
   """
   从仓库根目录读取 config.yaml。
@@ -221,63 +186,9 @@ def load_config() -> dict:
     log(f"[WARN] 读取 config.yaml 失败：{e}")
     return {}
 
-
 def _query_text_for_supabase_bm25(q: dict) -> str:
   q_text = str(q.get("query_text") or "").strip()
   return q_text
-
-
-def _format_supabase_window_for_log(
-  start_dt: datetime | None,
-  end_dt: datetime | None,
-  time_fields: tuple[str, ...],
-) -> tuple[str, str, str]:
-  safe_fields = {str(f).strip() for f in (time_fields or ()) if str(f).strip()}
-  if start_dt is None or end_dt is None:
-    published = "N/A"
-    updated = "N/A"
-  else:
-    window = f"{start_dt.isoformat()} ~ {end_dt.isoformat()}"
-    published = window if "published" in safe_fields else "N/A"
-    updated = window if "updated_at" in safe_fields else "N/A"
-  return published, updated, ",".join(sorted(safe_fields))
-
-
-def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
-  if not isinstance(value, datetime):
-    return None
-  if value.tzinfo is None:
-    return value.replace(tzinfo=timezone.utc)
-  return value.astimezone(timezone.utc)
-
-
-def split_supabase_time_window(
-  start_dt: datetime | None,
-  end_dt: datetime | None,
-  *,
-  shard_days: int = SUPABASE_BM25_SHARD_DAYS,
-) -> list[tuple[datetime, datetime]]:
-  """
-  将较长时间窗口切成多个固定天数分片，避免单次 BM25 RPC 触发 statement timeout。
-  """
-  safe_start = _normalize_utc_datetime(start_dt)
-  safe_end = _normalize_utc_datetime(end_dt)
-  if safe_start is None or safe_end is None or safe_end <= safe_start:
-    return []
-
-  safe_shard_days = max(int(shard_days or 1), 1)
-  step = timedelta(days=safe_shard_days)
-  if safe_end - safe_start <= step:
-    return [(safe_start, safe_end)]
-
-  shards: list[tuple[datetime, datetime]] = []
-  cursor = safe_start
-  while cursor < safe_end:
-    next_dt = min(cursor + step, safe_end)
-    shards.append((cursor, next_dt))
-    cursor = next_dt
-  return shards
-
 
 def _resolve_supabase_row_score(row: Dict[str, Any]) -> float:
   score_raw = row.get("score")
@@ -287,7 +198,6 @@ def _resolve_supabase_row_score(row: Dict[str, Any]) -> float:
     return float(score_raw)
   except Exception:
     return 0.0
-
 
 def merge_supabase_bm25_rows(
   rows_per_shard: list[list[Dict[str, Any]]],
@@ -352,7 +262,6 @@ def merge_supabase_bm25_rows(
     item.pop("_merged_shard_idx", None)
     item.pop("_merged_local_rank", None)
   return merged
-
 
 def _query_supabase_bm25_window(
   *,
@@ -457,7 +366,6 @@ def _query_supabase_bm25_window(
     return (rows_per_shard, success_count, failure_messages)
   return ([], 0, [failure_message, *failure_messages])
 
-
 def query_supabase_bm25_with_shards(
   *,
   url: str,
@@ -534,7 +442,6 @@ def query_supabase_bm25_with_shards(
     summary += f" | partial_failures={len(failure_messages)}"
   return (merged_rows, summary)
 
-
 def load_paper_pool(path: str) -> List[Paper]:
   """
   读取 arxiv_fetch_raw.py 生成的 JSON：
@@ -568,12 +475,10 @@ def load_paper_pool(path: str) -> List[Paper]:
   log(f"[INFO] 从 {path} 读取到 {len(papers)} 篇论文。")
   return papers
 
-
 def build_bm25_index(papers: List[Paper], k1: float = 1.5, b: float = 0.75) -> BM25Index:
   docs = [p.text_for_bm25 for p in papers]
   tokenized = [tokenize(d) for d in docs]
   return BM25Index(tokenized_docs=tokenized, k1=k1, b=b)
-
 
 def estimate_dynamic_top_k(total_papers: int | None) -> int:
   try:
@@ -584,11 +489,6 @@ def estimate_dynamic_top_k(total_papers: int | None) -> int:
     return 50
   blocks = (total - 1) // 1000
   return 50 * (blocks + 1)
-
-
-def multi_source_rpc_enabled() -> bool:
-  return str(os.getenv("DPR_ENABLE_MULTI_SOURCE_RPC") or "").strip().lower() in ("1", "true", "yes", "on")
-
 
 def resolve_multi_source_bm25_backend(config: Dict[str, Any], queries: List[dict]) -> Dict[str, Any] | None:
   all_sources: List[str] = []
@@ -633,7 +533,6 @@ def resolve_multi_source_bm25_backend(config: Dict[str, Any], queries: List[dict
     "schema": first_key[2],
     "bm25_rpc": str(os.getenv("DPR_MULTI_SOURCE_BM25_RPC") or "match_multi_source_papers_bm25").strip(),
   }
-
 
 def rank_papers_for_queries_via_supabase(
   queries: List[dict],
@@ -737,7 +636,6 @@ def rank_papers_for_queries_via_supabase(
     "total_hits": total_hits,
   }
 
-
 def score_boolean_mixed_for_query(
   bm25: BM25Index,
   papers: List[Paper],
@@ -814,7 +712,6 @@ def score_boolean_mixed_for_query(
     scores[idx] = float(score)
 
   return scores
-
 
 def rank_papers_for_queries(
   bm25: BM25Index,
@@ -911,7 +808,6 @@ def rank_papers_for_queries(
     "papers": id_to_paper,
   }
 
-
 def save_tagged_results(
   result: dict,
   output_path: str,
@@ -952,7 +848,6 @@ def save_tagged_results(
 
   log(f"[INFO] 已将带 tag 的论文和每个查询的 top_k 结果写入：{output_path}")
   log(f"[INFO] 其中带 tag 的论文数：{len(tagged_papers)}")
-
 
 def main() -> None:
   parser = argparse.ArgumentParser(
@@ -1234,7 +1129,6 @@ def main() -> None:
         base = base[:-5]
       output_path = os.path.join(FILTERED_DIR, f"{base}.bm25.json")
       process_single_file(input_path, output_path)
-
 
 if __name__ == "__main__":
   main()
