@@ -799,15 +799,50 @@ def main() -> None:
             flush=True,
         )
     else:
-        run_step(
-            "Step 1 - fetch arxiv",
-            [
-                python,
-                os.path.join(SRC_DIR, "maintain", "fetchers", "fetch_arxiv.py"),
-                *(["--days", str(args.fetch_days)] if args.fetch_days is not None else []),
-                *(["--ignore-seen"] if args.fetch_ignore_seen else []),
-            ],
-        )
+        # P0-1: fetch_arxiv 抛异常不再让 daily pipeline 中断。写一个空 raw
+        # + fetch_status.json sentinel,让后续 BM25/Embedding/RRF 跑空数据、
+        # workflow "Commit results" step 把 sentinel 写进 git history,
+        # 明天 PR review 就能看到 "今天 fetch 失败"。这是把
+        # silent fail (subprocess exit 1 + commit step skip) 升级为
+        # observable fail (commit 一个空 + status 文件)。
+        try:
+            run_step(
+                "Step 1 - fetch arxiv",
+                [
+                    python,
+                    os.path.join(SRC_DIR, "maintain", "fetchers", "fetch_arxiv.py"),
+                    *(["--days", str(args.fetch_days)] if args.fetch_days is not None else []),
+                    *(["--ignore-seen"] if args.fetch_ignore_seen else []),
+                ],
+            )
+        except subprocess.CalledProcessError as exc:
+            sentinel_dir = os.path.dirname(raw_path)
+            os.makedirs(sentinel_dir, exist_ok=True)
+            # 空 raw 让 BM25/Embedding 优雅跑 0 召回,而不是 FileNotFoundError
+            if not os.path.exists(raw_path):
+                with open(raw_path, "w", encoding="utf-8") as f:
+                    json.dump([], f, ensure_ascii=False)
+            sentinel_path = os.path.join(sentinel_dir, "fetch_status.json")
+            with open(sentinel_path, "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "status": "fetch_failed",
+                        "step": "Step 1 - fetch arxiv",
+                        "returncode": exc.returncode,
+                        "stderr_tail": (exc.stderr or "")[-500:] if exc.stderr else "",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "run_date_token": run_date_token,
+                    },
+                    f,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            print(
+                f"[WARN] Step 1 fetch 失败 (rc={exc.returncode}); "
+                f"已写空 raw + fetch_status.json sentinel,后续步骤跑空数据。"
+                f"明天请检查 archive/{run_date_token}/raw/fetch_status.json 决定是否手动补抓。",
+                flush=True,
+            )
     if trace_ids:
         print_trace_retrieval("RAW", raw_path, trace_ids)
     run_step(
