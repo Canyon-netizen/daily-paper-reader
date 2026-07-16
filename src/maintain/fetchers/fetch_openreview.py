@@ -315,7 +315,13 @@ def main() -> None:
     username = _norm(args.username)
     password = _norm(args.password)
     if not username or not password:
-        raise RuntimeError("缺少 OpenReview 凭证，请设置 OPENREVIEW_USERNAME / OPENREVIEW_PASSWORD。")
+        msg = (
+            "缺少 OpenReview 凭证。请在 Gist 配置 OPENREVIEW_USERNAME / "
+            "OPENREVIEW_PASSWORD（参考 README「Gist 配置」章节），"
+            "或在 workflow_dispatch 输入里通过 --username/--password 显式传入。"
+        )
+        print(f"::error::{msg}", file=sys.stderr)
+        raise RuntimeError(msg)
 
     years = resolve_target_years(years=args.years, year_end=args.year_end, year_count=args.year_count)
     output_path = resolve_output_path(args.conference, args.year_end, args.year_count, args.output, years=years)

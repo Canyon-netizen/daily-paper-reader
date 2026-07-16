@@ -141,6 +141,15 @@ jobs:
             esac
           }
 
+          # 哪些 key 走 OpenReview fetch(需要 OPENREVIEW_USERNAME/PASSWORD 凭证)。
+          # AAAI/ACL/EMNLP 走自家 API,不需凭证。
+          needs_openreview_creds() {
+            case "$1" in
+              iclr|icml|neurips) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
           # 逗号分隔 → 串行跑每个 init，任意一个失败整体 exit 1（set -e）。
           IFS=',' read -ra CONF_ARR <<< "$CONFERENCES"
           RAN=0
@@ -153,12 +162,30 @@ jobs:
               echo "::error::未找到 init 脚本：$script（会议名 $conf 不受支持）"
               exit 1
             fi
+            # OpenReview 类会议在 fetch 前需要凭证;若缺失,直接 ::error 退出,
+            # 避免走完 Python import+argparse 后在 fetch_openreview 才崩(从 log 看像"无征兆 0s 退出")。
+            if needs_openreview_creds "$key" && [ "${SKIP_FETCH}" != "true" ]; then
+              if [ -z "${OPENREVIEW_USERNAME:-}" ] || [ -z "${OPENREVIEW_PASSWORD:-}" ]; then
+                echo "::error::会议 ${conf} 需要 OpenReview 凭证:请在 Gist 配置 OPENREVIEW_USERNAME / OPENREVIEW_PASSWORD(没有可在 https://openreview.net 注册),或在会议页勾选「跳过 fetch」。"
+                exit 1
+              fi
+            fi
             ARGS=(--year-end "$YEAR_END" --year-count "$YEAR_COUNT" --embed-device cpu --embed-batch-size 8)
             if [ "${SKIP_FETCH}" = "true" ]; then
               ARGS+=(--skip-fetch)
             fi
             echo "[INFO] === init ${conf} (key=${key}) year_end=${YEAR_END} year_count=${YEAR_COUNT} skip_fetch=${SKIP_FETCH:-false} ==="
-            python -m "src.maintain.init_${key}" "${ARGS[@]}"
+            # 局部禁用 set -e 拿真实退出码,失败时把 stderr 摘要打出来,避免 0s 退出
+            # 让用户看不到任何线索。
+            set +e
+            out="$(python -u -m "src.maintain.init_${key}" "${ARGS[@]}" 2>&1)"
+            rc=$?
+            set -e
+            echo "$out"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error::init_${key} exit $rc (tail above)"
+              exit "$rc"
+            fi
             RAN=$((RAN + 1))
           done
 
