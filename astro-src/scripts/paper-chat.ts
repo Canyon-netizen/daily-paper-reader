@@ -529,22 +529,15 @@ function initChat(): void {
   let unread = 0;
   let sidebarVisible = readChatDocked();
 
-  // 论文正文区所有 .container(4 个 section + chat 容器),同步让位/收回
-  const paperContainers = Array.from(
-    document.querySelectorAll<HTMLElement>('.paper-page .container'),
-  );
-
   function applySidebarVisibility(): void {
     if (sidebarVisible) {
       panel.classList.remove('paper-chat-panel--hidden');
       fab.classList.add('paper-chat-fab--sidebar-visible');
       fab.classList.add('paper-chat-fab--active');
-      for (const el of paperContainers) el.classList.remove('container--chat-hidden');
     } else {
       panel.classList.add('paper-chat-panel--hidden');
       fab.classList.remove('paper-chat-fab--sidebar-visible');
       fab.classList.remove('paper-chat-fab--active');
-      for (const el of paperContainers) el.classList.add('container--chat-hidden');
     }
   }
 

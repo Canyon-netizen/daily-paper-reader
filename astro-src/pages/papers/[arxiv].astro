@@ -307,22 +307,8 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
 <style>
   .paper-page { padding-bottom: 4rem; }
   .container { max-width: var(--content-max-width); margin: 0 auto; padding: 0 1.5rem; }
-  /* 论文正文给常驻对话侧栏让位;由 paper-chat.ts 根据用户偏好切 .container--chat-hidden。
-     对话展开时:文字列在"侧栏左侧的可用区"内加宽并居中,填满原本中间的大片空白;
-     用 min() 设上限,超宽屏也不会把行拉得过长,窄屏则自动收窄。 */
-  .paper-page .container {
-    --chat-col: min(1080px, calc(100vw - var(--chat-sidebar-width) - 3rem));
-    --chat-side: max(1.5rem, calc((100vw - var(--chat-sidebar-width) - var(--chat-col)) / 2));
-    max-width: none;
-    padding-left: var(--chat-side);
-    padding-right: calc(var(--chat-sidebar-width) + var(--chat-side));
-    transition: padding 200ms ease-out;
-  }
-  .paper-page .container--chat-hidden {
-    max-width: var(--content-max-width);
-    padding-left: 1.5rem;
-    padding-right: 1.5rem;
-  }
+  /* 对话侧栏是 position: fixed,纯浮在右侧覆盖主区;主体宽度与 padding
+     全程不随侧栏状态变化,避免开启/关闭时正文突然重排。 */
 
   .paper-broken {
     padding: 3rem 0;
