@@ -1,15 +1,17 @@
 ---
 // /conferences/ — 会议论文拉取 UI(F1)
 //
-// 在本地调试后端跑通 (src/local_debug_server.py on 127.0.0.1:8567) 时,
-// 这个页面提供"按会议拉取论文到 Supabase"的触发按钮。流程:
+// 这个页面提供"按会议拉取论文到 Supabase"的触发按钮,通过 GitHub REST
+// workflow_dispatch 触发 .github/workflows/conference-init.yml(跑 init_<conf>.py:
+// fetch + embedding + upsert 到 Supabase)。流程:
 //   1. 用户选会议 + 年份 → 点"立即拉取"
-//   2. 前端 POST /api/local/workflows/dispatch {workflowKey: 'init-conferences', inputs}
-//   3. 后端用 build_command 拼出 bash 串行跑 init_<conf>.py --year-end N --year-count M
-//   4. 前端轮询 /api/local/runs/<id> 看进度 (status / conclusion / log)
+//   2. 前端 POST api.github.com/.../workflows/conference-init.yml/dispatches
+//      inputs: {conferences, year_end, year_count, skip_fetch}
+//   3. 轮询 /actions/workflows/conference-init.yml/runs 看 status / conclusion
+//   4. 完成后给出 GitHub Actions run 链接
 //
-// 安全:这个 endpoint 只在 local_debug_server 监听 127.0.0.1 时可访问,
-// 不会暴露到公网。生产环境部署时需另外加认证。
+// 前提:需在 /settings/ 页面填 GitHub PAT(勾 repo + workflow scope);
+// owner/repo 也从 settings 的 GitHubRepo 配置读(默认 Canyon-netizen/daily-paper-reader)。
 
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
@@ -35,8 +37,9 @@ const CONFERENCES = [
 
   <main class="settings-page">
     <header class="settings-page-header">
-      <strong>会议论文拉取</strong> · 选会议 + 年份,点"立即拉取"后台跑 init_<conf>.py
-      (fetch + embedding + upsert 到 Supabase)。本地调试后端需在 127.0.0.1:8567 运行。
+      <strong>会议论文拉取</strong> · 选会议 + 年份,点"立即拉取"通过 GitHub Actions 跑
+      <code>init_&lt;conf&gt;.py</code> (fetch + embedding + upsert 到 Supabase)。
+      需先在 <a href={`${import.meta.env.BASE_URL}settings/`}>设置页</a> 填 GitHub PAT(勾 <code>repo</code> + <code>workflow</code> 权限)。
     </header>
 
     <section class="settings-card">
@@ -88,21 +91,12 @@ const CONFERENCES = [
       </div>
 
       <p class="settings-card-sub" style="margin-top: 1rem;">
-        也可以选多个会议批量跑(下方按钮)。后端用 bash 串行执行,
-        任意一个 init_<conf>.py 失败整体 exit 1。
+        也可以选多个会议批量跑(下方按钮)。GitHub Actions 里串行执行每个
+        <code>init_&lt;conf&gt;.py</code>,任意一个失败整体 exit 1。
       </p>
       <button type="button" class="settings-action-btn primary" id="conf-batch-btn">
         拉取全部 6 个会议
       </button>
-    </section>
-
-    <section class="settings-card" id="conf-runs-card" hidden>
-      <h2 class="settings-card-title">运行历史</h2>
-      <p class="settings-card-sub">
-        最近 5 次运行。status: <code>queued</code> / <code>in_progress</code> /
-        <code>completed</code>。
-      </p>
-      <ul class="conf-runs-list" id="conf-runs-list"></ul>
     </section>
 
     <a class="settings-page-back" href={import.meta.env.BASE_URL}>← 返回首页</a>
@@ -146,181 +140,164 @@ const CONFERENCES = [
   .conf-card-status.is-running { color: var(--accent); }
   .conf-card-status.is-success { color: #2e7d32; }
   .conf-card-status.is-failure { color: #c62828; }
-  .conf-runs-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-  .conf-runs-list li {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0.5rem 0.75rem;
-    font-size: 0.85rem;
-    font-family: var(--font-mono);
-  }
-  .conf-runs-list .run-status { font-weight: 700; }
-  .conf-runs-list .run-status.queued { color: var(--fg-subtle); }
-  .conf-runs-list .run-status.in_progress { color: var(--accent); }
-  .conf-runs-list .run-status.completed { color: #2e7d32; }
-  .conf-runs-list .run-status.completed.failure { color: #c62828; }
+  .conf-card-status a { color: inherit; text-decoration: underline; }
 </style>
 
 <script>
-  import { debounce } from '../../lib/dom-utils';
+  import { loadGitHubToken, loadGitHubRepo } from '../../scripts/settings';
 
-  type RunStatus = 'queued' | 'in_progress' | 'completed';
-  type Run = {
-    run_id: string;
-    workflow_key: string;
-    status: RunStatus;
-    conclusion?: 'success' | 'failure' | null;
-    started_at?: string;
-    completed_at?: string;
-    error?: string;
+  // 固定触发这个 workflow 文件（不用 settings 里的 repo.workflow，那默认是 save-paper.yml）
+  const WORKFLOW_FILE = 'conference-init.yml';
+  const REF = 'main';
+
+  type GhRun = {
+    id: number;
+    status: string; // queued | in_progress | completed
+    conclusion: string | null; // success | failure | cancelled | ...
+    html_url: string;
+    created_at: string;
+    display_title?: string;
   };
 
-  // -------- 工具函数 --------
-  function dispatch(conferences: string, yearEnd: number, yearCount: number, skipFetch: boolean) {
-    return fetch('/api/local/workflows/dispatch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        workflowKey: 'init-conferences',
-        workflowFile: '',
-        inputs: {
-          conferences,
-          year_end: String(yearEnd),
-          year_count: String(yearCount),
-          ...(skipFetch ? { skip_fetch: 'true' } : {}),
-        },
-      }),
-    }).then(async (r) => {
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-      return data.run as Run;
-    });
+  function authHeaders(token: string) {
+    return {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
   }
 
-  function listRuns(): Promise<Run[]> {
-    return fetch('/api/local/runs')
-      .then((r) => r.json())
-      .then((d) => (Array.isArray(d.runs) ? d.runs.slice(0, 5) : []))
-      .catch(() => []);
-  }
-
-  function getRun(runId: string): Promise<Run> {
-    return fetch(`/api/local/runs/${encodeURIComponent(runId)}`)
-      .then((r) => r.json())
-      .then((d) => d.run as Run);
-  }
-
-  function setCardStatus(conf: string, state: 'idle' | 'running' | 'success' | 'failure', text: string) {
+  function setCardStatus(conf: string, state: 'idle' | 'running' | 'success' | 'failure', html: string) {
     const el = document.querySelector(`[data-conf-status="${conf}"]`);
     if (!el) return;
-    el.className = `conf-card-status is-${state === 'idle' ? 'idle' : state === 'running' ? 'running' : state}`;
-    el.innerHTML = `<span class="conf-status-label">${text}</span>`;
+    el.className = `conf-card-status is-${state}`;
+    el.innerHTML = `<span class="conf-status-label">${html}</span>`;
   }
 
-  // -------- 渲染运行历史 --------
-  function renderRuns(runs: Run[]) {
-    const list = document.getElementById('conf-runs-list');
-    const card = document.getElementById('conf-runs-card');
-    if (!list || !card) return;
-    if (runs.length === 0) {
-      card.hidden = true;
+  // -------- 触发 workflow_dispatch --------
+  async function dispatchWorkflow(
+    owner: string,
+    repo: string,
+    token: string,
+    inputs: Record<string, string>,
+  ): Promise<void> {
+    const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${WORKFLOW_FILE}/dispatches`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: REF, inputs }),
+    });
+    if (res.ok) return;
+    const body = await res.text().catch(() => '');
+    if (res.status === 404)
+      throw new Error(`Workflow 未找到: 确认 ${owner}/${repo} 存在,且 ${WORKFLOW_FILE} 已合并到 ${REF} 分支的 .github/workflows/ 下`);
+    if (res.status === 401) throw new Error('GitHub Token 无效或过期(需 repo + workflow scope)');
+    if (res.status === 403) throw new Error('GitHub 拒绝触发(检查 token 是否有 workflow 权限,或 Actions 是否已启用)');
+    if (res.status === 422) throw new Error(`inputs 校验失败: ${body.slice(0, 200)}`);
+    throw new Error(`GitHub API ${res.status}: ${body.slice(0, 200)}`);
+  }
+
+  // 找到本次 dispatch 触发的 run:取 created_at 晚于触发时刻的最新一条
+  async function findRun(owner: string, repo: string, token: string, since: number): Promise<GhRun | null> {
+    const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=5`;
+    const res = await fetch(url, { headers: authHeaders(token) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const runs: GhRun[] = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+    // 触发前 10s 内创建的也算(GitHub 时钟/延迟容差)
+    const margin = since - 10_000;
+    const fresh = runs.filter((r) => new Date(r.created_at).getTime() >= margin);
+    return (fresh[0] || runs[0]) ?? null;
+  }
+
+  // 轮询直到 completed,更新每张卡片状态
+  async function pollRun(owner: string, repo: string, token: string, since: number, confList: string[]) {
+    let run: GhRun | null = null;
+    // 先等 run 排上队(最多 ~50s)
+    for (let i = 0; i < 25; i++) {
+      run = await findRun(owner, repo, token, since);
+      if (run) break;
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    if (!run) {
+      for (const c of confList)
+        setCardStatus(c, 'failure', '✗ 50s 内未排上队,稍后到 GitHub Actions 查看');
       return;
     }
-    card.hidden = false;
-    list.innerHTML = runs
-      .map((r) => {
-        const status = r.status;
-        const cls =
-          status === 'completed' && r.conclusion === 'failure'
-            ? 'completed failure'
-            : status;
-        const inputs = (r as any).inputs || {};
-        return `<li>
-          <span class="run-status ${cls}">[${status}]</span>
-          <code>${r.workflow_key}</code>
-          conferences=${inputs.conferences || '?'} year_end=${inputs.year_end || '?'} year_count=${inputs.year_count || '?'}
-          ${r.error ? `<br/><span style="color:#c62828">${r.error}</span>` : ''}
-        </li>`;
-      })
-      .join('');
-  }
+    const runUrl = run.html_url;
+    const link = (text: string) => `<a href="${runUrl}" target="_blank" rel="noopener">${text}</a>`;
 
-  // -------- 轮询 --------
-  function pollRun(runId: string, conferences: string[]): () => void {
-    let stopped = false;
-    const tick = async () => {
-      if (stopped) return;
-      try {
-        const r = await getRun(runId);
-        if (r.status === 'in_progress') {
-          for (const c of conferences) setCardStatus(c, 'running', `运行中: ${runId.slice(0, 8)}`);
-        } else if (r.status === 'completed') {
-          const state = r.conclusion === 'failure' ? 'failure' : 'success';
-          for (const c of conferences) {
-            setCardStatus(c, state, state === 'success' ? '✓ 成功' : '✗ 失败');
-          }
-          stopped = true;
-          const runs = await listRuns();
-          renderRuns(runs);
+    // 轮询状态(最多 ~10min)
+    for (let i = 0; i < 300; i++) {
+      const res = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/actions/runs/${run.id}`,
+        { headers: authHeaders(token) },
+      );
+      if (res.ok) {
+        const info: GhRun = await res.json();
+        if (info.status === 'completed') {
+          const ok = info.conclusion === 'success';
+          for (const c of confList)
+            setCardStatus(c, ok ? 'success' : 'failure', ok ? link('✓ 成功') : link(`✗ ${info.conclusion || '失败'}`));
           return;
         }
-      } catch {
-        // ignore network blip
+        for (const c of confList) setCardStatus(c, 'running', link(`运行中 (${info.status})…`));
       }
-      setTimeout(tick, 1500);
-    };
-    tick();
-    return () => {
-      stopped = true;
-    };
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    for (const c of confList) setCardStatus(c, 'running', link('运行超时未结束,点此查看'));
   }
 
-  // -------- 事件绑定 --------
+  // -------- 事件入口 --------
   async function triggerConf(confList: string[]) {
     const yearEndEl = document.getElementById('conf-year-end') as HTMLInputElement | null;
     const yearCountEl = document.getElementById('conf-year-count') as HTMLInputElement | null;
     const skipFetchEl = document.getElementById('conf-skip-fetch') as HTMLInputElement | null;
     if (!yearEndEl || !yearCountEl || !skipFetchEl) return;
+
+    const token = loadGitHubToken();
+    if (!token) {
+      for (const c of confList)
+        setCardStatus(c, 'failure', '✗ 未配置 GitHub PAT,请到设置页填(需 repo + workflow 权限)');
+      return;
+    }
+    const { owner, repo } = loadGitHubRepo();
     const yearEnd = parseInt(yearEndEl.value, 10) || new Date().getUTCFullYear();
     const yearCount = parseInt(yearCountEl.value, 10) || 3;
     const skipFetch = skipFetchEl.checked;
-    const conferences = confList.join(',');
+    const inputs: Record<string, string> = {
+      conferences: confList.join(','),
+      year_end: String(yearEnd),
+      year_count: String(yearCount),
+      skip_fetch: skipFetch ? 'true' : 'false',
+    };
+
     for (const c of confList) setCardStatus(c, 'running', '调度中…');
+    const since = Date.now();
     try {
-      const run = await dispatch(conferences, yearEnd, yearCount, skipFetch);
-      pollRun(run.run_id, confList);
+      await dispatchWorkflow(owner, repo, token, inputs);
     } catch (e) {
       for (const c of confList) setCardStatus(c, 'failure', `✗ 调度失败: ${(e as Error).message}`);
+      return;
     }
+    for (const c of confList) setCardStatus(c, 'running', '已触发,等待排队…');
+    void pollRun(owner, repo, token, since, confList);
   }
 
   document.addEventListener('DOMContentLoaded', () => {
-    // 单会议按钮
+    // 单会议按钮(data-conf 是小写 id,与 init 脚本 key、卡片 data-conf-status 一致)
     document.querySelectorAll<HTMLButtonElement>('.conf-trigger-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const conf = btn.dataset.conf;
         if (conf) void triggerConf([conf]);
       });
     });
-    // 全部 6 会议
+    // 全部 6 会议(用小写 id,保证卡片状态能匹配上)
     const batchBtn = document.getElementById('conf-batch-btn');
     if (batchBtn) {
       batchBtn.addEventListener('click', () => {
-        void triggerConf(['AAAI', 'ACL', 'EMNLP', 'ICLR', 'ICML', 'NeurIPS']);
+        void triggerConf(['aaai', 'acl', 'emnlp', 'iclr', 'icml', 'neurips']);
       });
     }
-    // 初始拉一次历史 (debounce 防止快速点击)
-    const refreshRuns = debounce(async () => {
-      const runs = await listRuns();
-      renderRuns(runs);
-    }, 200);
-    void refreshRuns();
   });
 </script>

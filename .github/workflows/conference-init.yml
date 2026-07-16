@@ -1,0 +1,169 @@
+name: conference-init
+
+# 按会议抓取论文并同步到 Supabase（fetch + embedding + upsert）。
+#
+# 对应前端 /conferences/ 页面的"立即拉取"按钮：页面在线上部署时不再依赖本地
+# 调试后端（src/local_debug_server.py:8567），而是通过 GitHub REST
+# `workflow_dispatch` 触发这个 workflow，跑 src/maintain/init_<conf>.py。
+#
+# inputs:
+#   conferences  逗号分隔的会议展示名（AAAI,ACL,EMNLP,ICLR,ICML,NeurIPS），大小写不敏感
+#   year_end     抓到哪一年（默认当前 UTC 年）
+#   year_count   往前抓几年（默认 3）
+#   skip_fetch   true 时跳过 fetch，只重跑 sync（复用已有 raw archive）
+
+on:
+  workflow_dispatch:
+    inputs:
+      conferences:
+        description: "逗号分隔会议名，例如 AAAI,ICML,NeurIPS"
+        required: true
+        default: "ICML"
+      year_end:
+        description: "抓到哪一年；留空用当前 UTC 年"
+        required: false
+        default: ""
+      year_count:
+        description: "往前抓几年"
+        required: false
+        default: "3"
+      skip_fetch:
+        description: "跳过 fetch，只重跑 sync（true/false）"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: conference-init
+  cancel-in-progress: false
+
+jobs:
+  init:
+    if: github.repository == 'Canyon-netizen/daily-paper-reader' || github.repository == 'ziwenhahaha/daily-paper-reader' || github.repository == '5-xj/daily-paper-reader'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SUPABASE_URL: https://lyucdwgefyfbmaiopjbk.supabase.co
+      SUPABASE_SCHEMA: public
+      DPR_ENABLE_NEURIPS_BACKEND: "1"
+      DPR_NEURIPS_ENABLED: "1"
+      DPR_NEURIPS_PAPERS_TABLE: neurips_openreview_papers
+      DPR_NEURIPS_VECTOR_RPC_EXACT: match_neurips_openreview_papers_exact
+      DPR_NEURIPS_BM25_RPC: match_neurips_openreview_papers_bm25
+      DPR_ENABLE_ICML_BACKEND: "1"
+      DPR_ICML_ENABLED: "1"
+      DPR_ICML_PAPERS_TABLE: icml_openreview_papers
+      DPR_ICML_VECTOR_RPC_EXACT: match_icml_openreview_papers_exact
+      DPR_ICML_BM25_RPC: match_icml_openreview_papers_bm25
+      MKL_THREADING_LAYER: GNU
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: Load secrets from Gist
+        env:
+          DPR_GIST_ID: ${{ secrets.DPR_GIST_ID }}
+          DPR_GIST_TOKEN: ${{ secrets.DPR_GIST_TOKEN }}
+        run: python .github/scripts/load_gist.py
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip + torch
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.cache/torch
+          key: ${{ runner.os }}-dpr-conference-init-v1-${{ hashFiles('requirements.txt') }}
+
+      - name: Install deps (skip sqlite3)
+        run: |
+          python - <<'PY'
+          import re
+          lines = open("requirements.txt", "r", encoding="utf-8").read().splitlines()
+          lines = [l for l in lines if l.strip() and not re.match(r"^sqlite3\b", l)]
+          open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
+          PY
+          python -m pip install --upgrade pip
+          python -m pip install uv
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.5.1+cpu"
+          uv pip install --system -r /tmp/req.txt
+
+      - name: Run conference init
+        env:
+          SUPABASE_SERVICE_KEY: ${{ env.SUPABASE_SERVICE_KEY }}
+          OPENREVIEW_USERNAME: ${{ env.OPENREVIEW_USERNAME }}
+          OPENREVIEW_PASSWORD: ${{ env.OPENREVIEW_PASSWORD }}
+          DPR_EMBED_API_URL: ${{ env.DPR_EMBED_API_URL }}
+          DPR_EMBED_API_KEY: ${{ env.DPR_EMBED_API_KEY }}
+          HF_HOME: ${{ github.workspace }}/hf_cache
+          HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
+          HF_HUB_DISABLE_SYMLINKS: "1"
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_SERVICE_KEY:-}" ]; then
+            echo "::error::缺少 SUPABASE_SERVICE_KEY（应由 Gist 注入）。请检查 DPR_GIST_ID / DPR_GIST_TOKEN 与 Gist 内容。"
+            exit 1
+          fi
+
+          CONFERENCES="${{ github.event.inputs.conferences }}"
+          YEAR_END="${{ github.event.inputs.year_end }}"
+          YEAR_COUNT="${{ github.event.inputs.year_count }}"
+          SKIP_FETCH="${{ github.event.inputs.skip_fetch }}"
+
+          if [ -z "$YEAR_END" ]; then
+            YEAR_END="$(date -u +%Y)"
+          fi
+          if [ -z "$YEAR_COUNT" ]; then
+            YEAR_COUNT="3"
+          fi
+
+          # 展示名 → init 脚本 key（小写）。未知名直接小写兜底。
+          conf_to_key() {
+            case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+              aaai) echo "aaai" ;;
+              acl) echo "acl" ;;
+              emnlp) echo "emnlp" ;;
+              iclr) echo "iclr" ;;
+              icml) echo "icml" ;;
+              nips|neurips) echo "neurips" ;;
+              *) printf '%s' "$1" | tr '[:upper:]' '[:lower:]' ;;
+            esac
+          }
+
+          # 逗号分隔 → 串行跑每个 init，任意一个失败整体 exit 1（set -e）。
+          IFS=',' read -ra CONF_ARR <<< "$CONFERENCES"
+          RAN=0
+          for raw in "${CONF_ARR[@]}"; do
+            conf="$(echo "$raw" | xargs)"   # trim
+            [ -z "$conf" ] && continue
+            key="$(conf_to_key "$conf")"
+            script="src/maintain/init_${key}.py"
+            if [ ! -f "$script" ]; then
+              echo "::error::未找到 init 脚本：$script（会议名 $conf 不受支持）"
+              exit 1
+            fi
+            ARGS=(--year-end "$YEAR_END" --year-count "$YEAR_COUNT" --embed-device cpu --embed-batch-size 8)
+            if [ "${SKIP_FETCH}" = "true" ]; then
+              ARGS+=(--skip-fetch)
+            fi
+            echo "[INFO] === init ${conf} (key=${key}) year_end=${YEAR_END} year_count=${YEAR_COUNT} skip_fetch=${SKIP_FETCH:-false} ==="
+            python -m "src.maintain.init_${key}" "${ARGS[@]}"
+            RAN=$((RAN + 1))
+          done
+
+          if [ "$RAN" -eq 0 ]; then
+            echo "::error::conferences 输入解析后为空：$CONFERENCES"
+            exit 1
+          fi
+          echo "[INFO] 完成 ${RAN} 个会议的 init。"
