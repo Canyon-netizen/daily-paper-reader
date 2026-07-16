@@ -90,44 +90,49 @@ class SettingsTsDoesNotExportLocalApiBaseTest(unittest.TestCase):
         )
 
 
-class LocalDebugServerEndpointIsOrphanTest(unittest.TestCase):
-    """/api/local/workflows/dispatch exists in src/local_debug_server.py.
-    This test asserts no front-end code currently calls it. If a future PR
-    wires the front-end back to it, this test fails — and that's the signal
-    to update the test (i.e. the split is closed intentionally)."""
+class LocalDebugServerEndpointRemovedTest(unittest.TestCase):
+    """After P1-6 cleanup, /api/local/workflows/dispatch must no longer exist
+    in src/local_debug_server.py. Front-end never called it (commit 46b2b74
+    switched /conferences/ to GitHub REST), so keeping the endpoint around
+    only widens the attack surface.
+
+    This test pins the removal. If someone re-introduces /api/local/workflows/dispatch
+    (or a sibling endpoint like /api/local/runs/dispatch), this test fails and
+    the author must consciously update both code and test together."""
 
     ENDPOINT = "/api/local/workflows/dispatch"
 
-    def test_local_debug_server_exposes_endpoint(self):
-        """Sanity: the endpoint actually exists in the file we're checking."""
+    def test_local_debug_server_does_not_expose_dispatch_endpoint(self):
+        """The dispatch endpoint must be gone. Only /api/local/health may remain."""
         text = LOCAL_DEBUG_PY.read_text(encoding="utf-8")
-        self.assertIn(self.ENDPOINT, text, "expected endpoint not present")
+        self.assertNotIn(
+            self.ENDPOINT,
+            text,
+            f"{self.ENDPOINT} must be removed from src/local_debug_server.py — "
+            f"front-end no longer calls it. If you intentionally re-add it, also "
+            f"update this test (and confirm /conferences/ really needs it).",
+        )
 
-    def test_no_frontend_calls_endpoint(self):
-        text = LOCAL_DEBUG_PY.read_text(encoding="utf-8")
-        self.assertIn(self.ENDPOINT, text)  # confirm before scanning
-
-        # Scan astro-src/ for any reference to this endpoint.
-        hits = []
+    def test_no_local_api_endpoints_called_from_frontend(self):
+        """Belt-and-braces: scan astro-src/ for any /api/local/* caller.
+        Sibling endpoints (/api/local/runs, /api/local/config, /api/local/secret)
+        are also removed in P1-6 cleanup, so this test catches any of them being
+        re-introduced."""
         astro_root = ROOT / "astro-src"
+        offenders = []
         for path in astro_root.rglob("*"):
-            if not path.is_file():
-                continue
-            # Skip binary / node_modules / dist / build artifacts
-            if path.suffix not in {".ts", ".tsx", ".js", ".mjs", ".astro", ".css", ".html"}:
+            if not path.is_file() or path.suffix not in {".ts", ".tsx", ".js", ".mjs", ".astro"}:
                 continue
             try:
                 content = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue
-            if self.ENDPOINT in content:
-                hits.append(path.relative_to(ROOT))
-
+            if "/api/local/" in content:
+                offenders.append(path.relative_to(ROOT))
         self.assertEqual(
-            hits, [],
-            f"Frontend code calls the orphan local endpoint {self.ENDPOINT} — "
-            f"either remove the endpoint from local_debug_server.py or update "
-            f"this test to match the new design. Hits: {[str(h) for h in hits]}",
+            offenders, [],
+            f"Front-end code calls /api/local/* (removed in P1-6): "
+            f"{[str(p) for p in offenders]}",
         )
 
 

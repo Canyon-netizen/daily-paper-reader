@@ -499,23 +499,7 @@ DPR_INSTALL_MODE=full scripts/bootstrap_local.sh
 DPR_INSTALL_MODE=full DPR_TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu scripts/bootstrap_local.sh
 ```
 
-在 `localhost / 127.0.0.1` 页面里点击"触发工作流"时，前端会自动调用本地后端 `/api/local/workflows/dispatch`，把 `daily-paper-reader.yml`、`conference-paper-retrieval.yml` 等映射为本地 Python 子进程执行，不会上 GitHub，也不会要求启用 Actions。运行日志会显示在工作流面板里，并保存在 `.local-runs/`。
-
-如果前端和本地后端不是同一个地址，可以在页面加载前设置：
-
-```html
-<script>
-  window.DPR_LOCAL_API_BASE = 'http://127.0.0.1:8567';
-</script>
-```
-
-如果要部署到自己的服务器上调试，请同时启动这个后端，并对内网或受信任网络开放端口：
-
-```bash
-DPR_LOCAL_HOST=0.0.0.0 DPR_LOCAL_PORT=8567 scripts/local_debug.sh
-```
-
-然后访问 `http://<服务器地址>:8567`。这样页面和后端同源，点击触发按钮会在服务器本机执行工作流命令，而不是调用 GitHub Actions。
+> ⚠️ **历史说明**：`scripts/local_debug.sh` 启的 8567 后端曾经提供 `/api/local/workflows/dispatch` 等 endpoint 给浏览器调。2026-07 commit `46b2b74` 把 `/conferences/` 改成 GitHub REST 后，前端不再消费 8567 endpoint；2026-07 P1-6 清理把它们从 `src/local_debug_server.py` 中删除（仅保留 `/api/local/health` 作为存活检查）。`scripts/local_debug.sh` 仍可用，但只对想在 8567 跑存活检查的人有意义——触发 workflow 走 GitHub UI 或 GitHub REST。
 
 ---
 
