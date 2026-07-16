@@ -200,17 +200,17 @@ const CONFERENCES = [
     throw new Error(`GitHub API ${res.status}: ${body.slice(0, 200)}`);
   }
 
-  // 找到本次 dispatch 触发的 run:取 created_at 晚于触发时刻的最新一条
+  // 找到本次 dispatch 触发的 run:取 created_at 晚于触发时刻的最新一条。
+  // 注意:绝不能用 runs[0] 做兜底 — 老 run 也命中 latest,会让前端一直误报
+  // 「刚才触发的就是它」,而无视新 dispatch 实际有没有排上队。
   async function findRun(owner: string, repo: string, token: string, since: number): Promise<GhRun | null> {
     const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=5`;
     const res = await fetch(url, { headers: authHeaders(token) });
     if (!res.ok) return null;
     const data = await res.json();
     const runs: GhRun[] = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
-    // 触发前 10s 内创建的也算(GitHub 时钟/延迟容差)
-    const margin = since - 10_000;
-    const fresh = runs.filter((r) => new Date(r.created_at).getTime() >= margin);
-    return (fresh[0] || runs[0]) ?? null;
+    const margin = since - 10_000; // GitHub 时钟/延迟容差
+    return runs.find((r) => new Date(r.created_at).getTime() >= margin) ?? null;
   }
 
   // 轮询直到 completed,更新每张卡片状态
