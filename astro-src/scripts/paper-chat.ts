@@ -290,8 +290,9 @@ function renderDock(container: HTMLElement): {
       <span class="paper-chat-mode-badge" data-state="idle" aria-live="polite"></span>
     </div>
     <div class="paper-chat-sub">
-      基于本篇论文的结构化摘要与 LLM 多轮对话。
-      开启"全文"模式后,会基于 ar5iv 抓取的论文骨架(章节标题 + 每段首句)回答细节问题。
+      默认基于本篇论文的结构化摘要与 LLM 多轮对话。
+      需问方法细节 / 实验设置 / 附录等不在摘要里的内容,
+      上面切到「📄 全文」即可(读 daily pipeline 已抽取的本地 PDF 正文,秒开)。
       未配置 LLM?去 <a href="./../../settings/">设置页</a>。
     </div>
     <div class="paper-chat-mode-hint" hidden></div>
@@ -423,15 +424,27 @@ function initChat(): void {
       modeBadge.title = '';
     }
 
-    // mode-hint 行:loading 时给提示,完成后清掉
+    // mode-hint 行:三态分别提示不同内容,让用户清楚当前进度 / 怎么用
+    // - loading:抓全文骨架进行中
+    // - error:抓取失败,已回退
+    // - summary idle:提醒用户可以切全文(避免「摘要 LLM 看不到全文」的最常见困惑)
+    // - fulltext idle:不打扰(用户已主动切过来)
     if (state === 'loading') {
       modeHint.hidden = false;
+      modeHint.classList.remove('paper-chat-mode-hint--tip');
       modeHint.textContent = '正在抓取 ar5iv 全文,首次 3-8 秒,后续命中缓存秒切…';
     } else if (state === 'error') {
       modeHint.hidden = false;
+      modeHint.classList.remove('paper-chat-mode-hint--tip');
       modeHint.textContent = `全文加载失败:${hintMsg}。已自动回退到摘要模式。`;
+    } else if (state === 'idle' && currentMode === 'summary' && !isForcedSummary()) {
+      // 摘要默认模式,且管理员没强制锁 — 提示有全文可用,降低发现成本
+      modeHint.hidden = false;
+      modeHint.classList.add('paper-chat-mode-hint--tip');
+      modeHint.textContent = '💡 默认只喂 LLM 摘要。问方法细节 / 实验设置 / 附录时,记得点上方「📄 全文」(读本地 PDF 正文)。';
     } else {
       modeHint.hidden = true;
+      modeHint.classList.remove('paper-chat-mode-hint--tip');
       modeHint.textContent = '';
     }
   }
