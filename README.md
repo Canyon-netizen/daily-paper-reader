@@ -35,6 +35,7 @@
 
 ## 🆕 最近更新
 
+- **2026-07-16** 🌐 README 工作流叙述重写：把站点从「daily pipeline + paper-analyzer」单线更新为「**7 个 Astro 页面 + 10 个 GitHub Actions + 本地 8567 后端**」全景。浏览器侧覆盖 `/` `/papers/` `/papers/<slug>/` `/topic/` `/paper-analyzer/` `/conferences/` `/settings/` 7 页；后端侧覆盖 daily / conference-init / 6 类会议 maintain / 3 类多源 maintain / version-refresh / save-paper / reset-content / ci 共 10 个 workflow。
 - **2026-07-06** 🧹 仓库结构治理（17 个 commit，群聊式）：删 Docsify 前端 `app/` + 根 `index.html` + 6 个 orphan `tests/test_*.js`；`docs/_plans/` 迁移到仓库根 `plans/` 并抽 `astro-src/lib/paper.ts` 的 `EXCLUDED_DIRS` 常量；`src/*.py` 的 `try/except` 双 import 兜底清理（统一为 package-mode `from src.X import …`）；新增 [`scripts/run-pipeline.sh`](scripts/run-pipeline.sh)（自动激活 venv 的 Python 入口）、[`config.user.yaml.example`](config.user.yaml.example)（fork 用户覆写模板，gitignored）、[`docs/path-spec.md`](docs/path-spec.md)（三套日期目录命名权威规范）、[`tests/README.md`](tests/README.md)（pytest 文件名→`src/*.py` 模块映射）；`.gitignore` 去重 + `.scratch/` 目录级 ignore + `.DS_Store` 治理；`.gitattributes` 给 `docs/**/*.txt` 接 Git LFS；workflow owner allowlist 一致化到 `daily-paper-reader.yml` + `conference-paper-retrieval.yml`；`edge-functions/proxy.ts` + `others/structure.png` 删除。详细规划与每个 commit 的动机 / 风险 / 回滚见仓内 `.claude/plans/compressed-napping-hoare.md`。
 - **2026-07-04** 🛠️ 全面改造 `paper-analyzer` 页面：配置项默认自动持久化（input + debounce），新增 **🔌 测试连接** 按钮调用 `GET {base}/v1/models` 验证当前模型与服务端一致，新增 **🔄 刷新模型列表** 从服务端拉取真实模型填入 `<select>` 下拉；切 provider / 模型变更均有提示。
 - **2026-07-04** ☁️ 新增 Cloudflare Pages Function 反代：把 `functions/api/proxy.ts` 部署为 Pages Function，浏览器走 `daily-paper-reader.pages.dev/api/proxy?url=...` 拉 arXiv，无需依赖公共代理，0 配置即可用。EdgeOne Pages 用户请自行部署等价反代。
@@ -64,13 +65,15 @@
 
 ## ✨ Why Daily Paper Reader?
 
-- **🔎 Daily Paper Radar**：每日自动抓取 arXiv / OpenReview / bioRxiv / medRxiv / ChemRxiv 新论文，持续追踪研究前沿。
-- **🎯 Personalized Feed**：基于关键词、研究方向与兴趣生成个性化推荐流。
-- **📖 Read in Context**：支持摘要、原文、速览、长总结在同一页面串联阅读。`paper-analyzer` 还能直接上传 PDF 或传 arXiv ID，自动抽取正文并生成中文摘要 / TLDR / 动机 / 方法 / 结果 / 结论。
-- **💬 Ask While Reading**：支持 AI 论文问答，边读边问，沉淀私人讨论记录。
-- **🔁 LLM 配置 0 部署**：LLM Provider / API Key / Base URL / Model 全在浏览器 `localStorage`，Gist Token 一键同步到 secret Gist，GitHub Actions 自动拉取。
-- **☁️ 0 服务器 + 0 公共代理**：站点可部署到 Cloudflare Pages / Vercel / GitHub Pages / EdgeOne Pages；arXiv CORS 反代直接走 Pages Function，浏览器不依赖任何第三方代理。
-- **🛠️ Fork-and-Run**：Fork 后完成少量配置，即可上线自己的论文主页。
+- **🔎 多源论文雷达**：GitHub Actions 每日定时抓 **arXiv / bioRxiv / medRxiv / ChemRxiv / OpenReview 会议**（ICLR / ICML / NeurIPS / ACL / EMNLP / AAAI），覆盖 CS 主流到 q-bio 跨学科。
+- **🎯 个性化召回 + LLM 评分**：`subscriptions.intent_profiles` 维护研究方向 tag，BM25 + 向量 + RRF 三路召回，LLM 二次精排出 Top 论文，附带中文摘要与 TLDR。
+- **📖 一站式阅读**：首页编辑精选 → `/papers/` 论文库（cytoscape 节点网络可视化相似度）→ 单篇论文详情（摘要 / 速览 / 全文笔记 / **paper-chat 全文模式**）。
+- **💡 主题探索 (`/topic/`)**：5 阶段状态机——输入研究思路 → LLM 拆解子方向 → arXiv 检索 → 批量生成中文速览 → 主题报告 + 多轮追问；会话存 `localStorage`，刷新可续。
+- **🧪 paper-analyzer 长文精读**：上传 PDF 或输入 arXiv ID，自动抽取正文并生成中文摘要 + TLDR + 动机/方法/结果/结论四段笔记，支持 chunking 应对超大 PDF。
+- **🎛️ 集中配置 (`/settings/`)**：LLM / arXiv 类目 / GitHub PAT / 长文精读页数 / 主题列表 / CORS 代理 / 用户标签 / 已隐藏论文 —— 一页管全部；可同步到私有 Gist 让 GitHub Actions 复用。
+- **🔁 LLM 配置 0 部署**：Provider / API Key / Base URL / Model 全在浏览器 `localStorage`，**一键同步到 secret Gist**，GitHub Actions 自动拉取。
+- **☁️ 0 服务器 + 0 公共代理**：站点可部署到 Cloudflare Pages / Vercel / GitHub Pages / EdgeOne Pages；arXiv CORS 反代走 `functions/api/proxy.ts`（Cloudflare Pages Function），不依赖任何第三方代理。
+- **🛠️ Fork-and-Run**：Fork 后仅需 Cloudflare 绑定 + 配置大模型 API Key，即可上线自己的论文主页；想加自己研究方向 tag，改 `config.user.yaml` 即可，不会和 daily workflow 改写 `config.yaml` 冲突。
 
 ## 🧭 适用场景
 
@@ -80,6 +83,30 @@
 - **🔬 单论文精读**：把 PDF / arXiv ID 丢进 paper-analyzer，得到中文摘要 + 动机 / 方法 / 结果 / 结论四段笔记 + TLDR，不用打开额外窗口。
 
 
+
+## 🌐 站点地图
+
+> 站点是 Astro 5 静态站（`astro-src/pages/`），SSR 阶段从 `docs/` 拉论文元数据，客户端脚本接管交互。GitHub Actions 每日 pipeline 把结果写回 `docs/` 后 commit，下一次 push 触发 Cloudflare Pages 自动构建。
+
+| 路径 | 用途 | 关键客户端脚本 / 数据源 |
+|---|---|---|
+| `/` | 首页：编辑精选（近 7 天 Top 6）+ 按主题分类 + 工作流介绍 + 统计 | `scripts/index-filter.ts`、`scripts/paper-selection.ts`；数据 `listPapers({sinceDays:7, sortBy:'score', limit:6})` |
+| `/papers/` | 论文库：全量列表 + cytoscape 节点网络（相似度图）+ 按标签筛选 + 抽屉编辑用户标签 / 隐藏 | `components/PaperLibrary.astro`；用户标签 / 隐藏论文可同步到 Gist |
+| `/papers/<slug>/` | 单篇详情：摘要 + 速览 + 全文笔记 + 图集 + **paper-chat 全文模式**（本地 `.txt` 优先，ar5iv 兜底） | `scripts/paper-chat.ts`、`scripts/paper-fulltext.ts`、`scripts/paper-figures.ts`、`scripts/paper-hide.ts` |
+| `/topic/` | 主题探索：5 阶段状态机（思路 → 拆解 → 搜索 → 总结 → 报告）+ 多轮追问；复用 paper-analyzer 的 LLM / arXiv 链路 | `scripts/topic-search.ts`；会话存 `localStorage` |
+| `/paper-analyzer/` | 长文精读：上传 PDF / arXiv 搜索 / 历史笔记 3 个 tab；走 PDF.js 抽正文 + LLM 4 段笔记 + chunking 应对超大 PDF | `scripts/paper-analyzer.ts`（导出 `searchArxiv` / `fetchArxivPdf` / `callLLM` / `SYSTEM_PROMPT`，被 `/topic/` 复用） |
+| `/conferences/` | 会议论文拉取：选会议 + 年份 → 调 GitHub REST `workflow_dispatch` 触发 `conference-init.yml` → 轮询 run 状态 | 直接 fetch `api.github.com`；不走本机后端 |
+| `/settings/` | 一站式浏览器配置 + Gist 同步：LLM / arXiv 类目 / GitHub PAT / 长文精读 / 主题列表 / CORS 代理 / 用户标签 / 已隐藏论文 / 重置 | `scripts/settings.ts`（核心 localStorage 读写中枢，所有页面共用）+ `scripts/settings-page.ts` |
+| `/tutorial/` | 使用教程 | — |
+| `/zotero-usage/` | Zotero Connector 集成说明 | — |
+
+数据流方向：
+
+- **写入**：`docs/` 是站点唯一真相源。`daily-paper-reader.yml` commit 新论文 → 下次 push 触发 Cloudflare Pages 构建 → 站点刷新。
+- **浏览器配置**：全部存 `localStorage`（settings.ts 统一读写），可一键同步到私有 Gist。
+- **论文笔记的人工增补**：浏览器里点"📤 保存到 GitHub" → 触发 `save-paper.yml` → 把笔记推到 `docs/papers/<slug>/`。
+
+---
 
 ## 🛠️ 开发约定
 
@@ -153,32 +180,70 @@ git checkout -- config.yaml
 ## ⚙️ 架构总览
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ 浏览器                                                        │
-│   paper-analyzer (Astro static)                                │
-│       ├── 用户填 LLM 配置 ─────► localStorage                  │
-│       ├── 搜 arXiv ───► /api/proxy?url=... ─┐                │
-│       └── 同步 Gist ─► api.github.com/gists ─┤                │
-│                                                │                │
-│ Cloudflare Pages Function (/api/proxy)         │                │
-│   转发 arXiv 请求 + 加 CORS 头 ───────────────┘                │
-└─────────────────────────────────────────────────────────────────┘
-                          ↓
-┌─────────────────────────────────────────────────────────────────┐
-│ GitHub Actions (daily pipeline)                                │
-│   "Load secrets from Gist" step                                │
-│       读 ${{ secrets.DPR_GIST_ID }}                            │
-│       curl api.github.com/gists/$ID                            │
-│       写 LLM_API_KEY / SUPABASE_SERVICE_KEY / RERANK_API_KEY ...│
-│         到 $GITHUB_ENV                                         │
-│   src/4.llm_refine_papers.py 读 LLM_MODEL                      │
-│   src/main.py 也读 $GITHUB_ENV 文件补全 env                     │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────── 浏览器 (Astro 5 static) ────────────────────────┐
+│                                                                            │
+│  / 首页 ──┐                                                                │
+│  /papers/ ──┤                                                               │
+│  /papers/<slug>/ ──┐   settings.ts (localStorage 中枢)                    │
+│  /topic/ ────────┤   ┌────────────────────────────────────────────────┐   │
+│  /paper-analyzer/ ┼──►│ LLM Provider / API Key / Base URL / Model      │   │
+│  /conferences/ ──┘   │ GitHub PAT / Gist ID / 用户标签 / 隐藏论文       │   │
+│                      │ arXiv 类目 / CORS 代理 / 长文精读参数 / 主题列表 │   │
+│                      └──────────────┬─────────────────────┬───────────┘   │
+│                                     │                     │               │
+│                       paper-analyzer / topic 调用       调 GitHub REST    │
+│                                     ▼                     ▼               │
+│                          /api/proxy?url=...       api.github.com/gists    │
+└─────────────────────────────────────┬─────────────────────┬─────────────┘
+                                      │                     │
+        ┌─────────────────────────────┘                     │
+        │                                                    │
+Cloudflare Pages Function (/api/proxy)            GitHub Gist (私有 secret)
+  转发 arXiv + 加 CORS 头                          注入 LLM_API_KEY /
+                                                    SUPABASE_SERVICE_KEY /
+                                                    RERANK_* 等 key
+        │                                                    │
+        └────────────────────┬───────────────────────────────┘
+                             ▼
+┌────────────────────── GitHub Actions ─────────────────────┐
+│                                                              │
+│  daily-paper-reader.yml     每日 UTC 18:30 (北京次日 02:30) │
+│    Load secrets from Gist ─► src/main.py                     │
+│      0 enrich queries → 1 fetch arxiv/biorxiv/medrxiv/...    │
+│      → 2.1 BM25 召回 → 2.2 embedding 召回 → 2.3 RRF 合并    │
+│      → 3 rank → 4 LLM refine + 中文摘要/TLDR/笔记            │
+│      → 5 select → 6 generate_docs → docs/                   │
+│    自动 commit docs/ + 触发 Cloudflare Pages 重建            │
+│                                                              │
+│  conference-init.yml        /conferences/ 触发 (workflow_dispatch)│
+│    src/maintain/init_<conf>.py → fetch + embed → Supabase    │
+│    支持 AAAI / ACL / EMNLP / ICLR / ICML / NeurIPS           │
+│                                                              │
+│  maintain-biorxiv.yml       每日抓 bioRxiv                    │
+│  maintain-chemrxiv.yml      每日抓 ChemRxiv                   │
+│  maintain-medrxiv.yml       每日抓 medRxiv                    │
+│  maintain-supabase.yml      跨源同步 → Supabase               │
+│  maintain-version-refresh.yml 每周一查 arXiv 最新版本 → 重生成 │
+│                                                              │
+│  save-paper.yml             浏览器触发 → 把论文笔记推到仓库    │
+│  reset-content.yml          清空 docs/ 重新初始化              │
+│  ci.yml                     PR 检查                            │
+└──────────────────────────────────────────────────────────────┘
+                             ▲
+                             │ (本地调试可选)
+┌──────────────────── scripts/local_debug.sh ────────────────────┐
+│  启动 8567 本地后端 (src/local_debug_server.py)                  │
+│  /api/local/workflows/dispatch ─► 本机 Python 子进程跑 pipeline   │
+│  前端通过 window.DPR_LOCAL_API_BASE = 'http://127.0.0.1:8567'   │
+│  切到本地模式,不调 GitHub Actions                                │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-完整工作流（每日 pipeline / 会议检索 / multi-source 维护）见上方 ASCII 架构图与 `.github/workflows/` 目录。每个 workflow 的具体步骤看对应的 `.yml` 文件。
+每个 workflow 的具体步骤见对应的 `.yml` 文件（[`.github/workflows/`](.github/workflows/)）。补充说明：
 
-> 🔄 **论文版本自动刷新**：[`maintain-version-refresh.yml`](.github/workflows/maintain-version-refresh.yml)（每周一定时，或手动 `workflow_dispatch`）跑 [`src/maintain/refresh_versions.py`](src/maintain/refresh_versions.py)，扫描 `docs/papers/` 里每篇论文、查询 arXiv 最新版本，落后的自动用 `src/6.generate_docs.py --paper-id` 重生成新版本笔记（精读→全文总结+图，速读→速览），并删除旧版本 `.md`/`.txt`/图目录。支持 `--dry-run` / `--limit` / `--only-id`。
+- **`daily-paper-reader.yml`** 是站点内容生产的主入口；其余 maintain 系列只往 Supabase 写向量、不写 `docs/`。
+- **`conference-init.yml`** 由 `/conferences/` 页面前端通过 GitHub REST `workflow_dispatch` 触发，参数 `{conferences, year_end, year_count, skip_fetch}`。
+- **`maintain-version-refresh.yml`**（每周一定时，或手动 `workflow_dispatch`）跑 [`src/maintain/refresh_versions.py`](src/maintain/refresh_versions.py)，扫描 `docs/papers/` 里每篇论文、查询 arXiv 最新版本，落后的自动用 `src/6.generate_docs.py --paper-id` 重生成新版本笔记（精读→全文总结+图，速读→速览），并删除旧版本 `.md`/`.txt`/图目录。支持 `--dry-run` / `--limit` / `--only-id`。
 
 ---
 
@@ -223,6 +288,7 @@ git checkout -- config.yaml
 - 选 Provider（如 DeepSeek / MiniMax / 硅基流动 / 自定义），填 API Key、Base URL、Model。
 - 输入即时保存到 `localStorage`（绿色 ✓ "已自动保存到本地浏览器" 提示）。
 - 可点 **🔌 测试连接** 验证 API key 是否有效、当前 model 是否存在；点 **🔄 刷新模型列表** 从服务端拉取真实模型填入下拉。
+- 想统一管理 arXiv 类目、Gist、长文精读参数、用户标签等更多配置，到 [`/settings/`](#) 一站式管理（paper-analyzer 的"LLM 设置"折叠面板与 `/settings/` 写同一份 `localStorage`，两处互通）。
 
 ---
 
@@ -299,6 +365,8 @@ git checkout -- config.yaml
 | Base URL | OpenAI 兼容 endpoint，如 `https://api.deepseek.com/v1` |
 | Model | 兼容 OpenAI Chat Completions 的模型名 |
 | CORS 代理 | 自部署 arXiv 反代；留空走内置链 + 项目自带的 `/api/proxy` |
+
+> 💡 上面 4 项只是 paper-analyzer 内"LLM 设置"折叠面板的内容。其它配置（GitHub 仓库 owner/repo/workflow、长文精读最大页数、紧凑模式、arXiv 类目勾选、Gist Token、用户标签同步、已隐藏论文管理、CORS 代理自部署入口）都迁到了 [`/settings/`](#) 页，两个页面读同一份 `localStorage`。
 
 ### 自部署反代（推荐 5 行 Cloudflare Worker）
 
