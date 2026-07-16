@@ -28,6 +28,7 @@ export interface SkeletonSection {
   firstSentence: string;  // 该章节下第一个段落的首句
   formulaCount: number;   // 公式数量(渲染后 MathML/LaTeX 标签数)
   tableCount: number;     // 表格数量
+  formulas: string[];     // ar5iv <math alttext="..."> 收集到的 LaTeX 片段,每节最多 10 条
 }
 
 export interface FulltextSkeleton {
@@ -130,6 +131,10 @@ async function cacheGet(canonicalId: string): Promise<CacheRecord | null> {
         req.onsuccess = () => resolve((req.result as CacheRecord) || null);
         req.onerror = () => resolve(null);
       });
+      // 旧 cache 没有 formulas 字段(本次加的),返回 null 触发强制 refetch 一次
+      if (rec && rec.skeleton.sections.some((s) => !Array.isArray(s.formulas))) {
+        return null;
+      }
       if (rec) return rec;
     } catch { /* fall through to localStorage */ }
   }
@@ -265,6 +270,31 @@ function firstSentence(p: string): string {
   return sentence.length > 320 ? sentence.slice(0, 320) + '…' : sentence;
 }
 
+// ar5iv 用 LaTeXML 渲染,把每个公式包成 <math alttext="原始 LaTeX">。
+// 直接 textContent 会把 <math> 节点拍平成裸符号,丢失 LaTeX 源码 — 这正是之前
+// chat 全文模式看不到公式的根因。这里克隆节点,把 <math> 替换成 alttext 文本,
+// 既保 firstSentence 可读,又能在后续 prompt 输出里把 LaTeX 还给 LLM。
+function textContentWithMath(el: Element): string {
+  const clone = el.cloneNode(true) as Element;
+  for (const m of Array.from(clone.querySelectorAll('math[alttext]'))) {
+    const a = (m.getAttribute('alttext') || '').trim();
+    if (!a) continue;
+    m.parentNode?.replaceChild(clone.ownerDocument.createTextNode(a), m);
+  }
+  return clone.textContent || '';
+}
+
+// 收集段落里所有 <math alttext="..."> 的 LaTeX,每节最多 10 条。
+function collectFormulas(el: Element, cap = 10): string[] {
+  const out: string[] = [];
+  for (const m of Array.from(el.querySelectorAll('math[alttext]'))) {
+    const a = (m.getAttribute('alttext') || '').trim();
+    if (a) out.push(a);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
 export function extractSkeleton(html: string): FulltextSkeleton {
   // DOMParser 在 SSR 环境(没有 DOM)会抛错,callers 应在浏览器侧调用
   const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -290,7 +320,8 @@ export function extractSkeleton(html: string): FulltextSkeleton {
     while (walker && safety < 30) {
       if (/^H[1-6]$/.test(walker.tagName)) break; // 撞到下一标题就停
       if (walker.tagName === 'P') {
-        firstParaText = (walker.textContent || '').trim();
+        // 用 textContentWithMath 替换 textContent,把 <math alttext> 还原成 LaTeX 源码
+        firstParaText = textContentWithMath(walker).trim();
         if (firstParaText) break;
       }
       walker = walker.nextElementSibling;
@@ -299,6 +330,7 @@ export function extractSkeleton(html: string): FulltextSkeleton {
     // 数公式/表格 — 在 heading 之后到下一个同级 heading 之间的元素里数
     let formulaCount = 0;
     let tableCount = 0;
+    const formulas: string[] = [];
     let w2 = h.nextElementSibling;
     let s2 = 0;
     while (w2 && s2 < 60) {
@@ -307,6 +339,13 @@ export function extractSkeleton(html: string): FulltextSkeleton {
         'math, .ltx_equation, [role="math"], .MathJax, .mwe-math-mathml-display, .mwe-math-mathml-inline',
       ).length;
       tableCount += w2.querySelectorAll('table, figure.ltx_table').length;
+      // 同步收集 <math alttext="..."> LaTeX — 每节最多 10 条,避免 prompt 撑爆
+      if (formulas.length < 10) {
+        for (const a of collectFormulas(w2, 10 - formulas.length)) {
+          formulas.push(a);
+          if (formulas.length >= 10) break;
+        }
+      }
       w2 = w2.nextElementSibling;
       s2++;
     }
@@ -317,6 +356,7 @@ export function extractSkeleton(html: string): FulltextSkeleton {
       firstSentence: firstSentence(firstParaText),
       formulaCount,
       tableCount,
+      formulas,
     });
   }
 
@@ -324,7 +364,8 @@ export function extractSkeleton(html: string): FulltextSkeleton {
   const absEl = doc.querySelector('.ltx_abstract, blockquote.abstract, [class*="abstract"]');
   let abstract: string | undefined;
   if (absEl) {
-    const t = (absEl.textContent || '').replace(/^abstract[:\s]*/i, '').trim();
+    // 同样把 <math alttext> 还原成 LaTeX,LLM 看到的摘要也带公式
+    const t = textContentWithMath(absEl).replace(/^abstract[:\s]*/i, '').trim();
     if (t.length > 50) abstract = t.slice(0, 1200);
   }
 
@@ -507,7 +548,7 @@ function pdfTextToSkeleton(text: string, canonicalId: string, version: string): 
         cur.firstSentence = firstSentence(curFirstPara.join(' '));
         sections.push(cur);
       }
-      cur = { level: 2, title: line, firstSentence: '', formulaCount: 0, tableCount: 0 };
+      cur = { level: 2, title: line, firstSentence: '', formulaCount: 0, tableCount: 0, formulas: [] };
       curFirstPara = [];
     } else if (cur) {
       if (curFirstPara.length < 3) curFirstPara.push(line);
@@ -563,7 +604,11 @@ export function skeletonToPromptText(sk: FulltextSkeleton, maxBytes = 8 * 1024):
       ? `  [公式×${sec.formulaCount} 表格×${sec.tableCount}]`
       : '';
     const body = sec.firstSentence ? `\n  ${sec.firstSentence}` : '';
-    const block = `${heading}${meta}${body}\n`;
+    // 每节附上若干 LaTeX 片段,让 LLM 在回答"公式是啥"时能直接引用
+    const formulaTail = sec.formulas?.length
+      ? `\n  公式: ${sec.formulas.slice(0, 3).map((f) => `$${f}$`).join('  ')}`
+      : '';
+    const block = `${heading}${meta}${body}${formulaTail}\n`;
     if (bytes + block.length > maxBytes) {
       lines.push('(后续章节已截断,完整骨架请查看 ar5iv 原文)');
       break;
@@ -598,9 +643,58 @@ function trimSkeletonToBytes(sk: FulltextSkeleton, maxBytes: number): FulltextSk
   return { ...sk, sections: sk.sections.slice(0, lo) };
 }
 
-// ============================================================================
-// 元数据预热 — 仅抓 /abs HTML(2KB)补充 abstract,不等全文
-// ============================================================================
+/**
+ * 工具:按章节引用拿正文片段 — paper-analyzer 的 RAG tool-use 链会用。
+ *
+ * ref 接受两种形式(LLM 实际会怎么给):
+ *   - 数字编号:`3` / `3.2` / `§3` → 我们扫 .txt 找匹配的章节标题行
+ *   - 自由文本:`Method` / `Training Pipeline` / `3.2 Hypernetwork` →
+ *     在章节标题里做大小写不敏感子串匹配
+ *
+ * 返回:该章节下若干段纯文本(> maxChars 截断)。
+ * .txt 不可用 → 返回 null(调用方降级到 PDF / abstract)。
+ *
+ * 核心算法(段切分 / 标题识别 / 段范围)在 paper-retrieval-core.mjs,这里
+ * 只是引一下 + loadLocalTxt 的薄壳 — 让 Python 端能 spawn node 端到端测。
+ */
+export async function getSection(
+  arxivId: string,
+  ref: string,
+  maxChars = 6000,
+): Promise<string | null> {
+  const txt = await loadLocalTxt(arxivId);
+  if (!txt || txt.length < 1000) return null;
+  const core = await import('./paper-retrieval-core.mjs');
+  const blocks = core.segmentText(txt);
+  const startIdx = core.findSectionBlock(blocks, ref);
+  if (startIdx < 0) return null;
+  return core.collectSection(blocks, startIdx, maxChars);
+}
+
+/**
+ * 工具:关键词全文检索 — 拿 top-k 段(含匹配文本的行 + 前后 1-2 段上下文)。
+ *
+ * 不引 embedding:LLM 自己会用关键词搜,覆盖绝大多数「用户在意的细节」
+ * 类型(公式 / 表名 / 章节 / 关键实验名)。一篇论文 5-10W 词,本地
+ * 跑 1-2ms 完全够用。
+ *
+ * 排分:TF * log(text length / segment length),不在 hit 数上加权重 —
+ * LLM 会自己判断哪段更准。核心算法见 paper-retrieval-core.mjs。
+ */
+export async function searchInTxt(
+  arxivId: string,
+  query: string,
+  topK = 4,
+): Promise<string[] | null> {
+  const txt = await loadLocalTxt(arxivId);
+  if (!txt || txt.length < 1000) return null;
+  const core = await import('./paper-retrieval-core.mjs');
+  const segments = txt.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const hits = core.rankSegmentsByQuery(segments, query, topK);
+  if (!hits.length) return null;
+  const ordered = core.withNeighborhood(hits, segments);
+  return ordered.map((it) => `${it.isPrimary ? '★ ' : '  '}${segments[it.idx]}`);
+}
 
 export interface AbsMetadata {
   abstract?: string;
@@ -634,10 +728,14 @@ declare global {
   interface Window {
     __test_fulltext?: (arxivId: string) => Promise<FulltextResult>;
     __test_skeleton_prompt?: (sk: FulltextSkeleton) => string;
+    __test_get_section?: (arxivId: string, ref: string) => Promise<string | null>;
+    __test_search_txt?: (arxivId: string, q: string) => Promise<string[] | null>;
   }
 }
 
 if (typeof window !== 'undefined') {
   window.__test_fulltext = (id: string) => loadFulltextSkeleton(id, { bypassCache: true });
   window.__test_skeleton_prompt = skeletonToPromptText;
+  window.__test_get_section = (id: string, ref: string) => getSection(id, ref);
+  window.__test_search_txt = (id: string, q: string) => searchInTxt(id, q);
 }

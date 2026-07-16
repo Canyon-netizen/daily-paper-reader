@@ -37,6 +37,8 @@ import {
   loadHiddenPapers,
 } from './settings';
 import { debounce, canonicalArxivId, escapeHtml } from '../lib/dom-utils';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 // ============================================================================
 // 类型
@@ -1701,8 +1703,171 @@ NNN 用三位数(001, 002, ...);只能引用实际存在的图(不要编造编�
 }
 
 // ============================================================================
-// 精读 → GitHub 持久化触发(模块顶层)
+// 两阶段精读(RAG 增强)— 解决「骨架看一眼,LLM 诚实地说骨架里没提」
+//
+// 用户痛点:之前 deepReadPaper 把整段 PDF 节选塞 prompt,LLM 实际只能
+// 看到 context window 内的部分。超 200KB 的论文被截断后,LLM 在
+// "§3.2 关键模块" 等章节会诚实地说"原文未明确说明"。
+//
+// 方案:
+//   阶段 1:把骨架(sections + abstract)喂给 LLM,让它列出本论文最值得
+//   深入补充的 1-4 个细节(§号或关键词),即"补丁清单"。
+//   阶段 2:补丁清单里的每一项,调 paper-fulltext 工具(getSection /
+//   searchInTxt)拿到对应正文片段,合并回 prompt。
+//   阶段 3:走原 runDeepDive 拿 PDF 全文 + LLM 出精读,RAG 补充作为
+//   末尾「## 九、正文细节补充」追加,不动主体结构。
+//
+// 兼容:不依赖 tool_use 协议本身(主流 provider 都支持),开销一次额外
+// LLM 调用(规划),工具调用只跑本地 .txt 不打网络,论文越长收益越大。
 // ============================================================================
+
+const RETRIEVAL_PLAN_SYSTEM_PROMPT = `你是论文研究助理。给你提供一篇论文的 abstract + 章节骨架(标题 + 首句),目的是让你列出"需要进一步看正文才能写得准确"的细节清单。
+
+严格返回 JSON,不要输出任何其它文字、思考块或 markdown 围栏:
+
+{
+  "items": [
+    { "ref": "§3.2 或 'Training Pipeline' 或 'reward shaping'", "why": "一句话说明为什么需要看这段(例:'核心方法论,精读必须覆盖到公式层')" }
+  ]
+}
+
+清单长度限制:1-4 项,只挑最关键的(方法核心模块 + 实验关键结果 + 论文最大创新点)。如果骨架已经够详细(综述类论文),可以返回空 items: []。
+
+严禁:
+- 不要列出章节标题里的字面意思(已经看过)
+- 不要列 abstract 已说清楚的部分
+- 不要超过 4 项
+- 不要返回 markdown / 中文分析
+`;
+
+interface RetrievalItem {
+  ref: string;
+  why: string;
+}
+
+async function planRetrievals(
+  cfg: LLMConfig,
+  skeletonPrompt: string,
+  statusCb: (msg: string) => void,
+): Promise<RetrievalItem[]> {
+  statusCb('RAG 阶段 1/3:规划需补充的细节...');
+  const raw = await invokeChatCompletion(
+    cfg,
+    RETRIEVAL_PLAN_SYSTEM_PROMPT,
+    `下面是论文骨架(abstract + 章节标题 + 每节首句),基于它列出 1-4 个"看了才能写准"的细节清单。\n\n${skeletonPrompt}`,
+    'RAG 规划',
+    statusCb,
+  );
+  const json = extractBalancedJson(raw);
+  if (!json) return [];
+  let items: RetrievalItem[] = [];
+  try {
+    const parsed = JSON.parse(json);
+    if (Array.isArray(parsed?.items)) {
+      items = parsed.items
+        .filter((it: unknown): it is { ref: string; why: string } =>
+          typeof (it as { ref?: unknown })?.ref === 'string'
+          && typeof (it as { why?: unknown })?.why === 'string'
+        )
+        .slice(0, 4);
+    }
+  } catch { /* JSON 坏掉就当无清单 */ }
+  return items;
+}
+
+async function collectRetrievals(
+  arxivId: string,
+  items: RetrievalItem[],
+  statusCb: (msg: string) => void,
+): Promise<string> {
+  if (!items.length) return '';
+  statusCb(`RAG 阶段 2/3:抓取 ${items.length} 段正文补充...`);
+  // 动态 import paper-fulltext:它本身动态 import 我们,只能 dynamic import。
+  const ft = await import('./paper-fulltext');
+  const blocks: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    statusCb(`RAG (${i + 1}/${items.length}) ${it.ref}...`);
+    // 优先级:getSection(章节级) → searchInTxt(关键词兜底)
+    let snippet = await ft.getSection(arxivId, it.ref, 4000);
+    if (!snippet || snippet.length < 200) {
+      const hits = await ft.searchInTxt(arxivId, it.ref.replace(/^§\s*/, ''), 3);
+      if (hits && hits.length) snippet = hits.join('\n\n---\n\n');
+    }
+    if (snippet) {
+      blocks.push(`### 补充细节 [${it.ref}]\n> 为什么需要:${it.why}\n\n${snippet}`);
+    }
+  }
+  return blocks.join('\n\n');
+}
+
+interface DeepDiveWithRetrievalResult extends DeepDiveResult {
+  retrievalItems: RetrievalItem[];
+  retrievalSnippetsChars: number;
+}
+
+async function runDeepDiveWithRetrieval(
+  r: AnalysisResult,
+  entry: ArxivEntry | null,
+  cfg: LLMConfig,
+  statusCb: (msg: string) => void,
+  opts: { figureBase?: string; figureCount?: number } = {},
+): Promise<DeepDiveWithRetrievalResult> {
+  // 1. 先获取全文骨架 — skeleton/abstract 来源,优先走 .txt
+  statusCb('RAG:获取全文骨架...');
+  let skeletonPrompt = '';
+  let fulltextOk = false;
+  if (entry?.arxivId) {
+    // 同 collectRetrievals,paper-fulltext 是反向依赖,只能 dynamic import。
+    const ft = await import('./paper-fulltext');
+    const fulltext = await ft.loadFulltextSkeleton(entry.arxivId, { bypassCache: true });
+    if (fulltext.skeleton) {
+      fulltextOk = true;
+      skeletonPrompt = ft.skeletonToPromptText(fulltext.skeleton, 8192);
+      if (fulltext.skeleton.abstract) {
+        skeletonPrompt = `[摘要]\n${fulltext.skeleton.abstract}\n\n[骨架]\n${skeletonPrompt}`;
+      }
+    }
+  }
+  if (!fulltextOk) {
+    skeletonPrompt = '(骨架不可用 — LLM 直接按 abstract 推断)';
+  }
+
+  // 2. 阶段 1+2:规划 → 抓取
+  const items = await planRetrievals(cfg, skeletonPrompt, statusCb);
+  const retrievalBlocks = await collectRetrievals(
+    entry?.arxivId ?? '',
+    items,
+    statusCb,
+  );
+
+  // 3. 阶段 3:走原 runDeepDive 拿 PDF 全文 + 主精读
+  const base = await runDeepDive(r, entry, cfg, statusCb, opts);
+
+  // 把 RAG 补充追加到最终 markdown 末尾。
+  const retrievalNotes = retrievalBlocks
+    ? `\n\n## 九、正文细节补充(本地 .txt 检索)\n\n以下是基于 abstract + 章节骨架规划、调用工具额外抓取的正文细节片段,补充到精读末尾供参考。\n\n${retrievalBlocks}\n`
+    : '';
+
+  return {
+    ...base,
+    markdown: base.markdown + retrievalNotes,
+    retrievalItems: items,
+    retrievalSnippetsChars: retrievalBlocks.length,
+  };
+}
+
+export { runDeepDive, runDeepDiveWithRetrieval };
+export type { DeepDiveResult, DeepDiveWithRetrievalResult };
+
+if (typeof window !== 'undefined') {
+  // devtools / 阶段 1 验证用。手动调:
+  //   const r = await __test_rag_deep_dive(arxivId, cfg);
+  (window as unknown as { __test_rag_deep_dive?: unknown }).__test_rag_deep_dive =
+    runDeepDiveWithRetrieval;
+}
+
+
 
 // 当前最近一次生成的精读结果(供"保存精读到 GitHub"按钮使用)
 let currentDeepDive: DeepDiveResult | null = null;
@@ -1958,8 +2123,14 @@ function renderDeepDiveMarkdown(md: string): string {
     return escapeHtml(s)
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      // $...$ 行内 LaTeX(粗略保留原样,KaTeX 渲染留给未来扩展)
-      .replace(/\$([^$]+)\$/g, '<code class="analyzer-latex">$$1$</code>');
+      // $...$ 行内 LaTeX → KaTeX 客户端渲染;失败兜底到 <code>
+      .replace(/\$([^$\n]+?)\$/g, (_m, expr) => {
+        try {
+          return katex.renderToString(expr, { throwOnError: false, output: 'html' });
+        } catch {
+          return `<code class="analyzer-latex">$${expr}$</code>`;
+        }
+      });
   }
 }
 
