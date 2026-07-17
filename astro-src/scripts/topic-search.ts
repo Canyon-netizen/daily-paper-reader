@@ -28,6 +28,7 @@ import {
   callLLM,
 } from './paper-analyzer';
 import type { ArxivEntry } from './paper-analyzer';
+import { callChatCompletion, REASONING_MODEL_PATTERN_WIDE, type ChatMessage } from '../lib/llm';
 import { debounce, canonicalArxivId as canonicalId, escapeHtml } from '../lib/dom-utils';
 import {
   buildRegenSubQ,
@@ -649,53 +650,35 @@ async function callLLMRaw(
   jsonOnly = true,
   maxTokens = 4000,
 ): Promise<string> {
-  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
-  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
-  const isReasoning = /reasoner|reasoning|r1|think/i.test(cfg.model);
   // finish_reason=length(被输出预算截断)时,自动加倍预算重试一次。
-  // 主要救推理模型:它会先输出一大段 <think>...</think>,重任务(如从 164 篇筛 30 篇)
-  // 的思考很长,可能把整个 maxTokens 烧在 think 里,剥掉 think 后正文为空 →
-  // 「LLM 返回为空(finish_reason=length)」。加倍预算给思考+正文都留够空间。
+  // 主要救推理模型:它会先输出一大段 reasoning,重任务思考很长,可能烧光整个 maxTokens,
+  // 剥掉思考后正文为空。
   let budget = maxTokens;
   const MAX_BUDGET = 16000;
   for (let attempt = 0; ; attempt++) {
-    const body: Record<string, unknown> = {
-      model: cfg.model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
-      temperature: 0.3,
-      max_tokens: budget,
-    };
-    if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
-    const res = await fetch(url, {
-      method: 'POST',
-      signal: inFlightController?.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${cfg.apiKey}`,
+    const response = await callChatCompletion(
+      cfg,
+      {
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent },
+        ],
+        temperature: 0.3,
+        maxTokens: budget,
+        signal: inFlightController?.signal,
+        reasoningModelPattern: REASONING_MODEL_PATTERN_WIDE,
       },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`LLM API 错误 (${res.status}): ${t.slice(0, 200)}`);
-    }
-    const data = await res.json();
-    const content: string = data?.choices?.[0]?.message?.content ?? '';
-    const finishReason: string = data?.choices?.[0]?.finish_reason ?? '';
-    // 剥 think / fence,判断剥完后是否还有正文
+    );
+    const content = response.content;
+    const finishReason = response.finishReason;
     const stripped = content
-      .replace(/<think>[\s\S]*?<\/think>/gi, '')
-      // 未闭合的 <think>(被 length 截断,只有开标签没有闭标签)→ 整段当思考丢掉
-      .replace(/<think>[\s\S]*$/i, '')
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/, '')
+      .replace(/<\/think>/gi, "")
+      .replace(/<\/think[\s\S]*\$/i, "")
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```\s*$/, "")
       .trim();
-    // 被预算截断且正文为空/过短 → 加倍预算重试(思考吃光了预算,没轮到输出 JSON)
     if (
-      finishReason === 'length' &&
+      finishReason === "length" &&
       stripped.length < 20 &&
       budget < MAX_BUDGET &&
       attempt < 3
@@ -706,6 +689,7 @@ async function callLLMRaw(
     return finalizeLLMJson(content, stripped, finishReason, jsonOnly);
   }
 }
+
 
 // 从(已剥 think/fence 的)stripped 里提取顶层 JSON;jsonOnly=false 时原样返回 stripped。
 function finalizeLLMJson(
@@ -1317,31 +1301,15 @@ async function chatWithPaper(arxivId: string, question: string): Promise<string>
   ];
   for (const m of history) messages.push({ role: m.role, content: m.content });
   messages.push({ role: 'user', content: question });
-
-  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
-  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
-  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
-  const body: Record<string, unknown> = {
-    model: cfg.model,
+  const response = await callChatCompletion(cfg, {
     messages,
     temperature: 0.4,
-  };
-  if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
-  const res = await fetch(url, {
-    method: 'POST',
     signal: inFlightController?.signal,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`LLM API 错误 (${res.status}): ${t.slice(0, 200)}`);
-  }
-  const data = await res.json();
-  let content: string = data?.choices?.[0]?.message?.content ?? '';
+  let content: string = response.content ?? '';
   if (!content) throw new Error('LLM 返回为空');
   content = content
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<\/think>/gi, '')
     .replace(/^```(?:markdown)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
     .trim();
@@ -1401,31 +1369,15 @@ async function chatWithReport(
   ];
   for (const m of history.slice(-MAX_QA_FOR_LLM)) messages.push({ role: m.role, content: m.content });
   messages.push({ role: 'user', content: question });
-
-  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
-  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
-  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
-  const body: Record<string, unknown> = {
-    model: cfg.model,
+  const response = await callChatCompletion(cfg, {
     messages,
     temperature: 0.4,
-  };
-  if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
-  const res = await fetch(url, {
-    method: 'POST',
     signal: inFlightController?.signal,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`LLM API 错误 (${res.status}): ${t.slice(0, 200)}`);
-  }
-  const data = await res.json();
-  let content: string = data?.choices?.[0]?.message?.content ?? '';
+  let content: string = response.content ?? '';
   if (!content) throw new Error('LLM 返回为空');
   content = content
-    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<\/think>/gi, '')
     .replace(/^```(?:markdown)?\s*/i, '')
     .replace(/\s*```\s*$/, '')
     .trim();
