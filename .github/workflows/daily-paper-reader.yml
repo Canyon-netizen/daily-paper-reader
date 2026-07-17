@@ -10,9 +10,9 @@ on:
         required: false
         default: "false"
       fetch_days:
-        description: "回溯抓取天数（例如 30）；留空则使用默认配置"
+        description: "回溯抓取天数(默认 7;daily cron 也会自动用 7,留空跟随)"
         required: false
-        default: "10"
+        default: "7"
       fetch_mode:
         description: "抓取模式：auto/standard/skims（auto 按 fetch-days 阈值决定，standard/ skims 强制）"
         required: false
@@ -33,7 +33,9 @@ jobs:
   run:
     if: github.repository == 'Canyon-netizen/daily-paper-reader' || github.repository == 'ziwenhahaha/daily-paper-reader' || github.repository == '5-xj/daily-paper-reader'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # 单次 run 历史最长跑过 ~110 分钟(30 天窗口全量);窗口调小到 7-10 天后
+    # 通常 <50 分钟。timeout 留 6 小时给边角情况(冷启动 + LLM 抖动)。
+    timeout-minutes: 360
     env:
       DPR_EMBED_API_TIMEOUT: "60"
       PYTHONUNBUFFERED: "1"
@@ -184,6 +186,14 @@ jobs:
           FETCH_DAYS="${{ github.event.inputs.fetch_days }}"
           FETCH_MODE="${{ github.event.inputs.fetch_mode }}"
           PROFILE_TAG="${{ github.event.inputs.profile_tag }}"
+          # schedule 触发时 github.event.inputs 全空;workflow_dispatch 留空时也是空。
+          # 兜底默认 7 天 — 配合每日 cron 等效滚动 7 天窗口(batch 数 ~7-8 个,
+          # 单次 wall-clock ~30 分钟,远低于 6h timeout)。
+          # 想全量补历史(>7 天)必须显式传 fetch_days,例如 30。
+          if [ -z "$FETCH_DAYS" ]; then
+            FETCH_DAYS="7"
+          fi
+          echo "Effective FETCH_DAYS=$FETCH_DAYS RUN_ENRICH=$RUN_ENRICH FETCH_MODE=$FETCH_MODE PROFILE_TAG=${PROFILE_TAG:-<all>}"
           ARGS=()
           if [ "$RUN_ENRICH" = "true" ]; then
             ARGS+=(--run-enrich)
