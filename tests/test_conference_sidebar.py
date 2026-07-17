@@ -126,7 +126,10 @@ class ConferenceSidebarTest(unittest.TestCase):
             self.assertIn("title_zh: 会议论文中文标题", md_text)
             self.assertIn("pdf: \"https://openreview.net/pdf?id=abc123\"", md_text)
             self.assertIn("source: ICML-2025-Accepted", md_text)
+            # 4-dim categories:本批内 conference sidebar 仍 emit `tags:` 行兼容
+            # + 新增 `categories:` 块从 source 重推 venue。
             self.assertIn('tags: ["query:rl"]', md_text)
+            self.assertIn("categories: { venue: [\"ICML 2025\"]", md_text)
             self.assertNotIn("paper:ICML", md_text)
             self.assertNotIn("paper:2025", md_text)
             self.assertIn("selection_source: conference_retrieval", md_text)

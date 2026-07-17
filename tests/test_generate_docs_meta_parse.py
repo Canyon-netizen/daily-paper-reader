@@ -100,8 +100,16 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
             self.assertEqual(item["selection_source"], "fresh_fetch")
 
     def test_extract_sidebar_tags_hides_composite_suffix(self):
+        # llm_categories (4-dim) 优先路径;没有再回退 llm_tags。这两个 paper
+        # 都是 categories 路径,测试期望 task / method 维度被采纳。
         paper = {
             "llm_score": 8.0,
+            "llm_categories": {
+                "venue": [],
+                "task": ["reasoning", "retrieval"],
+                "method": ["rag"],
+                "type": ["empirical"],
+            },
             "llm_tags": [
                 "query:sr:composite",
                 "query:sr",
@@ -110,10 +118,14 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         }
         tags = self.mod.extract_sidebar_tags(paper)
         self.assertEqual(tags[0], ("score", "8.0"))
-        self.assertIn(("query", "sr"), tags)
-        self.assertIn(("query", "equation-discovery"), tags)
-        self.assertNotIn(("query", "sr:composite"), tags)
-        self.assertEqual(tags.count(("query", "sr")), 1)
+        # 4-dim 顺序固定:venue → task → method → type
+        self.assertIn(("task", "reasoning"), tags)
+        self.assertIn(("task", "retrieval"), tags)
+        self.assertIn(("method", "rag"), tags)
+        self.assertIn(("type", "empirical"), tags)
+        # llm_tags 在 llm_categories 路径里不读,旧 keyword/query 不出现
+        self.assertNotIn(("query", "sr"), tags)
+        self.assertNotIn(("query", "equation-discovery"), tags)
 
     def test_build_markdown_content_writes_media_json_front_matter(self):
         paper = {

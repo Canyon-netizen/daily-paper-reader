@@ -51,6 +51,16 @@ for (const f of files) {
       authors: m.data.authors || [],
       date: m.data.date ? new Date(m.data.date).toISOString().slice(0, 10) : '',
       tags: m.data.tags || [],
+      // 4-dim categories:paper.ts 默认空 4-dim,后续 Jaccard 走 flattenCategories。
+      // B7 迁移让 docs/papers 实际大多数都有 categories: 行;空时 fallback 用 []。
+      categories: m.data.categories && typeof m.data.categories === 'object'
+        ? {
+            venue: Array.isArray(m.data.categories.venue) ? m.data.categories.venue : [],
+            task: Array.isArray(m.data.categories.task) ? m.data.categories.task : [],
+            method: Array.isArray(m.data.categories.method) ? m.data.categories.method : [],
+            type: Array.isArray(m.data.categories.type) ? m.data.categories.type : [],
+          }
+        : { venue: [], task: [], method: [], type: [] },
       tldr: m.data.tldr || '',
       score: m.data.score || 0,
       source: m.data.source || '',

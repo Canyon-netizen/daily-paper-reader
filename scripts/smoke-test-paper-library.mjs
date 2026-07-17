@@ -49,9 +49,26 @@ const userTags = await import(`file://${TMP}/lib/user-tags.js`);
 const relations = await import(`file://${TMP}/lib/paper-relations.js`);
 
 const fakePapers = [
-  { id: 'a', arxivId: '0001.00001v1', title: 'A', title_zh: '甲', authors: ['x'], date: '2026-01-01', tags: ['topic:rl', 'query:foo'], tldr: 'rl agent', score: 1, source: 's' },
-  { id: 'b', arxivId: '0001.00002v1', title: 'B', title_zh: '乙', authors: ['x'], date: '2026-01-02', tags: ['topic:rl', 'query:bar'], tldr: 'rl method', score: 1, source: 's' },
-  { id: 'c', arxivId: '0001.00003v1', title: 'C', title_zh: '丙', authors: ['y'], date: '2026-01-03', tags: ['topic:cl'], tldr: 'cl alignment', score: 1, source: 's' },
+  // 4-dim categories fixtures — task 用 'rl' 与 'reasoning',method 用 'lora' 与 'rlhf',
+  // 让 a/b 共享 'task:rl' (Jaccard 期望命中)。
+  {
+    id: 'a', arxivId: '0001.00001v1', title: 'A', title_zh: '甲', authors: ['x'],
+    date: '2026-01-01',
+    categories: { venue: [], task: ['rl', 'agent'], method: ['lora'], type: ['empirical'] },
+    tldr: 'rl agent', score: 1, source: 's',
+  },
+  {
+    id: 'b', arxivId: '0001.00002v1', title: 'B', title_zh: '乙', authors: ['x'],
+    date: '2026-01-02',
+    categories: { venue: [], task: ['rl'], method: ['rlhf'], type: ['empirical'] },
+    tldr: 'rl method', score: 1, source: 's',
+  },
+  {
+    id: 'c', arxivId: '0001.00003v1', title: 'C', title_zh: '丙', authors: ['y'],
+    date: '2026-01-03',
+    categories: { venue: [], task: ['reasoning'], method: ['rag'], type: ['benchmark'] },
+    tldr: 'reasoning alignment', score: 1, source: 's',
+  },
 ];
 
 // Jaccard
@@ -59,9 +76,9 @@ const jEdges = relations.computeJaccardEdges(fakePapers, 0.01);
 console.log(`  jaccard edges: ${jEdges.length}`);
 console.log(`  edges: ${JSON.stringify(jEdges)}`);
 const aB = jEdges.find(e => (e.source === 'a' && e.target === 'b') || (e.source === 'b' && e.target === 'a'));
-if (!aB) throw new Error('FAIL: a-b should share topic:rl');
+if (!aB) throw new Error('FAIL: a-b should share task:rl');
 if (aB.weight < 0.1) throw new Error(`FAIL: a-b weight too low: ${aB.weight}`);
-if (!aB.sharedTags || !aB.sharedTags.includes('topic:rl')) throw new Error(`FAIL: sharedTags missing topic:rl: ${aB.sharedTags}`);
+if (!aB.sharedTags || !aB.sharedTags.includes('task:rl')) throw new Error(`FAIL: sharedTags missing task:rl: ${aB.sharedTags}`);
 console.log(`  ✓ a-b jaccard weight = ${aB.weight.toFixed(3)}, sharedTags = ${aB.sharedTags.join(',')}`);
 
 // TF-IDF
