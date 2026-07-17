@@ -128,43 +128,59 @@ const latestDateLabel = latestDate
         <ul class="paper-grid">
           {topPapers.map((p, i) => {
             const href = `${base}/papers/${p.slug}/`;
+            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : null;
             return (
               <li class="paper-card"
                   data-rank={i + 1}
                   data-arxiv-id={p.arxivId}>
                 <a href={href} class="paper-card-link">
+                  <div class="paper-card-topline" aria-hidden="true"></div>
                   <div class="paper-card-head">
-                    <span class="paper-rank">#{i + 1}</span>
+                    <div class="paper-rank-block">
+                      <span class="paper-rank-num">{String(i + 1).padStart(2, '0')}</span>
+                      <span class="paper-rank-label">{medal ? `${medal} 编辑精选` : '编辑精选'}</span>
+                    </div>
                     {p.score !== undefined && (
-                      <span class="paper-score" title="LLM 评分">
-                        ★ {p.score.toFixed(1)}
-                      </span>
+                      <div class="paper-score" title="LLM 评分">
+                        <span class="paper-score-star" aria-hidden="true">★</span>
+                        <span class="paper-score-value">{p.score.toFixed(1)}</span>
+                      </div>
                     )}
-                    {p.venue && (
+                  </div>
+                  {p.venue && (
+                    <div class="paper-meta-row">
                       <span class={p.accepted ? 'venue-chip venue-chip--accepted' : 'venue-chip'} title={p.accepted ? '会议接收论文' : '会议论文'}>
                         {p.venue}{p.accepted ? ' ✓' : ''}
                       </span>
-                    )}
-                  </div>
+                      {p.date && (
+                        <span class="paper-date">{new Date(p.date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</span>
+                      )}
+                    </div>
+                  )}
                   <h3 class="paper-title">{p.title_zh || p.title}</h3>
                   {p.title_zh && p.title && p.title !== p.title_zh && (
                     <p class="paper-title-en">{p.title}</p>
                   )}
                   {p.evidence && (
-                    <p class="paper-evidence">
+                    <blockquote class="paper-evidence">
                       <span class="evidence-label">EVIDENCE</span>
-                      {p.evidence}
-                    </p>
+                      <span class="evidence-text">{p.evidence}</span>
+                    </blockquote>
                   )}
                   <div class="paper-card-foot">
-                    {p.tags && p.tags.length > 0 && (
+                    {p.tags && p.tags.length > 0 ? (
                       <div class="paper-tags">
                         {p.tags.slice(0, 2).map((t) => (
                           <span class="tag">{t.replace(/^query:/, '')}</span>
                         ))}
                       </div>
-                    )}
-                    <span class="paper-cta">阅读 →</span>
+                    ) : <span />}
+                    <span class="paper-cta">
+                      阅读
+                      <svg class="paper-cta-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M5 12h14M13 5l7 7-7 7" />
+                      </svg>
+                    </span>
                   </div>
                 </a>
               </li>
