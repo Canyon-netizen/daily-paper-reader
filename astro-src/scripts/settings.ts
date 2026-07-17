@@ -3,75 +3,25 @@
 //
 // 浏览器里没有任何敏感数据离开浏览器:LLM key / Gist token 只存在 localStorage,
 // 只有用户主动"同步到 Gist"才会上传到用户自己的 Gist,后台 workflow 拉这个 Gist 当配置源。
+//
+// 拆分 (2026-07 split step 1): 顶层 interface / STORAGE_KEYS / GitHub 仓库
+// 默认搬到 ./settings/{types,storage}.ts; 主文件留 re-export 让旧 import
+// 路径 `from '../scripts/settings'` 继续工作。
 
-export interface LLMConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-}
-
-export interface TopicEntry {
-  tag: string;
-  description: string;
-  enabled: boolean;
-}
-
-export interface ProviderPreset {
-  baseUrl: string;
-  defaultModel: string;
-  models: string[];
-  label: string;
-}
+import type { LLMConfig, TopicEntry, ProviderPreset } from './settings/types';
+export type { LLMConfig, TopicEntry, ProviderPreset } from './settings/types';
 
 // ============================================================================
 // Storage keys — 在这里集中管理,改 key 名只需要改这一处
+// (实际定义见 ./settings/storage.ts; settings.ts 仅 import 使用, 旧代码继续
+//  `import { STORAGE_KEYS } from './settings'` 不需改路径 — 因为本文件
+//  现在通过下面的 `import` 在内部使用这些常量, 而 TS 中 re-export 给外部
+//  caller 的等效方式是 `export { X } from '...'`, 不要重复 import 后又 export)
 // ============================================================================
-export const STORAGE_KEYS = {
-  llm: 'dpr_analyzer_v1',
-  provider: 'dpr_analyzer_provider_v1',
-  proxy: 'dpr_analyzer_proxy_v1',
-  // 单一 GitHub PAT — 同时用于"Gist 同步配置"和"保存论文到 GitHub"。
-  // 需要同时有 `gist`(创建/更新 Gist)和 `repo`(触发 workflow_dispatch)权限。
-  // fine-grained PAT: Gist (write) + Actions (write) 或 Contents (write)。
-  // 历史 key `dpr_analyzer_gist_token_v1` 仍能读出来做向后兼容,但写入统一用 githubToken。
-  githubToken: 'dpr_analyzer_github_token_v1',
-  gistId: 'dpr_analyzer_gist_id_v1',
-  topics: 'dpr_analyzer_topics_v1',
-  categories: 'dpr_analyzer_categories_v1',
-  // 长文精读(Deep Dive) — maxPages 默认 20,compact 默认关。
-  // 用户在 settings 页改,仅存浏览器 localStorage。
-  deepDiveMaxPages: 'dpr_analyzer_deepdive_max_pages_v1',
-  deepDiveCompact: 'dpr_analyzer_deepdive_compact_v1',
-  deepDiveCompactPages: 'dpr_analyzer_deepdive_compact_pages_v1',
-  // 已隐藏论文列表 — 论文详情页"隐藏"按钮的持久化层。
-  // 不写 Gist(避免污染 CI $GITHUB_ENV),纯 localStorage。
-  hiddenPapers: 'dpr_hidden_papers_v1',
-  // 用户标签 — 论文抽屉"打标签"面板 + /settings/ 用户标签面板的持久化层。
-  // 与 hiddenPapers 一样纯 localStorage,Gist 同步在 settings.ts 里有专门
-  // pullUserTagsFromGist / pushUserTagsToGist,不污染其它字段。
-  userTags: 'dpr_user_tags_v1',
-  // 已选论文列表 — 多选论文 → 送去 /topic/?from=selection 当种子上下文。
-  // 仅 localStorage,不上 Gist(选择是临时工作流,跨设备无意义)。
-  selection: 'dpr_paper_selection_v1',
-  // paper-analyzer 分析结果本地历史(用户刷新页面后仍能查看、再次访问)。
-  // 纯 localStorage,不同步 Gist,也不上 GitHub。
-  analyzerHistory: 'dpr_analyzer_history_v1',
-  // 主题在 theme.ts / BaseLayout 里维护,这里不重复
-} as const;
-
-// GitHub 仓库配置 — 用于"保存论文到 GitHub"功能触发 workflow_dispatch。
-// 用户不需要填这个,默认指向当前仓库。如果 fork 到别处,在 settings 页面改这两个值。
-export const GITHUB_REPO_DEFAULT = {
-  owner: 'Canyon-netizen',
-  repo: 'daily-paper-reader',
-  workflow: 'save-paper.yml',
-};
-
-export interface GitHubRepoConfig {
-  owner: string;
-  repo: string;
-  workflow: string;
-}
+import { STORAGE_KEYS, GITHUB_REPO_DEFAULT } from './settings/storage';
+import type { GitHubRepoConfig } from './settings/storage';
+export { STORAGE_KEYS, GITHUB_REPO_DEFAULT } from './settings/storage';
+export type { GitHubRepoConfig } from './settings/storage';
 
 export function loadGitHubToken(): string {
   try {
