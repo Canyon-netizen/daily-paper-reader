@@ -56,7 +56,6 @@ export default defineConfig({
       rollupOptions: {
         // server-only disk 访问层:只走 SSR / bun 独立脚本,绝不应进 client chunk。
         // 顶层 import node:fs / node:path 会被 Vite externalize 后报 "join is not exported"。
-        // 用正则匹配相对路径 + 绝对路径两种形式,覆盖 Vite/Rollup 不同解析阶段。
         external: (id) =>
           /paper-disk\.mjs$/.test(id) ||
           /taxonomies-disk\.mjs$/.test(id),
@@ -64,7 +63,7 @@ export default defineConfig({
     },
     ssr: {
       // SSR 端:把 disk.mjs 标记为需要 bundle 而非 external,
-      // 否则 Astro 生成静态路由时找不到物理文件。
+      // 否则 Astro 在 SSR 阶段找不到物理文件。
       // (client 端靠 build.rollupOptions.external 排除,这俩不会进 client chunk)
       noExternal: [/.*-disk\.mjs$/],
     },
