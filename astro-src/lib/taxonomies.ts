@@ -1,12 +1,13 @@
 // 4-dim 分类白名单(任务/方法/类型),与 `src/taxonomy.py` 共用同份
 // `config/taxonomies.json`。TS 端主要靠 Vite 的 JSON import;bun 跑的独立脚本
-// 若 Vite 解析不到,走 `readTaxonomiesFromDisk()` 回落到 `readFileSync`。
+// 若 Vite 解析不到,动态 import `./taxonomies-disk.mjs` 回落到 `readFileSync`。
 //
 // venue 维度的可取集合由 `astro-src/lib/venue.ts::CONFERENCE_SOURCE_LABELS`
 // 推导 (source → 'ICML 2025' 风格 label),不在此处声明。
-
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+//
+// 注意:不要在此文件顶层 `import` 任何 node:* 模块 —— Vite 会把整个模块编进
+// 客户端 bundle,触发 `node:fs / node:path is not exported by __vite-browser-external`。
+// 需要读盘的逻辑全部走 `./taxonomies-disk.mjs`(动态 import)。
 
 interface TaxonomiesFile {
   task: readonly string[];
@@ -140,12 +141,13 @@ export function categoriesToYamlInline(c: Categories): string {
   return '{ ' + parts.join(', ') + ' }';
 }
 
-/** bun 独立跑 (无 Vite) 时的 fallback — 直接读盘同步加载;
+/** bun 独立跑 (无 Vite) 时的 fallback — 动态 import 读盘文件,
+ *  这样本文件的静态 dependency graph 不含 node:fs / node:path。
  *  类型与 JSON import 路径保持一致。 */
 let diskCache: TaxonomiesFile | null = null;
-export function readTaxonomiesFromDisk(): TaxonomiesFile {
+export async function readTaxonomiesFromDisk(): Promise<TaxonomiesFile> {
   if (diskCache) return diskCache;
-  const p = join(process.cwd(), 'config', 'taxonomies.json');
-  diskCache = JSON.parse(readFileSync(p, 'utf-8')) as TaxonomiesFile;
+  const mod = await import('./taxonomies-disk.mjs');
+  diskCache = mod.readTaxonomiesFromDisk() as TaxonomiesFile;
   return diskCache;
 }

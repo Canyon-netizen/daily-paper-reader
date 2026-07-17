@@ -10,7 +10,9 @@ import { listPapers, listAllPapersByTag, flattenCategories } from '../lib/paper'
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
+import DailyCalendar from '../components/DailyCalendar.astro';
 import '../styles/home.css';
+import '../styles/daily-calendar.css';
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
@@ -53,6 +55,22 @@ const latestDate = (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date;
 const latestDateLabel = latestDate
   ? new Date(latestDate).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
   : '等待首次抓取';
+
+// 日历视图数据:按 date desc + dedup(取每个 arxiv id 最新 v# 的 date)。
+const dailyPapersAll = await listPapers({ sortBy: 'date', dedup: true });
+const dailyLean = dailyPapersAll
+  .filter((p) => p.date)
+  .map((p) => ({
+    date: p.date!,
+    slug: p.slug,
+    arxivId: p.arxivId,
+    title: p.title,
+    title_zh: p.title_zh,
+    score: p.score,
+    venue: p.venue,
+    accepted: p.accepted,
+    tags: p.tags,
+  }));
 ---
 
 <BaseLayout
@@ -112,6 +130,9 @@ const latestDateLabel = latestDate
         </div>
       </div>
     </section>
+
+    <!-- ============ 日历视图 ============ -->
+    <DailyCalendar base={base} papers={dailyLean} />
 
     <!-- ============ 编辑精选 ============ -->
     <section id="top-picks" class="section">

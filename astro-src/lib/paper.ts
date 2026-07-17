@@ -5,15 +5,14 @@
 //   title / title_zh / authors / date / generated_at / pdf / categories /
 //   score / evidence / tldr / source / selection_source / figures_json /
 //   tables_json / motivation / method / result / conclusion
+//
+// 注意:不要在此文件顶层 `import` 任何 node:* 模块 —— Vite 会把整个模块编进
+// 客户端 bundle,触发 `node:fs / node:path is not exported by __vite-browser-external`。
+// 需要读盘的逻辑全部走 `./paper-disk.mjs`(动态 import)。
 
-import { readFile, readdir } from 'node:fs/promises';
-import { join, relative } from 'node:path';
 import yaml from 'js-yaml';
 import { buildCategories, type Categories } from './taxonomies';
 import { extractVenue } from './venue';
-
-const PROJECT_ROOT = process.cwd();
-const DOCS_DIR = join(PROJECT_ROOT, 'docs');
 
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
 const PREFIX_SKIP_DIR = '_';
@@ -142,10 +141,11 @@ function parseFrontmatter(text: string): { data: PaperFrontmatter; body: string 
 }
 
 export async function readPaper(id: string): Promise<Paper | null> {
-  const mdPath = join(DOCS_DIR, `${id}.md`);
+  const disk = await import('./paper-disk.mjs');
+  const mdPath = disk.joinPath(disk.DOCS_DIR, `${id}.md`);
   let text: string;
   try {
-    text = await readFile(mdPath, 'utf-8');
+    text = await disk.readTextFile(mdPath);
   } catch {
     return null;
   }
@@ -218,21 +218,23 @@ export interface PaperListItem {
   source?: string;
   venue?: string;
   accepted?: boolean;
+  tags?: string[];
 }
 
 async function walk(dir: string, out: string[]): Promise<void> {
-  const entries = await readdir(dir, { withFileTypes: true });
+  const disk = await import('./paper-disk.mjs');
+  const entries = await disk.readDirEntries(dir);
   for (const e of entries) {
     if (e.isDirectory()) {
       if (EXCLUDED_DIRS.has(e.name) || e.name.startsWith(PREFIX_SKIP_DIR)) continue;
-      const p = join(dir, e.name);
+      const p = disk.joinPath(dir, e.name);
       await walk(p, out);
       continue;
     }
     if (e.name.endsWith('.md') && !e.name.startsWith('_') && e.name !== 'README.md'
         && e.name !== 'path-spec.md' && e.name !== 'zotero-usage.md') {
-      const p = join(dir, e.name);
-      const rel = relative(DOCS_DIR, p).replace(/\\/g, '/');
+      const p = disk.joinPath(dir, e.name);
+      const rel = disk.relativeTo(disk.DOCS_DIR, p);
       const id = rel.replace(/\.md$/, '');
       out.push(id);
     }
@@ -241,7 +243,8 @@ async function walk(dir: string, out: string[]): Promise<void> {
 
 export async function listAllPaperIds(): Promise<string[]> {
   const out: string[] = [];
-  await walk(DOCS_DIR, out);
+  const disk = await import('./paper-disk.mjs');
+  await walk(disk.DOCS_DIR, out);
   return out;
 }
 
@@ -321,6 +324,7 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       source: p.source,
       venue: p.venue,
       accepted: p.accepted,
+      tags: p.tags as string[] | undefined,
     });
   }
   let filtered = items;

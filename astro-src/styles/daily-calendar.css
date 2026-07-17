@@ -1,0 +1,284 @@
+/* ============================================================
+ * 首页日历视图 (DailyCalendar.astro)
+ * 数据源: SSR 时 listPapers({sortBy:'date', dedup:true}),
+ * 客户端不发起 fetch,所有论文元数据序列化在 <script id="daily-data"> 里。
+ * 配色: 全用 var(--*) + color-mix,跟随 3 主题 (light / dark / sepia)。
+ * ============================================================ */
+
+.home .daily-section {
+  margin-top: 3.5rem;
+}
+
+.home .cal-months {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+/* ----- 单个月份 details ----- */
+.home .cal-month {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 320px;
+}
+.home .cal-month-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.9rem 1.2rem;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  font-weight: 700;
+  font-size: 1.02rem;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-elevated) 80%, var(--accent-soft));
+  transition: background var(--transition);
+}
+.home .cal-month-summary::-webkit-details-marker { display: none; }
+.home .cal-month-summary::marker { content: ''; }
+.home .cal-month-summary::before {
+  content: '▸';
+  display: inline-block;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  transition: transform var(--transition);
+  flex-shrink: 0;
+}
+.home .cal-month[open] > .cal-month-summary::before {
+  transform: rotate(90deg);
+}
+.home .cal-month-summary:hover {
+  background: color-mix(in srgb, var(--bg-elevated) 60%, var(--accent-soft));
+}
+.home .cal-month-summary-text {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex: 1;
+}
+.home .cal-month-count {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+
+.home .cal-grid-wrap {
+  padding: 1rem 1rem 1.1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ----- 星期表头 ----- */
+.home .cal-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.home .cal-weekday {
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--fg-subtle);
+  letter-spacing: 0.05em;
+  padding: 0.3rem 0;
+}
+
+/* ----- 7x6 网格 ----- */
+.home .cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+
+/* ----- 单格 cell ----- */
+.home .cal-cell {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  padding: 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--fg-subtle) 6%, var(--bg));
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font: inherit;
+  transition: transform var(--transition), border-color var(--transition), background var(--transition);
+  overflow: hidden;
+}
+.home .cal-cell:hover {
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+}
+.home .cal-cell--pad {
+  visibility: hidden;
+  cursor: default;
+  pointer-events: none;
+}
+.home .cal-cell--empty {
+  opacity: 0.35;
+}
+.home .cal-cell--low {
+  background: color-mix(in srgb, var(--fg-subtle) 8%, var(--bg));
+}
+.home .cal-cell--mid {
+  background: color-mix(in srgb, var(--warning) 18%, var(--bg));
+}
+.home .cal-cell--high {
+  background: color-mix(in srgb, var(--success) 22%, var(--bg));
+}
+.home .cal-cell[aria-expanded="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.home .cal-cell--today {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.home .cal-cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.home .cal-cell-day {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--fg-muted);
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+.home .cal-cell--high .cal-cell-day,
+.home .cal-cell--mid .cal-cell-day {
+  color: var(--fg);
+}
+.home .cal-cell-count {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  background: var(--accent);
+  color: var(--bg-elevated);
+  border-radius: 999px;
+  line-height: 1.3;
+}
+.home .cal-cell--empty .cal-cell-count { display: none; }
+
+.home .cal-cell-title {
+  margin-top: auto;
+  font-size: 0.7rem;
+  line-height: 1.25;
+  color: var(--fg);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-weight: 500;
+}
+
+/* ----- 展开区 ----- */
+.home .daily-detail {
+  margin-top: 1.2rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+.home .daily-detail[hidden] { display: none; }
+.home .daily-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.9rem 1.2rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+}
+.home .daily-detail-date {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+.home .daily-detail-meta {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.home .daily-detail-close {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--fg-muted);
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background var(--transition), color var(--transition);
+}
+.home .daily-detail-close:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.home .daily-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.8rem;
+  padding: 1rem 1.1rem 1.2rem;
+}
+.home .daily-detail-empty {
+  padding: 2rem 1.2rem;
+  text-align: center;
+  color: var(--fg-subtle);
+  font-size: 0.92rem;
+}
+
+/* ----- 展开区 paper-card 微调:去掉 topline 金牌色,标签密度更高 ----- */
+.home .daily-detail-grid .paper-card[data-rank="0"] .paper-card-topline {
+  display: none;
+}
+
+/* ----- 响应式 ----- */
+@media (max-width: 720px) {
+  .home .cal-cell {
+    padding: 2px;
+    gap: 1px;
+  }
+  .home .cal-cell-day { font-size: 0.65rem; }
+  .home .cal-cell-count {
+    font-size: 0.55rem;
+    padding: 0 3px;
+  }
+  .home .cal-cell-title { display: none; }
+  .home .cal-grid-wrap { padding: 0.7rem 0.6rem 0.8rem; }
+  .home .cal-weekday { font-size: 0.65rem; }
+  .home .daily-detail-grid { padding: 0.8rem; }
+}
+@media (max-width: 480px) {
+  .home .cal-month-summary { padding: 0.7rem 0.9rem; font-size: 0.92rem; }
+  .home .cal-grid { gap: 3px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home .cal-cell,
+  .home .cal-month-summary,
+  .home .daily-detail-close {
+    transition: none;
+  }
+  .home .cal-cell:hover { transform: none; }
+}
