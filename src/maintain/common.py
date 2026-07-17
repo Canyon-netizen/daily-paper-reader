@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Optional
 
 
 MAINTAIN_DIR = os.path.dirname(__file__)
@@ -113,3 +113,87 @@ def cleanup_backend(*, backend_key: str, retention_days: int, skip_cleanup: bool
             str(max(int(retention_days or 1), 1)),
         ],
     )
+
+
+# --- seen-state + last-crawl-at IO shared by 4 fetchers ---
+#
+# Before this module had them, each fetcher (fetch_arxiv / fetch_chemrxiv /
+# fetch_biorxiv_family / fetch_openreview) had its own 4-function block,
+# ~30 行每个 fetcher。biorxiv 的版本已经参数化, 其余 3 个 fetcher 是字节级
+# 相同但用模块级 CRAWL_STATE_FILE / SEEN_IDS_FILE 闭包。抽这里之后调用点
+# 改成 `load_seen_state(SEEN_IDS_FILE)` 即可。
+
+def _parse_iso_datetime(value: object) -> Optional[datetime]:
+    """Coerce ISO-8601 字符串到 UTC datetime. 返回 None 若失败或空。"""
+    if value is None:
+        return None
+    text = _norm(value)
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def load_last_crawl_at(crawl_state_file: str) -> Optional[datetime]:
+    if not crawl_state_file or not os.path.exists(crawl_state_file):
+        return None
+    try:
+        with open(crawl_state_file, "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+    except Exception:
+        return None
+    raw = _norm(payload.get("last_crawl_at"))
+    return _parse_iso_datetime(raw)
+
+
+def save_last_crawl_at(crawl_state_file: str, at_time: datetime) -> None:
+    parent = os.path.dirname(os.path.abspath(crawl_state_file))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    payload = {"last_crawl_at": at_time.astimezone(timezone.utc).isoformat()}
+    with open(crawl_state_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def load_seen_state(seen_ids_file: str) -> tuple:
+    """Read ``{ids: [...], updated_at, latest_published_at}`` JSON. 返回空
+    ``(set(), None)`` 若文件不存在或解析失败。"""
+    if not seen_ids_file or not os.path.exists(seen_ids_file):
+        return set(), None
+    try:
+        with open(seen_ids_file, "r", encoding="utf-8") as f:
+            payload = json.load(f) or {}
+    except Exception:
+        return set(), None
+
+    raw_ids = payload.get("ids") or []
+    if not isinstance(raw_ids, list):
+        raw_ids = []
+    seen_ids = {str(item).strip() for item in raw_ids if str(item).strip()}
+
+    latest_dt = _parse_iso_datetime(payload.get("latest_published_at"))
+    return seen_ids, latest_dt
+
+
+def save_seen_state(
+    seen_ids_file: str,
+    seen_ids,
+    latest_published_at: Optional[datetime],
+) -> None:
+    parent = os.path.dirname(os.path.abspath(seen_ids_file))
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    payload = {
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "latest_published_at": latest_published_at.astimezone(timezone.utc).isoformat()
+        if latest_published_at
+        else "",
+        "ids": sorted(seen_ids),
+    }
+    with open(seen_ids_file, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
