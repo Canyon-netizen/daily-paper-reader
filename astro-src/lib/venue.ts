@@ -40,6 +40,15 @@ const CONFERENCE_SOURCE_LABELS: Record<string, string> = {
  * - Conference source with a tagged value (e.g. "ICML-2025-Accepted"):
  *     parses tag and returns full "ICML 2025" + accepted flag.
  */
+// 调用方 (frontend / Python 回填) 需要"venue 维度"的数组形式以塞进
+// `categories.venue: [...]` 的存储槽位 (string[])。`venueLabel(source)` 只取 label,
+// 不返回 accepted 状态(status 在 categories 维度里不表达;`Paper.venue` 顶层
+// 仍单独维护 accepted 字段)。
+export function venueLabel(rawSource: string | undefined | null): string[] {
+  const out = extractVenue(rawSource);
+  return out.venue ? [out.venue] : [];
+}
+
 export function extractVenue(rawSource: string | undefined | null): VenueInfo {
   if (!rawSource) return { venue: "", accepted: false };
   const source = String(rawSource).trim();

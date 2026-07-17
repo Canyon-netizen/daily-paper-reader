@@ -16,6 +16,7 @@
 
 import type { PaperListItem } from './paper';
 import { loadSettings, LLM_DEFAULTS } from './storage';
+import { flattenCategories } from './paper';
 
 // ============================================================================
 // 类型
@@ -103,7 +104,9 @@ function buildNodes(papers: PaperListItem[]): RelationNode[] {
     id: p.id,
     arxivId: p.arxivId,
     title: p.title || p.title_zh || p.id,
-    tags: (p.tags || []).slice(),
+    // 拍平 categories (e.g. ['venue:ICML 2025','task:rl']) 供 Jaccard / UI 共用。
+    // 4-dim 比历史的 string[] tags 含的信息更密;map 不去重,flattenCategories 已去重。
+    tags: flattenCategories(p.categories),
   }));
 }
 
@@ -135,17 +138,13 @@ function topKEdges(edges: RelationEdge[], k: number): RelationEdge[] {
 
 /**
  * 提取论文的有效 tag 集合。规则:
- *   - 去除 `query:` 前缀(query:<tag> 与 <tag> 视为等价 — 前端 / 后台约定);
- *   - 去重;
+ *   - flattenCategories 输出形如 'dim:label'(e.g. 'task:rl','venue:ICML 2025'),
+ *     已带 dim 前缀 — 旧 `query:<label>` 前缀约定彻底删除;
+ *   - 去重由 flattenCategories 完成;
  *   - 空 tag 跳过。
  */
 function tagSet(p: PaperListItem): Set<string> {
-  const out = new Set<string>();
-  for (const t of p.tags || []) {
-    const stripped = t.startsWith('query:') ? t.slice(6) : t;
-    if (stripped) out.add(stripped);
-  }
-  return out;
+  return new Set(flattenCategories(p.categories));
 }
 
 /**
