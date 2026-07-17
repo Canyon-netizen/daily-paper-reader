@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from llm import ClientFactory
+from src._utils import log, group_start, group_end
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -29,18 +30,6 @@ GLOBAL_POOL_GUARANTEED_MAX = 20
 GLOBAL_POOL_RRF_MIN = 60
 GLOBAL_POOL_RRF_MAX = 300
 
-
-def log(message: str) -> None:
-  ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-  print(f"[{ts}] {message}", flush=True)
-
-
-def group_start(title: str) -> None:
-  print(f"::group::{title}", flush=True)
-
-
-def group_end() -> None:
-  print("::endgroup::", flush=True)
 
 def build_token_encoder():
   try:

@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
 from subscription_plan import count_subscription_tags
+from src._utils import log, group_start, group_end
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
@@ -57,10 +58,6 @@ CARRYOVER_MIN_SCORE = 8.0
 CARRYOVER_UNTAGGED = "untagged"
 
 
-def log(message: str) -> None:
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {message}", flush=True)
-
 def log_substep(code: str, name: str, phase: str) -> None:
     """
     用于前端解析的子步骤标记。
@@ -70,14 +67,6 @@ def log_substep(code: str, name: str, phase: str) -> None:
     if phase not in ("START", "END"):
         phase = "INFO"
     log(f"[SUBSTEP] {code} - {name} {phase}")
-
-
-def group_start(title: str) -> None:
-    print(f"::group::{title}", flush=True)
-
-
-def group_end() -> None:
-    print("::endgroup::", flush=True)
 
 
 def load_json(path: str) -> Dict[str, Any]:

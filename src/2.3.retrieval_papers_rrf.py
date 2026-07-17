@@ -10,6 +10,7 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
+from src._utils import log, group_start, group_end
 
 
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -17,18 +18,6 @@ ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezone.utc).strftime("%Y%m%d")
 ARCHIVE_DIR = os.path.join(ROOT_DIR, "archive", TODAY_STR)
 FILTERED_DIR = os.path.join(ARCHIVE_DIR, "filtered")
-
-def log(message: str) -> None:
-  ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-  print(f"[{ts}] {message}", flush=True)
-
-
-def group_start(title: str) -> None:
-  print(f"::group::{title}", flush=True)
-
-
-def group_end() -> None:
-  print("::endgroup::", flush=True)
 
 
 def load_json(path: str) -> Dict[str, Any]:

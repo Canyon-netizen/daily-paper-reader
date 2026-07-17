@@ -11,23 +11,12 @@ from typing import Any, Dict, List
 import yaml  # type: ignore
 
 from llm import ClientFactory
+from src._utils import log, group_start, group_end
 
 SCRIPT_DIR = os.path.dirname(__file__)
 CONFIG_FILE = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "config.yaml"))
 
 MODEL_NAME = os.getenv("BLT_REWRITE_MODEL", "gemini-3-flash-preview")
-
-def log(message: str) -> None:
-  ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-  print(f"[{ts}] {message}", flush=True)
-
-
-def group_start(title: str) -> None:
-  print(f"::group::{title}", flush=True)
-
-
-def group_end() -> None:
-  print("::endgroup::", flush=True)
 
 
 def build_related_prompt(keyword: str) -> List[Dict[str, str]]:
