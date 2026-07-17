@@ -406,12 +406,27 @@ def build_sidebar_payload(
         if label:
             tags.append({"kind": kind or "query", "label": label})
 
+    # 4-dim categories:venue 从 source 重推(历史 tags: 兼容保留);
+    # task/method/type 本会议侧不产,留空。
+    venue_dim: List[str] = []
+    src = norm_text(paper.get("source"))
+    if src:
+        from src.venue_extract import venue_label_list
+        venue_dim = venue_label_list(src)
+    categories_payload: Dict[str, List[str]] = {
+        "venue": venue_dim,
+        "task": [],
+        "method": [],
+        "type": [],
+    }
+
     payload = {
         "title": title,
         "link": link,
         "score": score_text,
         "selection_source": "conference_retrieval",
         "tags": tags,
+        "categories": categories_payload,
     }
     evidence = get_evidence(ranked_item)
     if evidence:
@@ -450,6 +465,17 @@ def build_conference_markdown(
         if label:
             tags.append(f"{kind}:{label}")
 
+    # 4-dim categories:venue 从 source 重推,其他留空;同时仍写历史 `tags:` 行
+    # (B7 migration 之后才会只写 categories)。
+    from src.taxonomy import categories_to_yaml_inline as _cat_yaml_inline
+    from src.venue_extract import venue_label_list
+    categories_block: Dict[str, List[str]] = {
+        "venue": venue_label_list(source),
+        "task": [],
+        "method": [],
+        "type": [],
+    }
+
     lines = ["---"]
     lines.append(f"title: {yaml_escape_value(title)}")
     if title_zh:
@@ -458,6 +484,8 @@ def build_conference_markdown(
     lines.append(f"date: {yaml_escape_value(published)}")
     if pdf_url:
         lines.append(f"pdf: {yaml_escape_value(pdf_url)}")
+    if any(categories_block.values()):
+        lines.append(f"categories: {_cat_yaml_inline(categories_block)}")
     if tags:
         lines.append(f"tags: [{', '.join(yaml_escape_value(tag) for tag in tags)}]")
     if score_text:

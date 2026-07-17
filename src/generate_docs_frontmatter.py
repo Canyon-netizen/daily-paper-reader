@@ -108,6 +108,18 @@ def _parse_front_matter(md_text: str) -> Dict[str, Any]:
                     raise ValueError
             except Exception:
                 val = _parse_simple_yaml_list(raw)
+        elif raw.startswith("{") and raw.endswith("}"):
+            # 4-dim categories 行:{venue: ["..."], task: [...], ...} — 直接 JSON-load。
+            # 单行 flow-style(由 src/taxonomy.py::categories_to_yaml_inline / src/6.generate_docs.py 写入),
+            # json.loads 即得 dict。
+            try:
+                parsed_dict = json.loads(raw)
+                if isinstance(parsed_dict, dict):
+                    val = parsed_dict
+                else:
+                    val = raw
+            except Exception:
+                val = raw
         else:
             if (raw[0] in ('"', "'") and raw[-1] == raw[0]) or (
                 raw[0] == '"' and raw[-1] == '"' and len(raw) >= 2
@@ -161,45 +173,63 @@ def _parse_generated_md_to_meta(
     if not title_en:
         title_en = legacy_meta.get("title", "")
 
+    # 4-dim categories:优先从 frontmatter 抽 venue/task/method/type (各 dim string[]);
+    # 标签(tags)那里只读历史 string[] (kind:label) 兼容路径。
+    categories: Dict[str, List[str]] = {"venue": [], "task": [], "method": [], "type": []}
+    raw_cats = fm_meta.get("categories")
+    if isinstance(raw_cats, dict):
+        for dim in ("venue", "task", "method", "type"):
+            items = raw_cats.get(dim)
+            if isinstance(items, list):
+                cleaned = [str(i).strip() for i in items if str(i).strip()]
+                categories[dim] = cleaned
+
     # tags：优先 front matter tags，次选旧式 HTML
     tags_typed: List[Dict[str, str]] = []
-    raw_tags = fm_meta.get("tags") if "tags" in fm_meta else fm_meta.get("Tags")
-    if isinstance(raw_tags, list):
-        tag_items = [str(i).strip() for i in raw_tags if str(i).strip()]
-    elif isinstance(raw_tags, str):
-        candidate = raw_tags.strip()
-        if candidate.startswith("[") and candidate.endswith("]"):
-            tag_items = _parse_simple_yaml_list(candidate)
-        else:
-            tag_items = [t.strip() for t in re.split(r",|，", candidate) if t.strip()]
+    # 本批过渡:若 frontmatter 已经有 categories,tags_typed 就按 categories
+    # 拍平为 "dim:label" tokens 输出,保持 downstream 消费者语义。
+    if any(categories[d] for d in categories):
+        for dim in ("venue", "task", "method", "type"):
+            for label in categories[dim]:
+                tags_typed.append({"kind": dim, "label": label})
     else:
-        tag_items = []
-
-    if tag_items:
-        for t in tag_items:
-            if ":" in t:
-                kind, label = t.split(":", 1)
-                tags_typed.append({"kind": (kind or "paper").strip(), "label": (label or "").strip()})
+        raw_tags = fm_meta.get("tags") if "tags" in fm_meta else fm_meta.get("Tags")
+        if isinstance(raw_tags, list):
+            tag_items = [str(i).strip() for i in raw_tags if str(i).strip()]
+        elif isinstance(raw_tags, str):
+            candidate = raw_tags.strip()
+            if candidate.startswith("[") and candidate.endswith("]"):
+                tag_items = _parse_simple_yaml_list(candidate)
             else:
-                tags_typed.append({"kind": "paper", "label": t})
-    else:
-        # 兼容旧式 markdown 的 HTML tag span
-        tags_html = str(fm_meta.get("tags") or legacy_meta.get("tags") or "")
-        for m in re.finditer(
-            r'<span\s+class="tag-label\s+([^"]+)"[^>]*>(.*?)</span>',
-            tags_html,
-            flags=re.IGNORECASE | re.DOTALL,
-        ):
-            cls = m.group(1) or ""
-            label = re.sub(r"<[^>]+>", "", (m.group(2) or "")).strip()
-            if not label:
-                continue
-            kind = "paper"
-            if "tag-green" in cls:
-                kind = "keyword"
-            elif "tag-blue" in cls:
-                kind = "query"
-            tags_typed.append({"kind": kind, "label": label})
+                tag_items = [t.strip() for t in re.split(r",|，", candidate) if t.strip()]
+        else:
+            tag_items = []
+
+        if tag_items:
+            for t in tag_items:
+                if ":" in t:
+                    kind, label = t.split(":", 1)
+                    tags_typed.append({"kind": (kind or "paper").strip(), "label": (label or "").strip()})
+                else:
+                    tags_typed.append({"kind": "paper", "label": t})
+        else:
+            # 兼容旧式 markdown 的 HTML tag span
+            tags_html = str(fm_meta.get("tags") or legacy_meta.get("tags") or "")
+            for m in re.finditer(
+                r'<span\s+class="tag-label\s+([^"]+)"[^>]*>(.*?)</span>',
+                tags_html,
+                flags=re.IGNORECASE | re.DOTALL,
+            ):
+                cls = m.group(1) or ""
+                label = re.sub(r"<[^>]+>", "", (m.group(2) or "")).strip()
+                if not label:
+                    continue
+                kind = "paper"
+                if "tag-green" in cls:
+                    kind = "keyword"
+                elif "tag-blue" in cls:
+                    kind = "query"
+                tags_typed.append({"kind": kind, "label": label})
 
     parsed_abstract_en = _extract_md_section(text, "Abstract")
     abstract_en = str(paper_abstract or "").strip()
@@ -260,6 +290,9 @@ def _parse_generated_md_to_meta(
         "evidence": str(evidence_value or "").strip(),
         "tldr": str(tldr_value or "").strip(),
         "tags": ", ".join(tags_compact),
+        # 4-dim categories — 同步塞到 meta 里。venue/task/method/type 各自 string[];
+        # 下游消费侧(supabase / /papers/[arxiv] 等)按 dim 单独读。
+        "categories": categories,
         "abstract_en": abstract_en,
         "source": paper_source_value,
         "selection_source": src_value,

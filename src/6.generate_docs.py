@@ -14,7 +14,7 @@ import time
 import xml.etree.ElementTree as ET
 from urllib.parse import quote_plus
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
 import requests
@@ -28,6 +28,12 @@ if SCRIPT_DIR not in sys.path:
 from src._utils import normalize_arxiv_id
 from src.paper_figures import ensure_paper_media
 from src.paper_formulas import ensure_paper_formulas
+from src.venue_extract import venue_label_list
+from src.taxonomy import (
+    normalize_category_dim,
+    build_categories as _build_cats,
+    categories_to_yaml_inline,
+)
 
 CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -553,33 +559,54 @@ def build_glance_fallback(paper: Dict[str, Any]) -> str:
         ]
     )
 
-def build_tags_html(section: str, llm_tags: List[str]) -> str:
+def build_tags_html(section: str, llm_tags: List[str], llm_categories: Optional[Dict[str, List[str]]] = None) -> str:
+    """
+    渲染论文底部标签行 (paper 内容区)。优先读 llm_categories 4-dim;
+    不存在时回退到历史 llm_tags 字符串数组。
+    """
     tags_html: List[str] = []
-    # 新链路按 query 标签展示；历史 keyword:* 统一折叠为 query:*，避免重复。
+    # 4-dim 调色板 — 与 astro-src/lib/paper.ts 渲染层对齐(.tag-venue/task/method/type)。
+    kind_to_css: Dict[str, str] = {
+        "venue": "tag-venue",
+        "task": "tag-task",
+        "method": "tag-method",
+        "type": "tag-type",
+        "query": "tag-blue",
+        "paper": "tag-pink",
+        "keyword": "tag-blue",
+    }
     seen = set()
-    for tag in llm_tags:
-        raw = str(tag).strip()
-        if not raw:
-            continue
-        kind, label = split_sidebar_tag(raw)
-        if kind == "keyword":
-            kind = "query"
-        label = (label or "").strip()
-        if not label:
-            continue
-        dedup_key = f"{kind}:{label}"
-        if dedup_key in seen:
-            continue
-        seen.add(dedup_key)
 
-        # 前台主标签统一使用 query（蓝色），paper 为预留类型。
-        css = {
-            "query": "tag-blue",
-            "paper": "tag-pink",
-        }.get(kind, "tag-pink")
+    def _emit(kind: str, label: str) -> None:
+        t = (label or "").strip()
+        if not t:
+            return
+        key = f"{kind}:{t}"
+        if key in seen:
+            return
+        seen.add(key)
+        css = kind_to_css.get(kind, "tag-pink")
         tags_html.append(
-            f'<span class="tag-label {css}">{html.escape(label)}</span>'
+            f'<span class="tag-label {css}">{html.escape(t)}</span>'
         )
+
+    if isinstance(llm_categories, dict):
+        for dim in ("venue", "task", "method", "type"):
+            items = llm_categories.get(dim) or []
+            if not isinstance(items, list):
+                continue
+            for label in items:
+                _emit(dim, str(label))
+    else:
+        # 新链路按 query 标签展示；历史 keyword:* 统一折叠为 query:*，避免重复。
+        for tag in llm_tags:
+            raw = str(tag).strip()
+            if not raw:
+                continue
+            kind, label = split_sidebar_tag(raw)
+            if kind == "keyword":
+                kind = "query"
+            _emit(kind, label)
     return " ".join(tags_html)
 
 def normalize_meta_tags_line(content: str) -> Tuple[str, bool]:
@@ -929,42 +956,68 @@ def build_sidebar_stars_html(score: Any) -> str:
 
 def extract_sidebar_tags(paper: Dict[str, Any], max_tags: int = 6) -> List[Tuple[str, str]]:
     """
-    侧边栏展示的标签：
-    - 只使用 llm_tags（与文章页 `**Tags**` 保持一致），避免出现“侧边栏与正文不对应”
-    - 去重 + 限制数量，避免侧边栏过长
+    侧边栏展示的标签:
+    - 优先读 llm_categories (4-dim {venue, task, method, type});若不存在则回退
+      到历史 llm_tags (string[] ['kind:label', ...]) — 兼容老数据。
+    - 去重 + 限制数量,避免侧边栏过长。
     """
-    raw: List[str] = []
-    if isinstance(paper.get("llm_tags"), list):
-        raw.extend([str(t) for t in (paper.get("llm_tags") or [])])
-
-    # 历史 keyword:* 统一折叠到 query:*，避免同名重复。
-    seen_labels = set()
     q: List[Tuple[str, str]] = []
     paper_tags: List[Tuple[str, str]] = []
     other: List[Tuple[str, str]] = []
+    seen_labels = set()
 
-    for t in raw:
-        kind, label = split_sidebar_tag(t)
-        if kind == "keyword":
-            kind = "query"
-        label = (label or "").strip()
-        if not label:
-            continue
-        dedup_key = f"{kind}:{label}"
-        if dedup_key in seen_labels:
-            continue
-        seen_labels.add(dedup_key)
-        if kind == "query":
-            q.append((kind, label))
-        elif kind == "paper":
-            paper_tags.append((kind, label))
-        else:
-            other.append((kind, label))
+    cats = paper.get("llm_categories")
+    if isinstance(cats, dict):
+        # 4-dim 顺序固定 venue→task→method→type,保证上游侧边栏排序稳定
+        for dim in ("venue", "task", "method", "type"):
+            items = cats.get(dim) or []
+            if not isinstance(items, list):
+                continue
+            for label in items:
+                t = str(label).strip()
+                if not t:
+                    continue
+                key = f"{dim}:{t}"
+                if key in seen_labels:
+                    continue
+                seen_labels.add(key)
+                if dim == "venue":
+                    q.append((dim, t))
+                elif dim == "task":
+                    paper_tags.append((dim, t))
+                else:
+                    other.append((dim, t))
+                if max_tags > 0 and len(seen_labels) >= max_tags:
+                    break
+            if max_tags > 0 and len(seen_labels) >= max_tags:
+                break
+    else:
+        # 历史 llm_tags 兼容:kind:label 格式
+        raw: List[str] = []
+        if isinstance(paper.get("llm_tags"), list):
+            raw.extend([str(t) for t in (paper.get("llm_tags") or [])])
 
-        if max_tags > 0 and len(seen_labels) >= max_tags:
-            break
+        for t in raw:
+            kind, label = split_sidebar_tag(t)
+            if kind == "keyword":
+                kind = "query"
+            label = (label or "").strip()
+            if not label:
+                continue
+            dedup_key = f"{kind}:{label}"
+            if dedup_key in seen_labels:
+                continue
+            seen_labels.add(dedup_key)
+            if kind == "query":
+                q.append((kind, label))
+            elif kind == "paper":
+                paper_tags.append((kind, label))
+            else:
+                other.append((kind, label))
 
-    # 展示顺序：评分 -> query -> 论文引用(paper) -> 其它
+            if max_tags > 0 and len(seen_labels) >= max_tags:
+                break
+
     tags = q + paper_tags + other
     score = paper.get("llm_score")
     score_tag = []
@@ -1046,10 +1099,17 @@ def build_markdown_content(
     zh_title: str,
     zh_abstract: str,
     tags_list: List[str],
+    categories: Optional[Dict[str, List[str]]] = None,
 ) -> str:
     """
     生成论文 Markdown 内容，使用 YAML front matter 存储元数据。
     前端通过解析 front matter 渲染页面布局。
+
+    `categories`:4-dim {venue, task, method, type},由 pipeline 上游传入
+       (一般是 paper.get("llm_categories"),流程与 legacy tags_list 并存 —
+       pipeline 全部迁移后会真正在 frontmatter 写 categories: 行)。
+    `tags_list`:历史 string[] tags,本批内仍写 frontmatter `tags:` 行,
+       保留向后读兼容 (B7 migration 后端会统一迁移到 categories)。
     """
     zh_title = strip_llm_reasoning(zh_title)
     zh_abstract = strip_llm_reasoning(zh_abstract)
@@ -1122,8 +1182,33 @@ def build_markdown_content(
     lines.append(f"generated_at: {yaml_escape_value(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'))}")
     if pdf_url:
         lines.append(f"pdf: {yaml_escape_value(pdf_url)}")
+    # 4-dim categories:本批开始写到 frontmatter — 与 TS 端 paper-analyzer.ts
+    # buildFrontmatter / Python taxonomy.categories_to_yaml_inline 同 shape。
+    # 单行 flow-style,JSON-loadable inline,Python 手写 frontmatter parser
+    # (`generate_docs_frontmatter.py::_parse_front_matter`) 直接认。
+    if categories:
+        # 来源可信 (已 normalize 过) — 直接 category_to_yaml_inline 输出。
+        try:
+            from taxonomy import categories_to_yaml_inline as _cat_yaml
+        except Exception:
+            _cat_yaml = None
+        if _cat_yaml is not None:
+            lines.append(f"categories: {_cat_yaml(categories)}")
+        else:
+            # 单点 import 失败时,fallback 手拼 — 保险起见,不该发生。
+            def _fallback(c: Dict[str, List[str]]) -> str:
+                parts = []
+                for dim in ("venue", "task", "method", "type"):
+                    items = c.get(dim, []) or []
+                    if not items:
+                        parts.append(f"{dim}: []")
+                    else:
+                        parts.append(f"{dim}: [{', '.join(f'\"{v}\"' for v in items)}]")
+                return "{ " + ", ".join(parts) + " }"
+            lines.append(f"categories: {_fallback(categories)}")
     if tags_list:
-        # 保留完整的 kind:label 格式，前端渲染时再处理
+        # 历史 tags: — 本批过渡保留,旧 reader 仍按此消费;B7 migration 后
+        # 统一迁到 categories 后才会不再 emit。
         lines.append(f"tags: [{', '.join(yaml_escape_value(t) for t in tags_list)}]")
     if score is not None:
         lines.append(f"score: {score}")
@@ -1192,6 +1277,33 @@ def build_tags_list(section: str, llm_tags: List[str]) -> List[str]:
         tags.append(dedup_key)
     return tags
 
+def prepare_llm_categories(paper: Dict[str, Any]) -> Dict[str, List[str]]:
+    """为 paper.llm_categories 凑 4-dim:
+
+    1) venue:从 source 重推 (Python venue_extract.venue_label_list,与 TS
+      paper.ts::backfillVenueDim 同源);
+    2) task/method/type:本批内不强求填充 — LLM 尚未产出 (LLM 产出 step 在
+      step 4/5 之外;此处为空 list 即可,前端 backfillVenueDim 会只补 venue)。
+      LLM 真正填上后(后续 plan 迭代 / paper-analyzer 浏览器工具),B6 backfill
+      再做反推 + 全 LLM 重打 4-dim。
+
+    注意:这里的 `categories` 不是历史 llm_tags (string[]) — `paper` 已有的
+    `llm_categories` 字段(若已由上游产)会被优先合并。"""
+    raw_cats = paper.get("llm_categories")
+    if not isinstance(raw_cats, dict):
+        raw_cats = {}
+    cats: Dict[str, List[str]] = {
+        "venue": list(raw_cats.get("venue") or []),
+        "task": normalize_category_dim(raw_cats.get("task"), "task"),
+        "method": normalize_category_dim(raw_cats.get("method"), "method"),
+        "type": normalize_category_dim(raw_cats.get("type"), "type"),
+    }
+    # venue 维度权威来源是 source;若 llm_categories 没填就从 source 推。
+    if not cats["venue"]:
+        cats["venue"] = venue_label_list(paper.get("source"))
+    return cats
+
+
 def process_paper(
     paper: Dict[str, Any],
     section: str,
@@ -1205,6 +1317,11 @@ def process_paper(
     md_path, txt_path, paper_id = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
     abstract_en = (paper.get("abstract") or "").strip()
     pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+
+    # 准备 4-dim categories(从 source 推 venue;task/method/type 若上游已打,
+    # 经 taxonomy 白名单过滤一次)。本批入口总是把 paper["llm_categories"]
+    # 补齐,后续 build_markdown_content / extract_sidebar_tags 才有的读。
+    paper["llm_categories"] = prepare_llm_categories(paper)
 
     glance = ""
 
@@ -1367,7 +1484,7 @@ def process_paper(
                 log(f"[DEBUG][STEP6] removed section tag from Tags: {os.path.basename(md_path)}")
 
         # 同步 Tags 行（例如 keyword:SR 与 query:SR 同名时也要都展示）
-        tags_html = build_tags_html(section, paper.get("llm_tags") or [])
+        tags_html = build_tags_html(section, paper.get("llm_tags") or [], paper.get("llm_categories"))
         if tags_html:
             updated, changed = replace_meta_line(existing, "Tags", tags_html, add_slash=True)
             if changed:
@@ -1443,7 +1560,9 @@ def process_paper(
         if glance:
             paper["_glance_overview"] = glance
         tags_list = build_tags_list(section, paper.get("llm_tags") or [])
-        content = build_markdown_content(paper, section, "", "", tags_list)
+        content = build_markdown_content(
+            paper, section, "", "", tags_list, paper.get("llm_categories")
+        )
         os.makedirs(os.path.dirname(md_path), exist_ok=True)
         atomic_write_text(md_path, content)
         return paper_id, title
@@ -1476,7 +1595,9 @@ def process_paper(
     glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
     if glance:
         paper["_glance_overview"] = glance
-    content = build_markdown_content(paper, section, zh_title, zh_abstract, tags_list)
+    content = build_markdown_content(
+        paper, section, zh_title, zh_abstract, tags_list, paper.get("llm_categories")
+    )
 
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
     atomic_write_text(md_path, content)
