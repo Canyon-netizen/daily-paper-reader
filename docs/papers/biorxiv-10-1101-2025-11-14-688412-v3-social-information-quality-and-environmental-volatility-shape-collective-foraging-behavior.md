@@ -5,7 +5,7 @@ authors: "Chirkov, V., Kurvers, R. H. J. M., Deffner, D., Romanczuk, P."
 date: 2026-06-26
 generated_at: "2026-07-04 02:35:26 UTC"
 pdf: "https://www.biorxiv.org/content/10.1101/2025.11.14.688412v3.full.pdf"
-tags: ["query:mas"]
+categories: { venue: [], task: ["mas"], method: [], type: [] }
 score: 9.0
 evidence: 多智能体强化学习模拟集体觅食
 tldr: 集体觅食需要在个体探索与社会信息利用之间权衡，但社会线索类型与环境波动如何塑造集体行为尚不清楚。本研究构建基于多智能体强化学习的空间显式模型，智能体追踪移动资源并在随机探索、私有追踪和社会吸引间选择，系统改变资源波动性与社会线索类型。结果显示，低质量线索产生脆弱策略，高质量信息则支持灵活多样的个体行为，揭示了信息质量与生态环境的交互是集体行为涌现的核心机制。
