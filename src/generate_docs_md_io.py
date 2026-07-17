@@ -70,3 +70,55 @@ def upsert_front_matter_field(md_text: str, key: str, value: str) -> Tuple[str, 
     updated = "---\n" + "\n".join(updated_lines).rstrip() + "\n---" + normalized[end_idx + 4 :]
     return updated, updated != normalized
 
+
+
+
+# --- batch C: file-system upsert (block-level) ---
+
+def upsert_auto_block(md_path: str, heading: str, content: str) -> None:
+    """
+    将自动生成内容写入 md：
+    - 若已存在同名 heading，则替换从该块开始到文件末尾
+    - 否则追加到文件末尾
+    """
+    key = f"## {heading}"
+    block = f"\n\n---\n\n{key}\n\n{content}".rstrip() + "\n"
+
+    with open(md_path, "r", encoding="utf-8") as f:
+        txt = f.read()
+
+    idx = txt.rfind(key)
+    if idx == -1:
+        new_txt = txt.rstrip() + block
+    else:
+        start = txt.rfind("\n\n---\n\n", 0, idx)
+        if start == -1:
+            start = idx
+        new_txt = txt[:start].rstrip() + block
+
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(new_txt)
+
+def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
+    """
+    在 Markdown 文本中插入/替换 `## 速览` 区块：
+    - 若已存在 `## 速览`，则替换其内容直到下一个分隔线 `---` 或下一个二级标题 `## `
+    - 否则在 `## Abstract` 之前插入；若找不到则追加到末尾
+    """
+    if not glance:
+        return md_text
+
+    txt = md_text or ""
+    key = "## 速览"
+    if key in txt:
+        # 替换现有速览块
+        pattern = re.compile(r"(^## 速览\\s*\\n)(.*?)(?=\\n---\\n|\\n##\\s|\\Z)", re.S | re.M)
+        return pattern.sub(rf"\\1{glance}\n", txt, count=1)
+
+    abstract_idx = txt.find("## Abstract")
+    if abstract_idx != -1:
+        before = txt[:abstract_idx].rstrip()
+        after = txt[abstract_idx:]
+        return f"{before}\n\n## 速览\n{glance}\n\n---\n\n{after}"
+    return (txt.rstrip() + f"\n\n## 速览\n{glance}\n").rstrip() + "\n"
+
