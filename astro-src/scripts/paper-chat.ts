@@ -124,10 +124,18 @@ function buildSystemPrompt(d: DOMStringMap, skeleton: FulltextSkeleton | null = 
 
   const lines: string[] = [];
   lines.push('你是一位耐心的科研助手,正在帮用户理解一篇论文。');
+  // 全文模式的描述语随 source 分支:
+  //   - source === 'txt' (本地 PDF 抽出来的正文):正文充足,LLM 可引用具体细节
+  //   - source === 'ar5iv' / 'pdf' (骨架 + 首句):信息密度低,坦诚告知边界
+  const isTxtSkeleton = skeleton?.source === 'txt';
   if (skeleton) {
-    // 全文模式:让 LLM 优先用骨架,但不丢掉摘要(摘要已是高密度浓缩,放在最前)
-    lines.push('下面是该论文的结构化摘要 + ar5iv.org 抓到的全文骨架(章节标题 + 每段首句 + 公式/表格计数)。');
-    lines.push('优先基于全文骨架回答细节问题(方法、实验、附录);摘要信息可直接复用;若骨架未覆盖,坦诚告知。');
+    if (isTxtSkeleton) {
+      lines.push('下面是该论文的结构化摘要 + daily pipeline 从 arXiv PDF 抽取的论文正文。');
+      lines.push('请优先基于正文回答细节问题(方法步骤、公式、实验设置、附录内容);摘要信息可直接复用;不要从其他论文知识推断。');
+    } else {
+      lines.push('下面是该论文的结构化摘要 + ar5iv.org 抓到的全文骨架(章节标题 + 每段首句 + 公式/表格计数)。');
+      lines.push('优先基于全文骨架回答细节问题(方法、实验、附录);摘要信息可直接复用;若骨架未覆盖,坦诚告知。');
+    }
   } else {
     lines.push('下面是该论文的结构化摘要(由 daily pipeline 预先生成);当用户提问时,请**优先基于这些信息回答**,如确实超出范围请明确说"摘要里没提到,我无法确认"。');
   }
@@ -145,19 +153,29 @@ function buildSystemPrompt(d: DOMStringMap, skeleton: FulltextSkeleton | null = 
   if (result) lines.push(`\n结果:\n${result}`);
   if (conclusion) lines.push(`\n结论:\n${conclusion}`);
   if (skeleton) {
-    lines.push('\n=== 论文全文骨架(ar5iv 抓取,按章节结构排列) ===');
-    lines.push(skeletonToPromptText(skeleton));
+    if (isTxtSkeleton) {
+      // txt 来源:plainText 全量喂给 LLM,不再走骨架格式化,完整保留正文细节
+      lines.push('\n=== 论文正文(daily pipeline 从 arXiv PDF 抽取) ===');
+      lines.push(skeleton.plainText || '');
+    } else {
+      lines.push('\n=== 论文全文骨架(ar5iv 抓取,按章节结构排列) ===');
+      lines.push(skeletonToPromptText(skeleton));
+    }
   }
   lines.push('');
   lines.push('=== 回答指南 ===');
   lines.push('- 用户可能追问方法细节、实验设置、局限性、与相关工作的对比等。');
   if (skeleton) {
-    lines.push('- 骨架里的章节用 ## 标记,可按章节引用(如"见 §Method")。');
-    lines.push('- 若用户问的细节在骨架里没出现,坦诚说明,不要从其他论文知识推断。');
+    if (isTxtSkeleton) {
+      lines.push('- 直接引用正文中的具体细节(章节名、公式、表格、数值);用户要"详细"时优先展开。');
+      lines.push('- 不要复述完整摘要 / 完整正文;按用户问题选择性展开。');
+    } else {
+      lines.push('- 骨架里的章节用 ## 标记,可按章节引用(如"见 §Method")。');
+      lines.push('- 若用户问的细节在骨架里没出现,坦诚说明,不要从其他论文知识推断。');
+    }
   } else {
     lines.push('- 如果用户的问题涉及摘要外的内容(如完整数学推导、附录实验),坦诚告知摘要范围有限。');
   }
-  lines.push('- 不要复述完整摘要/骨架;直接回答用户具体的问题。');
   return lines.join('\n');
 }
 

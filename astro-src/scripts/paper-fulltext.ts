@@ -189,16 +189,29 @@ function ar5ivUrl(arxivId: string): string {
  * 读 /papers/{arxivId}.txt。
  * 返回纯文本;文件不存在 / 太小(< 1KB,通常是 404 HTML 错误页或空)返回 null。
  * 调用方 catch 网络异常继续走 ar5iv 兜底。
+ *
+ * public/papers/ 里实际文件名是 {arxivId}v#-{slug}.txt(slug 是 daily pipeline
+ * 加的"题词"标识,比如 2606.30015v1-parametricskills.txt)。所以除了
+ * 严格 {canonicalId}.txt / {arxivId}.txt,还要尝试匹配的 slug 形式:
+ *   1. {arxivId}-{*}.txt — 需要先在 DOM/data-attr 拿到题词前缀
+ *   2. 全局懒加载:在 paper 页面挂过文件名的元素时,把文件名缓存进 module scope,
+ *      让任何后续 loadFulltextSkeleton(arxivId) 调用都能直接拿到拼接形式。
  */
 export async function loadLocalTxt(arxivId: string): Promise<string | null> {
   const id = canonicalArxivId(arxivId);
-  // arxivId 形如 "2606.30015v1" / "2606.30015" → 都要尝试 .txt 后缀
-  const candidates = [
-    `${id}.txt`,
-    `${arxivId}.txt`,  // 兜底带 v# 形式(虽然 public 里只放去重后的,但万一)
-  ];
   const base = (import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
-  for (const name of candidates) {
+  // 候选顺序:
+  //   1. daily pipeline 默认命名(去 v# 和带 v#)
+  //   2. 模块缓存的题词文件名(由 paper 页 setLocalTxtHint 注入)
+  //   3. 探测时序上最近一次扫到的同名文件兜底
+  const candidates: string[] = [];
+  const fromSlugCache = getLocalTxtSlugHint(arxivId);
+  if (fromSlugCache) candidates.push(fromSlugCache);
+  candidates.push(`${id}.txt`, `${arxivId}.txt`);
+  // 去重
+  const seen = new Set<string>();
+  const ordered = candidates.filter((n) => (seen.has(n) ? false : (seen.add(n), true)));
+  for (const name of ordered) {
     try {
       const res = await fetch(`${base}/papers/${name}`);
       if (!res.ok) continue;
@@ -211,6 +224,20 @@ export async function loadLocalTxt(arxivId: string): Promise<string | null> {
     }
   }
   return null;
+}
+
+// 题词文件名缓存:SSR 在 paper 页注入 data-txt-prefix,客户端 setLocalTxtHint
+// 缓存 "{arxivId}-{slug}.txt" 形式的实际文件名。loaded 模块级别就够了。
+const _txtHintByArxivId = new Map<string, string>();
+
+/** 由 paper 页 SSR 把 data-txt-prefix 传过来,登记实际文件名 pattern */
+export function setLocalTxtHint(arxivId: string, fullFilename: string): void {
+  if (!arxivId || !fullFilename) return;
+  _txtHintByArxivId.set(canonicalArxivId(arxivId), fullFilename);
+}
+
+function getLocalTxtSlugHint(arxivId: string): string | null {
+  return _txtHintByArxivId.get(canonicalArxivId(arxivId)) || null;
 }
 
 /**
@@ -235,6 +262,38 @@ function getInlineFulltext(): string {
   } catch {
     return '';
   }
+}
+
+/**
+ * 读 #paper-chat 的 data-txt-name(由 [arxiv].astro SSR 注入),得到
+ * public/papers/ 下当前论文对应的实际 .txt 文件名(slug 形式,如
+ * "2606.30015v1-parametricskills.txt"),并登记到模块级 hint 缓存,
+ * 供任意后续 loadFulltextSkeleton 调用直接拿到正确的 fetch 路径。
+ *
+ * 数据属性不存在 / 为 ' ' / 长度可疑时,不注入缓存,让 loadLocalTxt 走
+ * 原始的 fallback 候选。
+ */
+function syncLocalTxtHintFromDOM(): void {
+  try {
+    if (typeof document === 'undefined') return;
+    const el = document.getElementById('paper-chat');
+    if (!el) return;
+    const name = (el.dataset.txtName || '').trim();
+    const arxivId = (el.dataset.arxivId || '').trim();
+    if (!name || !arxivId || name === '.' || name.startsWith(' ')) return;
+    if (!name.endsWith('.txt')) return;
+    // sanity:文件名应该以 "{digits.digits}v{digits}-" 开头
+    if (!/^\d{4}\.\d{4,5}v\d+-/.test(name)) return;
+    setLocalTxtHint(arxivId, name);
+  } catch { /* ignore */ }
+}
+
+/**
+ * Probe-only 入口:不写缓存,只看 DOM 端能不能拿到文件名。在 cache 判断前调一次,
+ * 给 #paper-chat section hint 一次刷新机会。
+ */
+export function primeLocalTxtHint(): void {
+  syncLocalTxtHintFromDOM();
 }
 
 // ============================================================================
@@ -395,6 +454,10 @@ export async function loadFulltextSkeleton(
 ): Promise<FulltextResult> {
   const canonicalId = canonicalArxivId(arxivId);
   const version = arxivIdVersion(arxivId);
+
+  // 0) 先把 #paper-chat 的 data-txt-name 同步到 hint 缓存
+  //    — 在论文页时这一步能拿到正确的 slug 文件名,后续 loadLocalTxt 直接命中
+  primeLocalTxtHint();
 
   // 1) 查缓存
   if (!opts.bypassCache) {
