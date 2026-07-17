@@ -25,6 +25,7 @@ ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+from src._utils import normalize_arxiv_id
 from src.paper_figures import ensure_paper_media
 from src.paper_formulas import ensure_paper_formulas
 
@@ -46,7 +47,6 @@ DEFAULT_DOCS_CONCURRENCY = 4
 REASONING_BLOCK_RE = re.compile(r"<think>.*?</think>|<thinking>.*?</thinking>", re.IGNORECASE | re.DOTALL)
 PLACEHOLDER_TEXT_RE = re.compile(r"^[\s.。…·,，、;；:：!！?？\-_/\\|\"'`]+$")
 
-
 def strip_llm_reasoning(text: str) -> str:
     """
     部分推理模型会把内部思考以 <think> 标签混入正文。
@@ -56,7 +56,6 @@ def strip_llm_reasoning(text: str) -> str:
         return ""
     return REASONING_BLOCK_RE.sub("", str(text)).strip()
 
-
 def is_placeholder_text(text: str) -> bool:
     """
     判断 LLM/历史文档中常见的占位输出，如 "...", ".....", "。".
@@ -65,7 +64,6 @@ def is_placeholder_text(text: str) -> bool:
     if not s:
         return True
     return bool(PLACEHOLDER_TEXT_RE.match(s))
-
 
 def is_too_short_for_abstract_translation(zh_abstract: str, abstract_en: str) -> bool:
     """
@@ -77,7 +75,6 @@ def is_too_short_for_abstract_translation(zh_abstract: str, abstract_en: str) ->
     if en_words < 80:
         return False
     return zh_cjk < int(en_words * 0.85)
-
 
 def call_llm_text(
     client: LLMClient,
@@ -94,7 +91,6 @@ def call_llm_text(
     )
     resp = client.chat(messages=messages, response_format=response_format)
     return strip_llm_reasoning(resp.get("content") or "")
-
 
 def call_llm_structured_json(
     client: LLMClient,
@@ -142,7 +138,6 @@ def call_llm_structured_json(
         return None
     return parsed
 
-
 def log(message: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{ts}] {message}", flush=True)
@@ -156,7 +151,6 @@ def log_substep(code: str, name: str, phase: str) -> None:
     if phase not in ("START", "END"):
         phase = "INFO"
     log(f"[SUBSTEP] {code} - {name} {phase}")
-
 
 def load_config() -> dict:
     if not os.path.exists(CONFIG_FILE):
@@ -174,7 +168,6 @@ def load_config() -> dict:
         log(f"[WARN] 读取 config.yaml 失败：{e}")
         return {}
 
-
 def resolve_docs_dir() -> str:
     docs_dir = os.getenv("DOCS_DIR")
     config = load_config()
@@ -190,13 +183,11 @@ def resolve_docs_dir() -> str:
         docs_dir = os.path.join(ROOT_DIR, "docs")
     return docs_dir
 
-
 def slugify(title: str) -> str:
     s = (title or "").strip().lower()
     s = re.sub(r"\s+", "-", s)
     s = re.sub(r"[^a-z0-9\-]+", "", s)
     return s or "paper"
-
 
 def extract_pdf_text(pdf_path: str) -> str:
     doc = fitz.open(pdf_path)
@@ -207,7 +198,6 @@ def extract_pdf_text(pdf_path: str) -> str:
     finally:
         doc.close()
     return "\n\n".join(texts)
-
 
 def fetch_paper_markdown_via_jina(pdf_url: str, max_retries: int = 3) -> str | None:
     if not pdf_url:
@@ -230,28 +220,6 @@ def fetch_paper_markdown_via_jina(pdf_url: str, max_retries: int = 3) -> str | N
         time.sleep(2 * attempt)
     log("[JINA][ERROR] 多次请求失败，将回退到 PyMuPDF 抽取。")
     return None
-
-
-def normalize_arxiv_id(value: str) -> str:
-    """
-    统一将可能携带 URL 的 arXiv 输入转换为 id。
-    兼容：
-    - 1706.03762
-    - 1706.03762v1
-    - https://arxiv.org/abs/1706.03762v1
-    """
-    raw = (value or "").strip()
-    if not raw:
-        return ""
-    if raw.startswith("http://") or raw.startswith("https://"):
-        raw = raw.rsplit("/", 1)[-1]
-    raw = raw.split("?")[0]
-    if raw.startswith("abs/"):
-        raw = raw[len("abs/") :]
-    if raw.startswith("pdf/"):
-        raw = raw[len("pdf/") :].replace(".pdf", "")
-    return raw.strip().lower()
-
 
 def parse_arxiv_xml_feed(xml_text: str) -> Dict[str, Any]:
     """
@@ -307,7 +275,6 @@ def parse_arxiv_xml_feed(xml_text: str) -> Dict[str, Any]:
         "llm_tags": ["query:transformer", "query:attention"],
     }
 
-
 def fetch_arxiv_paper_meta(arxiv_id: str) -> Dict[str, Any]:
     """
     通过 arXiv API 拉取单篇论文元数据，用于单篇补生成。
@@ -321,7 +288,6 @@ def fetch_arxiv_paper_meta(arxiv_id: str) -> Dict[str, Any]:
     if resp.status_code != 200:
         raise RuntimeError(f"arXiv API 请求失败，status={resp.status_code}")
     return parse_arxiv_xml_feed(resp.text)
-
 
 def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, str]:
     if LLM_CLIENT is None:
@@ -389,7 +355,6 @@ def translate_title_and_abstract_to_zh(title: str, abstract: str) -> Tuple[str, 
         return "", ""
     return zh_title, zh_abstract
 
-
 def extract_section_tail(md_text: str, heading: str) -> str:
     """
     从 md 中提取某个自动生成段落（heading）后的尾部内容。
@@ -402,7 +367,6 @@ def extract_section_tail(md_text: str, heading: str) -> str:
     if idx == -1:
         return ""
     return md_text[idx + len(key) :].strip()
-
 
 def strip_auto_sections(md_text: str) -> str:
     """
@@ -419,7 +383,6 @@ def strip_auto_sections(md_text: str) -> str:
         return md_text
     cut = min(cut_points)
     return md_text[:cut].rstrip()
-
 
 def normalize_meta_tldr_line(md_text: str) -> Tuple[str, bool]:
     """
@@ -444,7 +407,6 @@ def normalize_meta_tldr_line(md_text: str) -> Tuple[str, bool]:
         else:
             out.append(line)
     return "\n".join(out), changed
-
 
 def normalize_glance_block_format(md_text: str) -> Tuple[str, bool]:
     """
@@ -513,7 +475,6 @@ def normalize_glance_block_format(md_text: str) -> Tuple[str, bool]:
 
     return "\n".join(out), changed
 
-
 def ensure_single_sentence_end(text: str) -> str:
     """
     给 TLDR/短句补一个句末标点（避免重复 '。。'）。
@@ -523,7 +484,6 @@ def ensure_single_sentence_end(text: str) -> str:
         return s
     s = s.rstrip("。.!?！？")
     return s + "。"
-
 
 def upsert_auto_block(md_path: str, heading: str, content: str) -> None:
     """
@@ -549,7 +509,6 @@ def upsert_auto_block(md_path: str, heading: str, content: str) -> None:
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(new_txt)
 
-
 def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
     """
     在 Markdown 文本中插入/替换 `## 速览` 区块：
@@ -572,7 +531,6 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
         after = txt[abstract_idx:]
         return f"{before}\n\n## 速览\n{glance}\n\n---\n\n{after}"
     return (txt.rstrip() + f"\n\n## 速览\n{glance}\n").rstrip() + "\n"
-
 
 def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: int = 3) -> str | None:
     if LLM_CLIENT is None:
@@ -647,7 +605,6 @@ def generate_deep_summary(md_file_path: str, txt_file_path: str, max_retries: in
             log(f"[WARN] 精读总结失败（第 {attempt} 次）：{e}")
             time.sleep(2 * attempt)
     return last or None
-
 
 def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) -> str | None:
     """
@@ -742,7 +699,6 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
             time.sleep(2 * attempt)
     return None
 
-
 def build_glance_fallback(paper: Dict[str, Any]) -> str:
     """
     当 LLM 额度不足/不可用时的降级速览：
@@ -798,7 +754,6 @@ def build_glance_fallback(paper: Dict[str, Any]) -> str:
         ]
     )
 
-
 def build_tags_html(section: str, llm_tags: List[str]) -> str:
     tags_html: List[str] = []
     # 新链路按 query 标签展示；历史 keyword:* 统一折叠为 query:*，避免重复。
@@ -828,7 +783,6 @@ def build_tags_html(section: str, llm_tags: List[str]) -> str:
         )
     return " ".join(tags_html)
 
-
 def normalize_meta_tags_line(content: str) -> Tuple[str, bool]:
     """
     兼容历史格式：文章页 `**Tags**` 不再展示“精读区/速读区”标签。
@@ -842,7 +796,6 @@ def normalize_meta_tags_line(content: str) -> Tuple[str, bool]:
     )
     fixed = pattern.sub("", content)
     return fixed, fixed != content
-
 
 def replace_meta_line(md_text: str, label: str, value: str, add_slash: bool = True) -> Tuple[str, bool]:
     """
@@ -862,7 +815,6 @@ def replace_meta_line(md_text: str, label: str, value: str, add_slash: bool = Tr
     new_txt, n = pattern.subn(lambda _m: line, txt, count=1)
     return new_txt, n > 0 and new_txt != txt
 
-
 def format_date_str(date_str: str) -> str:
     s = str(date_str or "").strip()
     m = RANGE_DATE_RE.match(s)
@@ -872,7 +824,6 @@ def format_date_str(date_str: str) -> str:
     if len(s) == 8 and s.isdigit():
         return f"{s[:4]}-{s[4:6]}-{s[6:]}"
     return date_str
-
 
 def prepare_paper_paths(docs_dir: str, date_str: str, title: str, arxiv_id: str) -> Tuple[str, str, str]:
     slug = slugify(title)
@@ -884,18 +835,15 @@ def prepare_paper_paths(docs_dir: str, date_str: str, title: str, arxiv_id: str)
     txt_path = os.path.join(target_dir, f"{basename}.txt")
     return md_path, txt_path, paper_id
 
-
 def prepare_day_report_paths(docs_dir: str, date_str: str) -> Tuple[str, str]:
     # 日报 README 不再单文件存放 — 详情由首页 docs/README.md 承载。
     # 返回虚拟路径以保留调用方签名兼容。
     return docs_dir, os.path.join(docs_dir, "README.md")
 
-
 def prepare_home_module_paths(docs_dir: str) -> Tuple[str, str]:
     notice_path = os.path.join(docs_dir, "_home_notice.md")
     promo_path = os.path.join(docs_dir, "_home_promo.md")
     return notice_path, promo_path
-
 
 def ensure_home_module_files(docs_dir: str) -> Tuple[str, str]:
     notice_path, promo_path = prepare_home_module_paths(docs_dir)
@@ -910,7 +858,6 @@ def ensure_home_module_files(docs_dir: str) -> Tuple[str, str]:
             f.write("")
     return notice_path, promo_path
 
-
 def _read_module_markdown(path: str) -> str:
     if not os.path.exists(path):
         return ""
@@ -919,7 +866,6 @@ def _read_module_markdown(path: str) -> str:
             return (f.read() or "").strip()
     except Exception:
         return ""
-
 
 def _format_entry_tags(tags: List[Tuple[str, str]]) -> str:
     labels: List[str] = []
@@ -941,7 +887,6 @@ def _format_entry_tags(tags: List[Tuple[str, str]]) -> str:
             labels.append(v)
     return "、".join(labels) if labels else "无标签"
 
-
 def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
     for kind, label in tags or []:
         if (kind or "").strip() == "score":
@@ -953,7 +898,6 @@ def _entry_score_text(tags: List[Tuple[str, str]]) -> str:
             except Exception:
                 return v
     return ""
-
 
 def build_daily_brief_summary(
     date_label: str,
@@ -1028,7 +972,6 @@ def build_daily_brief_summary(
 
     return fallback
 
-
 def build_docsify_id_href(path_no_ext: str) -> str:
     """
     生成站内 Markdown 内链 / 路由一致的相对路径。
@@ -1049,7 +992,6 @@ def build_docsify_id_href(path_no_ext: str) -> str:
         return "/"
     p = p.lstrip("/")
     return f"/{p}"
-
 
 def build_latest_report_section(
     date_str: str,
@@ -1110,7 +1052,6 @@ def build_latest_report_section(
     lines.append("")
     return "\n".join(lines)
 
-
 def normalize_sidebar_tag(tag: str) -> str:
     text = (tag or "").strip()
     if not text:
@@ -1119,7 +1060,6 @@ def normalize_sidebar_tag(tag: str) -> str:
         if text.startswith(prefix):
             return text[len(prefix) :].strip()
     return text
-
 
 def split_sidebar_tag(tag: str) -> Tuple[str, str]:
     """
@@ -1147,10 +1087,8 @@ def split_sidebar_tag(tag: str) -> Tuple[str, str]:
             return (kind, label)
     return ("other", raw)
 
-
 def round_half_up(x: float) -> int:
     return int(math.floor(x + 0.5))
-
 
 def score_to_star_rating(score: Any) -> float:
     """
@@ -1165,7 +1103,6 @@ def score_to_star_rating(score: Any) -> float:
         return 0.0
     s = max(0.0, min(10.0, s))
     return round_half_up(s) / 2.0
-
 
 def build_sidebar_stars_html(score: Any) -> str:
     rating = score_to_star_rating(score)
@@ -1190,7 +1127,6 @@ def build_sidebar_stars_html(score: Any) -> str:
         f'<span class="dpr-stars-fill" style="width:{pct_str}">★★★★★</span>'
         f"</span>"
     )
-
 
 def extract_sidebar_tags(paper: Dict[str, Any], max_tags: int = 6) -> List[Tuple[str, str]]:
     """
@@ -1240,7 +1176,6 @@ def extract_sidebar_tags(paper: Dict[str, Any], max_tags: int = 6) -> List[Tuple
             score_tag.append(("score", str(score)))
     return score_tag + tags
 
-
 def ensure_text_content(pdf_url: str, txt_path: str) -> str:
     if os.path.exists(txt_path):
         with open(txt_path, "r", encoding="utf-8") as f:
@@ -1258,14 +1193,12 @@ def ensure_text_content(pdf_url: str, txt_path: str) -> str:
         f.write(text_content or "")
     return text_content or ""
 
-
 def yaml_escape_value(s: str) -> str:
     if not s:
         return '""'
     if any(c in s for c in [':', '#', '"', "'", '\n', '[', ']', '{', '}', ',', '&', '*', '!', '|', '>', '%', '@', '`']):
         return '"' + s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n') + '"'
     return s
-
 
 def atomic_write_text(path: str, content: str, encoding: str = "utf-8") -> None:
     """写文本到 path,通过 tmp + os.replace 原子写入。
@@ -1288,7 +1221,6 @@ def atomic_write_text(path: str, content: str, encoding: str = "utf-8") -> None:
             pass
         raise
 
-
 def maybe_generate_paper_figures(
     paper: Dict[str, Any],
     *,
@@ -1303,7 +1235,6 @@ def maybe_generate_paper_figures(
         pdf_url=pdf_url,
     )
     return figures
-
 
 def maybe_generate_paper_media(
     paper: Dict[str, Any],
@@ -1330,7 +1261,6 @@ def maybe_generate_paper_media(
         log(f"[WARN] 论文图表提取失败：{asset_key}: {e}")
         return [], []
 
-
 def upsert_front_matter_field(md_text: str, key: str, value: str) -> Tuple[str, bool]:
     text = str(md_text or "")
     if not text.startswith("---\n") and not text.startswith("---\r\n"):
@@ -1354,7 +1284,6 @@ def upsert_front_matter_field(md_text: str, key: str, value: str) -> Tuple[str, 
         updated_lines.append(f"{key}: {value}")
     updated = "---\n" + "\n".join(updated_lines).rstrip() + "\n---" + normalized[end_idx + 4 :]
     return updated, updated != normalized
-
 
 def build_markdown_content(
     paper: Dict[str, Any],
@@ -1485,7 +1414,6 @@ def build_markdown_content(
 
     return "\n".join(lines)
 
-
 def build_tags_list(section: str, llm_tags: List[str]) -> List[str]:
     """
     构建标签列表，保留 kind:label 格式。
@@ -1508,7 +1436,6 @@ def build_tags_list(section: str, llm_tags: List[str]) -> List[str]:
         seen.add(dedup_key)
         tags.append(dedup_key)
     return tags
-
 
 def process_paper(
     paper: Dict[str, Any],
@@ -1808,7 +1735,6 @@ def process_paper(
 
     return paper_id, title
 
-
 def resolve_paper_id_to_md_path(docs_dir: str, paper_id: str) -> str:
     """
     根据 paper_id 反推 md 文件路径。
@@ -1818,7 +1744,6 @@ def resolve_paper_id_to_md_path(docs_dir: str, paper_id: str) -> str:
     if len(parts) != 2 or parts[0] != "papers":
         return ""
     return os.path.join(docs_dir, "papers", f"{parts[1]}.md")
-
 
 def filter_entries_by_existing_files(
     docs_dir: str,
@@ -1846,7 +1771,6 @@ def filter_entries_by_existing_files(
             log(f"[INFO] 过滤已删除论文（速读区）: {paper_id}")
 
     return filtered_deep, filtered_quick
-
 
 def update_sidebar(
     sidebar_path: str,
@@ -1983,7 +1907,6 @@ def update_sidebar(
     with open(sidebar_path, "w", encoding="utf-8") as f:
         f.writelines(lines)
 
-
 def build_day_report_markdown(
     date_str: str,
     date_label: str | None,
@@ -2050,7 +1973,6 @@ def build_day_report_markdown(
     lines.append("")
     return "\n".join(lines)
 
-
 def write_day_report_readme(
     docs_dir: str,
     date_str: str,
@@ -2072,11 +1994,9 @@ def write_day_report_readme(
         f.write(content)
     return day_readme
 
-
 def list_day_report_links(docs_dir: str) -> List[Tuple[str, str]]:
     # 扁平化后日报详情只在 docs/README.md,不再列举历史日期目录。
     return []
-
 
 def build_home_readme_content(
     docs_dir: str,
@@ -2112,7 +2032,6 @@ def build_home_readme_content(
     lines.append("")
     return "\n".join(lines)
 
-
 def sync_home_readme_from_day_report(
     docs_dir: str,
     date_str: str,
@@ -2139,10 +2058,8 @@ def sync_home_readme_from_day_report(
         f.write(content)
     return home_readme
 
-
 def get_paper_sidebar_evidence(paper: Dict[str, Any]) -> str:
     return str(paper.get("canonical_evidence") or "").strip()
-
 
 def write_run_daily_log(
     date_str: str,
@@ -2174,11 +2091,9 @@ def write_run_daily_log(
         f.write("\n")
     return out_path
 
-
 def backfill_history_day_reports(docs_dir: str) -> int:
     # 扁平化后不再按日期分桶,无需补齐历史日报 README。
     return 0
-
 
 def _extract_md_section(md_text: str, heading: str) -> str:
     """
@@ -2194,7 +2109,6 @@ def _extract_md_section(md_text: str, heading: str) -> str:
     # 下一个二级标题
     m = re.search(r"\n##\s+", after)
     return (after if not m else after[: m.start()]).strip()
-
 
 def _parse_simple_yaml_list(raw: str) -> List[str]:
     items: List[str] = []
@@ -2236,7 +2150,6 @@ def _parse_simple_yaml_list(raw: str) -> List[str]:
         items.append(last)
 
     return [re.sub(r'^["\']|["\']$', "", it).replace("\\\\", "\\").replace('\\"', '"').replace("\\'", "'") for it in items]
-
 
 def _parse_front_matter(md_text: str) -> Dict[str, Any]:
     """
@@ -2286,7 +2199,6 @@ def _parse_front_matter(md_text: str) -> Dict[str, Any]:
 
         meta[key] = val
     return meta
-
 
 def _parse_generated_md_to_meta(
     md_path: str,
@@ -2435,7 +2347,6 @@ def _parse_generated_md_to_meta(
         "selection_source": src_value,
     }
 
-
 def write_day_meta_index_json(
     docs_dir: str,
     date_str: str,
@@ -2491,7 +2402,6 @@ def write_day_meta_index_json(
         json.dump(payload, f, ensure_ascii=False, indent=2)
         f.write("\n")
     return out_path
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 6: generate docs for deep/quick sections.")
@@ -2802,7 +2712,6 @@ def main() -> None:
     log_substep("6.7", "写入运行日志（日报）", "END")
 
     log(f"[OK] docs updated: {docs_dir}")
-
 
 if __name__ == "__main__":
     main()

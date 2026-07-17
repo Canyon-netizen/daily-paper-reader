@@ -13,6 +13,7 @@ from src.source_config import (
     load_config_with_source_migration,
     save_config,
 )
+from src._utils import normalize_arxiv_id
 
 try:
     import yaml  # type: ignore
@@ -236,27 +237,6 @@ def resolve_sidebar_date_label(fetch_days: int | None) -> str | None:
     return None
 
 
-def normalize_arxiv_id(value: Any) -> str:
-    text = str(value or "").strip().lower()
-    if not text:
-        return ""
-    if text.startswith("arxiv:"):
-        text = text.split(":", 1)[1].strip()
-    if text.startswith("http://") or text.startswith("https://"):
-        text = text.split("?", 1)[0].split("#", 1)[0]
-        text = text.rstrip("/")
-        if "/abs/" in text:
-            text = text.rsplit("/abs/", 1)[-1]
-        elif "/pdf/" in text:
-            text = text.rsplit("/pdf/", 1)[-1]
-        else:
-            text = text.rsplit("/", 1)[-1]
-    if text.endswith(".pdf"):
-        text = text[: -len(".pdf")]
-    text = text.strip()
-    matched = re.match(r"^(\d{4}\.\d{4,5})(?:v\d+)?$", text)
-    if matched:
-        return matched.group(1)
     return text
 
 
