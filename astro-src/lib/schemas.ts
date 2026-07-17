@@ -21,6 +21,15 @@
 //   });
 
 import type { AnalysisResult, ArxivEntry } from '../scripts/paper-analyzer';
+import {
+  buildCategories,
+  type Categories,
+  type CategoriesInput,
+  categoriesToYamlInline,
+} from './taxonomies';
+
+export { buildCategories, categoriesToYamlInline };
+export type { Categories, CategoriesInput };
 
 // ============================================================================
 // SubQ + 构造
