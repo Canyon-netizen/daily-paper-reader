@@ -4,6 +4,8 @@
 //   const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
 //   const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
 //   const isReasoning = /reasoner|reasoning|r1|think?/i.test(cfg.model);
+//   ...历史 caller 里 paper-analyzer + topic-search 1323/1407 全用窄正则
+//   (不含 think), 只有 topic-search:654 callLLMRaw 用宽正则 (含 think)。
 //   ...
 //   const body = { model, messages, temperature, max_tokens, ... };
 //   if (isDeepSeek && isReasoning) body.thinking = { type: 'disabled' };
@@ -60,12 +62,14 @@ export interface ChatResponse {
 }
 
 const DEEPSEEK_RE = /^https?:\/\/api\.deepseek\.com/i;
-const REASONING_MODEL_RE = /reasoner|reasoning|r1|think/i;
-const REASONING_MODEL_RE_PAPER_ANALYZER = /reasoner|reasoning|r1/i;
+const REASONING_MODEL_RE = /reasoner|reasoning|r1/i;
+const REASONING_MODEL_RE_TOPICSEARCH_DECOMPOSE = /reasoner|reasoning|r1|think/i;
 
-/** paper-analyzer 历史上的窄正则(不含 `think`),保持它的判断行为不变。
- *  调用 site 显式传 `reasoningModelPattern: REASONING_MODEL_PATTERN_NARROW`。 */
-export const REASONING_MODEL_PATTERN_NARROW = REASONING_MODEL_RE_PAPER_ANALYZER;
+/** topic-search 的 callLLMRaw(:654)历史上用了"宽"正则(含 think),其它 4 处
+ *  caller(都在 topic-search 1323/1407 + paper-analyzer 1224/1468) 都是"窄"
+ *  正则(只 reasoner/reasoning/r1)。默认使用窄正则;callLLMRaw 通过
+ *  `REASONING_MODEL_PATTERN_WIDE` 显式传宽版本, 保留它的历史行为。 */
+export const REASONING_MODEL_PATTERN_WIDE = REASONING_MODEL_RE_TOPICSEARCH_DECOMPOSE;
 
 /** 调一次 OpenAI 兼容 /v1/chat/completions。返回 content + finishReason + 原始 raw JSON。
  *
