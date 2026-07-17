@@ -6,7 +6,7 @@
 // 4) 按主题分类:折叠式 tag 列表
 // 5) How it works:3 步工作流介绍
 // 数据为空时仍能展示 hero/stats/empty-state,避免 Vercel 首次部署"全空"观感
-import { listPapers, listAllPapersByTag } from '../lib/paper';
+import { listPapers, listAllPapersByTag, flattenCategories } from '../lib/paper';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
@@ -18,23 +18,24 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7 });
 const byTag = await listAllPapersByTag();
 
-// 主题显示顺序(若仓库有按 query: 前缀分类的 tag,这里做去前缀)。
-// 这里只列有中文 label 的主流主题;总主题数 totalTopics 仍按 byTag.size
+// 主题显示顺序(listAllPapersByTag 返回的 key 现在用 'task:<label>' 形式;
+// 旧 'query:<label>' 前缀已废)。
+// 这里只列有中文 label 的主流 task 主题;总主题数 totalTopics 仍按 byTag.size
 // 真实计算(可能多于这里),避免 stat row 与展示行数不一致。
-const tagOrder = ['rl', 'mas', 'self-distillation', 'intervention', 'game-ai', 'llm-agent', 'gui', 'vision', '其他'];
-const sortedTagEntries = tagOrder
+const TASK_ORDER = ['rl', 'mas', 'llm-agent', 'reasoning', 'gui', 'vision', 'game-ai', 'robotics', '其他'];
+const sortedTagEntries = TASK_ORDER
   .filter((t) => byTag.has(t))
   .map((t) => [t, byTag.get(t)!] as const);
 
 const tagLabels: Record<string, string> = {
   rl: '强化学习',
   mas: '多智能体系统',
-  'self-distillation': '自蒸馏',
-  intervention: '激活干预',
-  'game-ai': '游戏 AI',
+  reasoning: '推理增强',
   'llm-agent': 'LLM Agent',
+  'game-ai': '游戏 AI',
   gui: 'GUI',
   vision: '视觉',
+  robotics: '机器人',
   其他: '其他',
 };
 
@@ -168,13 +169,26 @@ const latestDateLabel = latestDate
                     </blockquote>
                   )}
                   <div class="paper-card-foot">
-                    {p.tags && p.tags.length > 0 ? (
-                      <div class="paper-tags">
-                        {p.tags.slice(0, 2).map((t) => (
-                          <span class="tag">{t.replace(/^query:/, '')}</span>
-                        ))}
-                      </div>
-                    ) : <span />}
+                    {(() => {
+                      // 卡片底部标签:从 categories 拍平后展示前 2 个 task/method/type
+                      // 标签(venue 已经在上面的 venue-chip 展示了,这里跳过)。
+                      const cardTags: string[] = [];
+                      const cats = p.categories;
+                      if (cats) {
+                        for (const dim of ['task', 'method', 'type'] as const) {
+                          for (const label of cats[dim] || []) {
+                            if (cardTags.length < 2) cardTags.push(label);
+                          }
+                        }
+                      }
+                      return cardTags.length > 0 ? (
+                        <div class="paper-tags">
+                          {cardTags.map((label: string) => (
+                            <span class="tag">{label}</span>
+                          ))}
+                        </div>
+                      ) : <span />;
+                    })()}
                     <span class="paper-cta">
                       阅读
                       <svg class="paper-cta-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -241,7 +255,7 @@ const latestDateLabel = latestDate
                           data-selectable-tldr={p.tldr || ''}
                           data-selectable-method=""
                           data-selectable-result=""
-                          data-selectable-tags={(p.tags || []).join(',')}>
+                          data-selectable-tags={flattenCategories(p.categories).join(',')}>
                         <a href={href} class="tag-paper-link">
                           <span class="tag-paper-score">
                             {p.score?.toFixed(1) || '—'}
@@ -268,7 +282,7 @@ const latestDateLabel = latestDate
                               data-selectable-tldr={p.tldr || ''}
                               data-selectable-method=""
                               data-selectable-result=""
-                              data-selectable-tags={(p.tags || []).join(',')}>
+                              data-selectable-tags={flattenCategories(p.categories).join(',')}>
                             <a href={href} class="tag-paper-link">
                               <span class="tag-paper-score">
                                 {p.score?.toFixed(1) || '—'}

@@ -59,11 +59,14 @@
   // ---------- 常量 ----------
   const VIRTUAL_ROW_HEIGHT = 96;     // px,列表项估计高度(用于虚拟滚动)
   const VIRTUAL_OVERSCAN = 6;        // 多渲染的离屏行数
+  // categories 4-dim 调色板 — 与 astro-src/pages/papers/[arxiv].astro 的
+  // .tag-<dim> CSS class 共享色值。`default` 表示 user-prefix 或纯 label(没冒号)。
   const TAG_KIND_PALETTE: Record<string, string> = {
-    query: '#b31b1b',
-    topic: '#1d4ed8',
+    venue: '#b31b1b',
+    task: '#1d4ed8',
     method: '#9333ea',
-    benchmark: '#0891b2',
+    type: '#0891b2',
+    user: '#6b7280',
     default: '#6b7280',
   };
   const EDGE_COLOR: Record<string, string> = {
@@ -82,6 +85,19 @@
   function tagKindOf(tag: string): string {
     const i = tag.indexOf(':');
     return i > 0 ? tag.slice(0, i).toLowerCase() : 'default';
+  }
+  function pickPrimaryTag(flatTags: string[]): string {
+    // 跳过 venue:— venue 在卡片上已有 chip 表达,主 tag 优先让用户看到"任务"。
+    for (const t of flatTags || []) {
+      if (t.startsWith('task:')) return t;
+    }
+    for (const t of flatTags || []) {
+      if (t.startsWith('method:')) return t;
+    }
+    for (const t of flatTags || []) {
+      if (t.startsWith('type:')) return t;
+    }
+    return flatTags && flatTags[0] ? flatTags[0] : '';
   }
   function tagColor(tag: string): string {
     return TAG_KIND_PALETTE[tagKindOf(tag)] || TAG_KIND_PALETTE.default;
@@ -480,7 +496,9 @@
             label: (n.title || '').slice(0, 60),
             title: n.title,
             tags: n.tags,
-            primaryTag: n.tags[0] || '',
+            // primaryTag:从 task 起挑第一个(任务/方法/类型),venue 略过(venue
+            // 在卡片角落的 venue-chip 已表达);若无 task/method/type 则取第一项。
+            primaryTag: pickPrimaryTag(n.tags),
           },
         })),
         ...edges.map((e, idx) => ({

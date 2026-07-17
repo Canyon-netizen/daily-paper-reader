@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
-import { readPaper, listAllPaperIds } from '../../lib/paper';
+import { readPaper, listAllPaperIds, flattenCategories } from '../../lib/paper';
 import { renderMarkdownBody } from '../../lib/markdown';
 import '../../styles/paper-chat.css';
 import '../../styles/hidden-toast.css';
@@ -140,17 +140,21 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
                     <span class="meta-value score-pill">{paper.score.toFixed(1)}</span>
                   </div>
                 )}
-                {paper.tags && paper.tags.length > 0 && (
-                  <div class="meta-row">
-                    <span class="meta-label">TAGS</span>
-                    <span class="meta-value">
-                      {paper.tags.map((t) => {
-                        // kind:label 格式。前端只看 label;kind 只用来给 css class 分桶颜色。
-                        const i = t.indexOf(':');
-                        const kind = i > 0 ? t.slice(0, i) : '';
-                        const label = i > 0 ? t.slice(i + 1) : t;
-                        const cls = `tag tag-${kind || 'other'}`;
-                        return <span class={cls}>{label}</span>;
+                {paper.categories && (paper.categories.venue.length + paper.categories.task.length + paper.categories.method.length + paper.categories.type.length) > 0 && (
+                  <div class="meta-row meta-row--categories">
+                    <span class="meta-label">CATEGORIES</span>
+                    <span class="meta-value meta-categories">
+                      {(['venue', 'task', 'method', 'type'] as const).map((dim) => {
+                        const labels = paper.categories && paper.categories[dim];
+                        if (!labels || labels.length === 0) return null;
+                        return (
+                          <span class="category-dim">
+                            <span class="category-dim-label">{dim.toUpperCase()}</span>
+                            {labels.map((label: string) => (
+                              <span class={`tag tag-${dim}${paper.accepted && dim === 'venue' ? ' tag-venue--accepted' : ''}`}>{label}</span>
+                            ))}
+                          </span>
+                        );
                       })}
                     </span>
                   </div>
@@ -165,17 +169,6 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
                   <div class="meta-row">
                     <span class="meta-label">GENERATED</span>
                     <span class="meta-value">{paper.generated_at}</span>
-                  </div>
-                )}
-                {paper.venue && (
-                  <div class="meta-row">
-                    <span class="meta-label">VENUE</span>
-                    <span class="meta-value">
-                      <span class={paper.accepted ? 'venue-badge venue-badge--accepted' : 'venue-badge'}>
-                        {paper.venue}
-                        {paper.accepted && <span class="venue-badge-tick">✓ Accepted</span>}
-                      </span>
-                    </span>
                   </div>
                 )}
               </div>
@@ -257,7 +250,7 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
         data-method={paper.method || ''}
         data-result={paper.result || ''}
         data-conclusion={paper.conclusion || ''}
-        data-tags={(paper.tags || []).join(',')}
+        data-tags={flattenCategories(paper.categories).join(',')}
         data-arxiv-id={paper.arxivId || ' '}
         data-fulltext={fulltextInline || ' '}
         data-txt-name={`${arxiv}.txt`}
@@ -288,7 +281,7 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
         data-method={paper.method || ''}
         data-result={paper.result || ''}
         data-conclusion={paper.conclusion || ''}
-        data-tags={(paper.tags || []).join(',')}
+        data-tags={flattenCategories(paper.categories).join(',')}
       ></section>
     )}
   </main>
@@ -403,6 +396,29 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
     margin-right: 0.3em;
   }
   .pdf-link { color: var(--accent); font-family: var(--font-mono); font-size: 0.9rem; }
+
+  /* categories 4-dim — 每组有自己的调色板 */
+  .meta-row--categories { flex-wrap: wrap; row-gap: 0.4rem; }
+  .meta-categories { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+  .category-dim {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+  }
+  .category-dim-label {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.08em;
+    color: var(--fg-subtle);
+    padding-right: 0.35em;
+    border-right: 1px solid var(--border);
+  }
+  .tag-venue { background: #fef2f2; color: #b31b1b; border: 1px solid #fecaca; }
+  .tag-venue--accepted { background: #fee2e2; border-color: #b31b1b; font-weight: 600; }
+  .tag-task { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .tag-method { background: #faf5ff; color: #9333ea; border: 1px solid #e9d5ff; }
+  .tag-type { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
+  .tag-other { background: var(--tag-bg); color: var(--fg-muted); }
 
   /* 会议接受徽章 — 论文被会议接收时显示,非会议论文 venue="" 整体不渲染 */
   .venue-badge {
