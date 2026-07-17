@@ -44,26 +44,12 @@ elif os.getenv("BLT_API_KEY"):
 
 DEFAULT_DOCS_CONCURRENCY = 4
 
-REASONING_BLOCK_RE = re.compile(r"<think>.*?</think>|<thinking>.*?</thinking>", re.IGNORECASE | re.DOTALL)
-PLACEHOLDER_TEXT_RE = re.compile(r"^[\s.。…·,，、;；:：!！?？\-_/\\|\"'`]+$")
-
-def strip_llm_reasoning(text: str) -> str:
-    """
-    部分推理模型会把内部思考以 <think> 标签混入正文。
-    文档页只应保留最终答案。
-    """
-    if not text:
-        return ""
-    return REASONING_BLOCK_RE.sub("", str(text)).strip()
-
-def is_placeholder_text(text: str) -> bool:
-    """
-    判断 LLM/历史文档中常见的占位输出，如 "...", ".....", "。".
-    """
-    s = strip_llm_reasoning(text).strip()
-    if not s:
-        return True
-    return bool(PLACEHOLDER_TEXT_RE.match(s))
+from src.generate_docs_text_utils import (
+    REASONING_BLOCK_RE,
+    PLACEHOLDER_TEXT_RE,
+    strip_llm_reasoning,
+    is_placeholder_text,
+)
 
 def is_too_short_for_abstract_translation(zh_abstract: str, abstract_en: str) -> bool:
     """
