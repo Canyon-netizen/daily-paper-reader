@@ -106,37 +106,19 @@ def call_llm_structured_json(
             "max_tokens": int(max_tokens),
         }
     )
-    resp = client.chat_structured(
+    # 行为等价于原拒绝/finish_reason/parse_error/reasoning-strip 链:
+    # - refusal -> log warn 不抛 -> on_refusal 静默
+    # - finish_reason 非 stop -> log warn 不抛 -> on_incomplete_finish
+    # - parse_error -> 试一次 reasoning-strip 后 抛 ValueError -> retry_on_reasoning=True
+    return client.chat_structured_safe(
         messages=messages,
         schema_name=schema_name,
         schema=schema,
-        strict=True,
-        allow_json_object_fallback=True,
+        on_refusal=lambda t: log(f"[WARN] Structured output refusal: {t}"),
+        on_incomplete_finish=lambda fr: log(
+            f"[WARN] Structured output 未完成：finish_reason={fr}"
+        ),
     )
-    if resp.get("refusal"):
-        log(f"[WARN] Structured output refusal: {resp.get('refusal')}")
-        return None
-    if resp.get("finish_reason") not in (None, "stop"):
-        log(f"[WARN] Structured output 未完成：finish_reason={resp.get('finish_reason')}")
-        return None
-    if resp.get("parse_error") is not None:
-        content = resp.get("content") or ""
-        stripped = LLMClient._strip_reasoning_blocks(content)
-        if stripped and stripped != content:
-            try:
-                recovered = LLMClient.parse_json_content(stripped)
-            except Exception as exc2:
-                raise ValueError(
-                    f"模型未返回合法 JSON(已尝试剥离 think 块):{stripped[:500]}"
-                ) from exc2
-            if isinstance(recovered, dict):
-                return recovered
-        raise ValueError(f"模型未返回合法 JSON：{stripped[:500] if stripped else content[:500]}")
-
-    parsed = resp.get("parsed")
-    if not isinstance(parsed, dict):
-        return None
-    return parsed
 
 def log(message: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

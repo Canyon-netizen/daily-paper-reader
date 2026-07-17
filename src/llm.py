@@ -599,11 +599,12 @@ class LLMClient:
         schema: Dict[str, Any],
         *,
         on_refusal: Optional[Callable[[str], None]] = None,
+        on_incomplete_finish: Optional[Callable[[str], None]] = None,
         retry_on_reasoning: bool = True,
         strict: bool = True,
         allow_json_object_fallback: bool = True,
     ) -> Optional[Dict[str, Any]]:
-        """``chat_structured`` 的高级包装，集中处理拒绝 + ``reasoning`` 残留。
+        """``chat_structured`` 的高级包装，集中处理拒绝 + ``reasoning`` 残留 + finish_reason。
 
         三处 Step 脚本之前各自重复 "call chat_structured → 检查 refusal →
         检查 parse_error → 尝试 ``_strip_reasoning_blocks`` 后重 parse"。这里
@@ -611,28 +612,22 @@ class LLMClient:
 
         行为契约:
 
-        - 返回 ``None`` 当且仅当调用者选择不抛错而是吞掉(refusal handler
-          ``return`` 而不抛，或 ``on_refusal`` 显式返回 ``None``)。
-        - ``on_refusal`` 是 ``callable(refusal_text) -> None``。默认是把
-          ``refusal_text`` 包装为 ``ValueError`` 抛出。三处脚本差异点:
-            - ``0.enrich_config_queries``: 直接抛 ValueError(中)
-            - ``4.llm_refine_papers``: 直接抛 ValueError(英)
-            - ``6.generate_docs``: 仅 log warn 不抛。caller 需要
-              ``on_refusal=lambda t: (log(...), None)[1]`` 或者包装成
-              ``def quiet(t): log(...); raise_from_None(...)``。
-
+        - 返回 ``None`` 当且仅当调用者选择不抛错而是吞掉（refusal /
+          finish_reason handler 调用后返回 ``None``）。
+        - ``on_refusal`` 是 ``callable(refusal_text) -> None``。默认把
+          ``refusal_text`` 包装为 ``ValueError`` 抛出。三处脚本差异:
+            - ``0.enrich_config_queries``: 直接抛 ValueError（默认行为）
+            - ``4.llm_refine_papers``: 直接抛 ValueError（默认行为）
+            - ``6.generate_docs``: 仅 log warn 不抛。caller 提供
+              ``on_refusal=lambda t: log(...)``。
+        - ``on_incomplete_finish``: ``finish_reason`` 非 ``None`` 也非
+          ``stop`` 时回调。默认 ``None`` 表示忽略。``6`` 传
+          ``on_incomplete_finish=lambda fr: log(f"[WARN] ... finish_reason={fr}")``。
         - ``retry_on_reasoning``: 若 ``response.parsed`` 为空且 ``parse_error``
-          不为空，尝试 ``_strip_reasoning_blocks(content)`` 后重 parse 一次。
-          命中就返回, 失败抛 ``ValueError``(包装原始 parse_error)。
+          非空，尝试 ``_strip_reasoning_blocks`` 后重 parse 一次。
 
-        给 caller 一个 param 而不是再开第三个版本, 避免口子越开越多。
+        给 caller 一些 param 而不是再开 v2/v3, 避免口子越开越多。
         """
-        # 先打 kwargs; caller 通常自己也在外面设过 kwargs, 但安全起见再设一次
-        try:
-            self.kwargs.setdefault("temperature", 0.0)
-        except Exception:
-            pass
-
         def _default_on_refusal(refusal_text: str) -> None:
             raise ValueError(f"模型拒绝输出结构化结果:{refusal_text}")
 
@@ -649,6 +644,11 @@ class LLMClient:
         refusal = resp.get("refusal")
         if refusal:
             handler(str(refusal))
+            return None
+
+        fr = resp.get("finish_reason")
+        if fr is not None and fr != "stop" and on_incomplete_finish is not None:
+            on_incomplete_finish(str(fr))  # callback 内 raise 会自然传出
             return None
 
         parsed = resp.get("parsed")

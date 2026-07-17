@@ -96,24 +96,22 @@ def build_rewrite_prompt(query: str) -> List[Dict[str, str]]:
 
 
 def call_llm_json(client: LLMClient, messages: List[Dict[str, str]], schema_name: str, schema: Dict[str, Any]) -> Dict[str, Any]:
-  resp = client.chat_structured(
+  # 0 原本把 refusal / finish_reason / parse_error 全 raise。helper 默认
+  # on_refusal 抛 ValueError; finish_reason 通过 on_incomplete_finish 内
+  # raise, 异常会自然传出不被 helper 吞掉。retry_on_reasoning 关掉 — 0
+  # 的旧实现没尝试 _strip_reasoning_blocks, 保持原行为不退化。
+  def _raise_incomplete(fr: str) -> None:
+    raise ValueError(f"结构化输出未完成：finish_reason={fr}")
+  result = client.chat_structured_safe(
     messages,
     schema_name=schema_name,
     schema=schema,
-    strict=True,
-    allow_json_object_fallback=True,
+    on_incomplete_finish=_raise_incomplete,
+    retry_on_reasoning=False,
   )
-  if resp.get("refusal"):
-    raise ValueError(f"模型拒绝输出结构化结果：{resp.get('refusal')}")
-  if resp.get("finish_reason") not in (None, "stop"):
-    raise ValueError(f"结构化输出未完成：finish_reason={resp.get('finish_reason')}")
-  if resp.get("parse_error") is not None:
-    raise ValueError(f"模型未返回合法 JSON：{resp.get('content')}")
-
-  parsed = resp.get("parsed")
-  if not isinstance(parsed, dict):
-    raise ValueError(f"模型未返回合法 JSON：{resp.get('content')}")
-  return parsed
+  if not isinstance(result, dict):
+    raise ValueError(f"模型未返回合法 JSON：{result!r}")
+  return result
 
 
 def main() -> None:
