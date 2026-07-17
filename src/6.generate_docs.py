@@ -26,6 +26,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from src.paper_figures import ensure_paper_media
+from src.paper_formulas import ensure_paper_formulas
 
 CONFIG_FILE = os.path.join(ROOT_DIR, "config.yaml")
 TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezone.utc).strftime("%Y%m%d")
@@ -1394,6 +1395,7 @@ def build_markdown_content(
     selection_source = str(paper.get("selection_source") or "").strip()
     figure_assets = paper.get("_figure_assets") if isinstance(paper.get("_figure_assets"), list) else []
     table_assets = paper.get("_table_assets") if isinstance(paper.get("_table_assets"), list) else []
+    formula_assets = paper.get("_formula_assets") if isinstance(paper.get("_formula_assets"), list) else []
 
     # 解析速览内容
     glance = paper.get("_glance_overview", "").strip()
@@ -1453,6 +1455,9 @@ def build_markdown_content(
         lines.append(f"figures_json: {yaml_escape_value(json.dumps(figure_assets, ensure_ascii=False))}")
     if table_assets:
         lines.append(f"tables_json: {yaml_escape_value(json.dumps(table_assets, ensure_ascii=False))}")
+    if formula_assets:
+        # 公式片段(PDF 启发式抽取的 LaTeX),paper-fulltext.ts 拿来做 chat 上下文
+        lines.append(f"formulas_json: {yaml_escape_value(json.dumps(formula_assets, ensure_ascii=False))}")
 
     # 速览字段
     if glance_motivation:
@@ -1539,6 +1544,7 @@ def process_paper(
         existing_meta = _parse_front_matter(existing)
         has_figures_json = bool(str(existing_meta.get("figures_json") or "").strip()) if existing_meta else False
         has_tables_json = bool(str(existing_meta.get("tables_json") or "").strip()) if existing_meta else False
+        has_formulas_json = bool(str(existing_meta.get("formulas_json") or "").strip()) if existing_meta else False
         if not has_figures_json or not has_tables_json:
             figures, tables = maybe_generate_paper_media(
                 paper,
@@ -1563,6 +1569,27 @@ def process_paper(
                     existing,
                     "tables_json",
                     yaml_escape_value(json.dumps(tables, ensure_ascii=False)),
+                )
+                if changed:
+                    with open(md_path, "w", encoding="utf-8") as f:
+                        f.write(updated + ("\n" if not updated.endswith("\n") else ""))
+                    existing = updated
+
+        # formulas_json 独立 backfill — 不依赖 figures/tables 结果,避免主流程一失败就连带跳过
+        # 提取逻辑独立,且部分老论文 pdf_url 为空时直接 no-op
+        if not has_formulas_json and pdf_url:
+            formula_assets = ensure_paper_formulas(
+                pdf_url=pdf_url,
+                docs_dir=docs_dir,
+                source_key=paper_source or "arxiv",
+                asset_key=paper_id.replace("/", "-"),
+            )
+            if formula_assets:
+                paper["_formula_assets"] = formula_assets
+                updated, changed = upsert_front_matter_field(
+                    existing,
+                    "formulas_json",
+                    yaml_escape_value(json.dumps(formula_assets, ensure_ascii=False)),
                 )
                 if changed:
                     with open(md_path, "w", encoding="utf-8") as f:
@@ -1720,6 +1747,16 @@ def process_paper(
             paper["_figure_assets"] = figures
         if tables:
             paper["_table_assets"] = tables
+        # 公式提取(启发式,失败 no-op)— 仅 arxiv 等带 pdf_url 的源生效
+        if pdf_url:
+            formulas = ensure_paper_formulas(
+                pdf_url=pdf_url,
+                docs_dir=docs_dir,
+                source_key=paper_source or "arxiv",
+                asset_key=paper_id.replace("/", "-"),
+            )
+            if formulas:
+                paper["_formula_assets"] = formulas
         glance = generate_glance_overview(title, abstract_en) or build_glance_fallback(paper)
         if glance:
             paper["_glance_overview"] = glance
@@ -1742,6 +1779,15 @@ def process_paper(
         paper["_figure_assets"] = figures
     if tables:
         paper["_table_assets"] = tables
+    if pdf_url:
+        formulas = ensure_paper_formulas(
+            pdf_url=pdf_url,
+            docs_dir=docs_dir,
+            source_key=paper_source or "arxiv",
+            asset_key=paper_id.replace("/", "-"),
+        )
+        if formulas:
+            paper["_formula_assets"] = formulas
 
     zh_title, zh_abstract = translate_title_and_abstract_to_zh(title, abstract_en)
     tags_list = build_tags_list(section, paper.get("llm_tags") or [])

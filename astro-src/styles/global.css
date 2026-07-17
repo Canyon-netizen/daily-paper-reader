@@ -297,3 +297,35 @@ img {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ========================================
+ * 4. KaTeX 公式 — 论文正文、chat 气泡、analyzer 精读区共用
+ *    KaTeX 自带样式表(katex/dist/katex.min.css)负责布局;
+ *    这里只补:字号、color 跟随主题 --fg、长公式横向滚动。
+ * ======================================== */
+.katex {
+  font-size: 1.05em;
+  color: inherit;
+}
+.katex-display {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25em 0;
+}
+.katex-display > .katex {
+  color: inherit;
+}
+/* chat 气泡字号小,KaTeX 跟着缩 */
+.paper-chat-msg .katex {
+  font-size: 1em;
+}
+/* 公式占位降级(KaTeX 解析失败时):跟旧 code.math-inline 保持视觉一致 */
+code.math-inline {
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}

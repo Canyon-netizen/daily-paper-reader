@@ -5,6 +5,8 @@
 // 这样聊天气泡里就拿到了论文正文页同款 markdown 语法集。
 
 import { escapeHtml } from './dom-utils';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 
 //
 // 为了让聊天气泡里的标题层级视觉上低于论文正文页(避免气泡里出现一个比正文 H2 还大的 H1),
@@ -34,9 +36,13 @@ export interface RenderOptions {
 
 function renderInline(s: string): string {
   let out = escapeHtml(s);
-  // 行内 LaTeX: $...$  → 包成 <code class="math inline"> 包内公式字符
+  // 行内 LaTeX: $...$ → KaTeX SSR 渲染。失败兜底回 <code class="math math-inline">
   out = out.replace(/\$([^$\n]+?)\$/g, (_m, expr) => {
-    return `<code class="math math-inline">${expr}</code>`;
+    try {
+      return katex.renderToString(expr, { throwOnError: false, output: 'html' });
+    } catch {
+      return `<code class="math math-inline">${expr}</code>`;
+    }
   });
   // Markdown 图片: ![alt](url) — 用于精读里 LLM 插入的 figure 引用
   out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt, src) => {
@@ -213,6 +219,36 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
       flushList();
       const tag = isChat ? 'h3' : 'h1';
       out.push(`<${tag}>${renderInline(line.slice(2))}</${tag}>`);
+      continue;
+    }
+
+    // 块级 $$...$$(单行)
+    if (line.startsWith('$$') && line.endsWith('$$') && line.length > 4) {
+      flushList();
+      const expr = line.slice(2, -2);
+      try {
+        out.push(katex.renderToString(expr, { throwOnError: false, output: 'html', displayMode: true }));
+      } catch {
+        out.push(`<pre class="math math-block">${escapeHtml(expr)}</pre>`);
+      }
+      continue;
+    }
+    // 块级 $$...$$(多行,$$ 独占一行)
+    if (line.trim() === '$$') {
+      flushList();
+      let j = i + 1;
+      const buf: string[] = [];
+      while (j < lines.length && lines[j].trim() !== '$$') {
+        buf.push(lines[j]);
+        j++;
+      }
+      const expr = buf.join('\n');
+      try {
+        out.push(katex.renderToString(expr, { throwOnError: false, output: 'html', displayMode: true }));
+      } catch {
+        out.push(`<pre class="math math-block">${escapeHtml(expr)}</pre>`);
+      }
+      i = j; // for 循环还会 +1,跳到闭合 $$ 之后
       continue;
     }
 

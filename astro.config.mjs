@@ -49,8 +49,8 @@ export default defineConfig({
       cors: true,
     },
     optimizeDeps: {
-      // pdfjs-dist 走动态 import(),体积大,显式预构建避免 dev 启动后浏览器拉不到
-      include: ['pdfjs-dist'],
+      // pdfjs-dist / katex 走动态 import(),体积大,显式预构建避免 dev 启动后浏览器拉不到
+      include: ['pdfjs-dist', 'katex'],
     },
   },
 });

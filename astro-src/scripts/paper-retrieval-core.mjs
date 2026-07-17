@@ -225,7 +225,10 @@ async function main() {
 }
 
 // 仅在直接执行时跑 main,import 时不跑。
-import { fileURLToPath } from 'node:url';
+// 动态 import('node:url') 而非静态 import — Vite/Astro 在 bundle 浏览器侧模块
+// 时会把静态 `node:url` externalize 成 stub,触发 fileURLToPath 报错;
+// node:url 只在 CLI 直接跑这个 .mjs 时用,SSR 侧不会触碰。
+const { fileURLToPath } = await import('node:url');
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   main().catch((e) => {
     console.error(e.stack || e.message);

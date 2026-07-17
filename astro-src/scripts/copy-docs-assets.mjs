@@ -246,6 +246,18 @@ async function main() {
     console.log(line);
   }
 
+  // 拷贝 KaTeX 字体到 public/fonts/katex/ — 让 GH-Pages 子路径下也能加载
+  // KaTeX 自带 CSS 用 url(fonts/KaTeX_*.woff2) 相对路径引用,Astro 把 public/ 原样
+  // 拷到 dist 根,base=/daily-paper-reader 时会自动解析到子路径。空仓库时跳过。
+  const katexR = copyKatexFonts();
+  if (katexR.copied > 0) {
+    const inKB = (katexR.bytesIn / 1024).toFixed(0);
+    console.log(`[copy-docs-assets] fonts/katex: ${katexR.copied} 个文件, ${inKB} KiB`);
+    totalCount += katexR.copied;
+    totalBytesIn += katexR.bytesIn;
+    totalBytesOut += katexR.bytesOut;
+  }
+
   const elapsed = Date.now() - start;
   const inMB = (totalBytesIn / 1024 / 1024).toFixed(1);
   const outMB = (totalBytesOut / 1024 / 1024).toFixed(1);
@@ -329,6 +341,41 @@ async function readFileChunk(path, maxBytes) {
   } finally {
     await fh.close();
   }
+}
+
+// ============================================================================
+// node_modules/katex/dist/fonts → public/fonts/katex/
+// 只在首次或字体版本变化时全量复制,后续 dev 启动秒过。
+// ============================================================================
+
+const KATEX_FONTS_SRC = join(ROOT, 'node_modules', 'katex', 'dist', 'fonts');
+const KATEX_FONTS_DST = join(ROOT, 'public', 'fonts', 'katex');
+const KATEX_VERSION_STAMP = '.katex-fonts-version';
+
+function copyKatexFonts() {
+  if (!existsSync(KATEX_FONTS_SRC)) {
+    // 没装 katex 时跳过,UI 上公式降级为 <code> 占位
+    return { copied: 0, bytesIn: 0, bytesOut: 0 };
+  }
+  // 用 stamp 文件避免每次都遍历 fonts/:只在缺失或 stamp 不匹配时重拷
+  const stampPath = join(KATEX_FONTS_DST, KATEX_VERSION_STAMP);
+  if (existsSync(stampPath)) {
+    return { copied: 0, bytesIn: 0, bytesOut: 0 };
+  }
+  mkdirSync(KATEX_FONTS_DST, { recursive: true });
+  let copied = 0;
+  let bytesIn = 0;
+  for (const name of readdirSync(KATEX_FONTS_SRC)) {
+    if (!name.endsWith('.woff2') && !name.endsWith('.woff') && !name.endsWith('.ttf')) continue;
+    const src = join(KATEX_FONTS_SRC, name);
+    const dst = join(KATEX_FONTS_DST, name);
+    copyFileSync(src, dst);
+    copied++;
+    bytesIn += statSync(src).size;
+  }
+  // 写 stamp 标记完成,下次启动秒过
+  writeFileSync(stampPath, new Date().toISOString());
+  return { copied, bytesIn, bytesOut: bytesIn };
 }
 
 main();
