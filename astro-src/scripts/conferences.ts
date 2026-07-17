@@ -260,3 +260,52 @@ export async function triggerConf(
     setCardStatusImpl: deps.setCardStatusImpl,
   });
 }
+
+// -------- DOM 绑定入口 --------
+// 把 conferences/index.astro 内联的 65 行 <script> 抽出来。读 DOM 输入(年
+// 份 / 上游跳过勾选) → 包装成 deps → 委托 triggerConf。同样的 deps 构造
+// 既给浏览器(默认读 DOM)也给单测(测试中传 stub document.querySelector)。
+export interface BindDeps {
+  documentObj?: Document;
+  loadGitHubToken: () => string;
+  loadGitHubRepo: () => { owner: string; repo: string };
+}
+
+export function bindConfTriggers(deps: BindDeps): void {
+  const doc = deps.documentObj ?? document;
+  // 与原 .astro 内联版一致:任一输入元素缺失则 silently return,避免在
+  // 页面还在 SSR 水合时就开始 dispatch workflow。
+  const yearEndEl = doc.getElementById('conf-year-end') as HTMLInputElement | null;
+  const yearCountEl = doc.getElementById('conf-year-count') as HTMLInputElement | null;
+  const skipFetchEl = doc.getElementById('conf-skip-fetch') as HTMLInputElement | null;
+  if (!yearEndEl || !yearCountEl || !skipFetchEl) return;
+
+  const readInputValue = (el: HTMLInputElement, fallback: number): number => {
+    const n = parseInt(el.value, 10);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const onClick = (confList: string[]) => {
+    void triggerConf(confList, {
+      loadGitHubToken: deps.loadGitHubToken,
+      loadGitHubRepo: deps.loadGitHubRepo,
+      yearEnd: readInputValue(yearEndEl, new Date().getUTCFullYear()),
+      yearCount: readInputValue(yearCountEl, 3),
+      skipFetch: Boolean(skipFetchEl.checked),
+    });
+  };
+
+  // 单会议按钮 — data-conf 必须是会议小写 id,与 init 脚本 key 一致
+  doc.querySelectorAll<HTMLButtonElement>('.conf-trigger-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const conf = btn.dataset.conf;
+      if (conf) onClick([conf]);
+    });
+  });
+  // 全部 6 会议
+  const batchBtn = doc.getElementById('conf-batch-btn');
+  if (batchBtn) {
+    batchBtn.addEventListener('click', () => {
+      onClick(['aaai', 'acl', 'emnlp', 'iclr', 'icml', 'neurips']);
+    });
+  }
+}

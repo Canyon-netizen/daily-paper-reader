@@ -148,66 +148,9 @@ const CONFERENCES = [
 
 <script>
   import { loadGitHubToken, loadGitHubRepo } from '../../scripts/settings';
-  import { dispatchWorkflow, pollRun } from '../../scripts/conferences';
-
-  // 卡片状态 setter — 与 ./conferences.ts 内部默认值同语义,只暴露给本文件。
-  function setCardStatus(conf: string, state: 'idle' | 'running' | 'success' | 'failure', html: string) {
-    const el = document.querySelector(`[data-conf-status="${conf}"]`);
-    if (!el) return;
-    el.className = `conf-card-status is-${state}`;
-    el.innerHTML = `<span class="conf-status-label">${html}</span>`;
-  }
-
-  // -------- 事件入口 --------
-  async function triggerConf(confList: string[]) {
-    const yearEndEl = document.getElementById('conf-year-end') as HTMLInputElement | null;
-    const yearCountEl = document.getElementById('conf-year-count') as HTMLInputElement | null;
-    const skipFetchEl = document.getElementById('conf-skip-fetch') as HTMLInputElement | null;
-    if (!yearEndEl || !yearCountEl || !skipFetchEl) return;
-
-    const token = loadGitHubToken();
-    if (!token) {
-      for (const c of confList)
-        setCardStatus(c, 'failure', '✗ 未配置 GitHub PAT,请到设置页填(需 repo + workflow 权限)');
-      return;
-    }
-    const { owner, repo } = loadGitHubRepo();
-    const yearEnd = parseInt(yearEndEl.value, 10) || new Date().getUTCFullYear();
-    const yearCount = parseInt(yearCountEl.value, 10) || 3;
-    const skipFetch = skipFetchEl.checked;
-    const inputs: Record<string, string> = {
-      conferences: confList.join(','),
-      year_end: String(yearEnd),
-      year_count: String(yearCount),
-      skip_fetch: skipFetch ? 'true' : 'false',
-    };
-
-    for (const c of confList) setCardStatus(c, 'running', '调度中…');
-    const since = Date.now();
-    try {
-      await dispatchWorkflow(owner, repo, token, inputs);
-    } catch (e) {
-      for (const c of confList) setCardStatus(c, 'failure', `✗ 调度失败: ${(e as Error).message}`);
-      return;
-    }
-    for (const c of confList) setCardStatus(c, 'running', '已触发,等待排队…');
-    void pollRun(owner, repo, token, since, confList);
-  }
+  import { bindConfTriggers } from '../../scripts/conferences';
 
   document.addEventListener('DOMContentLoaded', () => {
-    // 单会议按钮(data-conf 是小写 id,与 init 脚本 key、卡片 data-conf-status 一致)
-    document.querySelectorAll<HTMLButtonElement>('.conf-trigger-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const conf = btn.dataset.conf;
-        if (conf) void triggerConf([conf]);
-      });
-    });
-    // 全部 6 会议(用小写 id,保证卡片状态能匹配上)
-    const batchBtn = document.getElementById('conf-batch-btn');
-    if (batchBtn) {
-      batchBtn.addEventListener('click', () => {
-        void triggerConf(['aaai', 'acl', 'emnlp', 'iclr', 'icml', 'neurips']);
-      });
-    }
+    bindConfTriggers({ loadGitHubToken, loadGitHubRepo });
   });
 </script>
