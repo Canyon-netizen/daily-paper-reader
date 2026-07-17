@@ -64,34 +64,76 @@ export interface AnalysisResult {
   // 看不到它在所处研究主题里的坐标。新增此字段把笔记从"单点摘要"扩展到"主题语境"，
   // 让用户即使不读全文也能定位这篇工作相对其他工作的位置与适用边界。
   context?: string;
-  // 主题标签:从 TOPIC_ALLOWLIST(下方常量)里挑 1-4 个最贴切的标签,
-  // 由同一份 LLM 调用返回,前端规范化为 query:<tag> 写入 frontmatter。
-  // 失败 / 字段缺失 / 非数组时降级为 [];allowlist 之外的元素丢弃,避免自由发挥。
-  topic_tags?: string[];
+  // 主题标签:三层固定槽位 (domain / task / method),每层从下方 TOPIC_LAYERS
+  // 候选池里挑,候选池覆盖不到的元素必须带 "other:" 前缀才接受(自由标签兜底通道)。
+  // 由同一份 LLM 调用返回,前端 normalizeTopicTags 规范化后 buildFrontmatter
+  // 展平为 ["domain:<tag>","task:<tag>","method:<tag>"] 写入 frontmatter;
+  // 三层规范化后全空时保留旧 fallback `query:<arxivId 年月前缀>` 单 tag。
+  //
+  // 向后兼容:旧版本 topic_tags 是 string[];loadHistory 读老 localStorage 时若
+  // 检测到顶层是字符串数组,normalizeTopicTags 视作全空(丢弃)以触发 fallback,
+  // 新代码读老数据不崩。`string[]` 仅作为联合类型占位保留,不参与新写入路径。
+  topic_tags?: TopicTags | string[];
 }
 
-// 预置主题标签清单。
-// 前半段 = config.yaml intent_profiles / settings.DEFAULT_TOPICS_TEXT 已有的 5 项;
-// 后半段 = 仓库 docs/papers/ 现存论文常见的方向,扩展覆盖。
-// 改此处时记得同步 SYSTEM_PROMPT 里的预置清单(否则 LLM 看到清单和实际写文件的不一致)。
-const TOPIC_ALLOWLIST: readonly string[] = [
-  'RL',                  // 强化学习(reinforcement learning、policy optimization、MDP 等)
-  'MAS',                 // 多智能体系统(multi-agent、cooperation、swarm 等)
-  'game ai',             // 游戏 AI(博弈论、self-play、StarCraft、对战 等)
-  'self distillation',   // 自蒸馏(self-imitation、policy self-distillation、on-policy distillation 等)
-  'intervention',        // 大模型干预(steering vector、activation patching、representation engineering 等)
-  'llm-agent',           // LLM 驱动的智能体(tool use、ReAct、function calling、agentic workflow 等)
-  'reasoning',           // 推理增强(chain-of-thought、CoT、search-augmented、math reasoning 等)
-  'gui',                 // GUI 智能体 / 屏幕操作(GUI agent、WebShop、mobile UI、computer use 等)
-  'vision',              // 计算机视觉 / 多模态(VLM、image classification、video、segmentation 等)
-  'speech',              // 语音 / 音频(speech recognition、text-to-speech、audio generation 等)
-  'safety',              // AI 安全 / 对齐 / 红队(jailbreak、adversarial、alignment、harmful generation 等)
-  'retrieval',           // 信息检索 / RAG(dense retrieval、reranker、retrieval-augmented generation 等)
-  'code',                // 代码生成 / 程序合成(code LLM、completion、program synthesis 等)
-  'robotics',            // 机器人 / 具身智能(manipulation、locomotion、sim-to-real、embodied AI 等)
-  'knowledge',           // 知识表示 / 知识图谱(KG、entity linking、relation extraction 等)
-];
-const TOPIC_ALLOWLIST_LOWER = new Set(TOPIC_ALLOWLIST.map((t) => t.toLowerCase()));
+// 三层主题标签结构。每层独立过滤 + 独立硬上限。
+export interface TopicTags {
+  /** 领域:对齐 arXiv cs.* 类目与跨学科常见域(15 项候选池,见 TOPIC_LAYERS.domain)。 */
+  domain: string[];
+  /** 任务:这篇论文要解决的核心问题(12 项候选池,见 TOPIC_LAYERS.task)。 */
+  task: string[];
+  /** 方法:这篇论文用到的核心技术路线(13 项候选池,见 TOPIC_LAYERS.method)。 */
+  method: string[];
+}
+
+// 三层候选池。LLM 在 SYSTEM_PROMPT 里看到的就是这里字面值大小写原样。
+// 改这里时必须同步 SYSTEM_PROMPT 里对应的预置清单段(否则 LLM 看到的清单和实际过滤
+// 的清单不一致,会输出合法字面但 normalize 全部丢掉)。
+export const TOPIC_LAYERS: Readonly<{
+  domain: readonly string[];
+  task: readonly string[];
+  method: readonly string[];
+}> = {
+  domain: [
+    'nlp', 'cv', 'speech', 'robotics', 'kg', 'graph', 'recsys',
+    'ir', 'ml', 'dm', 'bio', 'hci', 'security', 'systems', 'theory',
+  ],
+  task: [
+    'reasoning', 'generation', 'understanding', 'translation',
+    'summarization', 'qa', 'dialogue', 'captioning',
+    'prediction', 'detection', 'planning', 'control',
+  ],
+  method: [
+    'rl', 'sft', 'rlhf', 'rag', 'distill', 'pretrain', 'prompt',
+    'intervention', 'agent', 'gan', 'diffusion', 'transformer', 'gnn',
+  ],
+};
+
+// 候选池快查 Set(每层独立)。normalizeTopicTags 用它做严格匹配。
+const TOPIC_LAYERS_LOWER: Readonly<Record<keyof TopicTags, Set<string>>> = {
+  domain: new Set(TOPIC_LAYERS.domain.map((t) => t.toLowerCase())),
+  task: new Set(TOPIC_LAYERS.task.map((t) => t.toLowerCase())),
+  method: new Set(TOPIC_LAYERS.method.map((t) => t.toLowerCase())),
+};
+
+// 每层最多保留 N 个标签(LLM 可能输出过量,做硬上限保护)。
+const TOPIC_LAYER_MAX: Readonly<Record<keyof TopicTags, number>> = {
+  domain: 3,
+  task: 3,
+  method: 3,
+};
+// 每层最多 2 个 other:* 自由标签(避免 LLM 自由发挥污染 frontmatter)。
+const TOPIC_LAYER_FREE_MAX: Readonly<Record<keyof TopicTags, number>> = {
+  domain: 2,
+  task: 2,
+  method: 2,
+};
+
+// 旧白名单保留为 deprecated 空 alias,防止外有脚本/grep 仍引用旧名字。
+// 注意:运行时实际不再使用,normalizeTopicTags 已迁移到 TOPIC_LAYERS。
+/** @deprecated use TOPIC_LAYERS instead. Kept as empty to avoid stale matches. */
+export const TOPIC_ALLOWLIST: readonly string[] = [];
+const TOPIC_ALLOWLIST_LOWER = new Set<string>();
 
 export interface ArxivEntry {
   id: string;            // 完整 arXiv URL
@@ -1147,27 +1189,67 @@ export const SYSTEM_PROMPT = `你是论文速览助手，请用中文生成信�
   说明它在该主题脉络中的位置(承接/扩展/对比哪类已有工作)、典型适用场景或边界条件、
   已知局限性或仍未解决的问题。**不要重复 TLDR / motivation / method / result / conclusion 里已经说过的事实**,
   写的是"如果只把这篇论文放回主题坐标系,它大致在哪个象限、相对其他工作最值得注意的点是什么"。
-- topic_tags(主题标签):从下方"预置清单"里挑 1-4 个最贴切的标签,输出为 JSON 字符串数组。
-  - **每个元素必须完全等于清单中某一项的字面值**(大小写、连字符、空格都按清单原样)。
-  - 例:["RL","MAS"] 或 ["self distillation","RL"];完全不命中时输出 []。
-  - 不许改写大小写、不许翻译成中文、不许编造、不许在新标签里塞笔记段落。
+- topic_tags(主题标签,三层固定槽位):输出一个 JSON 对象,严格包含 domain / task / method 三个键,每个键都是字符串数组。
+  - 结构:{"domain":[...],"task":[...],"method":[...]}
+  - 每个键代表一层,从下方对应的"候选池"里挑标签;**每个元素必须完全等于清单中某一项的字面值**(大小写、连字符、空格按清单原样)。
+  - 候选池覆盖不到时,在该层允许最多 2 个"自由标签",必须以 "other:" 开头(英文小写 kebab-case,只含 [a-z0-9-])。
+    例:domain 层候选池里没有"科学计算"相关,可以输出 ["other:scientific-computing"]。
+  - 同一层(候选池标签 + other: 自由标签)合计不超过 3 个;同一标签重复出现算 1 个;同一层 other: 自由标签去重只保留 1 个。
+  - 三层都没有任何合适标签时,允许整字段输出空对象 {} —— 前端会走 arxivId 前缀兜底。
+  - 不许翻译成中文、不许编造候选池外不带 "other:" 前缀的标签、不许在新标签里塞笔记段落。
 
-【预置清单 — topic_tags 严格从这里挑,大小写 / 连字符 / 空格按以下原样】
-- RL — 强化学习(reinforcement learning、policy optimization、MDP、Q-learning 等)
-- MAS — 多智能体系统(multi-agent、cooperation、swarm、agent communication 等)
-- game ai — 游戏 AI(博弈论、self-play、StarCraft、游戏对战 等)
-- self distillation — 自蒸馏(self-imitation、policy self-distillation、on-policy distillation 等)
-- intervention — 大模型干预(steering vector、activation patching、representation engineering 等)
-- llm-agent — LLM 驱动的智能体(tool use、ReAct、function calling、agentic workflow 等)
-- reasoning — 推理增强(chain-of-thought、CoT、math reasoning、search-augmented reasoning 等)
-- gui — GUI 智能体(GUI agent、WebShop、mobile UI、computer use 等)
-- vision — 计算机视觉 / 多模态(VLM、image classification、video、segmentation 等)
+【候选池 — 严格从这里挑,大小写 / 连字符 / 空格按以下原样】
+
+domain(领域,15 项)— 这篇论文所处的研究领域:
+- nlp — 自然语言处理(NLP、text understanding、language modeling、tokenization 等)
+- cv — 计算机视觉 / 多模态(VLM、image classification、video、segmentation 等)
 - speech — 语音 / 音频(speech recognition、text-to-speech、audio generation 等)
-- safety — AI 安全 / 对齐(jailbreak、adversarial、alignment、harmful generation 等)
-- retrieval — 信息检索 / RAG(dense retrieval、reranker、retrieval-augmented generation 等)
-- code — 代码生成 / 程序合成(code LLM、completion、program synthesis 等)
 - robotics — 机器人 / 具身智能(manipulation、locomotion、sim-to-real、embodied AI 等)
-- knowledge — 知识表示 / 知识图谱(KG、entity linking、relation extraction 等)
+- kg — 知识表示 / 知识图谱(KG、entity linking、relation extraction 等)
+- graph — 图学习 / 图神经网络(GNN、graph mining、molecular graph 等)
+- recsys — 推荐系统(collaborative filtering、sequential recommendation、ranking 等)
+- ir — 信息检索(dense retrieval、reranker、indexing、search ranking 等)
+- ml — 机器学习基础(general ML、optimization、learning theory、probabilistic models 等)
+- dm — 数据挖掘(anomaly detection、clustering、time series、tabular data 等)
+- bio — 计算生物学 / 生物信息(protein、genomics、drug discovery、molecular design 等)
+- hci — 人机交互 / 可视化(HCI、visualization、interactive systems、UX 等)
+- security — 安全与隐私(adversarial attack、privacy、cryptography、federated learning 等)
+- systems — 系统 / 编译 / 硬件(systems、compilers、MLSys、distributed、accelerator 等)
+- theory — 理论(learning theory、optimization theory、game theory、statistics 等)
+
+task(任务,12 项)— 这篇论文要解决的核心问题:
+- reasoning — 推理增强(chain-of-thought、CoT、math reasoning、search-augmented reasoning 等)
+- generation — 文本 / 图像 / 语音生成(generation、synthesis、creative writing、image synthesis 等)
+- understanding — 理解 / 分类(understanding、classification、parsing、NER 等)
+- translation — 机器翻译 / 跨语言(machine translation、cross-lingual 等)
+- summarization — 摘要 / 总结(abstractive / extractive summarization 等)
+- qa — 问答 / 检索式 QA(open-domain QA、reading comprehension、multi-hop QA 等)
+- dialogue — 对话 / 聊天(dialogue、chatbot、conversational AI 等)
+- captioning — 图像 / 视频字幕(image / video captioning 等)
+- prediction — 预测 / 回归 / 估计(forecasting、regression、trajectory prediction 等)
+- detection — 检测 / 识别(object detection、anomaly detection、defect detection 等)
+- planning — 规划 / 决策(planning、task planning、motion planning、scheduling 等)
+- control — 控制(control、controller design、feedback control 等)
+
+method(方法,13 项)— 这篇论文用到的核心技术路线:
+- rl — 强化学习(reinforcement learning、policy optimization、MDP、Q-learning 等)
+- sft — 监督微调(supervised fine-tuning、instruction tuning 等)
+- rlhf — 人类反馈强化学习(RLHF、DPO、preference learning、reward model 等)
+- rag — 检索增强生成(retrieval-augmented generation、retrieval-augmented LLM 等)
+- distill — 蒸馏(knowledge distillation、self-distillation、teacher-student 等)
+- pretrain — 预训练(self-supervised pretraining、contrastive pretraining、masked LM 等)
+- prompt — prompt 工程(prompt tuning、prompt engineering、in-context learning 等)
+- intervention — 大模型干预(steering vector、activation patching、representation engineering 等)
+- agent — LLM 智能体 / agentic(ReAct、tool use、function calling、agentic workflow 等)
+- gan — 生成对抗网络(GAN、adversarial training、diffusion 等)
+- diffusion — 扩散模型(diffusion model、score-based、DDPM 等)
+- transformer — Transformer 架构改进(attention、efficient transformer、long-context 等)
+- gnn — 图神经网络(GNN、message passing、graph attention 等)
+
+【topic_tags 字段示例】
+- 标准示例:{"domain":["cv","nlp"],"task":["generation"],"method":["diffusion","rlhf"]}
+- 含自由标签示例:{"domain":["other:quantum-ml"],"task":["reasoning"],"method":["other:tree-search"]}
+- 完全无合适标签:{}
 
 【内容要求】
 - 不要把英文句子放进中文字段;可保留必要英文术语或模型名
@@ -1183,28 +1265,81 @@ function buildUserPrompt(title: string, abstract: string, body: string): string 
   const payload = JSON.stringify({ title, abstract: abstract || '(无 abstract,从正文摘录)', body_excerpt: body.slice(0, 8000) }, null, 0);
   return (
     "请基于上面的 JSON 中的 title / abstract / body_excerpt,输出一个中文速览摘要,严格返回 JSON(不要输出任何其它文字):\n" +
-    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"topic_tags\":[\"...\",...]}\n" +
+    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"topic_tags\":{\"domain\":[\"...\"],\"task\":[\"...\"],\"method\":[\"...\"]}}\n" +
     "Output must be strict JSON only, no markdown, no fences, no extra text."
   ).replace("上面的 JSON", payload + "\n上面的 JSON");
 }
 
-// 规范化 topic_tags:限长、去空、去重、按 TOPIC_ALLOWLIST 严格匹配,不在清单的丢弃。
-// LLM 偶尔会返回自由词或拼写变体;这里兜底成空数组,buildFrontmatter 会用 arxivId 前缀兜底。
-function normalizeTopicTags(input: unknown): string[] {
-  if (!Array.isArray(input)) return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of input) {
-    if (typeof raw !== 'string') continue;
-    const t = raw.trim();
-    if (!t) continue;
-    const lower = t.toLowerCase();
-    if (!TOPIC_ALLOWLIST_LOWER.has(lower)) continue;  // 不在清单 → 丢弃
-    if (seen.has(lower)) continue;
-    seen.add(lower);
-    out.push(t);  // 保留 LLM 字面值(大小写/连字符),与 system prompt 清单一一对应
-    if (out.length >= 4) break;
+// 规范化 topic_tags:三层独立 normalize,每层从 TOPIC_LAYERS 候选池严格匹配,
+// 候选池外的元素必须以 "other:" 开头才接受(LLM 自由发挥的兜底通道),其他丢弃。
+//
+// 输入兼容:TopicTags 对象 / string[] 旧 history 数据 / null / undefined / 错乱类型。
+// 输出:始终是 TopicTags(不会回退成字符串数组,buildFrontmatter 需要结构化输入)。
+//
+// 三层规范化规则:
+//   - 每层独立走该层 TOPIC_LAYERS_LOWER 做严格匹配(大小写不敏感,保留 LLM 字面值)
+//   - 候选池外元素必须有 "other:" 前缀,且子标签通过 kebab-case 小写校验
+//   - 每层去重 + 硬上限 TOPIC_LAYER_MAX,其中 other: 自由标签上限 TOPIC_LAYER_FREE_MAX
+//   - 旧 history 字符串数组 → 直接返回全空(触发 arxivId 前缀 fallback),避免污染新协议
+function normalizeTopicTags(input: unknown): TopicTags {
+  const empty: TopicTags = { domain: [], task: [], method: [] };
+  if (input == null) return empty;
+
+  // 旧 history 兼容:顶层是字符串数组(旧字段),整体丢弃触发 fallback。
+  // 旧 topic_tags 元素是 "RL" / "MAS" 这种裸标签,跟新 domain/task/method 候选池
+  // 没有 kind 信息,放进 frontmatter 会破坏 kind:label 协议。
+  if (Array.isArray(input)) return empty;
+
+  if (typeof input !== 'object') return empty;
+  const obj = input as Record<string, unknown>;
+
+  const out: TopicTags = { domain: [], task: [], method: [] };
+  const layerKeys: ReadonlyArray<keyof TopicTags> = ['domain', 'task', 'method'];
+  // kebab-case 小写校验:只含 [a-z0-9-],且不能以 - 开头或结尾、不能连续 --
+  const KEBAB_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+  for (const layer of layerKeys) {
+    const layerInput = obj[layer];
+    if (!Array.isArray(layerInput)) continue;
+
+    const allowSet = TOPIC_LAYERS_LOWER[layer];
+    const maxTotal = TOPIC_LAYER_MAX[layer];
+    const maxFree = TOPIC_LAYER_FREE_MAX[layer];
+
+    const seenLower = new Set<string>();
+    let freeCount = 0;
+
+    for (const raw of layerInput) {
+      if (typeof raw !== 'string') continue;
+      const t = raw.trim();
+      if (!t) continue;
+
+      const lower = t.toLowerCase();
+      // 去重(任意来源:候选池标签 / other: 自由标签跨 layer 各自独立去重)
+      if (seenLower.has(lower)) continue;
+
+      if (allowSet.has(lower)) {
+        // 候选池内:接受,保留 LLM 字面值大小写(候选池本身都是小写,所以这里
+        // 实际就是 lower —— 但保留 LLM 原值更稳,例如未来扩 pool 时不动逻辑)
+        seenLower.add(lower);
+        out[layer].push(t);
+      } else if (lower.startsWith('other:')) {
+        // 自由标签:必须 other: + kebab-case 小写;强制规范化
+        const free = lower.slice('other:'.length);
+        if (!KEBAB_RE.test(free)) continue;
+        if (freeCount >= maxFree) continue;
+        freeCount++;
+        seenLower.add(lower);
+        out[layer].push(`other:${free}`);
+      } else {
+        // 候选池外且不带 other: 前缀 → 丢弃
+        continue;
+      }
+
+      if (out[layer].length >= maxTotal) break;
+    }
   }
+
   return out;
 }
 
@@ -1329,8 +1464,10 @@ export async function callLLM(
     result: parsed.result || '',
     conclusion: parsed.conclusion || '',
     context: parsed.context || '',
-    // topic_tags 由 normalizeTopicTags 按 TOPIC_ALLOWLIST 严格过滤;
-    // LLM 没返回 / 字段缺失 / 格式错乱时降级为 [],buildFrontmatter 再 fallback 到 arxivId 前缀。
+    // topic_tags 由 normalizeTopicTags 按 TOPIC_LAYERS 三层候选池严格过滤,
+    // 自由标签必须带 "other:" 前缀才接受;输出结构为 {domain, task, method}。
+    // LLM 没返回 / 字段缺失 / 格式错乱 / 顶层是 string[] (旧 history) 时
+    // 降级为三层全空对象,buildFrontmatter 再 fallback 到 arxivId 年月前缀。
     topic_tags: normalizeTopicTags(parsed.topic_tags),
   };
 }
@@ -2152,11 +2289,39 @@ function slugifyTitle(title: string, arxivId: string): string {
 function buildFrontmatter(r: AnalysisResult, entry: ArxivEntry | null, now: string): string[] {
   const arxivId = entry?.arxivId || '';
   const pdfUrl = entry?.pdfUrl || (arxivId ? `https://arxiv.org/pdf/${arxivId}` : '');
-  // tags 优先级:
-  //   1) LLM 抽出的 topic_tags (来自 TOPIC_ALLOWLIST)  → "query:<tag>"
-  //   2) 全部为空时 — fallback 到旧的 arxivId 年月前缀(原行为),保证不缺标签
-  //  兜底数组保持去重 + 最多 6 个,与后端 extract_sidebar_tags 对齐。
-  const tagsFromLLM = (r.topic_tags || []).map((t) => `query:${t.toLowerCase()}`);
+  // tags 组装规则(对齐 src/6.generate_docs.py:build_tags_list / split_sidebar_tag):
+  //   1) 从 r.topic_tags 展平(仅当它是 TopicTags 对象):
+  //      - 候选池标签 → "<layer>:<tag小写>" 形如 "domain:nlp"
+  //      - "other:*" 自由标签 → "<layer>:other:<tag>" 形如 "domain:other:quantum-ml"
+  //        (保留 "other:" 子前缀,后端 split_sidebar_tag 一律视为 "other" kind,
+  //         展示独立不会被 keyword: 折叠逻辑污染)
+  //      - 展平顺序固定 domain → task → method,保证上游侧边栏排序稳定
+  //   2) 全空时 fallback 到 arxivId 年月前缀(原行为,与 [[feedback_default_value_discovery]] 一致):
+  //      ["query:<arxivId 年月前缀>"] 或 ["query:manual"]
+  //   3) 总数上限 6 个,与后端 extract_sidebar_tags(max_tags=6) 对齐
+  //
+  // 旧 history 兼容:r.topic_tags 可能是 string[] (旧字段),视为全空走 fallback,
+  // 因为旧裸标签没有 kind:label 格式,塞进 frontmatter 会破坏 split_sidebar_tag 协议。
+  const tagsFromLLM: string[] = [];
+  if (r.topic_tags && !Array.isArray(r.topic_tags)) {
+    const tt = r.topic_tags as TopicTags;
+    const MAX_FROM_LLM = 5;  // 给 fallback 留 1 个槽
+    const pushLayer = (layer: keyof TopicTags): void => {
+      for (const t of tt[layer]) {
+        if (tagsFromLLM.length >= MAX_FROM_LLM) return;
+        // 自由标签保留子前缀并加 layer prefix
+        if (t.startsWith('other:')) {
+          tagsFromLLM.push(`${layer}:${t}`);
+        } else {
+          // 候选池标签本身已是规范化小写,这里再 .toLowerCase() 是双保险
+          tagsFromLLM.push(`${layer}:${t.toLowerCase()}`);
+        }
+      }
+    };
+    pushLayer('domain');
+    pushLayer('task');
+    pushLayer('method');
+  }
   const tagSet = new Set<string>();
   for (const t of tagsFromLLM) tagSet.add(t);
   if (tagSet.size === 0) tagSet.add(`query:${arxivId.split('.')[0] || 'manual'}`);
@@ -2307,7 +2472,16 @@ function loadHistory(): HistoryEntry[] {
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
-    return arr.filter((e) => e && typeof e.id === 'string' && e.analysis && typeof e.analysis === 'object');
+    return arr.filter((e) => {
+      if (!e || typeof e.id !== 'string' || !e.analysis || typeof e.analysis !== 'object') return false;
+      // 兜底:旧 history 的 analysis.topic_tags 是 string[] (旧字段),新代码读老数据
+      // 时不会崩 —— AnalysisResult 类型用 TopicTags | string[] 联合,UI 模板本来就不
+      // 渲染 topic_tags(见 renderResult 行 ~2400),所以肉眼无可见影响。
+      // 未来若 UI 要渲染 topic_tags,在 load 时统一 normalizeTopicTags 升级即可:
+      //   e.analysis.topic_tags = normalizeTopicTags(e.analysis.topic_tags);
+      // 当前保持惰性,避免每次 loadHistory 都跑一次 normalize。
+      return true;
+    });
   } catch {
     return [];
   }
