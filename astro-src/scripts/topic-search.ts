@@ -19,6 +19,7 @@ import {
   removeFromSelection,
   clearSelection,
   type SelectionItem,
+  type LLMConfig,
 } from './settings';
 import {
   searchArxiv,
@@ -49,15 +50,7 @@ import {
 // 类型 + 常量
 // ============================================================================
 
-interface LLMConfig {
-  apiKey: string;
-  baseUrl: string;
-  model: string;
-}
-
-// (SubQ / Candidate / Summary / ChatMsg / TopicSession / SessionStore / TopicReport(/Dimension/DimensionPaper)
-//  都从 ../lib/schemas 导入。构造 SubQ 必须走 buildSubQ / buildRegenSubQ。
-// 见 [[feedback_subq_fields_whitelist]]。)
+// LLMConfig 来自 ./settings, 不再本地定义. 见 ./settings:7.
 
 const SESSION_KEY = 'dpr_topic_session_v1';
 const SCHEMA_VERSION = 1;
