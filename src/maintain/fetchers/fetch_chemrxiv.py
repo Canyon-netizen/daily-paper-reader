@@ -20,6 +20,12 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from src.source_config import load_config_with_source_migration
+from src.maintain.common import (
+    load_last_crawl_at as _load_last_crawl_at_path,
+    load_seen_state as _load_seen_state_path,
+    save_last_crawl_at as _save_last_crawl_at_path,
+    save_seen_state as _save_seen_state_path,
+)
 
 
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -92,70 +98,22 @@ def get_run_date_token(end_date: datetime) -> str:
     return end_date.strftime("%Y%m%d")
 
 
-def load_last_crawl_at() -> datetime | None:
-    if not os.path.exists(CRAWL_STATE_FILE):
-        return None
-    try:
-        with open(CRAWL_STATE_FILE, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-    except Exception:
-        return None
-    raw = _norm(payload.get("last_crawl_at"))
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+# load_last_crawl_at / save_last_crawl_at / load_seen_state / save_seen_state
+# 已在 src.maintain.common 实现 — 顶部 import 的 4 个 _xxx_path 函数是参数化版。
+# 这里不再就地重复定义, 改用位于文件顶部的薄 wrapper 调用它们(保持在 fetcher
+# 原有"无参版本 + 模块级 const"调用风格)。
 
+def load_last_crawl_at() -> datetime | None:
+    return _load_last_crawl_at_path(CRAWL_STATE_FILE)
 
 def save_last_crawl_at(at_time: datetime) -> None:
-    os.makedirs(os.path.dirname(CRAWL_STATE_FILE), exist_ok=True)
-    payload = {"last_crawl_at": at_time.astimezone(timezone.utc).isoformat()}
-    with open(CRAWL_STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
+    _save_last_crawl_at_path(CRAWL_STATE_FILE, at_time)
 
 def load_seen_state() -> tuple[set[str], datetime | None]:
-    if not os.path.exists(SEEN_IDS_FILE):
-        return set(), None
-    try:
-        with open(SEEN_IDS_FILE, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-    except Exception:
-        return set(), None
-    raw_ids = payload.get("ids") or []
-    if not isinstance(raw_ids, list):
-        raw_ids = []
-    seen_ids = {str(item).strip() for item in raw_ids if str(item).strip()}
-    raw_latest = _norm(payload.get("latest_published_at"))
-    latest_dt = None
-    if raw_latest:
-        try:
-            latest_dt = datetime.fromisoformat(raw_latest.replace("Z", "+00:00"))
-            if latest_dt.tzinfo is None:
-                latest_dt = latest_dt.replace(tzinfo=timezone.utc)
-            latest_dt = latest_dt.astimezone(timezone.utc)
-        except Exception:
-            latest_dt = None
-    return seen_ids, latest_dt
-
+    return _load_seen_state_path(SEEN_IDS_FILE)
 
 def save_seen_state(seen_ids: set[str], latest_published_at: datetime | None) -> None:
-    os.makedirs(os.path.dirname(SEEN_IDS_FILE), exist_ok=True)
-    payload = {
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "latest_published_at": latest_published_at.astimezone(timezone.utc).isoformat()
-        if latest_published_at
-        else "",
-        "ids": sorted(seen_ids),
-    }
-    with open(SEEN_IDS_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
+    _save_seen_state_path(SEEN_IDS_FILE, seen_ids, latest_published_at)
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
     text = _norm(value)

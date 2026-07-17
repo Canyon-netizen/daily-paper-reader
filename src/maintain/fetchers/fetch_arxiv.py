@@ -16,6 +16,12 @@ from src.supabase_source import (
     fetch_papers_by_date_range,
 )
 from src.source_config import load_config_with_source_migration
+from src.maintain.common import (
+    load_last_crawl_at as _load_last_crawl_at_path,
+    load_seen_state as _load_seen_state_path,
+    save_last_crawl_at as _save_last_crawl_at_path,
+    save_seen_state as _save_seen_state_path,
+)
 
 # 项目根目录（当前脚本位于 src/maintain/fetchers/ 下）
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -23,6 +29,23 @@ ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 CONFIG_FILE = os.getenv("DPR_CONFIG_FILE") or os.path.join(ROOT_DIR, "config.yaml")
 CRAWL_STATE_FILE = os.path.join(ROOT_DIR, "archive", "crawl_state.json")
 SEEN_IDS_FILE = os.path.join(ROOT_DIR, "archive", "arxiv_seen.json")
+
+
+# 兼容 fetch_arxiv 原有调用风格(无参),内部委托 common 的参数化版本
+def load_last_crawl_at() -> datetime | None:
+    return _load_last_crawl_at_path(CRAWL_STATE_FILE)
+
+
+def save_last_crawl_at(at_time: datetime) -> None:
+    _save_last_crawl_at_path(CRAWL_STATE_FILE, at_time)
+
+
+def load_seen_state() -> tuple[set[str], datetime | None]:
+    return _load_seen_state_path(SEEN_IDS_FILE)
+
+
+def save_seen_state(seen_ids: set[str], latest_published_at: datetime | None) -> None:
+    _save_seen_state_path(SEEN_IDS_FILE, seen_ids, latest_published_at)
 
 # ArXiv 的主要一级分类列表
 # 注意：物理学比较特殊，ArXiv 历史上有很多独立的物理存档，为了保险，我们列出主要的
@@ -95,73 +118,6 @@ def resolve_supabase_time_window(
     safe_days = max(int(days or 1), 1)
     return end_date - timedelta(days=safe_days), end_date, f"rolling:{safe_days}d"
 
-
-def load_last_crawl_at() -> datetime | None:
-    if not os.path.exists(CRAWL_STATE_FILE):
-        return None
-    try:
-        with open(CRAWL_STATE_FILE, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-    except Exception:
-        return None
-    raw = str(payload.get("last_crawl_at") or "").strip()
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
-def save_last_crawl_at(at_time: datetime) -> None:
-    os.makedirs(os.path.dirname(CRAWL_STATE_FILE), exist_ok=True)
-    payload = {"last_crawl_at": at_time.astimezone(timezone.utc).isoformat()}
-    with open(CRAWL_STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
-
-def load_seen_state() -> tuple[set[str], datetime | None]:
-    if not os.path.exists(SEEN_IDS_FILE):
-        return set(), None
-    try:
-        with open(SEEN_IDS_FILE, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-    except Exception:
-        return set(), None
-
-    raw_ids = payload.get("ids") or []
-    if not isinstance(raw_ids, list):
-        raw_ids = []
-    seen_ids = {str(i).strip() for i in raw_ids if str(i).strip()}
-
-    raw_latest = str(payload.get("latest_published_at") or "").strip()
-    latest_dt = None
-    if raw_latest:
-        try:
-            latest_dt = datetime.fromisoformat(raw_latest.replace("Z", "+00:00"))
-            if latest_dt.tzinfo is None:
-                latest_dt = latest_dt.replace(tzinfo=timezone.utc)
-            latest_dt = latest_dt.astimezone(timezone.utc)
-        except Exception:
-            latest_dt = None
-
-    return seen_ids, latest_dt
-
-
-def save_seen_state(seen_ids: set[str], latest_published_at: datetime | None) -> None:
-    os.makedirs(os.path.dirname(SEEN_IDS_FILE), exist_ok=True)
-    payload = {
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "latest_published_at": latest_published_at.astimezone(timezone.utc).isoformat()
-        if latest_published_at
-        else "",
-        "ids": sorted(seen_ids),
-    }
-    with open(SEEN_IDS_FILE, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
 
 def log(message: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")

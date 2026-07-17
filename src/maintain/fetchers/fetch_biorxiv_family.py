@@ -18,6 +18,12 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from src.source_config import load_config_with_source_migration
+from src.maintain.common import (
+    load_last_crawl_at,
+    load_seen_state,
+    save_last_crawl_at,
+    save_seen_state,
+)
 
 
 SCRIPT_DIR = os.path.dirname(__file__)
@@ -99,72 +105,8 @@ def get_run_date_token(end_date: datetime) -> str:
     return end_date.strftime("%Y%m%d")
 
 
-def load_last_crawl_at(crawl_state_file: str) -> datetime | None:
-    if not os.path.exists(crawl_state_file):
-        return None
-    try:
-        with open(crawl_state_file, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-    except Exception:
-        return None
-    raw = _norm(payload.get("last_crawl_at"))
-    if not raw:
-        return None
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
-
-
-def save_last_crawl_at(crawl_state_file: str, at_time: datetime) -> None:
-    os.makedirs(os.path.dirname(crawl_state_file), exist_ok=True)
-    payload = {"last_crawl_at": at_time.astimezone(timezone.utc).isoformat()}
-    with open(crawl_state_file, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
-
-def load_seen_state(seen_ids_file: str) -> tuple[set[str], datetime | None]:
-    if not os.path.exists(seen_ids_file):
-        return set(), None
-    try:
-        with open(seen_ids_file, "r", encoding="utf-8") as f:
-            payload = json.load(f) or {}
-    except Exception:
-        return set(), None
-
-    raw_ids = payload.get("ids") or []
-    if not isinstance(raw_ids, list):
-        raw_ids = []
-    seen_ids = {str(item).strip() for item in raw_ids if str(item).strip()}
-
-    raw_latest = _norm(payload.get("latest_published_at"))
-    latest_dt = None
-    if raw_latest:
-        try:
-            latest_dt = datetime.fromisoformat(raw_latest.replace("Z", "+00:00"))
-            if latest_dt.tzinfo is None:
-                latest_dt = latest_dt.replace(tzinfo=timezone.utc)
-            latest_dt = latest_dt.astimezone(timezone.utc)
-        except Exception:
-            latest_dt = None
-    return seen_ids, latest_dt
-
-
-def save_seen_state(seen_ids_file: str, seen_ids: set[str], latest_published_at: datetime | None) -> None:
-    os.makedirs(os.path.dirname(seen_ids_file), exist_ok=True)
-    payload = {
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "latest_published_at": latest_published_at.astimezone(timezone.utc).isoformat()
-        if latest_published_at
-        else "",
-        "ids": sorted(seen_ids),
-    }
-    with open(seen_ids_file, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-
+# load_last_crawl_at / save_last_crawl_at / load_seen_state / save_seen_state
+# 已在 src.maintain.common 实现,这里不再重复定义。
 
 def iter_time_windows(
     start_date: datetime,
