@@ -8,6 +8,8 @@
 // 注意:不要在此文件顶层 `import` 任何 node:* 模块 —— Vite 会把整个模块编进
 // 客户端 bundle,触发 `node:fs / node:path is not exported by __vite-browser-external`。
 // 需要读盘的逻辑全部走 `./taxonomies-disk.mjs`(动态 import)。
+// 见 astro.config.mjs:diskExternalForClientOnly plugin 把 disk.mjs 只在
+// client 端 externalize,SSR 端会被 Vite 编进 chunk,运行时自包含。
 
 interface TaxonomiesFile {
   task: readonly string[];

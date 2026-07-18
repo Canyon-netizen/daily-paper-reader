@@ -3,6 +3,43 @@ import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import mdx from '@astrojs/mdx';
 
+/**
+ * paper-disk.mjs / taxonomies-disk.mjs 的处理:
+ *
+ *  - 这些文件顶层 import node:fs / node:path,如果进 client bundle,Vite 的
+ *    __vite-browser-external stub 不导出 readFile / join,客户端 import() 调用
+ *    时就会 crash。所以 client 端必须 externalize(不让它们进 client chunk)。
+ *
+ *  - SSR 端反过来:必须 bundle 进 chunk,否则:
+ *      (a) `external` 让 Rollup 把绝对路径写成相对路径(用 `../` 跳出 chunk 目录),
+ *          Node 运行时拼出 `dist/<原绝对路径>` 这种鬼路径,文件不存在;
+ *      (b) `ssr.noExternal` 在 Astro/Vite 6 这里没 override `build.rollupOptions.external`,
+ *          所以单纯依赖 `noExternal` 不够。
+ *
+ *  - 解决:写一个 build 阶段 plugin,只在 client build 把 disk.mjs 标 external,
+ *    SSR build 时不设 external,Vite 自然把 disk.mjs 编进 SSR chunk,
+ *    node:* 内置模块按 SSR 默认走 external(运行时 Node 解析,正常)。
+ */
+function diskExternalForClientOnly() {
+  const matcher = (id) =>
+    /paper-disk\.mjs$/.test(id) || /taxonomies-disk\.mjs$/.test(id);
+  return {
+    name: 'disk-external-client-only',
+    config(config, { isSsrBuild }) {
+      if (isSsrBuild) return;
+      const build = (config.build ??= {});
+      const rollup = (build.rollupOptions ??= {});
+      const prev = rollup.external;
+      rollup.external = (id, ...rest) => {
+        if (matcher(id)) return true;
+        if (typeof prev === 'function') return prev(id, ...rest);
+        if (Array.isArray(prev)) return prev.includes(id);
+        return false;
+      };
+    },
+  };
+}
+
 // 部署目标:
 //   - Vercel (根域名):  https://daily-paper-reader.vercel.app/
 //   - EdgeOne Pages:   https://<project>.edgeone.app/  (国内 CDN,根域名)
@@ -52,20 +89,11 @@ export default defineConfig({
       // pdfjs-dist / katex 走动态 import(),体积大,显式预构建避免 dev 启动后浏览器拉不到
       include: ['pdfjs-dist', 'katex'],
     },
-    build: {
-      rollupOptions: {
-        // server-only disk 访问层:只走 SSR / bun 独立脚本,绝不应进 client chunk。
-        // 顶层 import node:fs / node:path 会被 Vite externalize 后报 "join is not exported"。
-        external: (id) =>
-          /paper-disk\.mjs$/.test(id) ||
-          /taxonomies-disk\.mjs$/.test(id),
-      },
-    },
+    // 见顶部 diskExternalForClientOnly 的注释:client 端靠它 externalize,
+    // SSR 端靠 Vite 默认行为把 disk.mjs 编进 chunk + ssr.noExternal 兜底。
     ssr: {
-      // SSR 端:把 disk.mjs 标记为需要 bundle 而非 external,
-      // 否则 Astro 在 SSR 阶段找不到物理文件。
-      // (client 端靠 build.rollupOptions.external 排除,这俩不会进 client chunk)
       noExternal: [/.*-disk\.mjs$/],
     },
+    plugins: [diskExternalForClientOnly()],
   },
 });
