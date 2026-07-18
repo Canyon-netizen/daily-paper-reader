@@ -188,7 +188,18 @@ const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
       </p>
     </div>
   ) : (
-    <div class="cal-months">
+    <>
+      <div class="cal-jump">
+        <label for="cal-jump-select" class="cal-jump-label">跳到月份</label>
+        <select id="cal-jump-select" class="cal-jump-select" aria-label="跳到指定月份">
+          <option value="">— 选择月份 —</option>
+          {monthKeys.map((ym) => {
+            const [yStr, mStr] = ym.split('-');
+            return <option value={ym}>{yStr} 年 {parseInt(mStr, 10)} 月</option>;
+          })}
+        </select>
+      </div>
+      <div class="cal-months">
       {months.map((m, idx) => (
         <details class="cal-month" open={idx < OPEN_COUNT} data-month={m.key}>
           <summary class="cal-month-summary">
@@ -238,6 +249,7 @@ const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
         </details>
       ))}
     </div>
+    </>
   )}
 
   <div class="daily-detail" id="daily-detail" hidden aria-live="polite">
@@ -485,5 +497,27 @@ if (!dataEl) {
   }
   tryRestoreFromHash();
   window.addEventListener('hashchange', tryRestoreFromHash);
+
+  // ---- 月份跳转下拉 ----
+  const jumpSelect = $<HTMLSelectElement>('#cal-jump-select');
+  if (jumpSelect) {
+    jumpSelect.addEventListener('change', () => {
+      const ym = jumpSelect.value;
+      if (!ym) return;
+      const details = $(`.cal-month[data-month="${ym}"]`) as HTMLDetailsElement | null;
+      if (!details) {
+        jumpSelect.value = '';
+        return;
+      }
+      // 先确保展开(老月份默认折叠)
+      if (!details.open) details.open = true;
+      // rAF 等浏览器完成 open + layout 再滚动,避免滚动距离错位
+      requestAnimationFrame(() => {
+        details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // 滚动后给 select 加视觉反馈后,重置回提示态(可选 — 保留选项便于再选)
+        // jumpSelect.value = '';
+      });
+    });
+  }
 }
 </script>

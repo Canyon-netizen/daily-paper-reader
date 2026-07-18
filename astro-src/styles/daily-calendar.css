@@ -15,6 +15,45 @@
   gap: 0.8rem;
 }
 
+/* ----- 月份跳转下拉 ----- */
+.home .cal-jump {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+  padding: 0.5rem 0.8rem;
+  background: color-mix(in srgb, var(--accent-soft) 30%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.home .cal-jump-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.home .cal-jump-select {
+  flex: 1;
+  max-width: 14rem;
+  padding: 0.4rem 0.6rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+.home .cal-jump-select:hover {
+  border-color: var(--accent);
+}
+.home .cal-jump-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ----- 单个月份 details ----- */
 .home .cal-month {
   background: var(--bg-elevated);
@@ -255,6 +294,13 @@
 
 /* ----- 响应式 ----- */
 @media (max-width: 720px) {
+  .home .cal-jump {
+    padding: 0.4rem 0.6rem;
+  }
+  .home .cal-jump-select {
+    font-size: 0.8rem;
+    padding: 0.35rem 0.5rem;
+  }
   .home .cal-cell {
     padding: 2px;
     gap: 1px;
