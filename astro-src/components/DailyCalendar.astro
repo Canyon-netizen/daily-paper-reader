@@ -4,7 +4,7 @@
  * 数据源:SSR 时调用方传入 papers (listPapers({sortBy:'date', dedup:true}) 的精简结果)。
  * 多版本同 arxiv id 由 listPapers 默认 dedup 处理 —— 取 v# 最大的那条 date。
  *
- * 渲染:多月份瀑布,默认 open 最近 3 个月,老月份 <details> 折叠。
+ * 渲染:多月份瀑布,默认 open 最近 1 个月,老月份 <details> 折叠。
  * 点击某日 → 客户端 JS 渲染当日论文卡片墙 (.paper-card 复用 home.css)。
  * 数据通过 <script id="daily-data"> 序列化,客户端不 fetch。
  */
@@ -122,8 +122,9 @@ const months: MonthBucket[] = monthKeys.map((ym) => {
   return { key: ym, year: parseInt(yStr, 10), month: parseInt(mStr, 10), totalCount, daysWithPapers, cells };
 });
 
-// 5) 默认 open 最近 3 个月
-const OPEN_COUNT = 3;
+// 5) 默认 open 最近 1 个月(老月份 <details> 折叠),避免页面初始被 3 个月
+// × 6 行日历同时撑得很长(老用户累积了十几二十个月时尤其明显)。
+const OPEN_COUNT = 1;
 
 // 6) 序列化的 papers 数组(只含渲染所需字段,不再含 date/score 二次索引)
 const dataForClient = sortedDates.map((d) => [d, byDate.get(d)!] as [string, LeanPaper[]]);
