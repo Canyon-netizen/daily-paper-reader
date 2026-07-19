@@ -386,12 +386,29 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
   return sorted;
 }
 
-/** 按 task 维度桶分论文(categories.task[0] 作桶 key);
- *  兼容老格式 paper(没 categories 但有 tags: ['query:xxx'])— 用 tags[0]
- *  剥掉 'query:' 前缀作兜底;都没有则归 '其他'。
- *  与历史的 listAllPapersByTag 同语义,只是 input 由 tags 改 categories,
- *  这里保留对老 tags 格式的兼容,让迁移期的 paper 也能展示。
- *
+/** 老格式 paper 的 tag 前缀(`tags: ["query:rl"]` → 主题 key = "rl")。
+ *  历史 frontmatter 用 tags 数组 + query: 前缀表示主题;新版改用 categories.task。
+ *  迁移期两种格式并存,resolveTaskKey 会优先 categories.task 再回退到 tags[0] 剥前缀。 */
+export const LEGACY_TAG_PREFIX = 'query:';
+
+/** 取一篇 paper 的主题 key,供按主题分桶/筛选用。
+ *  口径:categories.task[0] 优先;无 task 时回退老格式 tags[0] 剥 `query:` 前缀;
+ *  都没有则返回 '其他'。
+ *  listAllPapersByTag 与首页日历视图的 dailyLean.task 共用此 helper,保证
+ *  "按主题分类" 段与日历主题 select 看到的桶/计数完全一致。 */
+export function resolveTaskKey(p: PaperListItem): string {
+  const taskList = p.categories?.task || [];
+  let key = taskList[0];
+  if (!key) {
+    const oldTag = p.tags?.[0];
+    if (oldTag && oldTag.startsWith(LEGACY_TAG_PREFIX)) {
+      key = oldTag.slice(LEGACY_TAG_PREFIX.length);
+    }
+  }
+  return key || '其他';
+}
+
+/** 按 task 维度桶分论文(resolveTaskKey 取桶 key)。
  *  注意:不能用 flattenCategories[0] 当 key — flattenCategories 按 venue→task→
  *  method→type 顺序拍,一篇 venue 不为空的 paper 会先匹配 venue 名,被分到 venue
  *  桶而不是 task 桶,导致首页"按主题分类"看不到这些 paper(会进 "其他")。
@@ -400,16 +417,7 @@ export async function listAllPapersByTag(): Promise<Map<string, PaperListItem[]>
   const all = await listPapers({ sortBy: 'score' });
   const byTag = new Map<string, PaperListItem[]>();
   for (const p of all) {
-    const taskList = p.categories?.task || [];
-    let key = taskList[0];
-    if (!key) {
-      // 兜底:老格式 paper 用 tags: ['query:xxx'],剥掉 'query:' 前缀。
-      const oldTag = p.tags?.[0];
-      if (oldTag && oldTag.startsWith('query:')) {
-        key = oldTag.slice('query:'.length);
-      }
-    }
-    if (!key) key = '其他';
+    const key = resolveTaskKey(p);
     if (!byTag.has(key)) byTag.set(key, []);
     byTag.get(key)!.push(p);
   }
