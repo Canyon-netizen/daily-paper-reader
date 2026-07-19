@@ -386,8 +386,11 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
   return sorted;
 }
 
-/** 按 task 维度桶分论文(categories.task[0] 作桶 key);若 task 为空则归 '其他'。
- *  与历史的 listAllPapersByTag 同语义,只是 input 由 tags 改 categories。
+/** 按 task 维度桶分论文(categories.task[0] 作桶 key);
+ *  兼容老格式 paper(没 categories 但有 tags: ['query:xxx'])— 用 tags[0]
+ *  剥掉 'query:' 前缀作兜底;都没有则归 '其他'。
+ *  与历史的 listAllPapersByTag 同语义,只是 input 由 tags 改 categories,
+ *  这里保留对老 tags 格式的兼容,让迁移期的 paper 也能展示。
  *
  *  注意:不能用 flattenCategories[0] 当 key — flattenCategories 按 venue→task→
  *  method→type 顺序拍,一篇 venue 不为空的 paper 会先匹配 venue 名,被分到 venue
@@ -398,8 +401,15 @@ export async function listAllPapersByTag(): Promise<Map<string, PaperListItem[]>
   const byTag = new Map<string, PaperListItem[]>();
   for (const p of all) {
     const taskList = p.categories?.task || [];
-    const first = taskList[0];
-    const key = first || '其他';
+    let key = taskList[0];
+    if (!key) {
+      // 兜底:老格式 paper 用 tags: ['query:xxx'],剥掉 'query:' 前缀。
+      const oldTag = p.tags?.[0];
+      if (oldTag && oldTag.startsWith('query:')) {
+        key = oldTag.slice('query:'.length);
+      }
+    }
+    if (!key) key = '其他';
     if (!byTag.has(key)) byTag.set(key, []);
     byTag.get(key)!.push(p);
   }

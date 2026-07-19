@@ -25,7 +25,7 @@ const byTag = await listAllPapersByTag();
 // 这里只列有中文 label 的主流 task 主题;"其他" 桶(categories.task 为空的
 // paper)不在首页展示 —— 那些 paper 去论文库按其他维度(venue/method/type)筛选。
 // totalTopics 用 sortedTagEntries.length 反映实际展示分类数,与 stats row 一致。
-const TASK_ORDER = ['rl', 'mas', 'llm-agent', 'agent', 'reasoning', 'gui', 'vision', 'game-ai', 'robotics', 'code'];
+const TASK_ORDER = ['rl', 'mas', 'llm-agent', 'agent', 'reasoning', 'gui', 'vision', 'game-ai', 'robotics', 'code', 'self-distillation', 'intervention'];
 const sortedTagEntries = TASK_ORDER
   .filter((t) => byTag.has(t))
   .map((t) => [t, byTag.get(t)!] as const);
@@ -41,6 +41,8 @@ const tagLabels: Record<string, string> = {
   vision: '视觉',
   robotics: '机器人',
   code: '代码生成',
+  'self-distillation': '自蒸馏',
+  intervention: '激活干预',
 };
 
 // 统计
