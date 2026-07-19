@@ -1203,7 +1203,8 @@ def build_markdown_content(
                     if not items:
                         parts.append(f"{dim}: []")
                     else:
-                        parts.append(f"{dim}: [{', '.join(f'\"{v}\"' for v in items)}]")
+                        quoted = ", ".join(f'"{v}"' for v in items)
+                        parts.append(f"{dim}: [{quoted}]")
                 return "{ " + ", ".join(parts) + " }"
             lines.append(f"categories: {_fallback(categories)}")
     if tags_list:
