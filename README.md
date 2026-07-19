@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="public/icon.png" alt="Daily Paper Reader Logo" width="720" />
+  <img src="public/icon.png" alt="Daily Paper Reader Logo" width="64" />
 </p>
 
 <h2 align="center">Your Daily Companion for Discovering and Reading AI Papers</h2>
