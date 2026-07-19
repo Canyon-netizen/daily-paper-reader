@@ -2,7 +2,8 @@ name: daily-paper-reader
 
 on:
   schedule:
-    - cron: "30 18 * * *" # 北京时间次日 02:30（UTC 18:30）
+    - cron: "0 */6 * * *" # 每 6 小时一次(UTC 0/6/12/18),即使单次失败也能在窗口内补抓
+    # - cron: "30 18 * * *" # 旧版:北京时间次日 02:30(UTC 18:30),仅 1 次/天
   workflow_dispatch:
     inputs:
       run_enrich:
