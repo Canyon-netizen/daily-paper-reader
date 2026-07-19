@@ -219,7 +219,12 @@ const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
       </div>
       <div class="cal-months">
       {months.map((m, idx) => (
-        <details class="cal-month" open={idx < OPEN_COUNT} data-month={m.key}>
+        <details
+          class="cal-month"
+          open={idx < OPEN_COUNT}
+          data-month={m.key}
+          style={idx < OPEN_COUNT ? '' : 'display:none'}
+        >
           <summary class="cal-month-summary">
             <span class="cal-month-summary-text">
               <span>{m.year} 年 {m.month} 月</span>
@@ -405,13 +410,15 @@ if (!dataEl) {
     // 若 papers 为空:仍允许点击(展示空状态),但确保 selected 视觉一致
     targetBtn.setAttribute('aria-expanded', 'true');
 
-    // 确保对应月份 details 打开,折叠其它月 — 全局只展开一个月
+    // 只显示对应月份,其它月 display:none 整体藏起来 — 跳转 / 点选 / hash 还原后页面只剩一个月的日历
     const monthKey = targetBtn.getAttribute('data-month');
     if (monthKey) {
       const monthDetails = $(`.cal-month[data-month="${monthKey}"]`) as HTMLDetailsElement | null;
       if (monthDetails) {
-        $$<HTMLDetailsElement>('.cal-month').forEach((d) => {
-          d.open = d === monthDetails;
+        $$<HTMLElement>('.cal-month').forEach((d) => {
+          const isTarget = d === monthDetails;
+          d.open = isTarget;
+          d.style.display = isTarget ? '' : 'none';
         });
       }
     }
@@ -538,9 +545,11 @@ if (!dataEl) {
     const ym = `${y}-${String(m).padStart(2, '0')}`;
     const target = $(`.cal-month[data-month="${ym}"]`) as HTMLDetailsElement | null;
     if (!target) return;
-    // 只保留目标展开,其它折叠 — 避免每个月的日历都同时铺出来
-    $$<HTMLDetailsElement>('.cal-month').forEach((d) => {
-      d.open = d === target;
+    // 只显示目标月,其它月 display:none — 跳转后页面只剩一个月的日历
+    $$<HTMLElement>('.cal-month').forEach((d) => {
+      const isTarget = d === target;
+      d.open = isTarget;
+      d.style.display = isTarget ? '' : 'none';
     });
     requestAnimationFrame(() => {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
