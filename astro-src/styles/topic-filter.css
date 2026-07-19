@@ -1,0 +1,151 @@
+/* 主题分类 ↔ 日历视图 联动筛选样式 — 2026-07-19
+ *
+ * 三处入口共用本样式:
+ *   1) 日历头部 chip 横排 (DailyCalendar.astro #topic-filter-bar)
+ *   2) 「按主题分类」详情 summary 内的"只在日历看"按钮 (.tag-jump-btn)
+ *   3) 主题筛选状态条 (.topic-filter-status)
+ *
+ * 视觉基线:全部沿用 home.css 现有 --accent / --accent-soft / --fg-muted /
+ *   --bg-elevated,不引入新色板。点击态只翻配色与字重,不新加阴影/动画。
+ */
+
+/* ============================================================
+ * 1) 日历头部 chip 横排
+ * ============================================================ */
+
+.topic-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.6rem 0 0.4rem;
+  margin-bottom: 0.5rem;
+}
+
+.topic-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  background: var(--bg-elevated, rgba(0, 0, 0, 0.04));
+  color: var(--fg);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  white-space: nowrap;
+}
+
+.topic-chip:hover {
+  background: var(--accent-soft, rgba(0, 0, 0, 0.06));
+}
+
+.topic-chip-n {
+  display: inline-block;
+  min-width: 1.5rem;
+  text-align: center;
+  padding: 0 0.35rem;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+}
+
+.topic-chip--active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.topic-chip--active .topic-chip-n {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
+.topic-chip--all.topic-chip--active {
+  background: var(--fg);
+  color: var(--bg, #fff);
+}
+
+.topic-chip--all.topic-chip--active .topic-chip-n {
+  display: none;
+}
+
+/* ============================================================
+ * 2) 主题筛选状态条(只在 topicKey !== null 时 hidden=false)
+ * ============================================================ */
+
+.topic-filter-status {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: 0.82rem;
+}
+
+.topic-filter-status[hidden] { display: none; }
+
+.topic-filter-status-text strong {
+  font-weight: 700;
+  margin: 0 0.15rem;
+}
+
+.topic-filter-status-clear {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 999px;
+}
+
+.topic-filter-status-clear:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+/* ============================================================
+ * 3) 「按主题分类」summary 内的"只在日历看"按钮
+ * ============================================================ */
+
+.home .tag-section-summary {
+  /* summary 现在的 flex 布局默认是 inline,这里把跳转按钮右推到最右 */
+}
+
+.home .tag-jump-btn {
+  margin-left: auto;
+  padding: 0.2rem 0.55rem;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent-soft, rgba(0, 0, 0, 0.08));
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  flex-shrink: 0;
+}
+
+.home .tag-jump-btn:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.home .is-filtered {
+  /* 高亮当前过滤的那一行 — 不动 details 展开态,只是左 border 提示 */
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.home .is-filtered .tag-jump-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}

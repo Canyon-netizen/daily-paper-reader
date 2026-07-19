@@ -13,6 +13,7 @@ import Footer from '../components/Footer.astro';
 import DailyCalendar from '../components/DailyCalendar.astro';
 import '../styles/home.css';
 import '../styles/daily-calendar.css';
+import '../styles/topic-filter.css';
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
@@ -61,6 +62,9 @@ const latestDateLabel = latestDate
   : '等待首次抓取';
 
 // 日历视图数据:按 date desc + dedup(取每个 arxiv id 最新 v# 的 date)。
+// task 字段给 DailyCalendar 客户端做主题筛选;p.categories 一并塞进去
+// 是为了让 backfill 的 md(没有 tags: frontmatter,只用 categories:)也能
+// 被客户端识别到 task key,与 listAllPapersByTag 口径一致。
 const dailyPapersAll = await listPapers({ sortBy: 'date', dedup: true });
 const dailyLean = dailyPapersAll
   .filter((p) => p.date)
@@ -74,6 +78,8 @@ const dailyLean = dailyPapersAll
     venue: p.venue,
     accepted: p.accepted,
     tags: p.tags,
+    task: p.categories?.task?.[0] ?? null,
+    categories: p.categories,
   }));
 ---
 
@@ -263,10 +269,19 @@ const dailyLean = dailyPapersAll
           {sortedTagEntries.map(([tag, items]) => {
             const label = tagLabels[tag] || tag;
             return (
-              <details class="tag-section">
+              <details class="tag-section" data-topic-key={tag}>
                 <summary class="tag-section-summary">
                   <span class="tag-name">{label}</span>
                   <span class="tag-count">{items.length} 篇</span>
+                  <button
+                    type="button"
+                    class="tag-jump-btn"
+                    data-topic-jump={tag}
+                    aria-label={`在日历中只查看 ${label} 主题论文`}
+                    title={`在日历中只查看 ${label}`}
+                  >
+                    🔎 只在日历看 →
+                  </button>
                 </summary>
                 <ul class="tag-papers">
                   {items.map((p) => {
@@ -343,6 +358,7 @@ const dailyLean = dailyPapersAll
     import '../scripts/index-filter.ts';
     import '../scripts/paper-selection.ts';
     import '../styles/paper-selection.css';
+    import { setTopicFilter, toggleTopicFilter } from '../scripts/topic-filter-bridge';
 
     // 按主题分类里"展开剩余 N 篇"按钮 — 静态渲染了所有文章,只是默认折叠。
     for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-tag-toggle]')) {
@@ -359,5 +375,31 @@ const dailyLean = dailyPapersAll
           : `收起剩余 ${restItems.length} 篇 ↑`;
       });
     }
+
+    // "只在日历看 →" 行内按钮 — 切/取消该主题在日历视图的过滤。
+    // 同主题再次点击 = 取消(toggleTopicFilter)。DailyCalendar 客户端脚本
+    // 负责渲染;本页只负责 dispatch。Event 通道由 topic-filter-bridge.ts 统一。
+    for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-topic-jump]')) {
+      const key = (btn.dataset.topicJump || '').trim();
+      if (!key) continue;
+      btn.addEventListener('click', (ev) => {
+        // 阻止冒泡到 <details>/<summary>,避免顺带展开/收起
+        ev.preventDefault();
+        ev.stopPropagation();
+        toggleTopicFilter(key);
+        const daily = document.getElementById('daily');
+        if (daily) daily.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+
+    // 监听来自 DailyCalendar 的过滤变化,同步本页"按主题分类"段的高亮态
+    // (只是给该主题行加 .is-active,不影响 details 展开/收起)。
+    import('../scripts/topic-filter-bridge').then(({ onTopicFilterChange }) => {
+      onTopicFilterChange((key) => {
+        document.querySelectorAll<HTMLElement>('[data-topic-key]').forEach((el) => {
+          el.classList.toggle('is-filtered', !!key && el.dataset.topicKey === key);
+        });
+      });
+    });
   </script>
 </BaseLayout>

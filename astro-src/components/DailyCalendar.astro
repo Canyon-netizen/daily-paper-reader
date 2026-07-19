@@ -19,6 +19,8 @@ interface LeanPaper {
   venue?: string;
   accepted?: boolean;
   tags?: string[];
+  /** categories.task[0],供客户端主题筛选;null 表示归到"其他"。 */
+  task?: string | null;
 }
 
 interface Props {
@@ -183,6 +185,35 @@ function cellLabel(c: DayCell): string {
 // 8) 总览统计
 const totalDays = months.reduce((s, m) => s + m.daysWithPapers, 0);
 const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
+
+// 9) 主题 → 篇数 统计(用于头部 chip 排序)。
+//    来源:listAllPapersByTag 在 index.astro 也用过口径(key = categories.task[0])。
+//    这里按 vali dLeanPaper.task 重新聚合,保证 chip N 与"按主题分类"段一致。
+const TOPIC_CHIPS = [
+  ['rl', '强化学习'],
+  ['mas', '多智能体系统'],
+  ['llm-agent', 'LLM Agent'],
+  ['agent', '智能体'],
+  ['reasoning', '推理增强'],
+  ['gui', 'GUI'],
+  ['vision', '视觉'],
+  ['game-ai', '游戏 AI'],
+  ['robotics', '机器人'],
+  ['code', '代码生成'],
+  ['self-distillation', '自蒸馏'],
+  ['intervention', '激活干预'],
+] as const;
+
+const taskCounts = new Map<string, number>();
+for (const p of valid) {
+  const t = p.task || '其他';
+  taskCounts.set(t, (taskCounts.get(t) || 0) + 1);
+}
+const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
+  key,
+  label,
+  count: taskCounts.get(key) || 0,
+})).filter((c) => c.count > 0);
 ---
 
 <section id="daily" class="section daily-section">
@@ -219,9 +250,42 @@ const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
           </select>
         </div>
       )}
-      <span class="section-tag">{grandTotal} 篇 / {totalDays} 天</span>
+      <span class="section-tag" id="cal-grand-count">{grandTotal} 篇 / {totalDays} 天</span>
     </div>
   </div>
+
+  {topicChips.length > 0 && (
+    <div class="topic-filter-bar" id="topic-filter-bar" role="toolbar" aria-label="按主题过滤日历">
+      <button
+        type="button"
+        class="topic-chip topic-chip--all"
+        data-topic-chip="__all__"
+        aria-pressed="true"
+      >
+        全部
+      </button>
+      {topicChips.map((c) => (
+        <button
+          type="button"
+          class="topic-chip"
+          data-topic-chip={c.key}
+          aria-pressed="false"
+          title={`只显示 ${c.label} 主题论文`}
+        >
+          <span class="topic-chip-label">{c.label}</span>
+          <span class="topic-chip-n">{c.count}</span>
+        </button>
+      ))}
+      <span class="topic-filter-status" id="topic-filter-status" hidden>
+        <span class="topic-filter-status-text">
+          只看 <strong id="topic-filter-status-label">—</strong>
+        </span>
+        <button type="button" class="topic-filter-status-clear" id="topic-filter-status-clear" aria-label="清除主题过滤">
+          ✕
+        </button>
+      </span>
+    </div>
+  )}
 
   {months.length === 0 ? (
     <div class="empty-card">
@@ -319,6 +383,7 @@ type Paper = {
   venue?: string;
   accepted?: boolean;
   tags?: string[];
+  task?: string | null;
 };
 
 const $ = <T extends Element = Element>(sel: string, root: Document | Element = document) =>
@@ -338,6 +403,28 @@ if (!dataEl) {
   const detailMeta = $<HTMLElement>('#daily-detail-meta');
   const detailGrid = $<HTMLElement>('#daily-detail-grid');
   const closeBtn = $<HTMLButtonElement>('#daily-detail-close');
+
+  // ---- 主题过滤 state ----
+  // topicKey 为 null = 不筛选。过滤由 #topic=<key> 与 'dpr-topic-filter-change' 事件双向同步。
+  // 客户端不 import 桥文件,直接 dispatch / addEventListener — 因为本页 <script> 与
+  // index.astro 的 <script> 共享同一页面 ESM graph,import 还是会拉桥模块。
+  let topicKey: string | null = null;
+  const TOPIC_FILTER_EVENT = 'dpr-topic-filter-change';
+
+  function getDayPapers(date: string): Paper[] {
+    const all = dayMap.get(date) || [];
+    if (!topicKey) return all;
+    return all.filter((p) => (p.task || null) === topicKey);
+  }
+
+  function getFilteredDayMap(): Map<string, Paper[]> {
+    const out = new Map<string, Paper[]>();
+    for (const [d, ps] of dayMap.entries()) {
+      const f = topicKey ? ps.filter((p) => (p.task || null) === topicKey) : ps;
+      if (f.length > 0) out.set(d, f);
+    }
+    return out;
+  }
 
   function escapeHtml(s: string): string {
     return s
@@ -420,7 +507,7 @@ if (!dataEl) {
     const targetBtn = $(`.cal-cell[data-day="${date}"]`) as HTMLButtonElement | null;
     if (!targetBtn) return;
 
-    const papers = dayMap.get(date) || [];
+    const papers = getDayPapers(date);
     // 若 papers 为空:仍允许点击(展示空状态),但确保 selected 视觉一致
     targetBtn.setAttribute('aria-expanded', 'true');
 
@@ -457,11 +544,15 @@ if (!dataEl) {
       window.dispatchEvent(new CustomEvent('daily-day-opened', { detail: { date } }));
     }
 
-    // hash + scroll
+    // hash + scroll — 与主题过滤 hash 共存格式('#day=' 而非旧 '#day-')
     try {
-      history.replaceState(null, '', `#day-${date}`);
+      const cur = readHashSegments();
+      const parts: string[] = [];
+      if (topicKey) parts.push('topic=' + encodeURIComponent(topicKey));
+      parts.push('day=' + date);
+      history.replaceState(null, '', '#' + parts.join('&'));
     } catch (_) {
-      window.location.hash = `#day-${date}`;
+      window.location.hash = `#day=${date}`;
     }
     if (detailEl) {
       // 用 rAF 避免 layout shift 抖
@@ -476,8 +567,14 @@ if (!dataEl) {
       el.setAttribute('aria-expanded', 'false');
     });
     if (detailEl) detailEl.hidden = true;
+    // 清 #day= 但保留 #topic= (setTopic 切换不应该把详情也清掉)
     try {
-      history.replaceState(null, '', window.location.pathname + window.location.search);
+      const parts: string[] = [];
+      if (topicKey) parts.push('topic=' + encodeURIComponent(topicKey));
+      const next = parts.length ? '#' + parts.join('&') : '';
+      const { pathname, search } = window.location;
+      const target = next ? pathname + search + next : pathname + (search || '');
+      history.replaceState(null, '', target);
     } catch (_) {
       // ignore
     }
@@ -528,16 +625,193 @@ if (!dataEl) {
   });
 
   // ---- hash 还原 ----
+  // 旧:L596 仅识别 #day=YYYY-MM-DD。
+  // 新:同时识别 #topic=<key> 与 #day=YYYY-MM-DD,两者用 & 共存
+  //     ('#day=2026-07-13&topic=rl')。topic 触发 setTopic(noHash=true) — 避免写回循环。
+  function readHashSegments(): { day: string | null; topic: string | null } {
+    const raw = window.location.hash.replace(/^#/, '');
+    if (!raw) return { day: null, topic: null };
+    let day: string | null = null;
+    let topic: string | null = null;
+    for (const seg of raw.split('&')) {
+      const [k, ...rest] = seg.split('=');
+      const v = decodeURIComponent(rest.join('='));
+      if (k === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(v)) day = v;
+      else if (k === 'topic') topic = v || null;
+    }
+    return { day, topic };
+  }
+
   function tryRestoreFromHash(): void {
-    const m = window.location.hash.match(/^#day-(\d{4}-\d{2}-\d{2})$/);
-    if (!m) return;
-    const date = m[1];
-    if (dayMap.has(date)) {
-      openDay(date);
+    const { day, topic } = readHashSegments();
+    if (topic !== null && topic !== topicKey) {
+      // 走 setTopic 的 noHash 分支:不重新写 hash,也不 dispatch(本就是因 hash 变化触发)
+      topicKey = topic;
+      applyCellVisualFilter();
+      updateSectionCounts();
+      updateChipActive();
+      updateFilterStatus();
+    }
+    if (day && dayMap.has(day)) {
+      openDay(day);
     }
   }
   tryRestoreFromHash();
   window.addEventListener('hashchange', tryRestoreFromHash);
+
+  // ---- 主题过滤实现 ----
+  function applyCellVisualFilter(): void {
+    const cells = $$<HTMLButtonElement>('.cal-cell[data-day]');
+    for (const cell of cells) {
+      const d = cell.getAttribute('data-day');
+      if (!d) continue;
+      const list = getDayPapers(d);
+      const n = list.length;
+      // 移除旧的 bucket class
+      cell.classList.remove(
+        'cal-cell--empty',
+        'cal-cell--high',
+        'cal-cell--mid',
+        'cal-cell--low',
+      );
+      const countEl = cell.querySelector<HTMLElement>('.cal-cell-count');
+      const titleEl = cell.querySelector<HTMLElement>('.cal-cell-title');
+      if (n === 0) {
+        cell.classList.add('cal-cell--empty');
+        if (countEl) countEl.textContent = '';
+        if (titleEl) titleEl.textContent = '';
+        cell.disabled = true;
+      } else {
+        const top = list[0];
+        const s = top?.score;
+        if (s !== undefined && s !== null && s >= 7) cell.classList.add('cal-cell--high');
+        else if (s !== undefined && s !== null && s >= 5) cell.classList.add('cal-cell--mid');
+        else cell.classList.add('cal-cell--low');
+        if (countEl) countEl.textContent = String(n);
+        if (titleEl) titleEl.textContent = top ? topTitleClient(top) : '';
+        cell.disabled = false;
+      }
+      // a11y label 重算
+      cell.setAttribute('aria-label', makeCellAriaLabel(d, n));
+    }
+  }
+
+  function updateSectionCounts(): void {
+    const grandEl = $<HTMLElement>('#cal-grand-count');
+    if (grandEl) {
+      const filtered = getFilteredDayMap();
+      let totalCount = 0;
+      for (const arr of filtered.values()) totalCount += arr.length;
+      const daysWith = filtered.size;
+      grandEl.textContent = `${totalCount} 篇 / ${daysWith} 天`;
+    }
+    $$<HTMLElement>('.cal-month').forEach((mEl) => {
+      const countEl = mEl.querySelector<HTMLElement>('.cal-month-count');
+      if (!countEl) return;
+      const monthKey = mEl.getAttribute('data-month');
+      if (!monthKey) return;
+      let total = 0;
+      let days = 0;
+      for (const [d, ps] of dayMap.entries()) {
+        if (!d.startsWith(monthKey)) continue;
+        const f = topicKey ? ps.filter((p) => (p.task || null) === topicKey) : ps;
+        if (f.length > 0) {
+          total += f.length;
+          days += 1;
+        }
+      }
+      countEl.textContent = `${total} 篇 · ${days} 天有更新`;
+    });
+  }
+
+  function updateChipActive(): void {
+    $$<HTMLButtonElement>('[data-topic-chip]').forEach((b) => {
+      const k = b.getAttribute('data-topic-chip');
+      const active = (k === '__all__' && topicKey === null) || k === topicKey;
+      b.setAttribute('aria-pressed', active ? 'true' : 'false');
+      b.classList.toggle('topic-chip--active', active);
+    });
+  }
+
+  function updateFilterStatus(): void {
+    const statusEl = $<HTMLElement>('#topic-filter-status');
+    const labelEl = $<HTMLElement>('#topic-filter-status-label');
+    if (!statusEl || !labelEl) return;
+    if (!topicKey) {
+      statusEl.hidden = true;
+      return;
+    }
+    const chip = $<HTMLButtonElement>(`[data-topic-chip="${CSS.escape(topicKey)}"]`);
+    const label = chip?.querySelector('.topic-chip-label')?.textContent?.trim() || topicKey;
+    labelEl.textContent = label;
+    statusEl.hidden = false;
+  }
+
+  function topTitleClient(p: Paper): string {
+    const t = (p.title_zh || p.title || '').trim();
+    if (t.length <= 14) return t;
+    return t.slice(0, 13) + '…';
+  }
+
+  function makeCellAriaLabel(d: string, n: number): string {
+    const [y, m, day] = d.split('-');
+    if (n === 0) return `${y} 年 ${parseInt(m, 10)} 月 ${parseInt(day, 10)} 日,无新论文`;
+    return `${y} 年 ${parseInt(m, 10)} 月 ${parseInt(day, 10)} 日,${n} 篇`;
+  }
+
+  function setTopic(key: string | null, opts: { silent?: boolean } = {}): void {
+    topicKey = key;
+    applyCellVisualFilter();
+    updateSectionCounts();
+    updateChipActive();
+    updateFilterStatus();
+    if (!opts.silent) {
+      // 写 hash
+      const cur = readHashSegments();
+      const day = cur.day;
+      const parts: string[] = [];
+      if (key) parts.push('topic=' + encodeURIComponent(key));
+      if (day) parts.push('day=' + day);
+      const nextHash = parts.length ? '#' + parts.join('&') : '';
+      const { pathname, search } = window.location;
+      const target = nextHash ? pathname + search + nextHash : pathname + (search || '');
+      if (window.location.hash !== nextHash) {
+        try { history.replaceState(null, '', target); } catch (_) { /* ignore */ }
+      }
+      // 广播(其它脚本 / tag-jump 按钮反向同步 UI)
+      document.dispatchEvent(
+        new CustomEvent(TOPIC_FILTER_EVENT, { detail: { topic: key } }),
+      );
+    }
+  }
+
+  // chip 点击 → 切 / 取消
+  $$<HTMLButtonElement>('[data-topic-chip]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const k = b.getAttribute('data-topic-chip') || '';
+      if (k === '__all__') {
+        setTopic(null);
+        return;
+      }
+      // 同主题再次点击 = 取消
+      const next = topicKey === k ? null : k;
+      setTopic(next);
+    });
+  });
+
+  // 状态条 ✕ 清除
+  const statusClearBtn = $<HTMLButtonElement>('#topic-filter-status-clear');
+  if (statusClearBtn) {
+    statusClearBtn.addEventListener('click', () => setTopic(null));
+  }
+
+  // 监听 index.astro 的 tag-jump 按钮(以及其它可能的 emit)
+  document.addEventListener(TOPIC_FILTER_EVENT, (e) => {
+    const ev = e as CustomEvent<{ topic: string | null }>;
+    const next = ev.detail?.topic ?? null;
+    if (next === topicKey) return; // 已同步
+    setTopic(next, { silent: true });
+  });
 
   // ---- 月份切换:全局「年 + 月」联动下拉 ----
   function switchMonth(ym: string): void {
