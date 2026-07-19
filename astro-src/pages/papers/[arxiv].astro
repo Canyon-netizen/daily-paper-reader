@@ -59,13 +59,17 @@ export const getStaticPaths: GetStaticPaths = async () => {
         // basename = 文件名段(无目录前缀)。例如
         //   papers/2026/06/2606.26155v1-foo  →  arxiv = "2606.26155v1-foo"
         arxiv: id.split('/').pop() || '',
-        // 顺手把完整 id 也喂进去,避免 page 端用 basename 反推时拼错目录。
+      },
+      props: {
+        // 顺手把完整 id 通过 props 喂进去,避免 page 端用 basename 反推时拼错目录。
+        // Astro getStaticPaths 的 props 会作为 Astro.props.fullId 暴露。
         fullId: id,
       },
     }));
 };
 
-const { arxiv, fullId } = Astro.params;
+const { arxiv } = Astro.params;
+const { fullId } = Astro.props;
 const id = fullId || `papers/${arxiv}`;
 const paper = await readPaper(id);
 const base = import.meta.env.BASE_URL;
