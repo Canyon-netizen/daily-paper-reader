@@ -252,20 +252,20 @@ const dailyLean = dailyPapersAll
         <div class="section-header">
           <div>
             <h2>🗂️ 按主题分类</h2>
-            <p class="section-sub">按 query tag 折叠浏览,每个主题下按评分倒序</p>
+            <p class="section-sub">按 query tag 浏览,每个主题下按评分倒序展示全部论文</p>
           </div>
         </div>
         <div class="tag-sections">
           {sortedTagEntries.map(([tag, items]) => {
             const label = tagLabels[tag] || tag;
             return (
-              <details class="tag-section" open={tag === 'rl'}>
+              <details class="tag-section" open>
                 <summary class="tag-section-summary">
                   <span class="tag-name">{label}</span>
                   <span class="tag-count">{items.length} 篇</span>
                 </summary>
                 <ul class="tag-papers">
-                  {items.slice(0, 10).map((p) => {
+                  {items.map((p) => {
                     const href = `${base}/papers/${p.slug}/`;
                     return (
                       <li data-arxiv-id={p.arxivId}
@@ -289,40 +289,6 @@ const dailyLean = dailyPapersAll
                       </li>
                     );
                   })}
-                  {items.length > 10 && (
-                    <>
-                      {items.slice(10).map((p) => {
-                        const href = `${base}/papers/${p.slug}/`;
-                        return (
-                          <li class="tag-paper-rest" data-tag-rest hidden
-                              data-arxiv-id={p.arxivId}
-                              data-paper-card-selectable
-                              data-selectable-paper={p.arxivId}
-                              data-selectable-title={p.title || ''}
-                              data-selectable-title-zh={p.title_zh || ''}
-                              data-selectable-tldr={p.tldr || ''}
-                              data-selectable-method=""
-                              data-selectable-result=""
-                              data-selectable-tags={flattenCategories(p.categories).join(',')}>
-                            <a href={href} class="tag-paper-link">
-                              <span class="tag-paper-score">
-                                {p.score?.toFixed(1) || '—'}
-                              </span>
-                              <span class="tag-paper-title">
-                                {p.title_zh || p.title}
-                              </span>
-                              <span class="tag-paper-arrow">→</span>
-                            </a>
-                          </li>
-                        );
-                      })}
-                      <li class="tag-paper-more">
-                        <button type="button" class="tag-paper-toggle" data-tag-toggle>
-                          展开剩余 {items.length - 10} 篇 ↓
-                        </button>
-                      </li>
-                    </>
-                  )}
                 </ul>
               </details>
             );
