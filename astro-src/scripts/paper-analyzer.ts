@@ -33,6 +33,7 @@ import {
   LLM_DEFAULTS,
   loadGitHubToken,
   loadGitHubRepo,
+  loadAutoSaveAnalyzerToGitHub,
   loadDeepDiveSettings,
   loadHiddenPapers,
 } from './settings';
@@ -337,6 +338,23 @@ function clearStatus(): void {
   const el = $('status');
   el.hidden = true;
   el.innerHTML = '';
+}
+
+// 自动同步到 GitHub 的轻量 toast — 跟 setStatus 错开,后者是阻塞状态行;
+// auto-save 是 fire-and-forget,失败/成功都用右下角 toast 提示,3.5s 自动消失。
+// 不依赖 status bar,避免把分析结果的状态盖掉。
+function showAutoSaveToast(msg: string, kind: 'ok' | 'err' = 'ok'): void {
+  const old = document.getElementById('analyzer-autosave-toast');
+  if (old) old.remove();
+  const el = document.createElement('div');
+  el.id = 'analyzer-autosave-toast';
+  el.className = `analyzer-autosave-toast analyzer-autosave-toast--${kind}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('analyzer-autosave-toast--fade');
+    setTimeout(() => el.remove(), 400);
+  }, 3500);
 }
 
 // 强转 string:之前 arxiv-index.json schema 演进时,有人把 entry 当字符串用,
@@ -2376,6 +2394,32 @@ async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promis
 // 切到历史 tab 时 list 显示,点击 → 重新渲染(不需要再调 LLM)。
 // 纯 localStorage,不上传,不进 Gist。如果用户拒绝再渲染或刷新页面,数据不丢。
 // ============================================================================
+// 自动同步触发器 — 跑完分析后,在用户没主动点 "📤 保存到 GitHub" 的情况下,
+// 根据 /settings/ 的开关决定是否自动落盘。失败/成功都用右下角轻量 toast。
+// - 开关默认关(避免误推用户仓库);开关在 settings 页 → "论文分析 — 自动同步"。
+// - 仅 arxiv 源生效,PDF 上传无 arxivId,saveToGitHub 自身会拒绝,这里前置过滤掉。
+// - 无 PAT 时静默跳过 + 一次性提示(每会话仅提示一次,避免反复打扰)。
+let autoSaveHintedNoToken = false;
+function maybeAutoSaveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): void {
+  if (!loadAutoSaveAnalyzerToGitHub()) return;
+  if (!entry || !entry.arxivId || entry.arxivId.startsWith('manual-')) return;
+  const token = loadGitHubToken();
+  if (!token) {
+    if (!autoSaveHintedNoToken) {
+      showAutoSaveToast('已开启自动同步,但还没配 GitHub PAT — 去 /settings/ 填一下', 'err');
+      autoSaveHintedNoToken = true;
+    }
+    return;
+  }
+  // fire-and-forget:不 await,错误用 .catch 接
+  void saveToGitHub(r, entry).then(() => {
+    showAutoSaveToast(`已同步到 docs/papers/${entry!.arxivId}-<slug>.md,Vercel 部署后可见`);
+  }).catch((e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    showAutoSaveToast(`自动同步失败: ${msg}`, 'err');
+  });
+}
+
 const HISTORY_KEY = 'dpr_analyzer_history_v1';
 const HISTORY_MAX_ENTRIES = 50;
 const HISTORY_MAX_TLDR_CHARS = 80;
@@ -2807,6 +2851,10 @@ async function runAnalysis(): Promise<void> {
       pdfUrl: currentArxivEntry?.pdfUrl,
       analysis: result,
     });
+    // 自动同步到 GitHub(开关在 /settings/ 页,默认关)。
+    // 仅对 arxiv 源生效(PDF 上传没 arxivId,saveToGitHub 会拒绝);fire-and-forget,
+    // 不阻塞结果渲染,失败时右下角 toast 提示。
+    maybeAutoSaveToGitHub(result, currentArxivEntry);
     renderResult(result, text);
     clearStatus();
   } catch (e) {

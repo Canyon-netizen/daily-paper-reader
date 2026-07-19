@@ -30,6 +30,8 @@ import {
   setGitHubToken,
   loadGitHubRepo,
   setGitHubRepo,
+  loadAutoSaveAnalyzerToGitHub,
+  setAutoSaveAnalyzerToGitHub,
   loadDeepDiveSettings,
   saveDeepDiveSettings,
   loadHiddenPapers,
@@ -478,6 +480,17 @@ function init(): void {
     el.addEventListener('input', saveDd);
     el.addEventListener('change', saveDd);
   });
+
+  // --- 5b. analyzer 自动同步开关 ---
+  // 默认关。开启后,paper-analyzer 的 runAnalysis 跑完会 fire-and-forget 触发
+  // save-paper.yml 把笔记落盘到 docs/papers/,Vercel 重新部署后首页就能看到。
+  const autoSaveCb = $<HTMLInputElement>('cfg-analyzer-auto-save');
+  autoSaveCb.checked = loadAutoSaveAnalyzerToGitHub();
+  const saveAutoSave = debounce(() => {
+    setAutoSaveAnalyzerToGitHub(autoSaveCb.checked);
+    flashSavedHint();
+  }, 200);
+  autoSaveCb.addEventListener('change', saveAutoSave);
 
   // --- 6. Reset ---
   $<HTMLButtonElement>('settings-reset-all-btn').addEventListener('click', resetAllSettings);

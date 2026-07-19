@@ -38,6 +38,10 @@ export const STORAGE_KEYS = {
   // paper-analyzer 分析结果本地历史(用户刷新页面后仍能查看、再次访问)。
   // 纯 localStorage,不同步 Gist,也不上 GitHub。
   analyzerHistory: 'dpr_analyzer_history_v1',
+  // analyzer 自动同步开关 — 跑完分析后自动触发 save-paper.yml 把笔记落盘到
+  // docs/papers/。需要 GitHub PAT(同 saveToGitHub 路径),未配 PAT 时静默跳过。
+  // 默认关:用户显式开启才动用户仓库,避免误推。
+  autoSaveAnalyzerToGitHub: 'dpr_analyzer_auto_save_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 

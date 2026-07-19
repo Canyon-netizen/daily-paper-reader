@@ -49,6 +49,20 @@ const GH_OWNER_KEY = 'dpr_analyzer_github_owner_v1';
 const GH_REPO_KEY = 'dpr_analyzer_github_repo_v1';
 const GH_WORKFLOW_KEY = 'dpr_analyzer_github_workflow_v1';
 
+// analyzer 自动同步开关 — 默认关,避免静默推用户仓库。
+// 用户在 /settings/ 页手动开启,paper-analyzer 的 runAnalysis 完成后会读这个
+// 值,决定是否在结果就绪后 fire-and-forget 触发 save-paper.yml。
+export function loadAutoSaveAnalyzerToGitHub(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.autoSaveAnalyzerToGitHub) === '1';
+  } catch { return false; }
+}
+export function setAutoSaveAnalyzerToGitHub(on: boolean): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.autoSaveAnalyzerToGitHub, on ? '1' : '0');
+  } catch { /* ignore */ }
+}
+
 export function loadGitHubRepo(): GitHubRepoConfig {
   const get = (k: string, fallback: string) => {
     try { return (localStorage.getItem(k) || '').trim() || fallback; }

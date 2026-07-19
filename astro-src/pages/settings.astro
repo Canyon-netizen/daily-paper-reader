@@ -199,6 +199,26 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
       </div>
     </section>
 
+    <!-- ===== analyzer 自动同步到 GitHub ===== -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">论文分析 — 自动同步</h2>
+      <p class="settings-card-sub">
+        开启后,在论文分析页跑完一篇 arXiv 论文会自动把笔记(中文摘要 / TLDR /
+        动机·方法·结果·结论)推到 <code>docs/papers/&lt;id&gt;-&lt;slug&gt;.md</code>,
+        Vercel 重新部署后,首页日历 / 论文库 / 主题分类里就能看到。
+        关闭时,笔记只存本机 localStorage(原"📤 保存到 GitHub"按钮仍然可以手动点)。
+      </p>
+
+      <div class="settings-field">
+        <label for="cfg-analyzer-auto-save">跑完分析自动推到 GitHub</label>
+        <input id="cfg-analyzer-auto-save" type="checkbox" />
+        <span class="settings-field-hint">
+          默认关闭 — 避免误推。需要上面那个 GitHub PAT(有 <code>repo</code> /
+          <code>Actions: write</code> 权限);没配 PAT 时自动跳过,只显示提示 toast。
+        </span>
+      </div>
+    </section>
+
     <!-- ===== 长文精读 ===== -->
     <section class="settings-card">
       <h2 class="settings-card-title">长文精读 (Deep Dive)</h2>
