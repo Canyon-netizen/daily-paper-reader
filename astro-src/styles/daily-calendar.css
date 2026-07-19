@@ -74,6 +74,22 @@
   font-family: var(--font-mono);
   letter-spacing: -0.01em;
 }
+/* 下拉搬进 slot 后隐藏冗余的静态「YYYY 年 M 月」文字(JS 未运行时保留作兜底) */
+.home .cal-month-head:has(.cal-month-jump-slot > *) .cal-month-title {
+  display: none;
+}
+/* 年/月下拉:JS 运行后被搬进当前显示月份卡的标题栏 slot */
+.home .cal-month-jump-slot {
+  display: inline-flex;
+  align-items: center;
+  margin-right: auto;
+}
+.home .cal-month-jump-slot:empty { display: none; }
+.home .cal-month-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
 .home .cal-month-count {
   font-size: 0.78rem;
   font-weight: 500;

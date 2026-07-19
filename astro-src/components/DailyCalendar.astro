@@ -225,41 +225,18 @@ const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
       </p>
     </div>
     <div class="cal-section-right">
-      {months.length > 0 && (
+      {months.length > 0 && topicChips.length > 0 && (
         <div class="cal-jump">
           <select
-            id="cal-jump-year"
-            class="cal-year-select"
-            aria-label="切换年份"
+            id="cal-jump-topic"
+            class="cal-topic-select"
+            aria-label="按主题过滤日历"
           >
-            {years.map((y) => (
-              <option value={y} selected={y === String(months[0].year)}>{y} 年</option>
+            <option value="__all__">主题:全部</option>
+            {topicChips.map((c) => (
+              <option value={c.key}>主题:{c.label}（{c.count}）</option>
             ))}
           </select>
-          <select
-            id="cal-jump-month"
-            class="cal-month-select"
-            aria-label="切换月份"
-          >
-            {(yearToMonths.get(String(months[0].year)) || []).map((mm) => (
-              <option
-                value={`${months[0].year}-${String(mm).padStart(2, '0')}`}
-                selected={mm === months[0].month}
-              >{mm} 月</option>
-            ))}
-          </select>
-          {topicChips.length > 0 && (
-            <select
-              id="cal-jump-topic"
-              class="cal-topic-select"
-              aria-label="按主题过滤日历"
-            >
-              <option value="__all__">主题:全部</option>
-              {topicChips.map((c) => (
-                <option value={c.key}>主题:{c.label}（{c.count}）</option>
-              ))}
-            </select>
-          )}
         </div>
       )}
       <span class="section-tag" id="cal-grand-count">{grandTotal} 篇 / {totalDays} 天</span>
@@ -289,6 +266,31 @@ const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
     </div>
   ) : (
     <>
+      {months.length > 0 && (
+        <div class="cal-month-jump" id="cal-month-jump">
+          <select
+            id="cal-jump-year"
+            class="cal-year-select"
+            aria-label="切换年份"
+          >
+            {years.map((y) => (
+              <option value={y} selected={y === String(months[0].year)}>{y} 年</option>
+            ))}
+          </select>
+          <select
+            id="cal-jump-month"
+            class="cal-month-select"
+            aria-label="切换月份"
+          >
+            {(yearToMonths.get(String(months[0].year)) || []).map((mm) => (
+              <option
+                value={`${months[0].year}-${String(mm).padStart(2, '0')}`}
+                selected={mm === months[0].month}
+              >{mm} 月</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div class="cal-months" id="cal-months">
       {months.map((m, idx) => (
         <div
@@ -298,6 +300,7 @@ const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
         >
           <div class="cal-month-head">
             <span class="cal-month-title">{m.year} 年 {m.month} 月</span>
+            <span class="cal-month-jump-slot" data-jump-slot></span>
             <span class="cal-month-count">{m.totalCount} 篇 · {m.daysWithPapers} 天有更新</span>
           </div>
           <div class="cal-grid-wrap">
@@ -511,6 +514,17 @@ if (!dataEl) {
         $$<HTMLElement>('.cal-month').forEach((d) => {
           d.style.display = d === monthDetails ? '' : 'none';
         });
+        // 年/月下拉跟随显示的月份卡
+        mountJumpIntoMonth(monthKey);
+        const monthSel = $<HTMLSelectElement>('#cal-jump-month');
+        const yearSel = $<HTMLSelectElement>('#cal-jump-year');
+        const [yy] = monthKey.split('-');
+        if (yearSel && yearSel.value !== yy) {
+          yearSel.value = yy;
+          rebuildMonthSelect(yearSel);
+        }
+        const freshMonthSel = $<HTMLSelectElement>('#cal-jump-month');
+        if (freshMonthSel) freshMonthSel.value = monthKey;
       }
     }
 
@@ -808,6 +822,29 @@ if (!dataEl) {
   });
 
   // ---- 月份切换:全局「年 + 月」联动下拉 ----
+  // 年/月下拉现在物理挂在「当前显示月份卡」的标题栏里(.cal-month-jump-slot),
+  // 而不是页面顶部。切月/切年时把这个下拉块搬进新显示月份的 slot。
+  // 注意:mountJumpIntoMonth 会被更早执行的 tryRestoreFromHash → openDay 调用,
+  // 所以这里用即时查询而非闭包 const,避免 TDZ ReferenceError。
+  function mountJumpIntoMonth(ym: string | null): void {
+    const jumpBlock = $<HTMLElement>('#cal-month-jump');
+    if (!jumpBlock) return;
+    let host: HTMLElement | null = null;
+    if (ym) {
+      host = $(`.cal-month[data-month="${ym}"] .cal-month-jump-slot`) as HTMLElement | null;
+    }
+    if (!host) {
+      // 兜底:挂到第一个可见月份的 slot
+      const visible = $$<HTMLElement>('.cal-month').find(
+        (el) => el.style.display !== 'none',
+      );
+      host = visible?.querySelector<HTMLElement>('.cal-month-jump-slot') || null;
+    }
+    if (host && jumpBlock.parentElement !== host) {
+      host.appendChild(jumpBlock);
+    }
+  }
+
   function switchMonth(ym: string): void {
     if (!ym) return;
     const target = $(`.cal-month[data-month="${ym}"]`) as HTMLElement | null;
@@ -816,7 +853,8 @@ if (!dataEl) {
     $$<HTMLElement>('.cal-month').forEach((d) => {
       d.style.display = d === target ? '' : 'none';
     });
-    // 同步头部 select 跟实际显示的月一致
+    // 把年/月下拉搬进目标月标题栏,并同步月 select 值
+    mountJumpIntoMonth(ym);
     const monthSel = $<HTMLSelectElement>('#cal-jump-month');
     if (monthSel) monthSel.value = ym;
     requestAnimationFrame(() => {
@@ -863,5 +901,8 @@ if (!dataEl) {
       switchMonth(monthSel.value);
     });
   }
+
+  // 初始:把年/月下拉挂进当前显示的月份卡标题栏(默认最近 1 个月 open)
+  mountJumpIntoMonth(monthSel ? monthSel.value : null);
 }
 </script>
