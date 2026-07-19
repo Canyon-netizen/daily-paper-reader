@@ -405,11 +405,15 @@ if (!dataEl) {
     // 若 papers 为空:仍允许点击(展示空状态),但确保 selected 视觉一致
     targetBtn.setAttribute('aria-expanded', 'true');
 
-    // 确保对应月份 details 打开
+    // 确保对应月份 details 打开,折叠其它月 — 全局只展开一个月
     const monthKey = targetBtn.getAttribute('data-month');
     if (monthKey) {
       const monthDetails = $(`.cal-month[data-month="${monthKey}"]`) as HTMLDetailsElement | null;
-      if (monthDetails && !monthDetails.open) monthDetails.open = true;
+      if (monthDetails) {
+        $$<HTMLDetailsElement>('.cal-month').forEach((d) => {
+          d.open = d === monthDetails;
+        });
+      }
     }
 
     // 填充 detail head
