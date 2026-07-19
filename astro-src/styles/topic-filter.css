@@ -1,85 +1,29 @@
 /* 主题分类 ↔ 日历视图 联动筛选样式 — 2026-07-19
  *
- * 三处入口共用本样式:
- *   1) 日历头部 chip 横排 (DailyCalendar.astro #topic-filter-bar)
- *   2) 「按主题分类」详情 summary 内的"只在日历看"按钮 (.tag-jump-btn)
- *   3) 主题筛选状态条 (.topic-filter-status)
+ * (2026-07-19 v2) 头部入口改成原生 <select> 与年/月并排,本文件因此删掉了
+ *   chip 横排相关样式。本文件现在只保留两件事:
+ *     1) 主题筛选状态条(.topic-filter-status)与"清除 ✕"按钮 — 仍显示在
+ *        section-header 下方,只在 topicKey !== null 时出现。
+ *     2) 「按主题分类」summary 内的"只在日历看"按钮 (.tag-jump-btn),
+ *        以及 index.astro 反向高亮当前过滤主题的 .is-filtered 边框。
  *
- * 视觉基线:全部沿用 home.css 现有 --accent / --accent-soft / --fg-muted /
- *   --bg-elevated,不引入新色板。点击态只翻配色与字重,不新加阴影/动画。
+ * 视觉基线:沿用 home.css 现有 --accent / --accent-soft / --fg-muted /
+ *   --bg-elevated / --fg / --bg,不引入新色板。
  */
 
 /* ============================================================
- * 1) 日历头部 chip 横排
+ * 1) 主题筛选状态条(只在 topicKey !== null 时 hidden=false)
  * ============================================================ */
 
-.topic-filter-bar {
+.topic-filter-status-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-  padding: 0.6rem 0 0.4rem;
-  margin-bottom: 0.5rem;
+  justify-content: flex-start;
+  padding: 0.4rem 0 0.2rem;
 }
 
-.topic-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.75rem;
-  background: var(--bg-elevated, rgba(0, 0, 0, 0.04));
-  color: var(--fg);
-  border: 1px solid transparent;
-  border-radius: 999px;
-  font-size: 0.82rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
-  white-space: nowrap;
-}
-
-.topic-chip:hover {
-  background: var(--accent-soft, rgba(0, 0, 0, 0.06));
-}
-
-.topic-chip-n {
-  display: inline-block;
-  min-width: 1.5rem;
-  text-align: center;
-  padding: 0 0.35rem;
-  background: rgba(0, 0, 0, 0.06);
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  color: var(--fg-muted);
-}
-
-.topic-chip--active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
-.topic-chip--active .topic-chip-n {
-  background: rgba(255, 255, 255, 0.22);
-  color: #fff;
-}
-
-.topic-chip--all.topic-chip--active {
-  background: var(--fg);
-  color: var(--bg, #fff);
-}
-
-.topic-chip--all.topic-chip--active .topic-chip-n {
-  display: none;
-}
-
-/* ============================================================
- * 2) 主题筛选状态条(只在 topicKey !== null 时 hidden=false)
- * ============================================================ */
+.topic-filter-status-row[hidden] { display: none; }
 
 .topic-filter-status {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
@@ -113,12 +57,8 @@
 }
 
 /* ============================================================
- * 3) 「按主题分类」summary 内的"只在日历看"按钮
+ * 2) 「按主题分类」summary 内的"只在日历看"按钮 + 当前过滤高亮
  * ============================================================ */
-
-.home .tag-section-summary {
-  /* summary 现在的 flex 布局默认是 inline,这里把跳转按钮右推到最右 */
-}
 
 .home .tag-jump-btn {
   margin-left: auto;

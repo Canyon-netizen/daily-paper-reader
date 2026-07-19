@@ -248,6 +248,18 @@ const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
               >{mm} 月</option>
             ))}
           </select>
+          {topicChips.length > 0 && (
+            <select
+              id="cal-jump-topic"
+              class="cal-topic-select"
+              aria-label="按主题过滤日历"
+            >
+              <option value="__all__">主题:全部</option>
+              {topicChips.map((c) => (
+                <option value={c.key}>主题:{c.label}（{c.count}）</option>
+              ))}
+            </select>
+          )}
         </div>
       )}
       <span class="section-tag" id="cal-grand-count">{grandTotal} 篇 / {totalDays} 天</span>
@@ -255,28 +267,8 @@ const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
   </div>
 
   {topicChips.length > 0 && (
-    <div class="topic-filter-bar" id="topic-filter-bar" role="toolbar" aria-label="按主题过滤日历">
-      <button
-        type="button"
-        class="topic-chip topic-chip--all"
-        data-topic-chip="__all__"
-        aria-pressed="true"
-      >
-        全部
-      </button>
-      {topicChips.map((c) => (
-        <button
-          type="button"
-          class="topic-chip"
-          data-topic-chip={c.key}
-          aria-pressed="false"
-          title={`只显示 ${c.label} 主题论文`}
-        >
-          <span class="topic-chip-label">{c.label}</span>
-          <span class="topic-chip-n">{c.count}</span>
-        </button>
-      ))}
-      <span class="topic-filter-status" id="topic-filter-status" hidden>
+    <div class="topic-filter-status-row" id="topic-filter-status-row" hidden>
+      <span class="topic-filter-status" id="topic-filter-status">
         <span class="topic-filter-status-text">
           只看 <strong id="topic-filter-status-label">—</strong>
         </span>
@@ -649,7 +641,7 @@ if (!dataEl) {
       topicKey = topic;
       applyCellVisualFilter();
       updateSectionCounts();
-      updateChipActive();
+      updateSelectActive();
       updateFilterStatus();
     }
     if (day && dayMap.has(day)) {
@@ -724,26 +716,30 @@ if (!dataEl) {
     });
   }
 
-  function updateChipActive(): void {
-    $$<HTMLButtonElement>('[data-topic-chip]').forEach((b) => {
-      const k = b.getAttribute('data-topic-chip');
-      const active = (k === '__all__' && topicKey === null) || k === topicKey;
-      b.setAttribute('aria-pressed', active ? 'true' : 'false');
-      b.classList.toggle('topic-chip--active', active);
-    });
+  function updateSelectActive(): void {
+    const sel = $<HTMLSelectElement>('#cal-jump-topic');
+    if (!sel) return;
+    const target = topicKey === null ? '__all__' : topicKey;
+    if (sel.value !== target) sel.value = target;
   }
 
   function updateFilterStatus(): void {
+    const rowEl = $<HTMLElement>('#topic-filter-status-row');
     const statusEl = $<HTMLElement>('#topic-filter-status');
     const labelEl = $<HTMLElement>('#topic-filter-status-label');
-    if (!statusEl || !labelEl) return;
+    if (!rowEl || !statusEl || !labelEl) return;
     if (!topicKey) {
+      rowEl.hidden = true;
       statusEl.hidden = true;
       return;
     }
-    const chip = $<HTMLButtonElement>(`[data-topic-chip="${CSS.escape(topicKey)}"]`);
-    const label = chip?.querySelector('.topic-chip-label')?.textContent?.trim() || topicKey;
+    const sel = $<HTMLSelectElement>('#cal-jump-topic');
+    const opt = sel?.querySelector<HTMLOptionElement>(`option[value="${CSS.escape(topicKey)}"]`);
+    const raw = opt?.textContent?.trim() || topicKey;
+    // "主题:强化学习(87)" → "强化学习"
+    const label = raw.replace(/^主题[::]/, '').replace(/[（(]\d+[）)]\s*$/, '').trim() || topicKey;
     labelEl.textContent = label;
+    rowEl.hidden = false;
     statusEl.hidden = false;
   }
 
@@ -763,7 +759,7 @@ if (!dataEl) {
     topicKey = key;
     applyCellVisualFilter();
     updateSectionCounts();
-    updateChipActive();
+    updateSelectActive();
     updateFilterStatus();
     if (!opts.silent) {
       // 写 hash
@@ -786,18 +782,16 @@ if (!dataEl) {
   }
 
   // chip 点击 → 切 / 取消
-  $$<HTMLButtonElement>('[data-topic-chip]').forEach((b) => {
-    b.addEventListener('click', () => {
-      const k = b.getAttribute('data-topic-chip') || '';
-      if (k === '__all__') {
-        setTopic(null);
-        return;
-      }
-      // 同主题再次点击 = 取消
-      const next = topicKey === k ? null : k;
-      setTopic(next);
+  // select 变更 → 切主题(同 value = 取消,即全部 → 全部依然是 null)
+  const topicSel = $<HTMLSelectElement>('#cal-jump-topic');
+  if (topicSel) {
+    topicSel.addEventListener('change', () => {
+      const k = topicSel.value;
+      // "全部" = null;其它就是该主题 key(没有 toggle 语义,select 不允许多次点同一选项)
+      // 同主题重复选择这种语义在原生 select 里不发生(change 只触发值改变);保持简洁不做 toggle。
+      setTopic(k === '__all__' ? null : k);
     });
-  });
+  }
 
   // 状态条 ✕ 清除
   const statusClearBtn = $<HTMLButtonElement>('#topic-filter-status-clear');
