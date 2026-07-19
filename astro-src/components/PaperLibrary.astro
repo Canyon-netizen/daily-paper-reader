@@ -1,7 +1,6 @@
 ---
-// PaperLibrary - 分屏:左列表 + 右网络,加抽屉编辑标签。
+// PaperLibrary - 左列表 + 右抽屉编辑标签。
 // 数据从 script#papers-data 注入(SSR 时序列化),客户端渲染。
-// cytoscape 通过 dynamic import('cytoscape') 加载(按需,不阻塞首屏)。
 // 用户标签:localStorage 优先(key 'dpr_user_tags_v1'),Gist 同步由 user-tags.ts 内部处理。
 ---
 
@@ -26,23 +25,6 @@
       </div>
     </div>
   </aside>
-
-  <!-- 右侧网络 -->
-  <section class="papers-graph-panel" aria-label="节点网络">
-    <div id="cy"></div>
-    <div class="papers-graph-loading" data-papers-graph-loading>
-      <div class="papers-graph-loading-spinner" aria-hidden="true"></div>
-      <div data-papers-graph-loading-text>计算节点网络…</div>
-    </div>
-    <div class="papers-graph-toolbar" role="group" aria-label="算法切换">
-      <button type="button" class="papers-graph-btn is-active" data-papers-algorithm="jaccard">Jaccard 标签</button>
-      <button type="button" class="papers-graph-btn" data-papers-algorithm="tfidf">TF-IDF 文本</button>
-      <button type="button" class="papers-graph-btn" data-papers-algorithm="hybrid">混合</button>
-      <button type="button" class="papers-graph-btn" data-papers-graph-fit title="适应屏幕">⤢</button>
-    </div>
-    <div class="papers-graph-meta" data-papers-graph-meta></div>
-    <div class="papers-graph-legend" data-papers-graph-legend hidden></div>
-  </section>
 
   <!-- 右侧抽屉 -->
   <aside class="papers-drawer" data-papers-drawer aria-hidden="true" aria-label="论文详情与标签编辑">

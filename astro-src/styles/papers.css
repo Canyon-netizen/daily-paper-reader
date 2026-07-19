@@ -1,10 +1,8 @@
-/* /papers/ 论文库 + 节点网络 样式
- * - 分屏布局 (grid-template-columns: minmax(420px, 45%) 1fr)
- * - 左:虚拟滚动论文列表 + 搜索 + 标签筛选
- * - 右:cytoscape 节点网络
- * - 右抽屉:论文详情 + 标签编辑
+/* /papers/ 论文库 样式
+ * - 单栏:虚拟滚动论文列表 + 搜索 + 标签筛选
+ * - 右侧抽屉:论文详情 + 标签编辑(drawer 是 position:fixed,不在 grid 内)
  * - 深色模式:沿用 body[data-theme="dark"] 下的 CSS 变量
- * - 移动端响应式:<768px 改上下叠
+ * - 移动端响应式:<768px 列表占满高度
  */
 
 /* =====================================================================
@@ -81,7 +79,7 @@
  * ===================================================================== */
 .papers-library-host {
   display: grid;
-  grid-template-columns: minmax(420px, 45%) 1fr;
+  grid-template-columns: 1fr;
   flex: 1 1 auto;
   min-height: 0; /* 让子元素可以独立滚动 */
   background: var(--bg);
@@ -244,94 +242,6 @@
   text-align: center;
   color: var(--fg-subtle);
   font-size: 0.9rem;
-}
-
-/* =====================================================================
- * 右侧:cytoscape 容器
- * ===================================================================== */
-.papers-graph-panel {
-  position: relative;
-  background: var(--bg);
-  min-height: 0;
-  overflow: hidden;
-}
-#cy {
-  position: absolute;
-  inset: 0;
-  background: var(--bg);
-}
-.papers-graph-loading {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: var(--fg-muted);
-  font-size: 0.95rem;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.6rem;
-}
-.papers-graph-loading-spinner {
-  width: 28px;
-  height: 28px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: papers-spin 0.8s linear infinite;
-}
-@keyframes papers-spin {
-  to { transform: rotate(360deg); }
-}
-.papers-graph-toolbar {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-  z-index: 5;
-  display: flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 0.4rem;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.papers-graph-btn {
-  font-size: 0.82rem;
-  padding: 0.35rem 0.75rem;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg-muted);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-family: inherit;
-  transition: all var(--transition);
-}
-.papers-graph-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.papers-graph-btn.is-active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-.papers-graph-meta {
-  position: absolute;
-  bottom: 0.6rem;
-  left: 0.6rem;
-  z-index: 5;
-  font-size: 0.75rem;
-  color: var(--fg-subtle);
-  font-family: var(--font-mono);
-  background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 0.3rem 0.6rem;
-  pointer-events: none;
 }
 
 /* =====================================================================
@@ -551,48 +461,12 @@
 }
 
 /* =====================================================================
- * Cytoscape 节点色:按主 tag kind 分桶
- * ===================================================================== */
-.papers-graph-legend {
-  position: absolute;
-  bottom: 0.6rem;
-  right: 0.6rem;
-  z-index: 5;
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 0.5rem 0.7rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  font-size: 0.75rem;
-  color: var(--fg-muted);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-.papers-graph-legend-row {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.papers-graph-legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-/* =====================================================================
- * 响应式:窄屏改上下叠
+ * 响应式:窄屏单栏
  * ===================================================================== */
 @media (max-width: 768px) {
   .papers-page {
     height: auto;
     min-height: 0;
-  }
-  .papers-library-host {
-    grid-template-columns: 1fr;
-    grid-template-rows: 50vh 50vh;
   }
   .papers-list-panel {
     border-right: none;
