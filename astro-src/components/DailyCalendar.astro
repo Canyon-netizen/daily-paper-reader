@@ -532,11 +532,14 @@ if (!dataEl) {
   function jumpTo(y: string, m: number): void {
     if (!y || !m) return;
     const ym = `${y}-${String(m).padStart(2, '0')}`;
-    const details = $(`.cal-month[data-month="${ym}"]`) as HTMLDetailsElement | null;
-    if (!details) return;
-    if (!details.open) details.open = true;
+    const target = $(`.cal-month[data-month="${ym}"]`) as HTMLDetailsElement | null;
+    if (!target) return;
+    // 只保留目标展开,其它折叠 — 避免每个月的日历都同时铺出来
+    $$<HTMLDetailsElement>('.cal-month').forEach((d) => {
+      d.open = d === target;
+    });
     requestAnimationFrame(() => {
-      details.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
 
