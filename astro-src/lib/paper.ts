@@ -386,15 +386,20 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
   return sorted;
 }
 
-/** 按扁平化 token (e.g. 'task:rl') 桶分论文;若都没有则归 '其他'。
- *  与历史的 listAllPapersByTag 同语义,只是 input 由 tags 改 categories。 */
+/** 按 task 维度桶分论文(categories.task[0] 作桶 key);若 task 为空则归 '其他'。
+ *  与历史的 listAllPapersByTag 同语义,只是 input 由 tags 改 categories。
+ *
+ *  注意:不能用 flattenCategories[0] 当 key — flattenCategories 按 venue→task→
+ *  method→type 顺序拍,一篇 venue 不为空的 paper 会先匹配 venue 名,被分到 venue
+ *  桶而不是 task 桶,导致首页"按主题分类"看不到这些 paper(会进 "其他")。
+ *  这里显式取 categories.task[0],保证每篇 paper 按它真正的主题归类。 */
 export async function listAllPapersByTag(): Promise<Map<string, PaperListItem[]>> {
   const all = await listPapers({ sortBy: 'score' });
   const byTag = new Map<string, PaperListItem[]>();
   for (const p of all) {
-    const flat = flattenCategories(p.categories);
-    const first = flat[0];
-    const key = first ? first.slice(first.indexOf(':') + 1) : '其他';
+    const taskList = p.categories?.task || [];
+    const first = taskList[0];
+    const key = first || '其他';
     if (!byTag.has(key)) byTag.set(key, []);
     byTag.get(key)!.push(p);
   }

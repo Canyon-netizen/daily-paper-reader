@@ -20,11 +20,12 @@ const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7 });
 const byTag = await listAllPapersByTag();
 
-// 主题显示顺序(listAllPapersByTag 返回的 key 现在用 'task:<label>' 形式;
+// 主题显示顺序(listAllPapersByTag 返回的 key 现在用 categories.task[0] 形式;
 // 旧 'query:<label>' 前缀已废)。
-// 这里只列有中文 label 的主流 task 主题;总主题数 totalTopics 仍按 byTag.size
-// 真实计算(可能多于这里),避免 stat row 与展示行数不一致。
-const TASK_ORDER = ['rl', 'mas', 'llm-agent', 'reasoning', 'gui', 'vision', 'game-ai', 'robotics', '其他'];
+// 这里只列有中文 label 的主流 task 主题;"其他" 桶(categories.task 为空的
+// paper)不在首页展示 —— 那些 paper 去论文库按其他维度(venue/method/type)筛选。
+// totalTopics 用 sortedTagEntries.length 反映实际展示分类数,与 stats row 一致。
+const TASK_ORDER = ['rl', 'mas', 'llm-agent', 'agent', 'reasoning', 'gui', 'vision', 'game-ai', 'robotics', 'code'];
 const sortedTagEntries = TASK_ORDER
   .filter((t) => byTag.has(t))
   .map((t) => [t, byTag.get(t)!] as const);
@@ -34,11 +35,12 @@ const tagLabels: Record<string, string> = {
   mas: '多智能体系统',
   reasoning: '推理增强',
   'llm-agent': 'LLM Agent',
+  agent: '智能体',
   'game-ai': '游戏 AI',
   gui: 'GUI',
   vision: '视觉',
   robotics: '机器人',
-  其他: '其他',
+  code: '代码生成',
 };
 
 // 统计
@@ -259,7 +261,7 @@ const dailyLean = dailyPapersAll
           {sortedTagEntries.map(([tag, items]) => {
             const label = tagLabels[tag] || tag;
             return (
-              <details class="tag-section" open>
+              <details class="tag-section">
                 <summary class="tag-section-summary">
                   <span class="tag-name">{label}</span>
                   <span class="tag-count">{items.length} 篇</span>
