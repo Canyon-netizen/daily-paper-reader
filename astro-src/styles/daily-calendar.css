@@ -15,7 +15,42 @@
   gap: 0.8rem;
 }
 
-/* ----- 单个月份卡(div 形式,内嵌月份切换下拉)----- */
+/* ----- section-header 右侧(年+月 select + 计数)----- */
+.home .cal-section-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.home .cal-jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.home .cal-year-select,
+.home .cal-month-select {
+  padding: 0.4rem 0.6rem;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--fg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+  min-width: 5.5rem;
+}
+.home .cal-year-select:hover,
+.home .cal-month-select:hover { border-color: var(--accent); }
+.home .cal-year-select:focus-visible,
+.home .cal-month-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ----- 单个月份卡 ----- */
 .home .cal-month {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
@@ -35,23 +70,9 @@
   font-size: 1.02rem;
   color: var(--fg);
 }
-.home .cal-month-select {
-  padding: 0.4rem 0.6rem;
-  font-family: inherit;
-  font-size: 0.92rem;
-  font-weight: 700;
-  color: var(--fg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: border-color var(--transition), background var(--transition);
-  min-width: 7.5rem;
-}
-.home .cal-month-select:hover { border-color: var(--accent); }
-.home .cal-month-select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+.home .cal-month-title {
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
 }
 .home .cal-month-count {
   font-size: 0.78rem;
@@ -248,7 +269,9 @@
 /* ----- 响应式 ----- */
 @media (max-width: 720px) {
   .home .cal-month-head { padding: 0.55rem 0.8rem; gap: 0.5rem; }
-  .home .cal-month-select { font-size: 0.85rem; min-width: 6rem; padding: 0.35rem 0.5rem; }
+  .home .cal-year-select,
+  .home .cal-month-select { font-size: 0.85rem; min-width: 4.5rem; padding: 0.35rem 0.5rem; }
+  .home .cal-section-right { gap: 0.5rem; }
   .home .cal-cell {
     padding: 2px;
     gap: 1px;

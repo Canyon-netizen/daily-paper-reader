@@ -193,7 +193,34 @@ const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
         按发布日期排布论文,点击某天查看当日详情。多版本取最新 v# 的日期。
       </p>
     </div>
-    <span class="section-tag">{grandTotal} 篇 / {totalDays} 天</span>
+    <div class="cal-section-right">
+      {months.length > 0 && (
+        <div class="cal-jump">
+          <select
+            id="cal-jump-year"
+            class="cal-year-select"
+            aria-label="切换年份"
+          >
+            {years.map((y) => (
+              <option value={y} selected={y === String(months[0].year)}>{y} 年</option>
+            ))}
+          </select>
+          <select
+            id="cal-jump-month"
+            class="cal-month-select"
+            aria-label="切换月份"
+          >
+            {(yearToMonths.get(String(months[0].year)) || []).map((mm) => (
+              <option
+                value={`${months[0].year}-${String(mm).padStart(2, '0')}`}
+                selected={mm === months[0].month}
+              >{mm} 月</option>
+            ))}
+          </select>
+        </div>
+      )}
+      <span class="section-tag">{grandTotal} 篇 / {totalDays} 天</span>
+    </div>
   </div>
 
   {months.length === 0 ? (
@@ -214,21 +241,7 @@ const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
           style={idx < OPEN_COUNT ? '' : 'display:none'}
         >
           <div class="cal-month-head">
-            <select
-              class="cal-month-select"
-              data-month-select={m.key}
-              aria-label={`切换月份(当前 ${m.year} 年 ${m.month} 月)`}
-            >
-              {years.map((y) => (
-                <optgroup label={`${y} 年`}>
-                  {(yearToMonths.get(y) || []).map((mm) => (
-                    <option value={`${y}-${String(mm).padStart(2, '0')}`} selected={y === m.year && mm === m.month}>
-                      {mm} 月
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            <span class="cal-month-title">{m.year} 年 {m.month} 月</span>
             <span class="cal-month-count">{m.totalCount} 篇 · {m.daysWithPapers} 天有更新</span>
           </div>
           <div class="cal-grid-wrap">
@@ -288,6 +301,7 @@ const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
 
   {/* 客户端脚本:读 daily-data,绑定 cell 交互,渲染卡片墙 */}
   <script type="application/json" id="daily-data" set:html={JSON.stringify(dataForClient)}></script>
+  <script type="application/json" id="cal-jump-data" set:html={yearMonthJson}></script>
 </section>
 
 <script>
@@ -525,7 +539,7 @@ if (!dataEl) {
   tryRestoreFromHash();
   window.addEventListener('hashchange', tryRestoreFromHash);
 
-  // ---- 月份切换:每个 .cal-month 头部嵌一个 <select>,change 时切换显示 ----
+  // ---- 月份切换:全局「年 + 月」联动下拉 ----
   function switchMonth(ym: string): void {
     if (!ym) return;
     const target = $(`.cal-month[data-month="${ym}"]`) as HTMLElement | null;
@@ -534,15 +548,52 @@ if (!dataEl) {
     $$<HTMLElement>('.cal-month').forEach((d) => {
       d.style.display = d === target ? '' : 'none';
     });
+    // 同步头部 select 跟实际显示的月一致
+    const monthSel = $<HTMLSelectElement>('#cal-jump-month');
+    if (monthSel) monthSel.value = ym;
     requestAnimationFrame(() => {
       target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
 
-  $$<HTMLSelectElement>('.cal-month-select').forEach((sel) => {
-    sel.addEventListener('change', () => {
-      switchMonth(sel.value);
+  // 解析年→月数组(已按月份 desc 排好)
+  type YearMonthMap = Record<string, number[]>;
+  const jumpDataEl = $<HTMLScriptElement>('#cal-jump-data');
+  let yearMonthMap: YearMonthMap = {};
+  try {
+    yearMonthMap = jumpDataEl ? JSON.parse(jumpDataEl.textContent || '{}') : {};
+  } catch (_) {
+    yearMonthMap = {};
+  }
+
+  // 重填月 select(年份变更后调用)
+  function rebuildMonthSelect(yearSel: HTMLSelectElement): void {
+    const monthSel = $<HTMLSelectElement>('#cal-jump-month');
+    if (!monthSel) return;
+    const y = yearSel.value;
+    const months = (yearMonthMap[y] || []).slice().sort((a, b) => b - a);
+    monthSel.innerHTML = months
+      .map((mm) => `<option value="${y}-${String(mm).padStart(2, '0')}">${mm} 月</option>`)
+      .join('');
+  }
+
+  // 绑定:全局 #cal-jump-year + #cal-jump-month 联动
+  const yearSel = $<HTMLSelectElement>('#cal-jump-year');
+  const monthSel = $<HTMLSelectElement>('#cal-jump-month');
+  if (yearSel) {
+    yearSel.addEventListener('change', () => {
+      rebuildMonthSelect(yearSel);
+      // 年变更后,自动跳到该年第一个月
+      const monthSelFresh = $<HTMLSelectElement>('#cal-jump-month');
+      if (monthSelFresh && monthSelFresh.options.length > 0) {
+        switchMonth(monthSelFresh.value);
+      }
     });
-  });
+  }
+  if (monthSel) {
+    monthSel.addEventListener('change', () => {
+      switchMonth(monthSel.value);
+    });
+  }
 }
 </script>
