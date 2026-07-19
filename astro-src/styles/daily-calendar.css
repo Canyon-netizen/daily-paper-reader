@@ -34,8 +34,6 @@
   white-space: nowrap;
 }
 .home .cal-jump-select {
-  flex: 1;
-  max-width: 14rem;
   padding: 0.4rem 0.6rem;
   font-family: inherit;
   font-size: 0.85rem;
@@ -45,6 +43,12 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: border-color var(--transition), background var(--transition);
+}
+.home #cal-jump-year { min-width: 6.5rem; }
+.home #cal-jump-month { min-width: 6rem; max-width: 9rem; }
+.home .cal-jump-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .home .cal-jump-select:hover {
   border-color: var(--accent);
@@ -301,6 +305,7 @@
     font-size: 0.8rem;
     padding: 0.35rem 0.5rem;
   }
+  .home #cal-jump-year, .home #cal-jump-month { min-width: 0; flex: 1; }
   .home .cal-cell {
     padding: 2px;
     gap: 1px;
