@@ -32,18 +32,11 @@ const FULLTEXT_INLINE_MAX_BYTES = 200 * 1024;
  *   - 没 .txt 的论文(早期 pipeline 漏抓)SSR 拿不到,data-fulltext 空,
  *     客户端走 fetch 兜底,保留 f40bc41 的 fetch 链不破。
  */
-async function readFulltextInline(arxivParam: string): Promise<string> {
+async function readFulltextInline(id: string): Promise<string> {
   try {
-    // arxivParam 是 URL slug 中的 arxivId 段(可能带 v#):
-    //   /papers/2606.26155v1-detecting-and.../  →  arxivParam = "2606.26155v1-detecting-..."
-    // 文件名格式 docs/papers/<arxivId>v<n>-<slug>.txt,arxivId 形如 2606.26155。
-    // 用 glob 风格的 startsWith 匹配,找到任意以 "{param} 开头去掉 .txt"的 .txt 文件。
-    // 先尝试"去除 v<n> 再加"-..." 的版本,失败再用 glob。
-    const trimmed = arxivParam.replace(/-\d{4}\.\d{4,5}.*$/, '');
-    // 实际上 arxivParam 已经是完整 slug,直接 join 即可:Astro getStaticPaths 把
-    // "{id}"(形如 papers/2606.26155v1-detecting-and...)的 id 部分喂给 params.arxiv,
-    // id 是 "papers/{slug}.md" 去掉 .md。docs/papers/{slug}.txt 跟它同名。
-    const txtPath = join(process.cwd(), 'docs', 'papers', `${arxivParam}.txt`);
+    // docs/papers/ 现在按 arxiv id 的 YYMM 分桶到 <YYYY>/<MM>/ 子目录,
+    // id 形如 `papers/2026/06/2606.26155v1-detecting-and...`,直接 join 即可。
+    const txtPath = join(process.cwd(), 'docs', `${id}.txt`);
     const buf = await readFile(txtPath);
     if (buf.byteLength > FULLTEXT_INLINE_MAX_BYTES || buf.byteLength < 1000) {
       // 太大 → 不内联,客户端 fetch;太小 → 视为异常(404 HTML/空),不内联
@@ -57,21 +50,26 @@ async function readFulltextInline(arxivParam: string): Promise<string> {
 
 export const getStaticPaths: GetStaticPaths = async () => {
   const ids = await listAllPaperIds();
-  // 仅处理 papers/ 段(扁平化后所有论文都进 docs/papers/)
+  // 仅处理 papers/ 段(子目录分桶后 id 含 /YYYY/MM/,但 URL 路由仍是 basename)。
+  // 把 basename 当 params.arxiv 喂给 page,内部用全 id 走 readPaper/readFulltextInline。
   return ids
     .filter((id) => id.startsWith('papers/'))
     .map((id) => ({
       params: {
-        arxiv: id.split('/')[1],
+        // basename = 文件名段(无目录前缀)。例如
+        //   papers/2026/06/2606.26155v1-foo  →  arxiv = "2606.26155v1-foo"
+        arxiv: id.split('/').pop() || '',
+        // 顺手把完整 id 也喂进去,避免 page 端用 basename 反推时拼错目录。
+        fullId: id,
       },
     }));
 };
 
-const { arxiv } = Astro.params;
-const id = `papers/${arxiv}`;
+const { arxiv, fullId } = Astro.params;
+const id = fullId || `papers/${arxiv}`;
 const paper = await readPaper(id);
 const base = import.meta.env.BASE_URL;
-const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv as string) : '';
+const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(id) : '';
 ---
 
 <BaseLayout title={paper?.title_zh || paper?.title || id}>
@@ -549,15 +547,15 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
   overflow: hidden;
   border-radius: var(--radius-md);
   background: var(--bg);
-  min-height: 320px;
-  /* 自适应高度按当前图撑开(见 paper-figures.ts),切图时高度会变 —— 加过渡避免生硬跳变 */
-  transition: height 200ms ease-out;
+  height: clamp(320px, 65vh, 720px);
 }
 
 .paper-slide {
   margin: 0;
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -569,7 +567,6 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
 .paper-slide.is-active {
   opacity: 1;
   pointer-events: auto;
-  position: relative;
 }
 .paper-slide-frame {
   flex: 1 1 auto;
@@ -645,6 +642,7 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(arxiv
 
 @media (max-width: 640px) {
   .paper-carousel { padding: 0.5rem 0.5rem 0; }
+  .paper-carousel-track { height: clamp(240px, 55vh, 480px); }
   .paper-carousel-btn { width: 2rem; height: 2rem; font-size: 1.25rem; }
 }
 </style>

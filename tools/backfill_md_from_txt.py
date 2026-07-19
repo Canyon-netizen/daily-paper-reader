@@ -199,7 +199,8 @@ def main() -> int:
 
     date_prefix = args.date  # YYYY-MM-DD
     targets: List[Path] = []
-    for p in sorted(DOCS_PAPERS.glob("*.txt")):
+    # docs/papers/ 现在按 <YYYY>/<MM/> 分桶,递归收所有 .txt。
+    for p in sorted(DOCS_PAPERS.rglob("*.txt")):
         if not p.exists():
             continue
         try:
@@ -208,7 +209,10 @@ def main() -> int:
             continue
         if mt != date_prefix:
             continue
-        if (DOCS_PAPERS / f"{p.stem}.md").exists():
+        # 同名 .md 已经在某个子目录里 → 跳过(避免重复回填)
+        if any((DOCS_PAPERS / sub / f"{p.stem}.md").exists()
+               for sub in DOCS_PAPERS.iterdir()
+               if sub.is_dir()):
             continue
         targets.append(p)
 
@@ -237,7 +241,11 @@ def main() -> int:
         print("[error] .env 缺少 api url model — 无法调 LLM,先回退到纯骨架 md")
         # 骨架版回退
         for rec in parsed_list:
-            md_path = DOCS_PAPERS / f"{rec['arxiv_id']}.md"
+            # 按 arxiv id YYMM 入对应 docs/papers/<YYYY>/<MM>/ 子目录
+            sys.path.insert(0, str(ROOT_DIR / "src"))
+            from paper_paths import paper_md_path  # type: ignore
+            md_path = Path(paper_md_path(str(ROOT_DIR / "docs"), rec['arxiv_id']))
+            md_path.parent.mkdir(parents=True, exist_ok=True)
             md_path.write_text(
                 "---\n"
                 f"title: {rec['title']}\n"
@@ -255,17 +263,20 @@ def main() -> int:
                 "---\n\n## Abstract\n\n" + rec.get("abstract", "") + "\n",
                 encoding="utf-8",
             )
-            print(f"[write] {md_path.name}")
+            print(f"[write] {md_path}")
         return 0
 
     llm_results = call_llm_batch(parsed_list, env)
     now = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+    sys.path.insert(0, str(ROOT_DIR / "src"))
+    from paper_paths import paper_md_path  # type: ignore
     for rec, llm in zip(parsed_list, llm_results):
-        md_path = DOCS_PAPERS / f"{rec['arxiv_id']}.md"
+        md_path = Path(paper_md_path(str(ROOT_DIR / "docs"), rec['arxiv_id']))
+        md_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             content = render_md(rec, llm, now)
             md_path.write_text(content, encoding="utf-8")
-            print(f"[write] {md_path.name}")
+            print(f"[write] {md_path}")
         except Exception as e:
             print(f"[ERROR] {rec['arxiv_id']}: {e}", flush=True)
 

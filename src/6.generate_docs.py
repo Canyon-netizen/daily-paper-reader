@@ -653,13 +653,14 @@ def format_date_str(date_str: str) -> str:
 
 def prepare_paper_paths(docs_dir: str, date_str: str, title: str, arxiv_id: str) -> Tuple[str, str, str]:
     slug = slugify(title)
-    basename = f"{arxiv_id}-{slug}" if arxiv_id else slug
-    # 扁平化:所有论文都进 docs/papers/,date_str 仅用于日志/archive。
-    target_dir = os.path.join(docs_dir, "papers")
-    paper_id = f"papers/{basename}"
-    md_path = os.path.join(target_dir, f"{basename}.md")
-    txt_path = os.path.join(target_dir, f"{basename}.txt")
-    return md_path, txt_path, paper_id
+    # 论文路径按 arxiv id 前缀的 YYMM 分桶到 docs/papers/<YYYY>/<MM>/,
+    # 方便 ls docs/papers/ 一眼看清最近哪些月份有数据。所有构造都走
+    # src.paper_paths,避免散落拼字符串漏改子目录层。
+    from src.paper_paths import paper_md_path, paper_txt_path, paper_id
+    md_path = paper_md_path(docs_dir, arxiv_id, slug) if arxiv_id else os.path.join(docs_dir, "papers", f"{slug}.md")
+    txt_path = paper_txt_path(docs_dir, arxiv_id, slug) if arxiv_id else os.path.join(docs_dir, "papers", f"{slug}.txt")
+    pid = paper_id(arxiv_id, slug) if arxiv_id else f"papers/{slug}"
+    return md_path, txt_path, pid
 
 def prepare_day_report_paths(docs_dir: str, date_str: str) -> Tuple[str, str]:
     # 日报 README 不再单文件存放 — 详情由首页 docs/README.md 承载。

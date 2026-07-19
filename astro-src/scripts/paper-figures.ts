@@ -1,7 +1,6 @@
 // astro-src/scripts/paper-figures.ts
 // 论文图表 carousel:箭头 + 键盘 ←/→ + 触屏/鼠标拖动 + 指示点。
-// 容器高度按所有图片 contain 后最大高度取,避免首屏跳变;位置记 sessionStorage。
-// 复用 paper-chat.ts 的「顶层直接调用 + 早返回」模式,其它页面 import 也无害。
+// 图片在统一的响应式边界框内等比缩放,位置记 sessionStorage。
 
 let bound = false;
 
@@ -35,21 +34,6 @@ function initFigures(): void {
 
   let current = clampIndex(parseInt(sessionStorage.getItem(storageKey) || '0', 10), slides.length);
 
-  function applyTrackHeight(): void {
-    if (!track) return;
-    const maxWidth = track.clientWidth || 800;
-    // 自适应:容器高度跟着「当前这张图」走,而不是所有图的最大/中位。
-    // 每张图都按其原始宽高比 contain 到满宽后的高度撑开容器 —— 任何一张都刚好贴合、
-    // 没有多余留白;比窗口高的图仍靠 object-fit:contain 等比压缩,不裁切。
-    const active = slides[current];
-    const img = active?.querySelector<HTMLImageElement>('img');
-    let target = 320;
-    if (img && img.naturalWidth && img.naturalHeight) {
-      target = Math.max(160, Math.round((img.naturalHeight * maxWidth) / img.naturalWidth));
-    }
-    track.style.height = `${target + 60}px`;
-  }
-
   function show(i: number, opts: { persist?: boolean } = {}): void {
     current = clampIndex(i, slides.length);
     slides.forEach((s, idx) => s.classList.toggle('is-active', idx === current));
@@ -62,16 +46,6 @@ function initFigures(): void {
     if (nextBtn) nextBtn.disabled = single;
     if (opts.persist !== false) {
       try { sessionStorage.setItem(storageKey, String(current)); } catch { /* privacy mode */ }
-    }
-    // 自适应高度跟随当前图。lazy 图切过去时可能还没解码(naturalWidth=0),
-    // applyTrackHeight 会先退到兜底高;挂一次性 load 监听,解码完再撑到正确高度。
-    // 外层函数在 !details 时已经早返回,这里闭包里 details 一定存在,用 ! 断言。
-    if (details!.open) {
-      const img = slides[current]?.querySelector<HTMLImageElement>('img');
-      if (img && !img.complete) {
-        img.addEventListener('load', applyTrackHeight, { once: true });
-      }
-      applyTrackHeight();
     }
   }
 
@@ -124,26 +98,7 @@ function initFigures(): void {
     activePointerId = null;
   });
 
-  function measure(): void {
-    const imgs = Array.from(root!.querySelectorAll<HTMLImageElement>('img'));
-    const waitAll = Promise.all(imgs.map((img) => img.complete
-      ? Promise.resolve()
-      : new Promise<void>((res) => {
-          img.addEventListener('load', () => res(), { once: true });
-          img.addEventListener('error', () => res(), { once: true });
-        })));
-    waitAll.then(applyTrackHeight);
-  }
-
   show(current, { persist: false });
-  if (details.open) measure();
-  details.addEventListener('toggle', () => { if (details.open) measure(); });
-
-  let resizeT: number | undefined;
-  window.addEventListener('resize', () => {
-    if (resizeT) window.clearTimeout(resizeT);
-    resizeT = window.setTimeout(applyTrackHeight, 150);
-  });
 }
 
 function bootstrap(): void {

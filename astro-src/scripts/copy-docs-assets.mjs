@@ -277,7 +277,19 @@ const TXT_MAX_BYTES = 1024 * 1024;  // 1 MiB 上限,够 LLM 看完整结构
 
 async function copyPapersTxt() {
   if (!existsSync(PAPERS_SRC)) return { count: 0, bytesIn: 0, bytesOut: 0, dropped: 0, truncated: 0 };
-  const entries = readdirSync(PAPERS_SRC).filter((n) => n.endsWith('.txt'));
+  // docs/papers/ 现在按 <YYYY>/<MM>/ 子目录分桶,要递归收所有 .txt。
+  // 输出仍保持 public/papers/ 平铺(客户端 /papers/<basename>.txt 直接 fetch),
+  // 这里靠 canonical id 去重选最高版本,跟旧行为一致。
+  const allTxt = [];
+  (function walk(d) {
+    for (const name of readdirSync(d)) {
+      const p = join(d, name);
+      const st = statSync(p);
+      if (st.isDirectory()) walk(p);
+      else if (st.isFile() && name.endsWith('.txt')) allTxt.push({ abs: p, name });
+    }
+  })(PAPERS_SRC);
+  const entries = allTxt.map((e) => e.name);
   // 按 canonical id 分组,取最高版本
   const latestPerId = new Map();  // arxiv id → { filename, version }
   const dropped = [];
@@ -301,8 +313,11 @@ async function copyPapersTxt() {
   let bytesIn = 0;
   let bytesOut = 0;
   let truncated = 0;
+  // 把 abs path 反查回来 —— entries 只存了 name,这里需要 abs 路径才能读
+  const absByName = new Map(allTxt.map((e) => [e.name, e.abs]));
   for (const { filename } of latestPerId.values()) {
-    const src = join(PAPERS_SRC, filename);
+    const src = absByName.get(filename);
+    if (!src) continue;
     const dst = join(PAPERS_DST, filename);
     const st = statSync(src);
     bytesIn += st.size;

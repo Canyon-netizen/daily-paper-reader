@@ -42,33 +42,36 @@ def list_missing_papers() -> list[tuple[str, str, str, str]]:
     资产目录布局: docs/assets/figures/<source_key>/<asset_key>/fig-*.webp
     arxiv: asset_key = arxiv id(YYMM.NNNNN[vN])
     biorxiv: asset_key = 整个 biorxiv-{...} id(去掉 .md 扩展名)
+
+    docs/papers/ 现在按 <YYYY>/<MM/> 子目录分桶,递归收 .md。
     """
     out: list[tuple[str, str, str, str]] = []
-    for name in sorted(os.listdir(PAPERS_DIR)):
-        if not name.endswith(".md") or name.startswith("_"):
-            continue
-        md_path = os.path.join(PAPERS_DIR, name)
-        with open(md_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        if "figures_json:" in content:
-            continue
-        # arxiv
-        m = ARXIV_ID_RE.match(name)
-        if m:
-            asset_key = m.group(1) + (m.group(2) or "")
-            source_key = "arxiv"
-        elif BIORXIV_PREFIX_RE.match(name):
-            asset_key = name[: -len(".md")]
-            source_key = "biorxiv"
-        else:
-            print(f"[WARN] {name}: 不是已知来源,跳过")
-            continue
-        pdf_match = PDF_RE.search(content)
-        if not pdf_match:
-            print(f"[WARN] {name}: no pdf url, skip")
-            continue
-        pdf_url = pdf_match.group(1).strip()
-        out.append((md_path, asset_key, source_key, pdf_url))
+    for root, _dirs, files in os.walk(PAPERS_DIR):
+        for name in sorted(files):
+            if not name.endswith(".md") or name.startswith("_"):
+                continue
+            md_path = os.path.join(root, name)
+            with open(md_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            if "figures_json:" in content:
+                continue
+            # arxiv
+            m = ARXIV_ID_RE.match(name)
+            if m:
+                asset_key = m.group(1) + (m.group(2) or "")
+                source_key = "arxiv"
+            elif BIORXIV_PREFIX_RE.match(name):
+                asset_key = name[: -len(".md")]
+                source_key = "biorxiv"
+            else:
+                print(f"[WARN] {name}: 不是已知来源,跳过")
+                continue
+            pdf_match = PDF_RE.search(content)
+            if not pdf_match:
+                print(f"[WARN] {name}: no pdf url, skip")
+                continue
+            pdf_url = pdf_match.group(1).strip()
+            out.append((md_path, asset_key, source_key, pdf_url))
     return out
 
 

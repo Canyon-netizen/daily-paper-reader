@@ -117,6 +117,34 @@ jobs:
           fi
           echo "Inputs OK: mode=$MODE arxiv_id=$ARXIV_ID slug=$SLUG needs_figures=$NEEDS_FIGS"
 
+      # docs/papers/ 按 arxiv id 的 YYMM 分桶到 <YYYY>/<MM>/ 子目录,
+      # 这里从 ARXIV_ID 提取 YEAR/MONTH 写到 env,后续步骤拼路径用。
+      # 例:2606.18483v1 → YEAR=2026 MONTH=06;biorxiv-10-1101-2025-11-14-... → YEAR=2025 MONTH=11。
+      # 与 src/paper_paths.py::paper_month_subdir() 逻辑等价(改一处记得改另一处)。
+      - name: Derive YEAR/MONTH subfolder from arxiv_id
+        env:
+          ARXIV_ID: ${{ inputs.arxiv_id }}
+        run: |
+          set -euo pipefail
+          id="$ARXIV_ID"
+          if [[ "$id" =~ ^biorxiv-10-[0-9]+-([0-9]{4})-([0-9]{2})- ]]; then
+            YEAR="${BASH_REMATCH[1]}"
+            MONTH="${BASH_REMATCH[2]}"
+          elif [[ "$id" =~ ^([0-9]{2})([0-9]{2})\. ]]; then
+            YEAR="20${BASH_REMATCH[1]}"
+            MONTH="${BASH_REMATCH[2]}"
+          else
+            echo "::error::无法从 arxiv_id=$id 提取 YYMM(arXiv/biorxiv 模式都不匹配)"
+            exit 1
+          fi
+          if (( 10#$MONTH < 1 || 10#$MONTH > 12 )); then
+            echo "::error::月份越界 YEAR=$YEAR MONTH=$MONTH"
+            exit 1
+          fi
+          echo "YEAR=$YEAR" >> "$GITHUB_ENV"
+          echo "MONTH=$MONTH" >> "$GITHUB_ENV"
+          echo "Derived subfolder: docs/papers/$YEAR/$MONTH/"
+
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -164,7 +192,9 @@ jobs:
       - name: Sync figures_json into existing .md frontmatter
         if: inputs.mode == 'append-deepdive' || inputs.mode == 'combined'
         env:
-          FILE: docs/papers/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          YEAR: ${{ env.YEAR }}
+          MONTH: ${{ env.MONTH }}
+          FILE: docs/papers/${{ env.YEAR }}/${{ env.MONTH }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
           ARXIV_ID: ${{ inputs.arxiv_id }}
         run: |
           set -euo pipefail
@@ -234,15 +264,17 @@ jobs:
           SLUG: ${{ inputs.slug }}
         run: |
           set -euo pipefail
-          FILE="docs/papers/${ARXIV_ID}-${SLUG}.md"
-          mkdir -p "docs/papers"
+          FILE="docs/papers/${YEAR}/${MONTH}/${ARXIV_ID}-${SLUG}.md"
+          mkdir -p "docs/papers/${YEAR}/${MONTH}"
           echo "$MD_CONTENT" > "$FILE"
           echo "Wrote $FILE ($(wc -c < "$FILE") bytes)"
 
       - name: Append deep dive to existing file
         if: inputs.mode == 'append-deepdive'
         env:
-          FILE: docs/papers/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          YEAR: ${{ env.YEAR }}
+          MONTH: ${{ env.MONTH }}
+          FILE: docs/papers/${{ env.YEAR }}/${{ env.MONTH }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
           DEEP_MD: ${{ inputs.deep_dive_md }}
           USED_MODEL: ${{ inputs.used_model }}
           TRUNCATED_PCT: ${{ inputs.truncated_pct }}
@@ -322,8 +354,11 @@ jobs:
 
       - name: Detect duplicates
         id: dup
+        env:
+          YEAR: ${{ env.YEAR }}
+          MONTH: ${{ env.MONTH }}
         run: |
-          FILE="docs/papers/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
+          FILE="docs/papers/${YEAR}/${MONTH}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
           if git log --all --oneline -- "$FILE" | head -n 1 > /dev/null 2>&1; then
             COUNT=$(git log --all --oneline -- "$FILE" | wc -l | tr -d ' ')
             echo "exists=true count=$COUNT"
@@ -339,13 +374,15 @@ jobs:
       - name: Commit and push
         if: steps.dup.outputs.exists != 'true'
         env:
+          YEAR: ${{ env.YEAR }}
+          MONTH: ${{ env.MONTH }}
           ARXIV_ID: ${{ inputs.arxiv_id }}
           SLUG: ${{ inputs.slug }}
           MSG: ${{ inputs.message }}
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          FILE="docs/papers/${ARXIV_ID}-${SLUG}.md"
+          FILE="docs/papers/${YEAR}/${MONTH}/${ARXIV_ID}-${SLUG}.md"
           ARXIV_ID_RAW=$(echo "$ARXIV_ID" | sed 's|/|_|g')
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

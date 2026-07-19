@@ -182,7 +182,8 @@ def main() -> int:
 
     changed = 0
     skipped = 0
-    for path in sorted(DOCS_DIR.glob("*.md")):
+    # docs/papers/ 现在按 <YYYY>/<MM/> 分桶,递归收所有 .md。
+    for path in sorted(DOCS_DIR.rglob("*.md")):
         if path.name == "README.md":
             continue
         was_changed, reason = process_file(path, args.dry_run)

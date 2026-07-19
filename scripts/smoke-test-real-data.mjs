@@ -32,17 +32,33 @@ patch('lib/user-tags.js');
 
 const relations = await import(`file://${TMP}/lib/paper-relations.js`);
 
-// 简单解析 docs/papers/*.md 的 frontmatter(用 gray-matter 库)
+// 简单解析 docs/papers/<YYYY>/<MM>/*.md 的 frontmatter(用 gray-matter 库)。
+// docs/papers/ 现在按年月子目录分桶,要递归收。
 const matter = (await import('gray-matter')).default;
 const { readdirSync, statSync } = await import('node:fs');
 const dir = resolve(ROOT, 'docs/papers');
-const files = readdirSync(dir).filter(f => f.endsWith('.md')).slice(0, 80);
+
+/** 递归收 docs/papers/ 下所有 .md,相对 dir 的路径用 forward slash 当 id。 */
+function walkMd(d) {
+  const out = [];
+  for (const name of readdirSync(d)) {
+    const full = resolve(d, name);
+    const st = statSync(full);
+    if (st.isDirectory()) out.push(...walkMd(full));
+    else if (st.isFile() && name.endsWith('.md')) out.push(full);
+  }
+  return out;
+}
+const allFiles = walkMd(dir);
+const files = allFiles.slice(0, 80);
 const papers = [];
 for (const f of files) {
-  const content = readFileSync(resolve(dir, f), 'utf8');
+  const content = readFileSync(f, 'utf8');
   try {
     const m = matter(content);
-    const id = `papers/${f.replace(/\.md$/, '')}`;
+    // id = `papers/<YYYY>/<MM>/<basename>`,跟 Astro listAllPaperIds() 同步
+    const rel = f.slice(dir.length + 1).replace(/\\/g, '/').replace(/\.md$/, '');
+    const id = `papers/${rel}`;
     papers.push({
       id,
       arxivId: m.data.arxivId || id,

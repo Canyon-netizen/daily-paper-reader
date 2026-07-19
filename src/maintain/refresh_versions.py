@@ -89,30 +89,33 @@ def detect_section(md_path: str) -> str:
 
 
 def scan_local_papers(papers_dir: str) -> List[LocalPaper]:
-    """枚举 docs/papers/ 下所有 arXiv 论文笔记。"""
+    """递归枚举 docs/papers/<YYYY>/<MM>/ 下所有 arXiv 论文笔记。"""
     out: List[LocalPaper] = []
     if not os.path.isdir(papers_dir):
         return out
-    for name in sorted(os.listdir(papers_dir)):
-        if not name.endswith(".md") or name == "README.md":
-            continue
-        stem = name[: -len(".md")]
-        m = ARXIV_FILE_RE.match(stem)
-        if not m:
-            continue
-        md_path = os.path.join(papers_dir, name)
-        out.append(
-            LocalPaper(
-                canonical=m.group("canonical"),
-                version=int(m.group("ver")),
-                versioned_id=f"{m.group('canonical')}v{m.group('ver')}",
-                slug=m.group("slug"),
-                basename=stem,
-                section=detect_section(md_path),
-                md_path=md_path,
-                txt_path=os.path.join(papers_dir, f"{stem}.txt"),
+    # docs/papers/ 现在按 docs/papers/<YYYY>/<MM>/ 分桶,递归收 .md。
+    # papers.meta.json / README.md 等顶层非论文文件靠 stem 不是 ARXIV 模式跳过。
+    for root, _dirs, files in os.walk(papers_dir):
+        for name in sorted(files):
+            if not name.endswith(".md") or name == "README.md":
+                continue
+            stem = name[: -len(".md")]
+            m = ARXIV_FILE_RE.match(stem)
+            if not m:
+                continue
+            md_path = os.path.join(root, name)
+            out.append(
+                LocalPaper(
+                    canonical=m.group("canonical"),
+                    version=int(m.group("ver")),
+                    versioned_id=f"{m.group('canonical')}v{m.group('ver')}",
+                    slug=m.group("slug"),
+                    basename=stem,
+                    section=detect_section(md_path),
+                    md_path=md_path,
+                    txt_path=os.path.join(root, f"{stem}.txt"),
+                )
             )
-        )
     return out
 
 

@@ -225,7 +225,8 @@ def main() -> int:
 
     changed = 0
     skipped = 0
-    targets = sorted(DOCS_DIR.glob("*.md"))
+    # docs/papers/ 现在按 <YYYY>/<MM/> 分桶,递归收所有 .md。
+    targets = sorted(DOCS_DIR.rglob("*.md"))
     if args.only:
         targets = [p for p in targets if p.name.startswith(args.only)]
     for path in targets:
