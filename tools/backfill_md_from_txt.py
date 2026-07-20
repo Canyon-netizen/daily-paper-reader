@@ -103,6 +103,7 @@ def call_llm_batch(papers: List[Dict[str, Any]], env: Dict[str, str]) -> List[Di
         '{"arxiv_id":"...", "title_zh":"...中文翻译...", '
         '"task_tags":["rl"|"mas"|"llm-agent"|"agent"|"reasoning"|"gui"|"vision"|"game-ai"|"robotics"|"code"|"self-distillation"|"intervention"], '
         '"score":1..10 整数, "evidence":"<=24字中文要点", '
+        '"abstract_zh":"英文 abstract 的完整忠实中文翻译,逐句覆盖全部信息,不要压缩成要点、TLDR 或改写总结", '
         '"tldr_zh":"<=180字中文摘要"}'
     )
 
@@ -169,6 +170,25 @@ def render_md(parsed: Dict[str, Any], llm: Dict[str, Any], generated_at: str) ->
         score_num = 0
     evidence = (llm.get("evidence") or "").strip()
     tldr = (llm.get("tldr_zh") or "").strip()
+    abstract_zh = (llm.get("abstract_zh") or "").strip()
+
+    # ## 摘要 必须来自 abstract_zh(英文 abstract 的完整忠实翻译);
+    # 过短/为空则降级为占位 TODO,绝不拿 tldr 顶替(防止 LLM 偷懒)。
+    # 长度校验复用 src/generate_docs_text_utils.is_too_short_for_abstract_translation
+    # 同一阈值(60/150 分段,详见该函数 docstring)。
+    if abstract_zh:
+        try:
+            sys.path.insert(0, str(ROOT_DIR / "src"))
+            from src.generate_docs_text_utils import is_too_short_for_abstract_translation  # type: ignore
+            if is_too_short_for_abstract_translation(abstract_zh, parsed.get("abstract", "")):
+                print(
+                    f"[warn] abstract_zh 过短疑似 TLDR ({parsed['arxiv_id']}),"
+                    f" ## 摘要 写为 TODO",
+                    flush=True,
+                )
+                abstract_zh = ""
+        except Exception as e:  # 校验失败兜底放行,不阻塞主流程
+            print(f"[warn] is_too_short 校验跳过 ({parsed['arxiv_id']}): {e}", flush=True)
 
     fm: Dict[str, Any] = {
         "title": parsed["title"],
@@ -205,7 +225,9 @@ def render_md(parsed: Dict[str, Any], llm: Dict[str, Any], generated_at: str) ->
         print(f"[warn] figures_json 注入跳过 ({parsed['arxiv_id']}): {e}", flush=True)
 
     front = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False).strip()
-    body = "\n\n## 摘要\n\n" + (tldr or "(待 LLM 摘要)") + "\n\n## Abstract\n\n" + parsed.get("abstract", "") + "\n"
+    # ## 摘要 段:abstract_zh 通过则用,否则写 TODO 占位(绝不拿 tldr 顶替)。
+    zh_section = abstract_zh if abstract_zh else "<!-- TODO: 中文摘要待重跑 -->"
+    body = "\n\n## 摘要\n\n" + zh_section + "\n\n## Abstract\n\n" + parsed.get("abstract", "") + "\n"
     return f"---\n{front}\n---\n{body}"
 
 

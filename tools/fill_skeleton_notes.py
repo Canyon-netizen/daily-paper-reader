@@ -265,6 +265,20 @@ def process(path: Path, client, dry_run=False):
         if not str(data.get(k, "")).strip():
             raise RuntimeError(f"LLM missing field '{k}' for {path.name}")
 
+    # 兜底:abstract_zh 长度必须过 is_too_short_for_abstract_translation,
+    # 否则视为 LLM 把 abstract 压缩成 TLDR 偷懒,拒绝写入(fail-fast)。
+    # 校验函数定义在 src/generate_docs_text_utils.py,行为与 6.generate_docs.py 同款。
+    try:
+        from src.generate_docs_text_utils import is_too_short_for_abstract_translation  # type: ignore
+        if is_too_short_for_abstract_translation(str(data["abstract_zh"]), abstract_en):
+            raise RuntimeError(
+                f"abstract_zh 过短疑似 TLDR,拒绝写入 {path.name} —— 请重跑"
+            )
+    except RuntimeError:
+        raise
+    except Exception as e:  # 校验本身出错不影响主流程,仅打 warn
+        print(f"[warn] is_too_short 校验跳过 ({path.name}): {e}", flush=True)
+
     new_fm = rebuild_frontmatter(fm, data)
 
     # 兜底抽图注入:backfill_2026-07-20_step6fix 这一批骨架笔记常缺 figures_json;
