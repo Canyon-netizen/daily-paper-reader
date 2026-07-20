@@ -769,6 +769,7 @@
 
 * [首页](/)
 * Daily Papers
+  * 2026-07-20 <!--dpr-date:20260720-->
   * 2026-07-13 <!--dpr-date:20260713-->
     * 精读区
       * <a class="dpr-sidebar-item-link dpr-sidebar-item-structured" href="/papers/2607.06935v1-mathematical-methods-of-reinforcement-learning" data-sidebar-item="{&quot;title&quot;: &quot;Mathematical methods of reinforcement learning&quot;, &quot;link&quot;: &quot;https://arxiv.org/abs/2607.06935v1-mathematical-methods-of-reinforcement-learning&quot;, &quot;score&quot;: &quot;10.0&quot;, &quot;tags&quot;: [{&quot;kind&quot;: &quot;query&quot;, &quot;label&quot;: &quot;rl&quot;}], &quot;evidence&quot;: &quot;强化学习算法数学基础，包括MDP、Bellman算子与收敛性&quot;}">Mathematical methods of reinforcement learning</a>
