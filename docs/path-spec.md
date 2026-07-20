@@ -4,15 +4,25 @@
 
 ## 1. 目录命名
 
-所有论文统一进 `docs/papers/`，按 arXiv id 升序自然排列（因 `YYMM.NNNNN` 前缀本身就是字典序的提交时间）。
+所有论文统一进 `docs/papers/`，按 **发表日**（不是 arxiv id YYMM）分桶到三层子目录：
+
+```
+docs/papers/<YYYY>/<MM>/<DD>/<arxiv-id>-<slug>.{md,txt}
+```
+
+`<YYYY>/<MM>/<DD>` 三段都来自 markdown frontmatter 的 `date: YYYY-MM-DD` 字段。bioRxiv 文件名内嵌 `YYYY-MM-DD` 也可直接提。
+
+> ⚠️ **arXiv id 的 YYMM 前缀不等于发表月**。例如 `2607.00083v1` 文件名 YYMM=2607，但
+> 真实 frontmatter `date` 是 `2026-06-30`，应进 `2026/06/30/`，不是 `2026/07/01/`。
+> 这是 commit 3166d40 (按 YYMM 分桶) 留下的历史 bug，引入 DD 子目录时一并修正。
 
 | 写法 | 对应 Astro 路由 |
 |---|---|
-| `docs/papers/<arxiv-id>-<slug>.md` | `astro-src/pages/papers/[arxiv].astro` |
+| `docs/papers/<YYYY>/<MM>/<DD>/<arxiv-id>-<slug>.md` | `astro-src/pages/papers/[arxiv].astro` |
 
-**id 段数 = 1**（去掉 `papers/` 后的文件名）。`astro-src/lib/paper.ts` 的 `walk()` 跳过 `_*` 前缀目录与 `tutorial/` / `assets/` / `plans/`，扫到的 `.md` 一律视为论文。
+**id 段数 = 4**（去掉 `papers/` 后：`YYYY/MM/DD/<basename>`）。`astro-src/lib/paper.ts` 的 `walk()` 递归扫所有子目录，跳过 `_*` 前缀目录与 `tutorial/` / `assets/` / `plans/`。`getStaticPaths` 用 `id.split('/').pop()` 取最后一段（basename）作 URL slug，所以 URL 仍是 `/papers/<basename>/`，不暴露中间层级。
 
-旧的 `docs/<bucket>/...` 三种目录命名（`YYYYMM/DD/`、`YYYYMMDD-YYYYMMDD/` 单日或区间）已于 2026-07 扁平化移除——git 历史里仍可通过 `git log --follow docs/papers/<id>.md` 找到论文沿革。
+迁移工具：`scripts/migrate-papers-by-day.mjs`（dry-run + `--apply`，会改 MD 与同名 .txt 到同一个目标目录）。DD 来源优先级：`.md` frontmatter `date` > 同 stem `.md` 日期 > arxiv YYMM + day=01 fallback。
 
 ## 2. 文件名约定
 
@@ -32,12 +42,12 @@
 
 ## 3. `Paper.yearMonth` / `day` 派生
 
-扁平化后 id 不再含日期段，但 `Paper` 接口保留这两个字段以避免下游消费者大规模改动：
+`Paper.id` 现在等于 `papers/<YYYY>/<MM>/<DD>/<basename>`，**已经包含**完整日期段：
 
-- `yearMonth`：从 `arxivId.split('.')[0]` 取（如 `2606.27814v1` → `"2606"`）。
-- `day`：从 `frontmatter.date.slice(8, 10)` 取（ISO `YYYY-MM-DD` 后两位）；缺 date 时为空字符串。
+- `yearMonth`：从 `Paper.id.split('/')[1:3]` 取（即 `YYYY/MM`）。
+- `day`：从 `Paper.id.split('/')[3]` 取（即 DD 子目录名）；id 是 YYYY/MM 两段格式（legacy 数据）时退化为从 `frontmatter.date.slice(8, 10)` 取。
 
-排序仍由 `frontmatter.date` 主导，`yearMonth`/`day` 只是显示用。
+排序仍由 `frontmatter.date` 主导（与目录布局一致），`yearMonth`/`day` 主要用于展示。
 
 ## 4. 不要放在 `docs/` 下
 
@@ -64,6 +74,7 @@
 ## 6. 修改 / 新增 checklist
 
 1. 文件名是否符合 `<arxiv-id>-<slug>.md`？
-2. 是否同步更新 `docs/_sidebar.md`？（pipeline 自动维护，但手工新增的论文要去 sidebar 注册）
-3. `node astro-src/scripts/build-arxiv-index.mjs` 跑过且索引文件无意外增量？
-4. `npm run build` 是否成功？
+2. 目标路径 `YYYY/MM/DD` 三段是否与 frontmatter `date` 一致（不是 arxiv id YYMM）？
+3. 是否同步更新 `docs/_sidebar.md`？（pipeline 自动维护，但手工新增的论文要去 sidebar 注册）
+4. `node astro-src/scripts/build-arxiv-index.mjs` 跑过且索引文件无意外增量？
+5. `npm run build` 是否成功？

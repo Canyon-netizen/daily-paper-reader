@@ -654,13 +654,26 @@ def format_date_str(date_str: str) -> str:
 
 def prepare_paper_paths(docs_dir: str, date_str: str, title: str, arxiv_id: str) -> Tuple[str, str, str]:
     slug = slugify(title)
-    # 论文路径按 arxiv id 前缀的 YYMM 分桶到 docs/papers/<YYYY>/<MM>/,
-    # 方便 ls docs/papers/ 一眼看清最近哪些月份有数据。所有构造都走
-    # src.paper_paths,避免散落拼字符串漏改子目录层。
+    # 论文路径按 frontmatter date (YYYY-MM-DD) 分桶到 docs/papers/<YYYY>/<MM>/<DD>/,
+    # 方便 ls docs/papers/2026/07/ 一眼看到当月各日的论文。arxiv id YYMM 不等于
+    # 真实发表月(如 2607.00083 真实发表日可能是 2026-06-30),所以必须用 date_str 优先。
+    # 所有构造都走 src.paper_paths,避免散落拼字符串漏改子目录层。
     from src.paper_paths import paper_md_path, paper_txt_path, paper_id
-    md_path = paper_md_path(docs_dir, arxiv_id, slug) if arxiv_id else os.path.join(docs_dir, "papers", f"{slug}.md")
-    txt_path = paper_txt_path(docs_dir, arxiv_id, slug) if arxiv_id else os.path.join(docs_dir, "papers", f"{slug}.txt")
-    pid = paper_id(arxiv_id, slug) if arxiv_id else f"papers/{slug}"
+    # date_str 可能是 YYYYMMDD(来自 --date / TODAY_STR)或 YYYY-MM-DD,统一 normalize 成 ISO。
+    iso_date = format_date_str(date_str) if date_str else ""
+    if arxiv_id and iso_date:
+        md_path = paper_md_path(docs_dir, arxiv_id, slug, date_str=iso_date)
+        txt_path = paper_txt_path(docs_dir, arxiv_id, slug, date_str=iso_date)
+        pid = paper_id(arxiv_id, slug, date_str=iso_date)
+    elif arxiv_id:
+        # 退化:date 不可解析时仍按 arxiv YYMM 单层分桶,不抛错(避免 daily pipeline 阻塞)
+        md_path = paper_md_path(docs_dir, arxiv_id, slug)
+        txt_path = paper_txt_path(docs_dir, arxiv_id, slug)
+        pid = paper_id(arxiv_id, slug)
+    else:
+        md_path = os.path.join(docs_dir, "papers", f"{slug}.md")
+        txt_path = os.path.join(docs_dir, "papers", f"{slug}.txt")
+        pid = f"papers/{slug}"
     return md_path, txt_path, pid
 
 def prepare_day_report_paths(docs_dir: str, date_str: str) -> Tuple[str, str]:

@@ -61,6 +61,11 @@ on:
         required: false
         type: string
         default: ""
+      date:
+        description: "论文发表日 YYYY-MM-DD(权威日期源);bioRxiv 可省略(从文件名解析),arxiv 强烈建议传"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -117,33 +122,56 @@ jobs:
           fi
           echo "Inputs OK: mode=$MODE arxiv_id=$ARXIV_ID slug=$SLUG needs_figures=$NEEDS_FIGS"
 
-      # docs/papers/ 按 arxiv id 的 YYMM 分桶到 <YYYY>/<MM>/ 子目录,
-      # 这里从 ARXIV_ID 提取 YEAR/MONTH 写到 env,后续步骤拼路径用。
-      # 例:2606.18483v1 → YEAR=2026 MONTH=06;biorxiv-10-1101-2025-11-14-... → YEAR=2025 MONTH=11。
-      # 与 src/paper_paths.py::paper_month_subdir() 逻辑等价(改一处记得改另一处)。
-      - name: Derive YEAR/MONTH subfolder from arxiv_id
+      # docs/papers/ 按发表日(frontmatter.date)分桶到 <YYYY>/<MM>/<DD>/ 子目录。
+      # - bioRxiv 文件名内嵌 YYYY-MM-DD,直接从 BASH_REMATCH 提 DAY。
+      # - arxiv id (YYMM.NNNNN) 的 YYMM 是 arxiv 编号≠发表月,YYYY/MM 仍可用 YYMM 作
+      #   fallback,但 DAY 必须由 inputs.date 提供;若没传则 day=01(不理想,会在月初目录堆积)。
+      # 例:arxiv 2607.00083v1 + date=2026-06-30 → 2026/06/30/(真实发表月是 6 月不是 7 月)
+      # 例:biorxiv-10-1101-2025-11-14-... → 2025/11/14/
+      # 与 src/paper_paths.py::paper_month_subdir()/paper_day_subdir() 逻辑等价
+      # (改一处记得改另两处:scripts/migrate-papers-by-day.mjs + src/paper_paths.py)。
+      - name: Derive YEAR/MONTH/DAY subfolder
         env:
           ARXIV_ID: ${{ inputs.arxiv_id }}
+          DATE_INPUT: ${{ inputs.date }}
         run: |
           set -euo pipefail
           id="$ARXIV_ID"
-          if [[ "$id" =~ ^biorxiv-10-[0-9]+-([0-9]{4})-([0-9]{2})- ]]; then
+          if [[ "$id" =~ ^biorxiv-10-[0-9]+-([0-9]{4})-([0-9]{2})-([0-9]{2})- ]]; then
             YEAR="${BASH_REMATCH[1]}"
             MONTH="${BASH_REMATCH[2]}"
+            DAY="${BASH_REMATCH[3]}"
           elif [[ "$id" =~ ^([0-9]{2})([0-9]{2})\. ]]; then
             YEAR="20${BASH_REMATCH[1]}"
             MONTH="${BASH_REMATCH[2]}"
+            if [[ -n "$DATE_INPUT" && "$DATE_INPUT" =~ ^([0-9]{4})-([0-9]{2})-([0-9]{2})$ ]]; then
+              # date 输入优先,允许 YYYY/MM 与 arxiv YYMM 不一致(如月底跨月)
+              YEAR="${BASH_REMATCH[1]}"
+              MONTH="${BASH_REMATCH[2]}"
+              DAY="${BASH_REMATCH[3]}"
+            elif [[ -n "$DATE_INPUT" ]]; then
+              echo "::error::date 输入格式非法(期望 YYYY-MM-DD),收到: $DATE_INPUT"
+              exit 1
+            else
+              DAY="01"
+              echo "::warning::arxiv id=$id 没传 date 输入,day=01(月末论文可能分桶错误,建议 web 端补传 date)"
+            fi
           else
-            echo "::error::无法从 arxiv_id=$id 提取 YYMM(arXiv/biorxiv 模式都不匹配)"
+            echo "::error::无法从 arxiv_id=$id 提取 YYYY/MM(arXiv/biorxiv 模式都不匹配)"
             exit 1
           fi
           if (( 10#$MONTH < 1 || 10#$MONTH > 12 )); then
             echo "::error::月份越界 YEAR=$YEAR MONTH=$MONTH"
             exit 1
           fi
+          if (( 10#$DAY < 1 || 10#$DAY > 31 )); then
+            echo "::error::日期越界 DAY=$DAY"
+            exit 1
+          fi
           echo "YEAR=$YEAR" >> "$GITHUB_ENV"
           echo "MONTH=$MONTH" >> "$GITHUB_ENV"
-          echo "Derived subfolder: docs/papers/$YEAR/$MONTH/"
+          echo "DAY=$DAY" >> "$GITHUB_ENV"
+          echo "Derived subfolder: docs/papers/$YEAR/$MONTH/$DAY/"
 
       - name: Checkout
         uses: actions/checkout@v5
@@ -194,7 +222,8 @@ jobs:
         env:
           YEAR: ${{ env.YEAR }}
           MONTH: ${{ env.MONTH }}
-          FILE: docs/papers/${{ env.YEAR }}/${{ env.MONTH }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          DAY: ${{ env.DAY }}
+          FILE: docs/papers/${{ env.YEAR }}/${{ env.MONTH }}/${{ env.DAY }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
           ARXIV_ID: ${{ inputs.arxiv_id }}
         run: |
           set -euo pipefail
@@ -264,8 +293,8 @@ jobs:
           SLUG: ${{ inputs.slug }}
         run: |
           set -euo pipefail
-          FILE="docs/papers/${YEAR}/${MONTH}/${ARXIV_ID}-${SLUG}.md"
-          mkdir -p "docs/papers/${YEAR}/${MONTH}"
+          FILE="docs/papers/${YEAR}/${MONTH}/${DAY}/${ARXIV_ID}-${SLUG}.md"
+          mkdir -p "docs/papers/${YEAR}/${MONTH}/${DAY}"
           echo "$MD_CONTENT" > "$FILE"
           echo "Wrote $FILE ($(wc -c < "$FILE") bytes)"
 
@@ -274,7 +303,8 @@ jobs:
         env:
           YEAR: ${{ env.YEAR }}
           MONTH: ${{ env.MONTH }}
-          FILE: docs/papers/${{ env.YEAR }}/${{ env.MONTH }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
+          DAY: ${{ env.DAY }}
+          FILE: docs/papers/${{ env.YEAR }}/${{ env.MONTH }}/${{ env.DAY }}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md
           DEEP_MD: ${{ inputs.deep_dive_md }}
           USED_MODEL: ${{ inputs.used_model }}
           TRUNCATED_PCT: ${{ inputs.truncated_pct }}
@@ -357,8 +387,9 @@ jobs:
         env:
           YEAR: ${{ env.YEAR }}
           MONTH: ${{ env.MONTH }}
+          DAY: ${{ env.DAY }}
         run: |
-          FILE="docs/papers/${YEAR}/${MONTH}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
+          FILE="docs/papers/${YEAR}/${MONTH}/${DAY}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
           if git log --all --oneline -- "$FILE" | head -n 1 > /dev/null 2>&1; then
             COUNT=$(git log --all --oneline -- "$FILE" | wc -l | tr -d ' ')
             echo "exists=true count=$COUNT"
@@ -382,7 +413,7 @@ jobs:
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
-          FILE="docs/papers/${YEAR}/${MONTH}/${ARXIV_ID}-${SLUG}.md"
+          FILE="docs/papers/${YEAR}/${MONTH}/${DAY}/${ARXIV_ID}-${SLUG}.md"
           ARXIV_ID_RAW=$(echo "$ARXIV_ID" | sed 's|/|_|g')
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
