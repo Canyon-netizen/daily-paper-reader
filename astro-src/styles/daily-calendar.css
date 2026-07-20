@@ -97,6 +97,40 @@
   font-family: var(--font-mono);
 }
 
+/* ----- 颜色含义图例(标题正下方,水平 chip 行)----- */
+.home .cal-legend {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.95rem;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+.home .cal-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.home .cal-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.home .cal-legend-swatch--high2 { background: color-mix(in srgb, var(--success) 32%, var(--bg)); border-color: color-mix(in srgb, var(--success) 60%, var(--border)); }
+.home .cal-legend-swatch--high  { background: color-mix(in srgb, var(--success) 22%, var(--bg)); border-color: color-mix(in srgb, var(--success) 50%, var(--border)); }
+.home .cal-legend-swatch--mid   { background: color-mix(in srgb, var(--warning) 22%, var(--bg)); }
+.home .cal-legend-swatch--low2  { background: color-mix(in srgb, var(--fg-subtle) 12%, var(--bg)); }
+.home .cal-legend-swatch--low   { background: color-mix(in srgb, var(--fg-subtle) 6%,  var(--bg)); }
+.home .cal-legend-swatch--today {
+  background: color-mix(in srgb, var(--fg-subtle) 6%, var(--bg));
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .home .cal-grid-wrap {
   padding: 1rem 1rem 1.1rem;
   border-top: 1px solid var(--border);
@@ -156,13 +190,21 @@
   opacity: 0.35;
 }
 .home .cal-cell--low {
-  background: color-mix(in srgb, var(--fg-subtle) 8%, var(--bg));
+  background: color-mix(in srgb, var(--fg-subtle) 6%, var(--bg));
+}
+.home .cal-cell--low2 {
+  background: color-mix(in srgb, var(--fg-subtle) 12%, var(--bg));
 }
 .home .cal-cell--mid {
-  background: color-mix(in srgb, var(--warning) 18%, var(--bg));
+  background: color-mix(in srgb, var(--warning) 22%, var(--bg));
 }
 .home .cal-cell--high {
   background: color-mix(in srgb, var(--success) 22%, var(--bg));
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+}
+.home .cal-cell--high2 {
+  background: color-mix(in srgb, var(--success) 32%, var(--bg));
+  border-color: color-mix(in srgb, var(--success) 55%, transparent);
 }
 .home .cal-cell[aria-expanded="true"] {
   background: var(--accent-soft);
@@ -288,6 +330,8 @@
   .home .cal-year-select,
   .home .cal-month-select { font-size: 0.85rem; min-width: 4.5rem; padding: 0.35rem 0.5rem; }
   .home .cal-section-right { gap: 0.5rem; }
+  .home .cal-legend { font-size: 0.72rem; gap: 0.4rem 0.7rem; }
+  .home .cal-legend-swatch { width: 12px; height: 12px; }
   .home .cal-cell {
     padding: 2px;
     gap: 1px;
