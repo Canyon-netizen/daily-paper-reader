@@ -1,20 +1,34 @@
 ---
 // 顶部导航栏
-// 简化版:品牌 logo + 4 个主入口 + 主题切换。
 // 渲染期通过当前 URL 推断 active 项,避免每次都靠 caller 传 currentPath。
+// 8 个站内入口 + 1 个 GitHub 外链 — 中等宽度下 nav 会换行,
+// 这里给 .navbar-links 加 fade-mask + overflow-x:auto,
+// 让窄屏可横向滚动而不是折行打乱栅格。链接表统一放在 frontmatter,
+// 避免模板和未来 JS 重新硬编码两份。
 interface Props {
   currentPath?: string;
 }
 const { currentPath } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
-// 推断当前路径(去掉 base 前缀,得到站内相对路径)
 const rawPath = Astro.url.pathname;
 const path = rawPath.startsWith(base) ? rawPath.slice(base.length) : rawPath;
 const isActive = (target: string): boolean => {
   if (target === '/') return path === '/' || path === '';
   return path === target || path.startsWith(target);
 };
+
+// 同一份链接表,模板和 JS 都引,避免硬编码两份
+const links = [
+  { href: '/',                label: '首页',        match: '/' },
+  { href: '/paper-analyzer/', label: '论文分析',    match: '/paper-analyzer' },
+  { href: '/papers/',         label: '论文库',      match: '/papers' },
+  { href: '/topic/',          label: '主题探索',    match: '/topic' },
+  { href: '/conferences/',    label: '会议',        match: '/conferences' },
+  { href: '/settings/',       label: '设置',        match: '/settings' },
+  { href: '/tutorial/',       label: '使用教程',    match: '/tutorial' },
+  { href: '/zotero-usage/',   label: 'Zotero',      match: '/zotero-usage' },
+];
 ---
 
 <header class="navbar">
@@ -30,14 +44,13 @@ const isActive = (target: string): boolean => {
     </a>
 
     <nav class="navbar-links" aria-label="主导航">
-      <a href={base + '/'} class={isActive('/') ? 'active' : ''}>首页</a>
-      <a href={base + '/paper-analyzer/'} class={isActive('/paper-analyzer') ? 'active' : ''}>论文分析</a>
-      <a href={base + '/papers/'} class={isActive('/papers') ? 'active' : ''}>论文库</a>
-      <a href={base + '/topic/'} class={isActive('/topic') ? 'active' : ''}>主题探索</a>
-      <a href={base + '/conferences/'} class={isActive('/conferences') ? 'active' : ''}>会议</a>
-      <a href={base + '/settings/'} class={isActive('/settings') ? 'active' : ''}>设置</a>
-      <a href={base + '/tutorial/'} class={isActive('/tutorial') ? 'active' : ''}>使用教程</a>
-      <a href={base + '/zotero-usage/'} class={isActive('/zotero-usage') ? 'active' : ''}>Zotero</a>
+      {links.map((l) => (
+        <a
+          href={base + l.href}
+          class={isActive(l.match) ? 'active' : ''}
+          aria-current={isActive(l.match) ? 'page' : undefined}
+        >{l.label}</a>
+      ))}
       <a
         href="https://github.com/Canyon-netizen/daily-paper-reader"
         target="_blank"
@@ -47,10 +60,24 @@ const isActive = (target: string): boolean => {
     </nav>
 
     <div class="navbar-actions">
-      <button id="theme-toggle" class="theme-toggle-btn" aria-label="切换主题" type="button">
-        <span class="theme-icon-light">☀</span>
-        <span class="theme-icon-dark">🌙</span>
-        <span class="theme-icon-contrast">◐</span>
+      <button id="theme-toggle" class="theme-toggle-btn" aria-label="切换主题" type="button" title="切换主题 (light → dark → contrast)">
+        <span class="theme-icon theme-icon--light" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+          </svg>
+        </span>
+        <span class="theme-icon theme-icon--dark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+        </span>
+        <span class="theme-icon theme-icon--contrast" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 3v18M12 3a9 9 0 0 0 0 18" fill="currentColor" stroke="none" />
+          </svg>
+        </span>
       </button>
     </div>
   </div>
@@ -61,18 +88,19 @@ const isActive = (target: string): boolean => {
     position: sticky;
     top: 0;
     z-index: 50;
-    background: color-mix(in srgb, var(--bg-elevated) 88%, transparent);
+    background: color-mix(in srgb, var(--bg-elevated) 86%, transparent);
     border-bottom: 1px solid var(--border);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: saturate(180%) blur(14px);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
   }
   .navbar-inner {
-    max-width: 1240px;
+    max-width: var(--shell-max-width);
     margin: 0 auto;
-    padding: 0.75rem 1.5rem;
+    padding: 0 var(--space-6);
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    gap: var(--space-5);
+    min-height: var(--navbar-height);
   }
   .navbar-brand {
     display: flex;
@@ -86,10 +114,10 @@ const isActive = (target: string): boolean => {
   .brand-mark {
     display: inline-flex;
     border-radius: 8px;
-    box-shadow: 0 2px 6px rgba(179, 27, 27, 0.25);
+    box-shadow: 0 2px 8px var(--accent-glow);
     transition: transform var(--transition);
   }
-  .navbar-brand:hover .brand-mark { transform: rotate(-4deg) scale(1.05); }
+  .navbar-brand:hover .brand-mark { transform: rotate(-4deg) scale(1.06); }
   .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
   .brand-title { font-weight: 700; font-size: 1.02rem; letter-spacing: -0.01em; }
   .brand-sub { font-size: 0.7rem; color: var(--fg-subtle); letter-spacing: 0.04em; }
@@ -98,61 +126,94 @@ const isActive = (target: string): boolean => {
     display: flex;
     gap: 0.15rem;
     margin-left: auto;
-    flex-wrap: wrap;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    mask-image: linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 24px), transparent 100%);
   }
+  .navbar-links::-webkit-scrollbar { display: none; }
   .navbar-links a {
-    padding: 0.4rem 0.85rem;
+    padding: 0.45rem 0.85rem;
     border-radius: var(--radius-md);
     color: var(--fg-muted);
     font-size: 0.92rem;
     font-weight: 500;
-    transition: all var(--transition);
     text-decoration: none;
+    white-space: nowrap;
+    position: relative;
+    transition: color var(--transition), background var(--transition);
   }
   .navbar-links a:hover {
     background: var(--bg-muted);
     color: var(--fg);
+    text-decoration: none;
   }
   .navbar-links a.active {
     background: var(--accent-soft);
     color: var(--accent);
   }
+  /* active 项下加一根 accent 横条,视觉锚定 */
+  .navbar-links a.active::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -2px;
+    width: 16px;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+    transform: translateX(-50%);
+    transition: width var(--transition);
+  }
+  .navbar-links a.active:hover::after { width: 28px; }
   .navbar-links a.navbar-ext {
     color: var(--fg-subtle);
   }
 
+  /* 极窄屏(< 920)把链接全部收起来避免折行;这里不做汉堡菜单(避免引入 JS),保留滚动 */
+  @media (max-width: 920px) {
+    .navbar-links a { padding: 0.4rem 0.65rem; font-size: 0.85rem; }
+    .navbar-inner { gap: var(--space-3); padding: 0 var(--space-4); }
+  }
+
+  .navbar-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
+
   .theme-toggle-btn {
-    padding: 0.4rem 0.65rem;
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     color: var(--fg-muted);
     cursor: pointer;
-    font-size: 1rem;
-    line-height: 1;
-    transition: all var(--transition);
+    transition: background var(--transition), color var(--transition), border-color var(--transition), transform var(--transition);
   }
   .theme-toggle-btn:hover {
     background: var(--bg-muted);
     color: var(--fg);
     border-color: var(--border-strong);
   }
+  .theme-toggle-btn:active { transform: scale(0.95); }
 
-  /* 三主题图标 */
-  [data-theme='light'] .theme-icon-light,
-  [data-theme='dark'] .theme-icon-dark,
-  [data-theme='contrast'] .theme-icon-contrast { display: inline; }
-  [data-theme='light'] .theme-icon-dark,
-  [data-theme='light'] .theme-icon-contrast,
-  [data-theme='dark'] .theme-icon-light,
-  [data-theme='dark'] .theme-icon-contrast,
-  [data-theme='contrast'] .theme-icon-light,
-  [data-theme='contrast'] .theme-icon-dark { display: none; }
+  /* SVG 主题图标切换 */
+  .theme-icon { display: none; line-height: 0; }
+  [data-theme='light']    .theme-icon--light    { display: inline-flex; }
+  [data-theme='dark']     .theme-icon--dark     { display: inline-flex; }
+  [data-theme='contrast'] .theme-icon--contrast { display: inline-flex; }
 
   @media (max-width: 720px) {
-    .navbar-inner { padding: 0.55rem 0.9rem; gap: 0.75rem; }
     .brand-sub { display: none; }
-    .navbar-links a { padding: 0.3rem 0.55rem; font-size: 0.85rem; }
+    .navbar-inner { padding: 0 var(--space-3); gap: var(--space-3); }
   }
   @media (max-width: 460px) {
     .brand-text { display: none; }

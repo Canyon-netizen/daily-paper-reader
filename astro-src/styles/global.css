@@ -27,6 +27,7 @@
   --accent: #b31b1b;       /* arXiv 经典红 */
   --accent-hover: #8a1414;
   --accent-soft: rgba(179, 27, 27, 0.08);
+  --accent-glow: rgba(179, 27, 27, 0.18);
 
   --link: #1d4ed8;
   --link-hover: #1e40af;
@@ -46,22 +47,43 @@
   --warning: #b45309;
   --warning-soft: rgba(180, 83, 9, 0.12);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.02);
+  --shadow-md: 0 4px 14px rgba(15, 23, 42, 0.06), 0 2px 4px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.10), 0 4px 8px rgba(15, 23, 42, 0.04);
+  --shadow-color: 15, 23, 42;
+
+  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --radius-xl: 16px;
 
   --font-sans: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
   --font-serif: 'Charter', 'Iowan Old Style', 'Apple Garamond', 'Georgia', 'Source Han Serif SC', 'Noto Serif CJK SC', serif;
-  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', monospace;
+  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', 'JetBrains Mono', monospace;
+
+  /* 间距阶 — 用于 margin / padding / gap 的 4px 网格 */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
 
   --content-max-width: 780px;
+  --wide-max-width: 1100px;
+  --shell-max-width: 1240px;
   --sidebar-width: 300px;
   --chat-sidebar-width: 420px;
-  --transition: 200ms ease-out;
+  --navbar-height: 64px;
+
+  --transition: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 320ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 :root[data-theme='dark'] {
@@ -77,6 +99,7 @@
   --accent: #ff6b35;
   --accent-hover: #ff8559;
   --accent-soft: rgba(255, 107, 53, 0.14);
+  --accent-glow: rgba(255, 107, 53, 0.24);
 
   --link: #58a6ff;
   --link-hover: #79b8ff;
@@ -97,8 +120,10 @@
   --warning-soft: rgba(210, 153, 34, 0.18);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.5);
+  --shadow-color: 0, 0, 0;
+  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 :root[data-theme='contrast'] {
@@ -114,6 +139,7 @@
   --accent: #ffeb3b;
   --accent-hover: #fff176;
   --accent-soft: rgba(255, 235, 59, 0.18);
+  --accent-glow: rgba(255, 235, 59, 0.32);
 
   --link: #ffeb3b;
   --link-hover: #fff176;
@@ -132,6 +158,11 @@
   --info-soft: rgba(147, 197, 253, 0.18);
   --warning: #fde68a;
   --warning-soft: rgba(253, 230, 138, 0.18);
+
+  --shadow-sm: none;
+  --shadow-md: none;
+  --shadow-lg: none;
+  --ring: 0 0 0 3px #ffeb3b;
 }
 
 * {
@@ -143,6 +174,10 @@ html {
   font-size: 16px;
   -webkit-text-size-adjust: 100%;
   scroll-behavior: smooth;
+  /* 锚点跳转留出 navbar 高度,避免标题被遮挡 */
+  scroll-padding-top: calc(var(--navbar-height) + var(--space-4));
+  /* 防止任何横向溢出 */
+  overflow-x: hidden;
 }
 
 body {
@@ -160,6 +195,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
 }
 
 body > * { flex-shrink: 0; }
@@ -177,9 +213,9 @@ a:hover {
 
 /* 键盘可达性:focus-visible 给清晰的焦点环,避免全鼠标浏览时满屏 outline */
 :focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
+  outline: none;
+  box-shadow: var(--ring);
+  border-radius: var(--radius-sm);
 }
 
 /* 选区颜色用主题色,看起来更顺 */
@@ -234,43 +270,168 @@ img {
 }
 
 /* ========================================
- * 2. 通用工具类
+ * 2. 通用工具类 — 跨页面共享,降低 page-level CSS 重复
+ *    命名约定:.dpr-* 前缀;页面已存在的 .container/.button/.tag 不动,
+ *    这里只补之前各页重复实现的常用模式。
  * ======================================== */
-.container {
-  max-width: var(--content-max-width);
-  margin: 0 auto;
-  padding: 0 1.5rem;
-}
 
-.button {
-  display: inline-block;
-  padding: 0.5em 1em;
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius-md);
-  font-size: 0.95rem;
-  cursor: pointer;
-  transition: background var(--transition);
-  text-decoration: none;
-}
-.button:hover {
-  background: var(--accent-hover);
-  text-decoration: none;
-}
-
-.tag {
+/* kbd — 键盘按键,部分页面 (settings/tutorial) 已经在用 */
+kbd {
   display: inline-block;
   padding: 0.15em 0.5em;
-  background: var(--tag-bg);
-  color: var(--tag-fg);
-  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
   font-size: 0.85em;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--fg);
+  box-shadow: 0 1px 0 var(--border);
+}
+
+/* 卡片 / 表面通用基类 — 页面可以再叠加 padding / shadow */
+.dpr-surface {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+}
+.dpr-surface--hover:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+/* 统计数字块 — 首页 + /papers/ 等用 */
+.dpr-stat {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  text-align: center;
+  color: inherit;
+  text-decoration: none;
+  display: block;
+}
+.dpr-stat-value {
+  font-family: var(--font-mono);
+  font-size: clamp(1.4rem, 2.4vw, 1.85rem);
+  font-weight: 800;
+  color: var(--fg);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.dpr-stat-value--sm { font-size: clamp(0.95rem, 1.6vw, 1.15rem); font-weight: 700; }
+.dpr-stat-value--accent { color: var(--accent); }
+.dpr-stat-label {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-top: var(--space-2);
   font-weight: 500;
 }
 
+/* 空状态卡 */
+.dpr-empty {
+  text-align: center;
+  padding: var(--space-12) var(--space-8);
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+.dpr-empty-icon { font-size: 3rem; margin-bottom: var(--space-3); }
+.dpr-empty h3 { font-size: 1.2rem; margin: 0 0 var(--space-3); color: var(--fg); }
+.dpr-empty p { color: var(--fg-muted); max-width: 480px; margin: 0 auto var(--space-6); line-height: 1.6; }
+.dpr-empty-actions { display: flex; gap: var(--space-3); justify-content: center; flex-wrap: wrap; }
+
+/* 通用章节头 — 首页 section-header / paper-analyzer / topic 都在用 */
+.dpr-section { max-width: var(--wide-max-width); margin: var(--space-12) auto 0; padding: 0 var(--space-6); }
+.dpr-section-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+.dpr-section-header h2 { margin: 0; font-size: clamp(1.4rem, 2.4vw, 1.7rem); letter-spacing: -0.01em; }
+.dpr-section-sub { margin: var(--space-1) 0 0; color: var(--fg-muted); font-size: 0.92rem; }
+.dpr-section-tag {
+  display: inline-block;
+  padding: var(--space-1) var(--space-3);
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+/* 按钮三态 — 已存在 .button,这里补 hover 时的微动效 */
+.button { transition: background var(--transition), transform var(--transition), box-shadow var(--transition); }
+.button:hover { transform: translateY(-1px); }
+.button:active { transform: translateY(0); }
+
+/* muted-link — 中性文字链接,不靠主色蓝。footer / tagsection 在用 */
+.dpr-muted-link {
+  color: var(--fg-muted);
+  text-decoration: none;
+  transition: color var(--transition);
+}
+.dpr-muted-link:hover { color: var(--accent); text-decoration: none; }
+
+/* 加载骨架 — 简单的 shimmer,以后任何 page 加 list 都可以挂 */
+.dpr-skeleton {
+  display: inline-block;
+  background: linear-gradient(
+    90deg,
+    var(--bg-muted) 0%,
+    color-mix(in srgb, var(--bg-muted) 50%, var(--bg-elevated)) 50%,
+    var(--bg-muted) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-sm);
+  animation: dpr-shimmer 1.4s ease-in-out infinite;
+  color: transparent;
+}
+@keyframes dpr-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 分隔条 — 比 border 更轻盈 */
+.dpr-divider {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-8) 0;
+}
+
+/* 小屏幕 helper */
+.dpr-show-mobile { display: none; }
+@media (max-width: 640px) { .dpr-show-mobile { display: initial; } .dpr-hide-mobile { display: none !important; } }
+
 /* ========================================
- * 3. 路由切换动画 (View Transitions API)
+ * 3. 滚动条 (Webkit) + 模态背景
+ *    暗色下更明显,亮色下不喧宾夺主
+ * ======================================== */
+@supports (scrollbar-width: thin) {
+  html { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid var(--bg);
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--fg-subtle); }
+
+/* 锚点跳转:section 元素预留 navbar 高度的偏移,避免被 fixed nav 遮挡 */
+:target { scroll-margin-top: calc(var(--navbar-height) + var(--space-4)); }
+[id] { scroll-margin-top: calc(var(--navbar-height) + var(--space-4)); }
+
+/* ========================================
+ * 4. 路由切换动画 (View Transitions API)
  * ======================================== */
 @view-transition {
   navigation: auto;
@@ -295,11 +456,13 @@ img {
   }
   * {
     transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 
 /* ========================================
- * 4. KaTeX 公式 — 论文正文、chat 气泡、analyzer 精读区共用
+ * 5. KaTeX 公式 — 论文正文、chat 气泡、analyzer 精读区共用
  *    KaTeX 自带样式表(katex/dist/katex.min.css)负责布局;
  *    这里只补:字号、color 跟随主题 --fg、长公式横向滚动。
  * ======================================== */

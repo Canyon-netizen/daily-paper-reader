@@ -18,35 +18,126 @@ const arxivUrl = arxivId ? `https://arxiv.org/abs/${arxivId}` : null;
 <BaseLayout title="404 · 页面不存在">
   <Navbar />
   <main class="page page-404">
-    <div class="code">404</div>
+    <div class="code-404" aria-hidden="true">404</div>
     <h1>页面走丢了</h1>
-    <p>这篇论文可能还没被每日 pipeline 抓取,或地址已经失效(站点 build 缓存)。</p>
-    {arxivUrl && (
-      <p class="arxiv-fallback">
-        <a href={arxivUrl} target="_blank" rel="noopener" class="arxiv-btn">
-          → 在 arxiv.org 上查看 {arxivId}
-        </a>
-      </p>
+    <p class="lead">这篇论文可能还没被每日 pipeline 抓取,或地址已经失效(站点 build 缓存)。</p>
+
+    {arxivUrl ? (
+      <div class="arxiv-fallback">
+        <div class="arxiv-card">
+          <div class="arxiv-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+              <path d="M16 13H8M16 17H8M10 9H8" />
+            </svg>
+          </div>
+          <div class="arxiv-text">
+            <div class="arxiv-eyebrow">检测到 arXiv ID</div>
+            <div class="arxiv-id">{arxivId}</div>
+          </div>
+          <a href={arxivUrl} target="_blank" rel="noopener" class="arxiv-btn">
+            在 arxiv.org 查看 ↗
+          </a>
+        </div>
+      </div>
+    ) : (
+      <p class="alt-help">可以用 arXiv ID 去 <a href="https://arxiv.org" target="_blank" rel="noopener">arxiv.org</a> 搜原文。</p>
     )}
-    {!arxivUrl && (
-      <p>可以用 arXiv ID 去 <a href="https://arxiv.org" target="_blank" rel="noopener">arxiv.org</a> 搜原文。</p>
-    )}
-    <a href={base + '/'} class="back">← 返回首页</a>
+
+    <div class="actions">
+      <a href={base + '/'} class="back">← 返回首页</a>
+      <a href={base + '/papers/'} class="back secondary">浏览论文库</a>
+    </div>
   </main>
   <Footer />
 </BaseLayout>
 
 <style>
-  .arxiv-fallback { margin: 1.2rem 0; }
+  .arxiv-fallback { margin: var(--space-6) 0; }
+  .arxiv-card {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-5);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    text-align: left;
+    max-width: 560px;
+    margin: 0 auto;
+    transition: border-color var(--transition), box-shadow var(--transition);
+  }
+  .arxiv-card:hover { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+  .arxiv-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px; height: 40px;
+    border-radius: var(--radius-md);
+    background: var(--accent-soft);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .arxiv-text { flex: 1; min-width: 0; }
+  .arxiv-eyebrow {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--fg-subtle);
+  }
+  .arxiv-id {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    color: var(--fg);
+    margin-top: 0.15rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .arxiv-btn {
-    display: inline-block;
-    background: var(--accent, #b31b1b);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: var(--accent);
     color: #fff;
-    padding: 0.6rem 1.2rem;
-    border-radius: var(--radius-sm, 4px);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
     text-decoration: none;
     font-weight: 600;
-    transition: opacity 150ms ease;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    transition: background var(--transition), transform var(--transition);
   }
-  .arxiv-btn:hover { opacity: 0.85; }
+  .arxiv-btn:hover { background: var(--accent-hover); transform: translateY(-1px); text-decoration: none; }
+
+  .alt-help { color: var(--fg-muted); }
+  .actions {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: var(--space-8);
+  }
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: var(--space-3) var(--space-5);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--fg);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: background var(--transition), border-color var(--transition), transform var(--transition);
+  }
+  .back:hover {
+    background: var(--bg-muted);
+    border-color: var(--border-strong);
+    text-decoration: none;
+    transform: translateY(-1px);
+  }
+  .back.secondary { background: transparent; }
 </style>
