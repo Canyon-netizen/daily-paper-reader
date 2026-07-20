@@ -46,6 +46,37 @@ def atomic_write_text(path: str, content: str, encoding: str = "utf-8") -> None:
             pass
         raise
 
+
+def verify_paper_md_was_written(md_path: str, *, min_size: int = 200) -> None:
+    """核对 atomic_write_text 落盘后 .md 真的存在且非空。
+
+    历史上 src/6.generate_docs.py process_paper 在 ensure_text_content
+    之后才报 NameError(纸 paper_source 未定义),导致 .txt 已写但 .md 落空,
+    整批被 ThreadPoolExecutor 静默吞掉后 daily commit 正常推进
+    (commit `c75c503` 描述的"7-10~7-17 pipeline step6 paper_source
+    NameError 漏写产物手动补齐"即此问题)。这个 helper 在每篇 .md
+    落盘后跑一次,期望 fail-fast:文件缺失 / 太小 / 没 frontmatter 都抛
+    RuntimeError,_process_section 的 except 子句只吞瞬时错误
+    (requests / json / TimeoutError / ConnectionError / OSError),
+    其他异常会向上传播,让 daily commit 失败而不是默默把空日报提交。
+    """
+    if not md_path:
+        raise RuntimeError("verify_paper_md_was_written: md_path is empty")
+    if not os.path.exists(md_path):
+        raise RuntimeError(f"paper md missing after write: {md_path}")
+    try:
+        size = os.path.getsize(md_path)
+    except OSError as e:
+        raise RuntimeError(f"paper md stat failed: {md_path}: {e}") from e
+    if size < min_size:
+        raise RuntimeError(
+            f"paper md suspiciously small ({size} bytes < {min_size}): {md_path}"
+        )
+    with open(md_path, "r", encoding="utf-8") as f:
+        head = f.read(64)
+    if not head.lstrip().startswith("---"):
+        raise RuntimeError(f"paper md missing YAML front matter: {md_path}")
+
 def upsert_front_matter_field(md_text: str, key: str, value: str) -> Tuple[str, bool]:
     text = str(md_text or "")
     if not text.startswith("---\n") and not text.startswith("---\r\n"):

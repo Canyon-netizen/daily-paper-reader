@@ -7,6 +7,7 @@ import json
 import math
 import os
 import sys
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 import tempfile
@@ -1052,6 +1053,7 @@ from src.generate_docs_md_io import (
     upsert_auto_block,
     upsert_glance_block_in_text,
     upsert_front_matter_field,
+    verify_paper_md_was_written,
 )
 
 def maybe_generate_paper_figures(
@@ -1319,6 +1321,7 @@ def process_paper(
     md_path, txt_path, paper_id = prepare_paper_paths(docs_dir, date_str, title, arxiv_id)
     abstract_en = (paper.get("abstract") or "").strip()
     pdf_url = str(paper.get("link") or paper.get("pdf_url") or "").strip()
+    paper_source = str(paper.get("source") or "").strip()
 
     # 准备 4-dim categories(从 source 推 venue;task/method/type 若上游已打,
     # 经 taxonomy 白名单过滤一次)。本批入口总是把 paper["llm_categories"]
@@ -1567,6 +1570,7 @@ def process_paper(
         )
         os.makedirs(os.path.dirname(md_path), exist_ok=True)
         atomic_write_text(md_path, content)
+        verify_paper_md_was_written(md_path)
         return paper_id, title
 
     # 新文件：生成完整内容
@@ -1603,6 +1607,7 @@ def process_paper(
 
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
     atomic_write_text(md_path, content)
+    verify_paper_md_was_written(md_path)
 
     # 精读区：生成详细总结
     if section == "deep":
@@ -2236,11 +2241,24 @@ def main() -> None:
 
             for future in as_completed(futures):
                 index, paper = futures[future]
+                paper_id = str(paper.get("id") or paper.get("paper_id") or "").strip()
+                paper_label = paper_id or paper.get("title") or f"<paper #{index}>"
                 try:
                     pid, title = future.result()
-                except Exception as e:
-                    log(f"[WARN] 生成{section}论文失败：{e}")
+                except (requests.RequestException, json.JSONDecodeError,
+                        TimeoutError, ConnectionError, OSError) as e:
+                    log(
+                        f"[WARN] 生成{section}论文失败（瞬时错误，跳过该篇）："
+                        f"{paper_label} | {type(e).__name__}: {e}"
+                    )
                     continue
+                except Exception as e:
+                    log(
+                        f"[ERROR] 生成{section}论文失败（疑似代码 bug，中止本节）："
+                        f"{paper_label} | {type(e).__name__}: {e}"
+                    )
+                    log("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+                    raise
                 paper_evidence_by_id[str((pid or "").strip())] = get_paper_sidebar_evidence(paper)
                 section_tags = extract_sidebar_tags(paper)
                 results.append((index, (pid, title, section_tags)))
@@ -2274,6 +2292,31 @@ def main() -> None:
         log_substep("6.3", "生成速读区文章", "START")
         quick_entries = _process_section("quick", quick_list, sidebar_evidence_by_id)
         log_substep("6.3", "生成速读区文章", "END")
+
+        # 一致性检查：防止 _process_section 静默吞掉全部异常后写 0 md、
+        # 但 step6 仍然 exit 0 把"空日报"提交上去。
+        # 任何异常如果走到这一步之前已经 raise,_process_section 会直接冒泡;
+        # 这里只防"瞬时错误跳过若干篇"导致 .md 显著少于预期的情况。
+        expected = len(deep_list) + len(quick_list)
+        actual = len(deep_entries) + len(quick_entries)
+        if expected > 0:
+            missing = expected - actual
+            if missing > 0:
+                ratio = actual / expected
+                log(
+                    f"[ERROR] step6 一致性检查未通过：expected {expected} mds, "
+                    f"actual {actual} ({missing} failed; 写入率 {ratio:.0%}). "
+                    f"Abort 防止空日报 commit。"
+                )
+                # daily commit 拒绝提交明显残缺的一批,让用户在
+                # GH Actions 日志里立刻看到 [WARN]/[ERROR] 行号和
+                # paper id,而不是几天后才发现 home 没有新论文。
+                raise SystemExit(2)
+            else:
+                log(
+                    f"[OK] step6 一致性检查通过：expected {expected}, "
+                    f"actual {actual} mds."
+                )
 
     log_substep("6.4", "生成当日日报并同步首页 README", "START")
     run_generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
