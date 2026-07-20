@@ -29,7 +29,8 @@
   gap: 0.4rem;
 }
 .home .cal-year-select,
-.home .cal-month-select {
+.home .cal-month-select,
+.home .cal-topic-select {
   padding: 0.4rem 0.6rem;
   font-family: inherit;
   font-size: 0.92rem;
@@ -42,12 +43,26 @@
   transition: border-color var(--transition), background var(--transition);
   min-width: 5.5rem;
 }
+.home .cal-topic-select { min-width: 9rem; max-width: 18rem; }
 .home .cal-year-select:hover,
-.home .cal-month-select:hover { border-color: var(--accent); }
+.home .cal-month-select:hover,
+.home .cal-topic-select:hover { border-color: var(--accent); }
 .home .cal-year-select:focus-visible,
-.home .cal-month-select:focus-visible {
+.home .cal-month-select:focus-visible,
+.home .cal-topic-select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+/* dropdown panels: Win/Chrome <option> 经常落到 OS 原生深色,强制浅色化 */
+.home .cal-topic-select option {
+  color: var(--fg);
+  background: var(--bg-elevated);
+}
+
+/* ----- 主题数 tag(与 #cal-grand-count 同位置,色更柔不抢戏)----- */
+.home .section-tag--soft {
+  background: var(--bg-muted);
+  color: var(--fg-muted);
 }
 
 /* ----- 单个月份卡 ----- */

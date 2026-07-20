@@ -187,6 +187,10 @@ function cellLabel(c: DayCell): string {
 // 8) 总览统计
 const totalDays = months.reduce((s, m) => s + m.daysWithPapers, 0);
 const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
+// 全库出现过的 task 集合大小(与月份切换无关,与 byTag.size 口径一致)
+const totalTopicCount = new Set(
+  valid.map((p) => (p.task && p.task.length > 0 ? p.task : null)).filter((x): x is string => !!x)
+).size;
 
 // 9) 主题 → 篇数 统计(用于头部 chip 排序)。
 //    来源:listAllPapersByTag 在 index.astro 也用过口径(key = categories.task[0])。
@@ -242,6 +246,7 @@ const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
         </div>
       )}
       <span class="section-tag" id="cal-grand-count">{grandTotal} 篇 / {totalDays} 天</span>
+      <span class="section-tag section-tag--soft" id="cal-topic-count" title="库内出现过的任务主题数(全量)">{totalTopicCount} 个主题</span>
     </div>
   </div>
 
