@@ -154,17 +154,23 @@ async function main() {
   log(`Unique stems: ${byStem.size}`);
   log('');
 
-  // 第一次 pass:收集所有 .md 的 date 进 map,后续 .txt 孤儿可用
+  // 第一次 pass:收集所有 .md 的 date 进 map,后续 .txt 孤儿可用。
+  // 注意:很多论文 .md 和 .txt stem 不一致(.md 无 slug, .txt 有 slug),所以
+  // 还得按 arxiv id 前缀再收集一份 → mdDateByArxivId,用于 cross-stem fallback。
   const stemDateMap = new Map();  // stem → { year, month, day, source }
+  const mdDateByArxivId = new Map();  // arxiv id (e.g. 2607.09330v1) → date
+  const ARXIV_ID_FROM_STEM_RE = /^(\d{4}\.\d{4,5}v\d+)/;
   for (const [stem, group] of byStem.entries()) {
     const md = group.find((e) => e.name.endsWith('.md'));
     if (!md) continue;
     const d = await readDateFromMd(md.fullPath);
     if (d.ok) {
       stemDateMap.set(stem, d);
+      const m = ARXIV_ID_FROM_STEM_RE.exec(stem);
+      if (m) mdDateByArxivId.set(m[1], d);
     }
   }
-  log(`Frontmatter dates collected from ${stemDateMap.size} .md files`);
+  log(`Frontmatter dates collected from ${stemDateMap.size} .md files (${mdDateByArxivId.size} unique arxiv ids)`);
   log('');
 
   let planned = 0;
@@ -204,11 +210,18 @@ async function main() {
         fallbackList.push(`${stem}: ${fb.source}`);
       }
     } else {
-      // 只有 .txt (orphan) → 用 siblingDateMap(若 stem 在另一月也有 .md),否则 fallback
-      const sibDate = stemDateMap.get(stem);
+      // 只有 .txt (orphan) → 优先查同 stem .md;stem 不一致时按 arxiv id 查 .md;
+      // 都没有 → arxiv YYMM + day=01 fallback。
+      let sibDate = stemDateMap.get(stem);
+      if (!sibDate) {
+        const m = ARXIV_ID_FROM_STEM_RE.exec(stem);
+        if (m) sibDate = mdDateByArxivId.get(m[1]);
+        if (sibDate) bucketSource = `arxiv-id-sibling-${sibDate.source}`;
+      } else {
+        bucketSource = `sibling-${sibDate.source}`;
+      }
       if (sibDate) {
         bucket = { year: sibDate.year, month: sibDate.month, day: sibDate.day };
-        bucketSource = `sibling-${sibDate.source}`;
         orphanTxt++;
       } else {
         const fb = parseDayFromFilename(stem);
