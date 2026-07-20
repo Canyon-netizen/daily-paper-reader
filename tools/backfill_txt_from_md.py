@@ -117,6 +117,14 @@ def txt_path_for_md(md_path: Path) -> Path:
     return md_path.with_suffix(".txt")
 
 
+def _rel(p: Path) -> str:
+    """尽量转成相对 ROOT_DIR 的短路径;在 ROOT 外(如临时目录测试)则原样返回。"""
+    try:
+        return str(p.relative_to(ROOT_DIR))
+    except ValueError:
+        return str(p)
+
+
 def read_pdf_url(md_path: Path) -> Optional[str]:
     """从 .md frontmatter 读 pdf: URL。"""
     try:
@@ -205,7 +213,7 @@ def ensure_txt_for_md(md_path: Path, *, log: Callable[[str], None] = print) -> b
         return False
     txt_path.parent.mkdir(parents=True, exist_ok=True)
     txt_path.write_text(text, encoding="utf-8")
-    log(f"      [write] {txt_path.relative_to(ROOT_DIR)} ({len(text)}B)")
+    log(f"      [write] {_rel(txt_path)} ({len(text)}B)")
     return True
 
 
