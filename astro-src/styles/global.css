@@ -449,6 +449,25 @@ kbd {
   from { opacity: 0; transform: translateY(4px); }
 }
 
+/* ----- 入场动画:首次加载时把 .dpr-stagger > * 错峰淡入 -----
+   页面用 <section class="dpr-stagger"> 包裹一组子元素,自动获得错峰入场。
+   0–600ms 总时长, 80ms 间隔,最多 8 个子元素(再多的用 duration 递减)。
+   prefers-reduced-motion 已在下方关闭。 */
+@keyframes dpr-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.dpr-stagger > * {
+  animation: dpr-rise 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation-delay: calc(var(--dpr-stagger-base, 0ms) + var(--dpr-stagger-step, 60ms) * min(var(--dpr-stagger-i, 0), 8));
+}
+
+/* ----- 视图进入(滚动到元素时):作为兜底,IntersectionObserver 加上 .is-in -----
+   单纯靠 CSS 没法可靠触发,所以这里也提供一个静态版:页面打开即淡入。 */
+.dpr-fade-in {
+  animation: dpr-rise 0.4s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-old(root),
   ::view-transition-new(root) {
@@ -459,6 +478,7 @@ kbd {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+  .dpr-stagger > *, .dpr-fade-in { animation: none !important; }
 }
 
 /* ========================================

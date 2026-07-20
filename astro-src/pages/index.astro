@@ -91,7 +91,7 @@ const dailyLean = dailyPapersAll
 
   <main class="home">
     <!-- ============ Hero ============ -->
-    <section class="hero">
+    <section class="hero dpr-fade-in">
       <div class="hero-bg" aria-hidden="true"></div>
       <div class="hero-inner">
         <div class="hero-eyebrow">
@@ -157,14 +157,15 @@ const dailyLean = dailyPapersAll
       </div>
 
       {topPapers.length > 0 ? (
-        <ul class="paper-grid">
+        <ul class="paper-grid dpr-stagger" style="--dpr-stagger-step: 70ms; --dpr-stagger-base: 100ms;">
           {topPapers.map((p, i) => {
             const href = `${base}/papers/${p.slug}/`;
             const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : null;
             return (
               <li class="paper-card"
                   data-rank={i + 1}
-                  data-arxiv-id={p.arxivId}>
+                  data-arxiv-id={p.arxivId}
+                  style={`--dpr-stagger-i: ${i}`}>
                 <a href={href} class="paper-card-link">
                   <div class="paper-card-topline" aria-hidden="true"></div>
                   <div class="paper-card-head">
@@ -324,8 +325,8 @@ const dailyLean = dailyPapersAll
           <p class="section-sub">一条 pipeline 把 arXiv 抓取到你眼前</p>
         </div>
       </div>
-      <ol class="how">
-        <li class="how-step">
+      <ol class="how dpr-stagger" style="--dpr-stagger-step: 80ms;">
+        <li class="how-step" style="--dpr-stagger-i: 0;">
           <div class="how-num">01</div>
           <h3>多源抓取</h3>
           <p>
@@ -333,14 +334,14 @@ const dailyLean = dailyPapersAll
             抓取最近 7 天新论文。
           </p>
         </li>
-        <li class="how-step">
+        <li class="how-step" style="--dpr-stagger-i: 1;">
           <div class="how-num">02</div>
           <h3>Embedding + 评分</h3>
           <p>
             通过 embedding + query tag 召回候选,LLM 二次评分,Top 论文带 LLM 中文摘要与 TLDR。
           </p>
         </li>
-        <li class="how-step">
+        <li class="how-step" style="--dpr-stagger-i: 2;">
           <div class="how-num">03</div>
           <h3>静态站呈现</h3>
           <p>
