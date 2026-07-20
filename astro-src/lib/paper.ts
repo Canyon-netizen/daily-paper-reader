@@ -255,6 +255,25 @@ export interface PaperListItem {
   venue?: string;
   accepted?: boolean;
   tags?: string[];
+  /** first figure url (已拼好 base),用于列表卡片缩略图。 */
+  thumbnail?: string;
+  /** 完整 figure 列表(未拼 base),供需要展示多图的场景(展开抽屉等)。 */
+  figures?: FigureEntry[];
+}
+
+/**
+ * 把 figures_json 里的 url 解析成可访问的图片 src。
+ *  - http(s) 绝对 URL:原样返回
+ *  - 以 / 开头(站点绝对路径):原样返回
+ *  - 其他(相对路径):拼 base
+ */
+export function figureUrlToAbsolute(url: string, base: string = '/'): string {
+  if (!url) return '';
+  if (/^https?:\/\//.test(url)) return url;
+  if (url.startsWith('/')) return url;
+  const b = base.endsWith('/') ? base.slice(0, -1) : base;
+  const u = url.startsWith('./') ? url.slice(2) : url;
+  return `${b}/${u}`;
 }
 
 async function walk(dir: string, out: string[]): Promise<void> {
@@ -295,6 +314,9 @@ export interface ListOptions {
   skipBroken?: boolean;
   dedup?: boolean;
   sinceDays?: number;
+  /** 拼缩略图 URL 时的 base(部署子路径)。listPapers 给 PaperListItem.thumbnail
+   *  填的就是 base + 相对 url 的拼结果,默认 '/' 部署根路径。 */
+  base?: string;
 }
 
 function dedupByCanonicalArxivId(items: PaperListItem[]): PaperListItem[] {
@@ -337,6 +359,7 @@ export function flattenCategories(c: Categories | undefined | null): string[] {
 
 export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[]> {
   const ids = await listAllPaperIds();
+  const base = opts.base || '/';
   const items: PaperListItem[] = [];
   for (const id of ids) {
     const p = await readPaper(id);
@@ -361,6 +384,8 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       venue: p.venue,
       accepted: p.accepted,
       tags: p.tags as string[] | undefined,
+      thumbnail: p.figures && p.figures.length > 0 ? figureUrlToAbsolute(p.figures[0].url, base) : undefined,
+      figures: p.figures,
     });
   }
   let filtered = items;

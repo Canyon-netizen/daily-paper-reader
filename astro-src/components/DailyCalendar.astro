@@ -21,6 +21,8 @@ interface LeanPaper {
   tags?: string[];
   /** categories.task[0],供客户端主题筛选;null 表示归到"其他"。 */
   task?: string | null;
+  /** 缩略图 URL(已拼 base),供客户端展开卡片渲染用。 */
+  thumbnail?: string;
 }
 
 interface Props {
@@ -395,6 +397,7 @@ type Paper = {
   accepted?: boolean;
   tags?: string[];
   task?: string | null;
+  thumbnail?: string;
 };
 
 const $ = <T extends Element = Element>(sel: string, root: Document | Element = document) =>
@@ -479,11 +482,16 @@ if (!dataEl) {
     const tagsHtml = tags.length > 0
       ? `<div class="paper-tags">${tags.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>`
       : '<span />';
+    // 缩略图:展开卡片有大空间,可以完整显示原比例,不用 object-fit:cover。
+    const thumbHtml = p.thumbnail
+      ? `<div class="paper-card-thumb-wrap"><img class="paper-card-thumb" src="${escapeHtml(p.thumbnail)}" alt="" loading="lazy" decoding="async" /></div>`
+      : '';
 
     return `
       <li class="paper-card" data-rank="${rank}" data-arxiv-id="${escapeHtml(p.arxivId)}">
         <a href="${escapeHtml(href)}" class="paper-card-link">
           <div class="paper-card-topline" aria-hidden="true"></div>
+          ${thumbHtml}
           <div class="paper-card-head">
             <div class="paper-rank-block">
               <span class="paper-rank-num">${String(rank).padStart(2, '0')}</span>
