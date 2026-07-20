@@ -32,9 +32,9 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         spec.loader.exec_module(cls.mod)
 
     def test_parse_meta_from_front_matter(self):
-        # repo 目录已重组 (commit 3166d40),docs/papers/ 按 YYYY/MM 拆,
-        # 老的 201706/12/attention 不再存在; 用现有 paper 验证解析路径。
-        md_path = Path("docs/papers/2026/06/2606.06087v1-latentskill.md")
+        # repo 目录已重组 (commit 1615ae5 加 DD 子目录),path 含 /04/;
+        # 用现有 paper 验证解析路径。
+        md_path = Path("docs/papers/2026/06/04/2606.06087v1-latentskill.md")
         item = self.mod._parse_generated_md_to_meta(str(md_path), "pid", "quick")
         self.assertEqual(item["title_en"], "LatentSkill: From In-Context Textual Skills to In-Weight Latent Skills for LLM Agents")
         self.assertTrue(item["authors"].startswith("Aofan Yu"))
@@ -299,7 +299,7 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
                 for p in patches:
                     p.stop()
 
-            self.assertEqual(pid, "papers/2026/07/2607.00001v1-paper-x")
+            self.assertEqual(pid, "papers/2026/07/20/2607.00001v1-paper-x")
             self.assertEqual(title, "Paper X")
 
             md_files = list(Path(docs_dir, "papers").rglob("*.md"))
