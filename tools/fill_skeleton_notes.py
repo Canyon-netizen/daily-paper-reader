@@ -267,6 +267,23 @@ def process(path: Path, client, dry_run=False):
 
     new_fm = rebuild_frontmatter(fm, data)
 
+    # 兜底抽图注入:backfill_2026-07-20_step6fix 这一批骨架笔记常缺 figures_json;
+    # 同 id 的 meta.json 若已存在(由 daily pipeline 提前抽好),这里把 figures 列表注入 frontmatter。
+    # 实现思路:rebuild_frontmatter 是逐行替换,不重写整个 dict;append 一行最干净。
+    arxiv_id = None
+    aid_m = re.search(r"^arxiv_id:\s*(\S+)", fm, flags=re.MULTILINE) or re.search(r"/(\d{4}\.\d{4,5}v\d+)\b", str(path))
+    if aid_m:
+        arxiv_id = aid_m.group(1)
+    # 只在当前 frontmatter 没有 figures_json 时注入(避免覆盖已有/更全的列表)
+    if arxiv_id and not re.search(r"^figures_json:", new_fm, flags=re.MULTILINE):
+        try:
+            from src._utils import figures_json_from_meta  # type: ignore
+            figs_yaml = figures_json_from_meta(str(ROOT / "docs"), arxiv_id)
+            if figs_yaml:
+                new_fm = new_fm + f"\nfigures_json: {figs_yaml}"
+        except Exception as e:
+            print(f"[warn] figures_json 注入跳过 ({arxiv_id}): {e}", flush=True)
+
     # insert Chinese 摘要 section before ## Abstract if absent
     if re.search(r"^##\s*摘要", body, flags=re.MULTILINE):
         new_body = body

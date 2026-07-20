@@ -84,22 +84,51 @@ function parseFigureList(raw: unknown): FigureEntry[] {
     }
   }
   if (!Array.isArray(arr)) return [];
-  const out: FigureEntry[] = [];
-  for (const item of arr) {
-    if (!item || typeof item !== 'object') continue;
-    const obj = item as Record<string, unknown>;
-    const url = typeof obj.url === 'string' ? obj.url.trim() : '';
-    if (!url) continue;
-    out.push({
-      url,
-      caption: typeof obj.caption === 'string' ? obj.caption : '',
-      page: typeof obj.page === 'number' ? obj.page : 0,
-      index: typeof obj.index === 'number' ? obj.index : out.length + 1,
-      width: typeof obj.width === 'number' ? obj.width : 0,
-      height: typeof obj.height === 'number' ? obj.height : 0,
-    });
+  return arr.map((item, i) => normalizeFigureEntry(item, i)).filter((e): e is FigureEntry => e !== null);
+}
+
+function normalizeFigureEntry(item: unknown, fallbackIndex: number): FigureEntry | null {
+  if (!item || typeof item !== 'object') return null;
+  const obj = item as Record<string, unknown>;
+  const url = typeof obj.url === 'string' ? obj.url.trim() : '';
+  if (!url) return null;
+  return {
+    url,
+    caption: typeof obj.caption === 'string' ? obj.caption : '',
+    page: typeof obj.page === 'number' ? obj.page : 0,
+    index: typeof obj.index === 'number' ? obj.index : fallbackIndex + 1,
+    width: typeof obj.width === 'number' ? obj.width : 0,
+    height: typeof obj.height === 'number' ? obj.height : 0,
+  };
+}
+
+/**
+ * 兜底:frontmatter `figures_json` 缺失或为空时,从
+ * `docs/assets/figures/arxiv/<arxivId>/meta.json` 读 figures 列表。
+ * 主要防 backfill 漏写 + 跨版本 frontmatter 漂移;disk miss 时返回 undefined。
+ */
+async function loadFiguresFromAssetMeta(arxivId: string): Promise<FigureEntry[] | undefined> {
+  if (!arxivId) return undefined;
+  const disk = await import('./paper-disk.mjs');
+  const metaPath = disk.joinPath(disk.DOCS_DIR, 'assets', 'figures', 'arxiv', arxivId, 'meta.json');
+  let text: string;
+  try {
+    text = await disk.readTextFile(metaPath);
+  } catch {
+    return undefined;
   }
-  return out;
+  try {
+    const meta = JSON.parse(text) as { figures?: unknown };
+    if (!Array.isArray(meta.figures)) return undefined;
+    const out: FigureEntry[] = [];
+    meta.figures.forEach((item, i) => {
+      const entry = normalizeFigureEntry(item, i);
+      if (entry) out.push(entry);
+    });
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeDate(v: unknown): string | undefined {
@@ -174,6 +203,11 @@ export async function readPaper(id: string): Promise<Paper | null> {
     : '';
   const { venue, accepted } = extractVenue(parsed.data.source);
   const categories = backfillVenueDim(parsed.data.categories, parsed.data.source);
+  const fmFigures = parseFigureList(parsed.data.figures_json);
+  // 兜底:frontmatter 缺 figures_json 时,从 assets meta.json 读
+  const figures = fmFigures.length > 0
+    ? fmFigures
+    : (await loadFiguresFromAssetMeta(arxivId)) ?? [];
   return {
     ...parsed.data,
     id,
@@ -186,7 +220,7 @@ export async function readPaper(id: string): Promise<Paper | null> {
     categories,
     body: parsed.body,
     isBroken: false,
-    figures: parseFigureList(parsed.data.figures_json),
+    figures,
     tables: parseFigureList(parsed.data.tables_json),
   };
 }

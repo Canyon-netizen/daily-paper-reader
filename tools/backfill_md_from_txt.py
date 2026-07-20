@@ -28,6 +28,13 @@ from typing import Any, Dict, List, Tuple
 import requests
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+
+# 收尾守卫:该脚本写 bare-id 的 .md,但对应正文 .txt 可能是 slug 形式(名字对不上
+# 前端按 {md-basename}.txt 的查找契约)。写完每篇 .md 后调 ensure_txt_for_md,
+# 把同 id 的兄弟 .txt 改名到 .md 的 basename(缺失时按 pdf 抓取),形成单一事实源。
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from backfill_txt_from_md import ensure_txt_for_md  # noqa: E402  (同目录工具)
 DOCS_PAPERS = ROOT_DIR / "docs" / "papers"
 
 
@@ -163,7 +170,7 @@ def render_md(parsed: Dict[str, Any], llm: Dict[str, Any], generated_at: str) ->
     evidence = (llm.get("evidence") or "").strip()
     tldr = (llm.get("tldr_zh") or "").strip()
 
-    fm = {
+    fm: Dict[str, Any] = {
         "title": parsed["title"],
         "title_zh": title_zh or parsed["title"],
         "authors": "",  #  txt 头部 author 抽取不可靠,留空
@@ -183,7 +190,19 @@ def render_md(parsed: Dict[str, Any], llm: Dict[str, Any], generated_at: str) ->
         "selection_source": "backfill_2026-07-19",
     }
 
+    # 兜底抽图注入:同一篇 id 往往已由 paper_figures.py 抽好 webp + meta.json,
+    # 但本脚本不抽图也不读 assets/ — 这里补一手,避免页面"有图不显示"。
+    # 注入后 astro-src/lib/paper.ts 直接消费 figures_json,无需 fallback。
     import yaml
+
+    sys.path.insert(0, str(ROOT_DIR / "src"))
+    try:
+        from src._utils import figures_json_from_meta  # type: ignore
+        figs_yaml = figures_json_from_meta(str(ROOT_DIR / "docs"), parsed["arxiv_id"])
+        if figs_yaml:
+            fm["figures_json"] = figs_yaml
+    except Exception as e:  # 容错,缺图不影响 backfill 主流程
+        print(f"[warn] figures_json 注入跳过 ({parsed['arxiv_id']}): {e}", flush=True)
 
     front = yaml.safe_dump(fm, allow_unicode=True, sort_keys=False).strip()
     body = "\n\n## 摘要\n\n" + (tldr or "(待 LLM 摘要)") + "\n\n## Abstract\n\n" + parsed.get("abstract", "") + "\n"
@@ -244,9 +263,11 @@ def main() -> int:
             # 按 arxiv id YYMM 入对应 docs/papers/<YYYY>/<MM>/ 子目录
             sys.path.insert(0, str(ROOT_DIR / "src"))
             from paper_paths import paper_md_path  # type: ignore
+            from src._utils import figures_json_from_meta  # type: ignore
             md_path = Path(paper_md_path(str(ROOT_DIR / "docs"), rec['arxiv_id']))
             md_path.parent.mkdir(parents=True, exist_ok=True)
-            md_path.write_text(
+            figs_yaml = figures_json_from_meta(str(ROOT_DIR / "docs"), rec['arxiv_id'])
+            md_text = (
                 "---\n"
                 f"title: {rec['title']}\n"
                 f"title_zh: 'N/A'\n"
@@ -260,10 +281,14 @@ def main() -> int:
                 "tldr: '(待 LLM 补)'\n"
                 "source: arxiv\n"
                 "selection_source: 'backfill_2026-07-19'\n"
-                "---\n\n## Abstract\n\n" + rec.get("abstract", "") + "\n",
-                encoding="utf-8",
             )
+            if figs_yaml:
+                # YAML 单引号包裹已含外层引号,直接拼一行
+                md_text += f"figures_json: {figs_yaml}\n"
+            md_text += "---\n\n## Abstract\n\n" + rec.get("abstract", "") + "\n"
+            md_path.write_text(md_text, encoding="utf-8")
             print(f"[write] {md_path}")
+            ensure_txt_for_md(md_path)
         return 0
 
     llm_results = call_llm_batch(parsed_list, env)
@@ -277,6 +302,7 @@ def main() -> int:
             content = render_md(rec, llm, now)
             md_path.write_text(content, encoding="utf-8")
             print(f"[write] {md_path}")
+            ensure_txt_for_md(md_path)
         except Exception as e:
             print(f"[ERROR] {rec['arxiv_id']}: {e}", flush=True)
 
