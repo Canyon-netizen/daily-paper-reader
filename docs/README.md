@@ -7,83 +7,92 @@
 
 ## 每次日报
 - 最新运行日期：2026-07-20
-- 运行时间：2026-07-20 12:19:45 UTC
+- 运行时间：2026-07-20 16:36:49 UTC
 - 运行状态：成功
-- 本次总论文数：22
-- 精读区：9
-- 速读区：13
+- 本次总论文数：25
+- 精读区：10
+- 速读区：15
 
 ### 今日简报（AI）
-今日完成22篇论文筛选，精读9篇、速读13篇，重点聚焦大模型自蒸馏与游戏关卡生成两大方向。最值得看的是诊断并缓解自蒸馏"思维坍缩"的工作（9.0分），以及基于Playtrace重构分割的时序关卡生成研究（9.0分），二者分别针对LLM推理稳定性与游戏AI结构化生成提出了新思路。建议关注LLM训练的读者精读自蒸馏篇，游戏AI或程序化生成方向的从业者关卡生成篇，其余速读可按需浏览。
+今日精选 25 篇论文，精读 10 篇速读 15 篇，聚焦时序知识编辑、分布式强化学习风险审计、可扩展计算机代理、密集检索蒸馏及腿足机器人运动等方向。最值得关注的是 PRISM Edit 用单一向量统一处理时序问答，以及对分布式强化学习风险声明的系统审计，提醒从业者勿轻信现有安全性结论。建议读者先从精读的两篇 9.0 分论文入手了解前沿，再挑选感兴趣的速读方向深入展开。
 - 详情：[本次日报](#本次日报)
 
 ### 精读区论文标签
-1. [Diagnosing and Mitigating Thinking Collapse in On-Policy Self-Distillation](/papers/2026/07/20/2607.10805v1-diagnosing-and-mitigating-thinking-collapse-in-on-policy-self-distillation)  
+1. [PRISM Edit: One Vector for All Temporal Answers](/papers/2026/07/20/2607.11327v1-prism-edit-one-vector-for-all-temporal-answers)  
    标签：评分：9.0/10
-   evidence：论文直接研究模型自学习的自蒸馏方法(OPSD)
-2. [Representing and Generating Levels Over Time through Playtrace Reconstructive Partitioning](/papers/2026/07/20/2607.12097v1-representing-and-generating-levels-over-time-through-playtrace-reconstructive-partitioning)  
+   evidence：通过优化表征空间中的单个向量来编辑语言模型在不同时序下的行为
+2. [Auditing the Risk Claims of Distributional Reinforcement Learning](/papers/2026/07/20/2607.11607v1-auditing-the-risk-claims-of-distributional-reinforcement-learning)  
    标签：评分：9.0/10
-   evidence：面向游戏关卡的程序化内容生成新方法
-3. [Robust Peak-cost Constrained Reinforcement Learning](/papers/2026/07/20/2607.15457v1-robust-peak-cost-constrained-reinforcement-learning)  
+   evidence：对分布式强化学习算法风险声明的理论审计分析
+3. [Representing and Generating Levels Over Time through Playtrace Reconstructive Partitioning](/papers/2026/07/20/2607.12097v1-representing-and-generating-levels-over-time-through-playtrace-reconstructive-partitioning)  
    标签：评分：9.0/10
-   evidence：对峰值成本约束MDP的理论分析与安全关键RL的鲁棒算法设计
-4. [PRISM Edit: One Vector for All Temporal Answers](/papers/2026/07/20/2607.11327v1-prism-edit-one-vector-for-all-temporal-answers)  
+   evidence：游戏关卡的程序化内容生成方法
+4. [Beyond Entropy: Correctness-Aware Advantage Shaping via Contrastive Policy Optimization](/papers/2026/07/20/2607.14614v1-beyond-entropy-correctness-aware-advantage-shaping-via-contrastive-policy-optimization)  
+   标签：评分：9.0/10
+   evidence：对比策略优化是一种带有理论与实证分析的新型强化学习算法
+5. [Optimal Self-Distillation for Rectified Flow via Linear Probing](/papers/2026/07/20/2607.14947v1-optimal-self-distillation-for-rectified-flow-via-linear-probing)  
+   标签：评分：9.0/10
+   evidence：生成模型的自蒸馏方法,证明可改进教师模型
+6. [Prediction-Only Distillation in Linear and Logistic Regression](/papers/2026/07/20/2607.15450v1-prediction-only-distillation-in-linear-and-logistic-regression)  
+   标签：评分：9.0/10
+   evidence：自蒸馏方法的理论分析
+7. [Better Starts, Better Ends: Bootstrapped Iterative Self-Reasoning Distillation for Compressed Reasoning](/papers/2026/07/20/2607.15736v1-better-starts-better-ends-bootstrapped-iterative-self-reasoning-distillation-for-compressed-reasoning)  
+   标签：评分：9.0/10
+   evidence：学生模型从自身的简洁副本学习的自蒸馏方法
+8. [When Do Multi-Agent Systems Help? An Information Bottleneck Perspective](/papers/2026/07/20/2607.16133v1-when-do-multi-agent-systems-help-an-information-bottleneck-perspective)  
+   标签：评分：9.0/10
+   evidence：用信息瓶颈视角分析多智能体系统相对单智能体的优势
+9. [From Pixels to States: Rethinking Interactive World Models as Game Engines](/papers/2026/07/20/2607.14076v1-from-pixels-to-states-rethinking-interactive-world-models-as-game-engines)  
    标签：评分：8.0/10
-   evidence：通过向量空间干预修改大语言模型的内部表示以编辑时间行为
-5. [PRISM Edit: One Vector for All Temporal Answers](/papers/2026/07/20/2607.11327v2-prism-edit-one-vector-for-all-temporal-answers)  
+   evidence：交互式世界模型作为下一代游戏引擎,采用动作-状态-观察循环
+10. [The Energy Society: A Simulation Environment for Studying Agent Cooperation under Survival Pressure](/papers/2026/07/20/2607.14865v1-the-energy-society-a-simulation-environment-for-studying-agent-cooperation-under-survival-pressure)  
    标签：评分：8.0/10
-   evidence：在MLP层中基于向量表征干预实现LLM编辑
-6. [SKooP: Symmetric Koopman Predictions for Faster and More Generalizable Legged Robot Locomotion with Reinforcement Learning](/papers/2026/07/20/2607.11624v1-skoop-symmetric-koopman-predictions-for-faster-and-more-generalizable-legged-robot-locomotion-with-reinforcement-learning)  
-   标签：评分：8.0/10
-   evidence：设计结合Koopman预测与形态对称性的新型强化学习算法以提升样本效率
-7. [Self-Supervised Visual Representation Learning: Pretrain-Finetuning or Joint Training?](/papers/2026/07/20/2607.13192v1-self-supervised-visual-representation-learning-pretrain-finetuning-or-joint-training)  
-   标签：评分：8.0/10
-   evidence：自监督视觉表征学习
-8. [Process Reward Informed Tree Rollout for Effective Multi-Turn RL](/papers/2026/07/20/2607.15610v1-process-reward-informed-tree-rollout-for-effective-multi-turn-rl)  
-   标签：评分：8.0/10
-   evidence：提出多轮智能体任务的新强化学习rollout算法PATR
-9. [Better Starts, Better Ends: Bootstrapped Iterative Self-Reasoning Distillation for Compressed Reasoning](/papers/2026/07/20/2607.15736v1-better-starts-better-ends-bootstrapped-iterative-self-reasoning-distillation-for-compressed-reasoning)  
-   标签：评分：8.0/10
-   evidence：策略自蒸馏：学生模型从自身简洁副本学习
+   evidence：研究多智能体在生存压力下的合作与竞争激励机制
 
 ### 速读区论文标签
-1. [LOGOS: A Living Logic for AI Agent Teams That Evolve With Humans](/papers/2026/07/20/2607.10878v1-logos-a-living-logic-for-ai-agent-teams-that-evolve-with-humans)  
+1. [SCALECUA: Scaling Computer Use Agents with Verifiable Task Synthesis and Efficient Online RL](/papers/2026/07/20/2607.11185v1-scalecua-scaling-computer-use-agents-with-verifiable-task-synthesis-and-efficient-online-rl)  
+   标签：评分：8.0/10
+   evidence：面向计算机使用智能体的在线强化学习及可验证奖励
+2. [Score-Only Distillation for Compact Dense Retrieval](/papers/2026/07/20/2607.11465v1-score-only-distillation-for-compact-dense-retrieval)  
+   标签：评分：8.0/10
+   evidence：从大教师模型蒸馏到紧凑学生模型以实现模型压缩
+3. [SKooP: Symmetric Koopman Predictions for Faster and More Generalizable Legged Robot Locomotion with Reinforcement Learning](/papers/2026/07/20/2607.11624v2-skoop-symmetric-koopman-predictions-for-faster-and-more-generalizable-legged-robot-locomotion-with-reinforcement-learning)  
+   标签：评分：8.0/10
+   evidence：强化学习应用于高维复杂非线性腿式机器人运动控制
+4. [Directional Constraints for Efficient Exploration in Safe Reinforcement Learning](/papers/2026/07/20/2607.12784v1-directional-constraints-for-efficient-exploration-in-safe-reinforcement-learning)  
+   标签：评分：8.0/10
+   evidence：安全强化学习算法与方向性约束探索
+5. [SEED: Self-Evolving On-Policy Distillation for Agentic Reinforcement Learning](/papers/2026/07/20/2607.14777v1-seed-self-evolving-on-policy-distillation-for-agentic-reinforcement-learning)  
+   标签：评分：8.0/10
+   evidence：自进化策略蒸馏框架，模型从自身完成的轨迹中学习技能
+6. [Q-Learning Lab: Teaching Reinforcement Learning Through Learner-Generated Trace Analysis](/papers/2026/07/20/2607.10802v1-q-learning-lab-teaching-reinforcement-learning-through-learner-generated-trace-analysis)  
    标签：评分：7.0/10
-   evidence：多智能体框架用于AI代理团队的协调、委派与治理
-2. [Capture, Shield, or Neutralize: Engagement-Aware Pursuit-Evasion](/papers/2026/07/20/2607.10986v1-capture-shield-or-neutralize-engagement-aware-pursuit-evasion)  
+   evidence：教授表格型Q学习算法及Bellman更新与ε-贪心策略
+7. [Auditing Belief-Conditioned LLM Agents in Hidden-Information Social Deduction Games](/papers/2026/07/20/2607.10814v1-auditing-belief-conditioned-llm-agents-in-hidden-information-social-deduction-games)  
    标签：评分：7.0/10
-   evidence：多智能体追逃博弈中的分层规划与安全协调
-3. [Score-Only Distillation for Compact Dense Retrieval](/papers/2026/07/20/2607.11465v1-score-only-distillation-for-compact-dense-retrieval)  
+   evidence：9人狼人杀多智能体隐藏信息博弈及LLM智能体信念审计
+8. [Autonomous Transition State Search with Soft Actor-Critic Reinforcement Learning](/papers/2026/07/20/2607.10854v1-autonomous-transition-state-search-with-soft-actor-critic-reinforcement-learning)  
    标签：评分：7.0/10
-   evidence：仅分数蒸馏将大型教师编码器压缩为紧凑的学生检索器
-4. [MAGIC: Transition-Aware Generation of Navigable Multi-Scene Game Worlds with Large Language Models](/papers/2026/07/20/2607.11594v1-magic-transition-aware-generation-of-navigable-multi-scene-game-worlds-with-large-language-models)  
+   evidence：将Soft Actor-Critic强化学习应用于复杂势能面搜索过渡态
+9. [Capture, Shield, or Neutralize: Engagement-Aware Pursuit-Evasion](/papers/2026/07/20/2607.10986v1-capture-shield-or-neutralize-engagement-aware-pursuit-evasion)  
    标签：评分：7.0/10
-   evidence：基于大语言模型的多场景游戏世界程序化生成
-5. [Self-Aware Recursively Self-Improving Agents for Personal Singularity: A Goal-, Scope-, Tool-, and Benchmark-Driven Multi-Agent Architecture](/papers/2026/07/20/2607.12254v2-self-aware-recursively-self-improving-agents-for-personal-singularity-a-goal--scope--tool--and-benchmark-driven-multi-agent-architecture)  
+   evidence：多智能体追逃博弈决策与规划方法
+10. [How to Realize Recursively Self-Improving Agents and Personal Singularity: A Goal-, Scope-, Tool-, and Benchmark-Driven Multi-Agent Architecture](/papers/2026/07/20/2607.12254v1-how-to-realize-recursively-self-improving-agents-and-personal-singularity-a-goal--scope--tool--and-benchmark-driven-multi-agent-architecture)  
    标签：评分：7.0/10
-   evidence：提出多智能体架构与智能体生态系统协调
-6. [Internet of Agentic Things: Networked AI Agents for Closed-Loop IoT Orchestration](/papers/2026/07/20/2607.12662v1-internet-of-agentic-things-networked-ai-agents-for-closed-loop-iot-orchestration)  
-   标签：评分：7.0/10
-   evidence：多个自主AI智能体跨分布式环境感知、推理与协调
-7. [Swarming and Opinion Dynamics](/papers/2026/07/20/2607.12844v1-swarming-and-opinion-dynamics)  
-   标签：评分：7.0/10
-   evidence：多智能体系统中的集体动力学与分布式决策
-8. [LOTAPO: Leave-One-Turn Attribution for Self-Generated Process Rewards in Multi-Turn Search Reasoning](/papers/2026/07/20/2607.13501v2-lotapo-leave-one-turn-attribution-for-self-generated-process-rewards-in-multi-turn-search-reasoning)  
-   标签：评分：7.0/10
-   evidence：提出一种多轮推理的过程监督强化学习算法
-9. [SearchOS-V1: Towards Robust Open-Domain Information-Seeking Agent Collaboration](/papers/2026/07/20/2607.15257v1-searchos-v1-towards-robust-open-domain-information-seeking-agent-collaboration)  
-   标签：评分：7.0/10
-   evidence：多智能体框架，通过显式共享状态实现智能体协调
-10. [The unique value of zero prediction errors in reinforcement learning](/papers/2026/07/20/biorxiv-10-64898-2026-07-13-738284-v1-the-unique-value-of-zero-prediction-errors-in-reinforcement-learning)  
-   标签：评分：7.0/10
-   evidence：强化学习理论的计算建模研究
-11. [Learning Safe Agent Behaviour from Human Preferences and Justifications via World Models](/papers/2026/07/20/2607.13172v1-learning-safe-agent-behaviour-from-human-preferences-and-justifications-via-world-models)  
+   evidence：提出受治理的多智能体架构，通过目标合约与范围界定实现智能体协调
+11. [BucketKD: A Safety-Aware Bucket-Based Knowledge Distillation Framework for End-to-End Motion Planning](/papers/2026/07/20/2607.10565v1-bucketkd-a-safety-aware-bucket-based-knowledge-distillation-framework-for-end-to-end-motion-planning)  
    标签：评分：6.0/10
-   evidence：在安全关键环境中通过世界模型和人类偏好训练安全智能体策略
-12. [A Hybrid Sampling-Based Trajectory Planner with Game-Theoretic Guidance for Autonomous Racing](/papers/2026/07/20/2607.13354v1-a-hybrid-sampling-based-trajectory-planner-with-game-theoretic-guidance-for-autonomous-racing)  
+   evidence：用于运动规划模型压缩的知识蒸馏
+12. [MafiaScope: Non-Invasive, Time-Resolved Belief Probing for LLM Agents in Social Deduction Games](/papers/2026/07/20/2607.10645v1-mafiascope-non-invasive-time-resolved-belief-probing-for-llm-agents-in-social-deduction-games)  
    标签：评分：6.0/10
-   evidence：竞争性赛车中的多智能体决策与轨迹规划
-13. [ReasFlow: Assisting Reasoning-Centric Scientific Discovery in Applied Mathematics via a Knowledge-Based Multi-Agent System](/papers/2026/07/20/2607.14178v1-reasflow-assisting-reasoning-centric-scientific-discovery-in-applied-mathematics-via-a-knowledge-based-multi-agent-system)  
+   evidence：LLM智能体作为社交推理游戏中的游戏角色，探测其信念与行为
+13. [Lottery and Sprint Arcade: Enabling Player-Driven Game Editing with Generative AI](/papers/2026/07/20/2607.10711v1-lottery-and-sprint-arcade-enabling-player-driven-game-editing-with-generative-ai)  
    标签：评分：6.0/10
-   evidence：基于知识的多智能体系统用于自动推理任务
+   evidence：LLM驱动的玩家在游戏中修改内容和机制
+14. [Automated Stealthy Wear-Out Attack on Digital Twins With Deep Reinforcement Learning](/papers/2026/07/20/2607.10830v1-automated-stealthy-wear-out-attack-on-digital-twins-with-deep-reinforcement-learning)  
+   标签：评分：6.0/10
+   evidence：深度强化学习应用于攻击工业数字孪生系统
+15. [LOGOS: A Living Logic for AI Agent Teams That Evolve With Humans](/papers/2026/07/20/2607.10878v1-logos-a-living-logic-for-ai-agent-teams-that-evolve-with-humans)  
+   标签：评分：6.0/10
+   evidence：为AI智能体团队提供治理与协调机制
 
