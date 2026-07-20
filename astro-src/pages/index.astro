@@ -1,57 +1,29 @@
 ---
 // 首页
 // 1) 顶部 hero:品牌口号 + 两枚 CTA
-// 2) 数据 stat row:总论文、主题数、来源数、最新更新
+// 2) 数据 stat row:收录论文、来源数、最新更新
 // 3) 编辑精选:近 7 天内按 LLM 评分排序的 Top 6 论文卡片
-// 4) 按主题分类:折叠式 tag 列表
+// 4) 日历视图:按发布日期排布 + 主题 chip 过滤(原 #by-topic 折叠列表已下线)
 // 5) How it works:3 步工作流介绍
 // 数据为空时仍能展示 hero/stats/empty-state,避免 Vercel 首次部署"全空"观感
-import { listPapers, listAllPapersByTag, flattenCategories, resolveTaskKey } from '../lib/paper';
+import { listPapers, resolveTaskKey } from '../lib/paper';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
 import DailyCalendar from '../components/DailyCalendar.astro';
 import '../styles/home.css';
 import '../styles/daily-calendar.css';
-import '../styles/topic-filter.css';
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
 // 编辑精选:近 7 天内按 LLM 评分排序的 Top 6(库内不足 6 时自动回退到不限时间的同排序)。
 const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7 });
-const byTag = await listAllPapersByTag();
-
-// 主题显示顺序(listAllPapersByTag 返回的 key 现在用 categories.task[0] 形式;
-// 旧 'query:<label>' 前缀已废)。
-// 这里只列有中文 label 的主流 task 主题;"其他" 桶(categories.task 为空的
-// paper)不在首页展示 —— 那些 paper 去论文库按其他维度(venue/method/type)筛选。
-// totalTopics 用 sortedTagEntries.length 反映实际展示分类数,与 stats row 一致。
-const TASK_ORDER = ['rl', 'mas', 'llm-agent', 'agent', 'reasoning', 'gui', 'vision', 'game-ai', 'robotics', 'code', 'self-distillation', 'intervention'];
-const sortedTagEntries = TASK_ORDER
-  .filter((t) => byTag.has(t))
-  .map((t) => [t, byTag.get(t)!] as const);
-
-const tagLabels: Record<string, string> = {
-  rl: '强化学习',
-  mas: '多智能体系统',
-  reasoning: '推理增强',
-  'llm-agent': 'LLM Agent',
-  agent: '智能体',
-  'game-ai': '游戏 AI',
-  gui: 'GUI',
-  vision: '视觉',
-  robotics: '机器人',
-  code: '代码生成',
-  'self-distillation': '自蒸馏',
-  intervention: '激活干预',
-};
 
 // 统计
 // totalPapers 用 listPapers({dedup:true}) 与 /papers/ 论文库对齐:
 //   同 arxiv id 多版本 (v1/v2/...) 只算一篇,避免首页显示 220 而论文库显示 205。
 //   旧实现 listAllPaperIds().length 含全部版本数,跟论文库不同步。
 const totalPapers = (await listPapers({ dedup: true })).length;
-const totalTopics = byTag.size;
 const sources = ['arXiv', 'bioRxiv', 'medRxiv', 'ChemRxiv', 'OpenReview']; // pipeline 支持的来源
 // 最近更新:用按 date desc 排后的第一篇论文 date (dedup 后),
 // 而不是 topPapers[0].date —— topPapers 是按 score 排序的,
@@ -125,10 +97,6 @@ const dailyLean = dailyPapersAll
         <a class="stat stat-link" href="#top-picks">
           <div class="stat-value">{totalPapers.toLocaleString()}</div>
           <div class="stat-label">收录论文</div>
-        </a>
-        <a class="stat stat-link" href="#by-topic">
-          <div class="stat-value">{totalTopics}</div>
-          <div class="stat-label">主题分类</div>
         </a>
         <div class="stat">
           <div class="stat-value">{sources.length}</div>
@@ -257,66 +225,6 @@ const dailyLean = dailyPapersAll
       )}
     </section>
 
-    <!-- ============ 按主题分类 ============ -->
-    {sortedTagEntries.length > 0 && (
-      <section id="by-topic" class="section">
-        <div class="section-header">
-          <div>
-            <h2>🗂️ 按主题分类</h2>
-            <p class="section-sub">按 query tag 浏览,每个主题下按评分倒序展示全部论文</p>
-          </div>
-        </div>
-        <div class="tag-sections">
-          {sortedTagEntries.map(([tag, items]) => {
-            const label = tagLabels[tag] || tag;
-            return (
-              <details class="tag-section" data-topic-key={tag}>
-                <summary class="tag-section-summary">
-                  <span class="tag-name">{label}</span>
-                  <span class="tag-count">{items.length} 篇</span>
-                  <button
-                    type="button"
-                    class="tag-jump-btn"
-                    data-topic-jump={tag}
-                    aria-label={`在日历中只查看 ${label} 主题论文`}
-                    title={`在日历中只查看 ${label}`}
-                  >
-                    🔎 只在日历看 →
-                  </button>
-                </summary>
-                <ul class="tag-papers">
-                  {items.map((p) => {
-                    const href = `${base}/papers/${p.slug}/`;
-                    return (
-                      <li data-arxiv-id={p.arxivId}
-                          data-paper-card-selectable
-                          data-selectable-paper={p.arxivId}
-                          data-selectable-title={p.title || ''}
-                          data-selectable-title-zh={p.title_zh || ''}
-                          data-selectable-tldr={p.tldr || ''}
-                          data-selectable-method=""
-                          data-selectable-result=""
-                          data-selectable-tags={flattenCategories(p.categories).join(',')}>
-                        <a href={href} class="tag-paper-link">
-                          <span class="tag-paper-score">
-                            {p.score?.toFixed(1) || '—'}
-                          </span>
-                          <span class="tag-paper-title">
-                            {p.title_zh || p.title}
-                          </span>
-                          <span class="tag-paper-arrow">→</span>
-                        </a>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </details>
-            );
-          })}
-        </div>
-      </section>
-    )}
-
     <!-- ============ How it works ============ -->
     <section class="section">
       <div class="section-header">
@@ -359,48 +267,5 @@ const dailyLean = dailyPapersAll
     import '../scripts/index-filter.ts';
     import '../scripts/paper-selection.ts';
     import '../styles/paper-selection.css';
-    import { setTopicFilter, toggleTopicFilter } from '../scripts/topic-filter-bridge';
-
-    // 按主题分类里"展开剩余 N 篇"按钮 — 静态渲染了所有文章,只是默认折叠。
-    for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-tag-toggle]')) {
-      btn.addEventListener('click', () => {
-        const buttonLi = btn.closest('.tag-paper-more');
-        const ul = buttonLi?.parentElement;
-        if (!ul) return;
-        const restItems = ul.querySelectorAll<HTMLElement>('[data-tag-rest]');
-        if (restItems.length === 0) return;
-        const collapsing = !restItems[0].hidden; // 第一项当前为 false 意味着本次要收起
-        restItems.forEach((el) => { el.hidden = collapsing; });
-        btn.textContent = collapsing
-          ? `展开剩余 ${restItems.length} 篇 ↓`
-          : `收起剩余 ${restItems.length} 篇 ↑`;
-      });
-    }
-
-    // "只在日历看 →" 行内按钮 — 切/取消该主题在日历视图的过滤。
-    // 同主题再次点击 = 取消(toggleTopicFilter)。DailyCalendar 客户端脚本
-    // 负责渲染;本页只负责 dispatch。Event 通道由 topic-filter-bridge.ts 统一。
-    for (const btn of document.querySelectorAll<HTMLButtonElement>('[data-topic-jump]')) {
-      const key = (btn.dataset.topicJump || '').trim();
-      if (!key) continue;
-      btn.addEventListener('click', (ev) => {
-        // 阻止冒泡到 <details>/<summary>,避免顺带展开/收起
-        ev.preventDefault();
-        ev.stopPropagation();
-        toggleTopicFilter(key);
-        const daily = document.getElementById('daily');
-        if (daily) daily.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
-
-    // 监听来自 DailyCalendar 的过滤变化,同步本页"按主题分类"段的高亮态
-    // (只是给该主题行加 .is-active,不影响 details 展开/收起)。
-    import('../scripts/topic-filter-bridge').then(({ onTopicFilterChange }) => {
-      onTopicFilterChange((key) => {
-        document.querySelectorAll<HTMLElement>('[data-topic-key]').forEach((el) => {
-          el.classList.toggle('is-filtered', !!key && el.dataset.topicKey === key);
-        });
-      });
-    });
   </script>
 </BaseLayout>

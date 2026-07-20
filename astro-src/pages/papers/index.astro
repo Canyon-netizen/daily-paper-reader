@@ -25,10 +25,9 @@ const papers = await listPapers({ dedup: true, sortBy: 'date' });
 const today = new Date().toISOString().slice(0, 10);
 const todayCount = papers.filter((p) => p.date === today).length;
 
-// 主题分类数:与首页 stats 统一口径 — 复用 listAllPapersByTag(),
+// 主题分类数:复用 listAllPapersByTag(),
 // 其内部按每篇 flattenCategories 的首个 token 分桶,byTag.size 即主题分类数。
-// 不要在此处按 4 维全 token 去重,那会得到 venue/task/method/type 总和(8),
-// 与首页 totalTopics(byTag.size = 7)不一致。
+// 不要在此处按 4 维全 token 去重,那会得到 venue/task/method/type 总和(8)。
 const byTag = await listAllPapersByTag();
 const uniqueTagCount = byTag.size;
 
