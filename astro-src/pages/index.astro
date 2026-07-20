@@ -17,7 +17,8 @@ import '../styles/daily-calendar.css';
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 
 // 编辑精选:近 7 天内按 LLM 评分排序的 Top 6(库内不足 6 时自动回退到不限时间的同排序)。
-const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7 });
+// base 传给 listPapers 用于拼缩略图 URL(部署子路径兼容)。
+const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7, base });
 
 // 统计
 // totalPapers 用 listPapers({dedup:true}) 与 /papers/ 论文库对齐:
@@ -37,7 +38,8 @@ const latestDateLabel = latestDate
 // task 字段给 DailyCalendar 客户端做主题筛选;p.categories 一并塞进去
 // 是为了让 backfill 的 md(没有 tags: frontmatter,只用 categories:)也能
 // 被客户端识别到 task key,与 listAllPapersByTag 口径一致。
-const dailyPapersAll = await listPapers({ sortBy: 'date', dedup: true });
+// thumbnail 给 DailyCalendar 客户端展开卡片渲染缩略图(已用 base 拼过的 URL)。
+const dailyPapersAll = await listPapers({ sortBy: 'date', dedup: true, base });
 const dailyLean = dailyPapersAll
   .filter((p) => p.date)
   .map((p) => ({
@@ -52,6 +54,7 @@ const dailyLean = dailyPapersAll
     tags: p.tags,
     task: resolveTaskKey(p),
     categories: p.categories,
+    thumbnail: p.thumbnail,
   }));
 ---
 
@@ -136,6 +139,11 @@ const dailyLean = dailyPapersAll
                   style={`--dpr-stagger-i: ${i}`}>
                 <a href={href} class="paper-card-link">
                   <div class="paper-card-topline" aria-hidden="true"></div>
+                  {p.thumbnail && (
+                    <div class="paper-card-thumb-wrap">
+                      <img class="paper-card-thumb" src={p.thumbnail} alt="" loading="lazy" decoding="async" />
+                    </div>
+                  )}
                   <div class="paper-card-head">
                     <div class="paper-rank-block">
                       <span class="paper-rank-num">{String(i + 1).padStart(2, '0')}</span>

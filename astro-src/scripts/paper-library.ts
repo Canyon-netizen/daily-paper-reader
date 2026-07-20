@@ -31,6 +31,8 @@
     slug: string;
     // 可选:SSR 嵌入的轻量 tldr(若空,drawer 打开时再单独请求)
     tldr?: string;
+    // 可选:缩略图 URL(已拼 base);给抽屉展示 first figure 用
+    thumbnail?: string;
   }
   interface PapersDataPayload {
     papers: PaperListItemLite[];
@@ -368,6 +370,16 @@
         titleEn.hidden = false;
       } else {
         titleEn.hidden = true;
+      }
+      // 抽屉缩略图(first figure):有 url 就显示,否则整块隐藏
+      const thumbWrap = this.qs<HTMLDivElement>('[data-papers-drawer-thumb]');
+      const thumbImg = thumbWrap ? thumbWrap.querySelector('img') : null;
+      if (p.thumbnail && thumbImg) {
+        thumbImg.src = p.thumbnail;
+        thumbWrap.hidden = false;
+      } else if (thumbImg) {
+        thumbImg.removeAttribute('src');
+        thumbWrap.hidden = true;
       }
       this.qs<HTMLDivElement>('[data-papers-drawer-arxiv]').textContent =
         p.arxivId ? `arXiv: ${p.arxivId}` : '';
