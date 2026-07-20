@@ -1,33 +1,29 @@
 import importlib.util
 import json
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class GenerateDocsMetaParseTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         root = Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
         if "fitz" not in sys.modules:
-            import types
+            try:
+                import fitz  # noqa: F401
+            except Exception:
+                import types
 
-            fitz_stub = types.ModuleType("fitz")
-            fitz_stub.open = lambda *args, **kwargs: None
-            sys.modules["fitz"] = fitz_stub
-        if "llm" not in sys.modules:
-            import types
-
-            llm_stub = types.ModuleType("llm")
-
-            class DummyDeepSeekClient:
-                def __init__(self, *args, **kwargs):
-                    pass
-
-            llm_stub.DeepSeekClient = DummyDeepSeekClient
-            llm_stub.resolve_max_output_tokens = lambda default=393216: default
-            sys.modules["llm"] = llm_stub
+                fitz_stub = types.ModuleType("fitz")
+                fitz_stub.open = lambda *args, **kwargs: None
+                sys.modules["fitz"] = fitz_stub
 
         src_path = root / "src" / "6.generate_docs.py"
         spec = importlib.util.spec_from_file_location("gen6_mod", src_path)
@@ -36,14 +32,15 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         spec.loader.exec_module(cls.mod)
 
     def test_parse_meta_from_front_matter(self):
-        md_path = Path("docs/201706/12/1706.03762v1-attention-is-all-you-need.md")
+        # repo 目录已重组 (commit 3166d40),docs/papers/ 按 YYYY/MM 拆,
+        # 老的 201706/12/attention 不再存在; 用现有 paper 验证解析路径。
+        md_path = Path("docs/papers/2026/06/2606.06087v1-latentskill.md")
         item = self.mod._parse_generated_md_to_meta(str(md_path), "pid", "quick")
-        self.assertEqual(item["title_en"], "Attention Is All You Need")
-        self.assertTrue(item["authors"].startswith("Ashish Vaswani"))
-        self.assertIn("query:transformer", item["tags"])
-        self.assertEqual(item["date"], "20170612")
-        self.assertIn("https://arxiv.org/pdf", item["pdf"])
-        self.assertEqual(item["selection_source"], "fresh_fetch")
+        self.assertEqual(item["title_en"], "LatentSkill: From In-Context Textual Skills to In-Weight Latent Skills for LLM Agents")
+        self.assertTrue(item["authors"].startswith("Aofan Yu"))
+        self.assertEqual(item["date"], "2026-06-04")
+        self.assertEqual(item["source"], "arxiv")
+        self.assertEqual(item["selection_source"], "web_analyzer")
 
     def test_parse_fallback_to_legacy_meta_lines(self):
         with tempfile.TemporaryDirectory() as d:
@@ -243,6 +240,158 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertIn("30-70个中文字符", prompt)
         self.assertIn("问题背景→核心方法→关键结果→贡献意义", prompt)
         self.assertNotIn("每个字段一句话概括", prompt)
+
+    def test_process_paper_new_file_writes_md_and_defines_paper_source(self):
+        """
+        回归 commit c75c503 描述的 "process_paper 引用未定义 paper_source
+        → NameError → 批量 try/except 吞掉 → 0 md 落盘" 旧 bug。
+
+        期望:即便 pdf_url 非空(走 ensure_paper_formulas 路径),
+        process_paper 也必须把 .md 写到磁盘,且 frontmatter 含 source。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = str(root)
+            paper = {
+                "id": "2607.00001v1",
+                "title": "Paper X",
+                "abstract": "Abstract body long enough to pass heuristics.",
+                "link": "https://arxiv.org/pdf/2607.00001v1",
+                "pdf_url": "https://arxiv.org/pdf/2607.00001v1",
+                "source": "arxiv",
+                "authors": ["Author A"],
+                "published": "2026-07-20T00:00:00+00:00",
+                "llm_categories": {
+                    "venue": ["arxiv"],
+                    "task": ["rl"],
+                    "method": [],
+                    "type": ["empirical"],
+                },
+            }
+            patches = [
+                patch.object(self.mod, "ensure_text_content", return_value="txt body"),
+                patch.object(
+                    self.mod,
+                    "maybe_generate_paper_media",
+                    return_value=([], []),
+                ),
+                patch.object(
+                    self.mod, "ensure_paper_formulas", return_value=[]
+                ),
+                patch.object(
+                    self.mod,
+                    "translate_title_and_abstract_to_zh",
+                    return_value=("中文标题", "中文摘要"),
+                ),
+                patch.object(
+                    self.mod,
+                    "generate_glance_overview",
+                    return_value="**TLDR**：一句话。\n**Motivation**：动机。\n**Method**：方法。\n**Result**：结果。\n**Conclusion**：结论。\n**Context**：语境。",
+                ),
+            ]
+            for p in patches:
+                p.start()
+            try:
+                pid, title = self.mod.process_paper(
+                    paper, "quick", "20260720", docs_dir
+                )
+            finally:
+                for p in patches:
+                    p.stop()
+
+            self.assertEqual(pid, "papers/2026/07/2607.00001v1-paper-x")
+            self.assertEqual(title, "Paper X")
+
+            md_files = list(Path(docs_dir, "papers").rglob("*.md"))
+            self.assertEqual(
+                len(md_files),
+                1,
+                f"expected exactly 1 .md, found {len(md_files)}: {md_files}",
+            )
+            md_text = md_files[0].read_text(encoding="utf-8")
+            self.assertTrue(md_text.startswith("---"), "md must start with frontmatter")
+            self.assertGreater(len(md_text), 200, "md suspiciously short")
+            self.assertIn("source: arxiv", md_text)
+
+    def test_process_paper_propagates_developer_bug(self):
+        """
+        回归:_process_section 的 except 子句只吞瞬时错误(requests /
+        json / TimeoutError / ConnectionError / OSError),其他异常
+        (这里是 NameError)必须冒泡让 daily commit 失败。
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            docs_dir = str(root)
+            paper = {
+                "id": "2607.00002v1",
+                "title": "Bug paper",
+                "abstract": "x" * 200,
+                "link": "https://arxiv.org/pdf/2607.00002v1",
+                "source": "arxiv",
+                "published": "2026-07-20T00:00:00+00:00",
+            }
+
+            def broken_ensure(*args, **kwargs):
+                raise NameError("simulated undefined symbol")
+
+            patches = [
+                patch.object(self.mod, "ensure_text_content", side_effect=broken_ensure),
+                patch.object(self.mod, "maybe_generate_paper_media", return_value=([], [])),
+                patch.object(self.mod, "ensure_paper_formulas", return_value=[]),
+                patch.object(
+                    self.mod,
+                    "translate_title_and_abstract_to_zh",
+                    return_value=("t", "a"),
+                ),
+                patch.object(
+                    self.mod, "generate_glance_overview", return_value=""
+                ),
+            ]
+            for p in patches:
+                p.start()
+            try:
+                with ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(
+                        self.mod.process_paper,
+                        paper,
+                        "quick",
+                        "20260720",
+                        docs_dir,
+                    )
+                    with self.assertRaises(NameError):
+                        for f in as_completed([fut]):
+                            f.result()
+            finally:
+                for p in patches:
+                    p.stop()
+
+    def test_verify_paper_md_was_written_catches_missing_and_small(self):
+        from src.generate_docs_md_io import verify_paper_md_was_written
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # 缺失
+            with self.assertRaises(RuntimeError):
+                verify_paper_md_was_written(str(root / "missing.md"))
+            # 过小
+            tiny = root / "tiny.md"
+            tiny.write_text("---", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                verify_paper_md_was_written(str(tiny))
+            # 无 frontmatter
+            no_fm = root / "nofm.md"
+            no_fm.write_text("A" * 500, encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                verify_paper_md_was_written(str(no_fm))
+            # 正常
+            good = root / "good.md"
+            good.write_text(
+                "---\ntitle: T\n---\n\n# Body\n\n" + "A" * 500,
+                encoding="utf-8",
+            )
+            verify_paper_md_was_written(str(good))
 
 
 if __name__ == "__main__":
