@@ -56,19 +56,8 @@ from src.generate_docs_text_utils import (
     PLACEHOLDER_TEXT_RE,
     strip_llm_reasoning,
     is_placeholder_text,
+    is_too_short_for_abstract_translation,
 )
-
-def is_too_short_for_abstract_translation(zh_abstract: str, abstract_en: str) -> bool:
-    """
-    粗略识别“把 Abstract 写成一句 TLDR”的情况。
-    对较长英文摘要，完整中文翻译通常不会只有英文词数的一小部分。
-    """
-    zh_cjk = len(re.findall(r"[\u4e00-\u9fff]", zh_abstract or ""))
-    en_words = len(re.findall(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?", abstract_en or ""))
-    if en_words < 80:
-        return False
-    return zh_cjk < int(en_words * 0.85)
-
 def call_llm_text(
     client: LLMClient,
     messages: List[Dict[str, str]],
@@ -1431,8 +1420,24 @@ def process_paper(
                         break
 
                 has_zh_title = h1_count >= 2
-                has_zh_abstract = "## 摘要" in existing
-                need_zh = (not has_zh_title) or (not has_zh_abstract)
+                has_zh_abstract_section = "## 摘要" in existing
+                # 即使 ## 摘要 段存在,也检测正文是否过短/占位 —— 历史 backfill
+                # 可能把 tldr 直接塞进 ## 摘要(见 tools/backfill_md_from_txt.py)。
+                existing_zh_abstract = ""
+                if has_zh_abstract_section:
+                    zh_abs_m = re.search(
+                        r"^##\s*摘要\s*\n(.*?)(?=^##\s|\Z)",
+                        existing,
+                        re.S | re.M,
+                    )
+                    existing_zh_abstract = (zh_abs_m.group(1).strip() if zh_abs_m else "")
+                zh_abstract_is_bad = (
+                    not has_zh_abstract_section
+                    or not existing_zh_abstract
+                    or is_placeholder_text(existing_zh_abstract)
+                    or is_too_short_for_abstract_translation(existing_zh_abstract, abstract_en)
+                )
+                need_zh = (not has_zh_title) or zh_abstract_is_bad
 
                 if need_zh:
                     zh_title, zh_abstract = translate_title_and_abstract_to_zh(
@@ -1452,9 +1457,17 @@ def process_paper(
                         if inserted:
                             updated = "\n".join(out_lines)
 
-                    if (not has_zh_abstract) and zh_abstract:
-                        # 插入到 `## Abstract` 之前（若不存在则追加在末尾）
-                        if "## Abstract" in updated:
+                    if zh_abstract_is_bad and zh_abstract:
+                        # 替换 ## 摘要 段 —— 不存在则插入,已存在则重写正文。
+                        if "## 摘要" in updated:
+                            updated = re.sub(
+                                r"(^##\s*摘要\s*\n).*?(?=^##\s|\Z)",
+                                lambda m: m.group(1) + zh_abstract.strip() + "\n",
+                                updated,
+                                count=1,
+                                flags=re.S | re.M,
+                            )
+                        elif "## Abstract" in updated:
                             updated = updated.replace(
                                 "## Abstract",
                                 "## 摘要\n" + zh_abstract.strip() + "\n\n## Abstract",
@@ -1466,6 +1479,11 @@ def process_paper(
                                 + "\n\n## 摘要\n"
                                 + zh_abstract.strip()
                                 + "\n"
+                            )
+                        if zh_abstract_is_bad and existing_zh_abstract:
+                            log(
+                                f"[WARN][STEP6] ## 摘要 过短被强制重写: "
+                                f"{os.path.basename(md_path)} (cjk={len(existing_zh_abstract)} chars)"
                             )
 
                     if updated != existing:
