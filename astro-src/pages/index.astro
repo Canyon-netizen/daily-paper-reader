@@ -58,14 +58,14 @@ const dailyLean = dailyPapersAll
   }));
 
 // 主题数量:库内出现过的 categories.task[0] 集合大小,与日历
-// #cal-topic-count 软标签口径一致(resolveTaskKey:categories.task 优先 →
-// 无则回退 tags[0] 剥 query: → 都没有算 "其他","其他"也算进主题数,
-// 因为它代表"无明确 task 的论文"这个真实存在的桶)。
+// #cal-topic-count 软标签口径一致。剔除 resolveTaskKey 的 '其他' fallback
+// (它代表"无明确 task 的论文",不是真实的主题分类,UI 不对用户暴露),
+// 让 stats 卡 "主题数量" 与日历 select 选项数严格一致。
 // 直接基于 dailyLean.task 聚合,不重复扫盘。
 const topicKeys = new Set<string>();
 for (const p of dailyLean) {
   const key = p.task;
-  if (key) topicKeys.add(key);
+  if (key && key !== '其他') topicKeys.add(key);
 }
 const topicCount = topicKeys.size;
 ---
