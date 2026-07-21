@@ -1932,6 +1932,7 @@ function renderSubqStage(): void {
       current!.subqs = current!.subqs.filter((s) => s.id !== id);
       delete current!.candidatesBySubq[id];
       current!.summaries = current!.summaries.filter((s) => s.subqId !== id);
+      renderFacetStage(); // 删子方向会改变 facet 覆盖计数/未覆盖状态,同步刷新面板
       renderSubqStage();
       renderCandStage();
       renderSummaryStage();
@@ -3852,6 +3853,7 @@ function init(): void {
       reason: '',
       selected: true,
     });
+    renderFacetStage(); // 新子方向未归属任何维度,刷新面板的"未归属"提示
     renderSubqStage();
     persistSession(current!);
   });
