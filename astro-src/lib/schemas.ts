@@ -63,6 +63,11 @@ export interface SubQ {
   searchError?: string;
   /** arXiv 真实常见写法(去重 + 去中文字符) */
   aliases?: string[];
+  /** 该子方向归属的研究维度 (facet) 的权威 id。decomposeIdea 解析对象时映射填充。 */
+  facetId?: string;
+  /** 派生缓存:归属 facet 的中文 label。渲染时优先按 facetId 查当前 facet 的最新 label,
+   *  facetLabel 只在 facet 缺失 / 旧 session 时作 fallback,避免 facet 改名后显示过期值。 */
+  facetLabel?: string;
 }
 
 /** buildSubQ 的输入形状。required 字段显式列出,LLM / UI / regen 三类构造方都要走这里。 */
@@ -78,6 +83,8 @@ export interface SubQInput {
   hitCount?: number;
   hitSamples?: readonly string[];
   searchError?: string;
+  facetId?: string;
+  facetLabel?: string;
 }
 
 /** SubQ 里 explorationType 的白名单 (LLM 偶发大小写或拼写错误要走这里收敛)。 */
@@ -163,6 +170,14 @@ export function buildSubQ(input: SubQInput): SubQ {
       ? input.hitSamples.filter((s): s is string => typeof s === 'string')
       : undefined,
     searchError: input.searchError ? String(input.searchError) : undefined,
+    facetId: (() => {
+      const t = String(input.facetId ?? '').trim().slice(0, 64);
+      return t || undefined;
+    })(),
+    facetLabel: (() => {
+      const t = String(input.facetLabel ?? '').trim().slice(0, 60);
+      return t || undefined;
+    })(),
   };
   return out;
 }
@@ -193,7 +208,128 @@ export function buildRegenSubQ(args: {
     hitCount: base.hitCount,
     hitSamples: base.hitSamples,
     searchError: base.searchError,
+    // facet 归属:用户已有归属优先(regen 不应把子方向搬到别的维度),
+    // 旧 session / base 无归属时才用 replacement 补齐。
+    facetId: base.facetId ?? replacement.facetId,
+    facetLabel: base.facetLabel ?? replacement.facetLabel,
   });
+}
+
+// ============================================================================
+// Facet(研究维度)+ 构造 — 阶段 1 拆解的显式中间层
+// ============================================================================
+
+/** 研究维度分类。稳定英文枚举,UI 层再映射中文(见 FACET_CATEGORY_LABELS)。 */
+export type FacetCategory =
+  | 'method'
+  | 'data_task'
+  | 'structure_property'
+  | 'application_transfer'
+  | 'evaluation_benchmark';
+
+export const ALLOWED_FACET_CATEGORIES: ReadonlySet<FacetCategory> = new Set([
+  'method',
+  'data_task',
+  'structure_property',
+  'application_transfer',
+  'evaluation_benchmark',
+]);
+
+/** FacetCategory → 中文显示名。UI 渲染 chip / select 用。 */
+export const FACET_CATEGORY_LABELS: Record<FacetCategory, string> = {
+  method: '方法路线',
+  data_task: '数据与任务',
+  structure_property: '结构与性质',
+  application_transfer: '应用与迁移',
+  evaluation_benchmark: '评测与基准',
+};
+
+/** 一个研究维度。id 是权威归属键(subq.facetId 指向它)。 */
+export interface Facet {
+  id: string;
+  label: string;
+  category: FacetCategory;
+  note: string;
+}
+
+export interface FacetInput {
+  id: string;
+  label: string;
+  category?: FacetCategory | string;
+  note?: string;
+}
+
+/** 构造 Facet。id/label/note 清洗 + 截断,category 非法 → 'method' 兜底。
+ *  不负责去重 id / 校验 subq 映射(那需要 facets+subqs 全局上下文,在 decomposeIdea 解析层做)。 */
+export function buildFacet(input: FacetInput): Facet {
+  const rawCat = String(input.category ?? '').trim().toLowerCase();
+  const category = ALLOWED_FACET_CATEGORIES.has(rawCat as FacetCategory)
+    ? (rawCat as FacetCategory)
+    : 'method';
+  return {
+    id: String(input.id ?? '').trim().slice(0, 64),
+    label: String(input.label ?? '').trim().slice(0, 60),
+    category,
+    note: clampText(input.note, 180),
+  };
+}
+
+/** 拆解阶段 facet 覆盖 / 重复自检结果。派生数据,不持久化。 */
+export interface FacetCoverage {
+  /** 没有任何 subq 归属的 facet id */
+  uncoveredFacetIds: string[];
+  /** 关联了 >1 个 subq 的 facet id(可能重复) */
+  redundantFacetIds: string[];
+  /** 没有有效 facetId 的 subq id */
+  unassignedSubqIds: string[];
+}
+
+/** decomposeIdea 的返回形状:facets + subqs + 覆盖自检。 */
+export interface TopicDecomposition {
+  facets: Facet[];
+  subqs: SubQ[];
+  coverage: FacetCoverage;
+}
+
+/** LLM 拆解 response 的边界输入形状(解析后仍必须过 buildFacet / buildSubQ)。 */
+export interface DecomposeLLMFacet {
+  id?: string;
+  label?: string;
+  category?: string;
+  note?: string;
+}
+export interface DecomposeLLMSubQ {
+  label?: string;
+  query?: string;
+  aliases?: readonly unknown[];
+  reason?: string;
+  facetId?: string;
+}
+export interface DecomposeLLMResponse {
+  facets?: readonly DecomposeLLMFacet[];
+  subqs?: readonly DecomposeLLMSubQ[];
+}
+
+/** 计算 facet 覆盖 / 重复 / 未分配。纯代码,不调 LLM。 */
+export function computeFacetCoverage(facets: Facet[], subqs: SubQ[]): FacetCoverage {
+  const facetIds = new Set(facets.map((f) => f.id));
+  const countByFacet = new Map<string, number>();
+  const unassignedSubqIds: string[] = [];
+  for (const sq of subqs) {
+    if (sq.facetId && facetIds.has(sq.facetId)) {
+      countByFacet.set(sq.facetId, (countByFacet.get(sq.facetId) ?? 0) + 1);
+    } else {
+      unassignedSubqIds.push(sq.id);
+    }
+  }
+  const uncoveredFacetIds: string[] = [];
+  const redundantFacetIds: string[] = [];
+  for (const f of facets) {
+    const n = countByFacet.get(f.id) ?? 0;
+    if (n === 0) uncoveredFacetIds.push(f.id);
+    else if (n > 1) redundantFacetIds.push(f.id);
+  }
+  return { uncoveredFacetIds, redundantFacetIds, unassignedSubqIds };
 }
 
 // ============================================================================
@@ -225,6 +361,9 @@ export interface TopicSession {
   topic: string;
   createdAt: number;
   updatedAt: number;
+  /** 阶段 1 拆解出的研究维度(显式 facet 层)。旧 session 无此字段 → undefined,
+   *  UI 检测到空则隐藏 facet panel。 */
+  facets?: Facet[];
   subqs: SubQ[];
   candidatesBySubq: Record<string, Candidate[]>;
   /** 阶段 3 子方向 group 折叠状态:subqId → 是否展开。可选,老 session 缺这字段 → undefined,

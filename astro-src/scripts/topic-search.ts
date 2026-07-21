@@ -25,22 +25,30 @@ import {
   searchArxiv,
   searchArxivById,
   fetchArxivPdf,
+  fetchWithDiagnosis,
   callLLM,
 } from './paper-analyzer';
 import type { ArxivEntry } from './paper-analyzer';
 import { callChatCompletion, REASONING_MODEL_PATTERN_WIDE, type ChatMessage } from '../lib/llm';
 import { debounce, canonicalArxivId as canonicalId, escapeHtml } from '../lib/dom-utils';
 import {
+  buildFacet,
   buildRegenSubQ,
   buildSubQ,
+  computeFacetCoverage,
   normalizeAliases,
   normalizeQuery,
+  FACET_CATEGORY_LABELS,
   type Candidate,
   type ChatMsg,
+  type DecomposeLLMResponse,
+  type Facet,
+  type FacetCategory,
   type SessionStore,
   type SubQ,
   type SubqRewrite,
   type Summary,
+  type TopicDecomposition,
   type TopicReport,
   type TopicReportDimension,
   type TopicReportDimensionPaper,
@@ -81,102 +89,100 @@ const REPORT_LLM_RETRY = 2;
 // Prompt 模板
 // ============================================================================
 
-const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研究思路(中英文均可),你要把它拆成
-**3-5 个可独立在 arXiv 检索的子方向**。拆解分两步,每一步都按下面规范执行。
+const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研究思路(中英文均可),你要先把该主题拆成
+**显式的研究维度(facet)清单**,再从这些维度出发拆出 **3-5 个可独立在 arXiv 检索的子方向**。
+与以往不同:facet 这一层现在是**要输出给用户看、可编辑**的中间结构,不再只是你脑内的草稿。
 
 ═══════════════════════════════════════════════════════════
-【STEP 1 — 领域 facet 清单】(先认知,再拆解)
+【STEP 1 — 输出研究维度 facet 清单(5-7 个)】
 ═══════════════════════════════════════════════════════════
 
-不要直接拍脑袋拆方向。先针对这个研究主题,**列出 5-7 个"该主题特有的研究侧面"
-(我们称之为 facet)**,每个 facet 用 4-8 字中文短语表达,覆盖以下五类至少其中 4 类:
+针对这个主题,列出 **5-7 个"该主题特有的研究维度"**,覆盖下面五类中的**至少 4 类**:
 
-  ① 方法侧 (How):该主题有哪些主流技术路线 / 学习范式
-  ② 数据/任务侧 (What):该主题处理的核心数据形态或任务类型
-  ③ 结构/性质侧 (Why):该主题的内部结构、几何性质、理论保证
-  ④ 应用/迁移侧 (Where):该主题落到哪些下游应用 / 跨域迁移
-  ⑤ 评测/基准侧 (Bench):该主题有哪些评测协议、数据集、leaderboard
+  ① method              方法路线:主流技术路线 / 学习范式
+  ② data_task           数据与任务:核心数据形态 / 任务类型
+  ③ structure_property  结构与性质:内部结构、几何性质、理论保证
+  ④ application_transfer 应用与迁移:下游应用 / 跨域迁移
+  ⑤ evaluation_benchmark 评测与基准:评测协议、数据集、leaderboard
 
-不同主题的 facet 完全不同,例如:
-  - "智能体记忆" → facet 包括:长程记忆 / 工作记忆 / 检索式记忆 / 记忆压缩 / 记忆评测
-  - "代码生成"   → facet 包括:语言模型主干 / 仓库级检索 / 测试时验证 / 执行反馈 / 评测基准
-  - "技能向量化" → facet 应包括:表征学习 / 库检索组合 / 几何结构 / 迁移规划 / 评测基准
+每个 facet 必须:
+  - id:      唯一的**纯 ASCII 短标识**(如 "f_method"、"f_bench"),后续 subq 用它引用
+  - label:   4-12 字中文短语,是这个主题**特有**的维度名(不要泛化成"模型优化""应用场景")
+  - category:必须是上面 5 个英文枚举值之一
+  - note:    一句话说明这个维度在研究什么(≤ 40 字)
 
-**这一步只是让你想清楚,你不需要把 facet 输出给用户,只用于引导你下一步拆方向。**
-
-═══════════════════════════════════════════════════════════
-【STEP 2 — 按 facet 拆解成 JSON 数组】
-═══════════════════════════════════════════════════════════
-
-基于 STEP 1 的 facet 清单,**从不同 facet 各挑 1 个,组合成 3-5 个子方向**,确保:
-  - 子方向之间**尽量不重叠**(不同 facet)
-  - 尽量覆盖方法/应用/评测/结构 4 类(参考 STEP 1 五类)
-  - 数量灵活:**思路很短时 2-3 个也行,不要为了凑数而编造不相关的方向**
-
-每个子方向严格遵循下面的 JSON schema:
-  - label:       子方向中文短标题(8-20 字),要让用户一眼看懂"这条在搜什么"
-  - query:       **arXiv 真实检索关键词**,必须是 2-3 个独立的英文单词空格分隔
-                 (arXiv all:"..." 是整短语精确匹配,短语化会 0 召回)
-  - aliases:     **3-5 个 arXiv 真实常见写法**,字符串数组,每个元素是 2-4 个英文
-                 关键词空格分隔的短语,贴近 arXiv 论文摘要真实用词
-  - reason:      一句话中文说明为什么这个子方向值得检索(可以引用 STEP 1 的 facet 名字)
+facet 是可供用户编辑的研究骨架 —— 宁可维度精准而暂时没有 subq,也不要为凑数编泛维度。
 
 ═══════════════════════════════════════════════════════════
-【query 真实度纪律 — 非常重要,直接决定 arXiv 召回率】
+【STEP 2 — 从 facet 拆出 3-5 个子方向,每个恰好挂一个 facet】
 ═══════════════════════════════════════════════════════════
 
-- query 用 **2-3 个独立的英文单词**空格分隔,不要写完整短语或句子
-  ✓ 正确: "episodic memory", "skill embedding", "tool retrieval"
-  ✗ 错误: "long-term episodic memory architecture"(太长)
-  ✗ 错误: "skill latent geometry"(LLM 自创短语,arXiv 几乎没人这样写)
+- 输出 3-5 个子方向(主题很窄时 2-3 个也行,不要为凑数编造不相关方向)
+- **每个子方向必须有且只有一个 facetId,精确等于某个 facets[].id**
+- **默认不同子方向挂不同 facet**(这是保证子方向正交、不重叠的硬约束)
+- 同一个 facet 只在其内部确实存在两条不可合并的路线时,才允许挂 2 个子方向
+- 子方向之间按 **研究问题 / 技术机制 / 数据任务 / 评测协议** 区分,**不要只换同义词或换个应用名**
+- 若某 facet 暂时找不到稳定 query,就让它保持"未覆盖"(没有 subq),不要硬造
 
-- aliases 是 **arXiv 上真实有人用的关键词组合**——
-  - 想一想 arXiv 论文摘要里,这个子方向的论文**实际怎么写标题**:
-    "Skill-Based Reinforcement Learning" / "Tool Retrieval for LLMs" 这种标题风格
-  - 把这些标题拆成 2-4 词的别名,而不是堆 LLM 自己的术语组合
-  - 3-5 个,不能与 query 完全一样
-  - **如果 LLM 自己也不确定某个 alias 是不是 arXiv 真实写法,就换成更短、更通用、更早出现的词**
-
-- ❌ **禁止的写法**(arXiv 0 召回典型坑):
-  - 自创复合短语:"skill vectorial representation", "latent geometry", "tool-use augmented agent"
-  - 论文标题风格的完整句子:"learning skills for hierarchical planning"
-  - 用破折号 / 驼峰 / 下划线连接多个词
-  - 中英混杂(必须纯英文单词)
-
-- ✓ **推荐的写法**(arXiv 真实常见):
-  - 单词对:"skill embedding", "task representation"
-  - 三词组合:"hierarchical reinforcement learning", "tool-augmented language model"
-
-- 如果用户输入的是中文思路,query / aliases **全部用英文专业术语**(不混中文)。
+每个子方向字段:
+  - label:       中文短标题(8-20 字),让用户一眼看懂这条在搜什么
+  - query:       arXiv 真实检索关键词,**2-3 个独立英文单词空格分隔**
+  - aliases:     **3-5 个 arXiv 真实常见写法**(字符串数组,每个 2-4 词空格分隔)
+  - reason:      一句话中文,说明这条**如何对应它的 facet**
+  - facetId:     必须精确等于上面某个 facets[].id
 
 ═══════════════════════════════════════════════════════════
-【示例 — "智能体长程记忆"主题】
+【query 真实度纪律 — 直接决定 arXiv 召回率】
 ═══════════════════════════════════════════════════════════
 
-STEP 1 facets(模型内部思考,不出现在输出里):
-  - 长程记忆机制 / 检索式记忆 / 记忆压缩与抽象 / 记忆评测基准 /
-    多模态记忆 / 记忆的隐私与遗忘
+- query 用 **2-3 个独立英文单词**空格分隔,不要完整短语 / 句子
+  ✓ "episodic memory" / "skill embedding" / "tool retrieval"
+  ✗ "long-term episodic memory architecture"(太长) / "skill latent geometry"(自创短语,arXiv 无人用)
+- aliases 是 arXiv 上真实有人用的关键词组合(想 arXiv 论文标题实际怎么写),3-5 个,不能与 query 完全一样
+- 用户输入中文思路时,query / aliases **全部用英文专业术语**(不混中文)
+- ❌ 禁止:自创复合短语 / 论文标题式整句 / 破折号驼峰下划线连词 / 中英混杂
 
-STEP 2 输出(只输出 JSON 数组,不要解释):
-[
-  {"label":"情节记忆与长期记忆","query":"episodic memory long-term",
-   "aliases":["memory-augmented agent","long context memory","retrieval memory agent"],
-   "reason":"对应方法侧:检索式长期记忆是主流实现路径(facet: 长程记忆机制)"},
-  {"label":"记忆压缩与抽象","query":"memory consolidation",
-   "aliases":["memory compression agent","memory abstraction hierarchical","summarized memory agent"],
-   "reason":"对应结构侧:记忆摘要 / 抽象的研究(facet: 记忆压缩与抽象)"},
-  {"label":"记忆评测基准","query":"agent memory benchmark",
-   "aliases":["long-term memory benchmark","memory evaluation LLM agent","LOCOMO benchmark"],
-   "reason":"对应评测侧:LoCoMo / LongMemEval 等基准(facet: 记忆评测基准)"}
-]
+═══════════════════════════════════════════════════════════
+【arXiv 证据的用法】
+═══════════════════════════════════════════════════════════
+
+- 输入里可能给你一组**真实 arXiv 论文标题**,它们只是"这个领域真实在研究什么"的证据
+- 从标题里提取领域真实使用的术语 / 方法名 / 任务名,用作 query / aliases 的种子
+- **不要照抄标题**,不要把同一组高频词铺满所有 facet / subq
+- 证据不改变研究边界:以用户明确的研究思路为主;证据缺失(标注"证据不可用")时仅依思路拆解,不要因此停摆
+
+═══════════════════════════════════════════════════════════
+【示例 — "智能体长程记忆"主题(节选)】
+═══════════════════════════════════════════════════════════
+
+{
+  "facets": [
+    {"id":"f_mech","label":"长程记忆机制","category":"method","note":"检索式 / 参数化长期记忆的实现路径"},
+    {"id":"f_compress","label":"记忆压缩与抽象","category":"structure_property","note":"记忆摘要 / 分层抽象"},
+    {"id":"f_bench","label":"记忆评测基准","category":"evaluation_benchmark","note":"长期记忆的评测协议与数据集"},
+    {"id":"f_multimodal","label":"多模态记忆","category":"data_task","note":"跨模态记忆的存取"}
+  ],
+  "subqs": [
+    {"label":"情节记忆与长期记忆","query":"episodic memory long-term",
+     "aliases":["memory-augmented agent","long context memory","retrieval memory agent"],
+     "reason":"对应长程记忆机制:检索式长期记忆是主流实现路径","facetId":"f_mech"},
+    {"label":"记忆压缩与抽象","query":"memory consolidation",
+     "aliases":["memory compression agent","memory abstraction hierarchical","summarized memory agent"],
+     "reason":"对应记忆压缩与抽象维度","facetId":"f_compress"},
+    {"label":"记忆评测基准","query":"agent memory benchmark",
+     "aliases":["long-term memory benchmark","memory evaluation LLM agent","LOCOMO benchmark"],
+     "reason":"对应评测基准维度:LoCoMo / LongMemEval 等","facetId":"f_bench"}
+  ]
+}
+(注:f_multimodal 暂无 subq,属于"未覆盖"维度 — 这是允许的)
 
 ═══════════════════════════════════════════════════════════
 【输出格式 — 必须严格遵守】
 ═══════════════════════════════════════════════════════════
 
-- 只输出 STEP 2 的 JSON 数组,不要任何其它文字、markdown 围栏、思考块
-- 不要写 <think> 思考块,不要写解释
-- 第一行必须是 [ ,最后一行必须是 ]
+- 只输出**一个 JSON 对象**,顶层同时含 "facets" 与 "subqs" 两个数组
+- 不要任何其它文字、markdown 围栏、<think> 思考块
+- **第一行必须是 { ,最后一行必须是 }**
 `;
 
 const EXPLORE_FROM_SEEDS_SYSTEM = `你是研究迁移/探索助手。用户已选 N 篇相关性较高的论文,你需要基于这些论文的核心思路,
@@ -649,6 +655,7 @@ async function callLLMRaw(
   cfg: LLMConfig,
   jsonOnly = true,
   maxTokens = 4000,
+  expectedTopLevel?: '[' | '{',
 ): Promise<string> {
   // finish_reason=length(被输出预算截断)时,自动加倍预算重试一次。
   // 主要救推理模型:它会先输出一大段 reasoning,重任务思考很长,可能烧光整个 maxTokens,
@@ -686,7 +693,7 @@ async function callLLMRaw(
       budget = Math.min(budget * 2, MAX_BUDGET);
       continue;
     }
-    return finalizeLLMJson(content, stripped, finishReason, jsonOnly);
+    return finalizeLLMJson(content, stripped, finishReason, jsonOnly, expectedTopLevel);
   }
 }
 
@@ -697,6 +704,7 @@ function finalizeLLMJson(
   stripped: string,
   finishReason: string,
   jsonOnly: boolean,
+  expectedTopLevel?: '[' | '{',
 ): string {
   if (!jsonOnly) {
     if (!stripped) throw new Error(`LLM 返回为空 (finish_reason=${finishReason})`);
@@ -710,11 +718,14 @@ function finalizeLLMJson(
   const headIdx = stripped.search(/\S/);
   if (headIdx < 0) throw new Error(`LLM 返回为空(finish_reason=${finishReason}, 返回前 200 字符: ${content.slice(0, 200).replace(/\s+/g, ' ')})`);
   const head = stripped[headIdx];
-  // head 不是 [ / { 时说明 LLM 先输出了思考/说明文字。此时按"数组优先"猜 opener:
-  // 首个 [ 若出现在首个 { 之前就当数组,否则当对象。
+  // head 不是 [ / { 时说明 LLM 先输出了思考/说明文字。此时优先用调用方给的
+  // expectedTopLevel(decompose 传 '{');没给才按"数组优先"猜:首个 [ 若出现在
+  // 首个 { 之前就当数组,否则当对象。注意真实首字符永远优先于 expectedTopLevel,
+  // 以支持 legacy 数组 fallback(某些 provider 仍返回数组)。
   let opener: '[' | '{';
   if (head === '[') opener = '[';
   else if (head === '{') opener = '{';
+  else if (expectedTopLevel) opener = expectedTopLevel;
   else {
     const bi = stripped.indexOf('[');
     const oi = stripped.indexOf('{');
@@ -731,9 +742,66 @@ function finalizeLLMJson(
 // 状态机:5 个阶段
 // ============================================================================
 
-async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<SubQ[]> {
+// 拆解前对原始主题做一次轻量 arXiv 探针,拿真实论文标题作为"这个领域真实在研究什么"
+// 的证据喂给拆解 prompt。失败(CORS / 网络 / 无英文 token)返回空证据,绝不阻塞拆解。
+// arXiv 限速 ~1 req/s:默认只发 1 个请求,标题不足时最多再补 1 个(间隔 1s)。
+async function probeTopicEvidence(idea: string): Promise<string[]> {
+  const q = normalizeQuery(idea);
+  if (!q || !/[A-Za-z]/.test(q)) return []; // 整段中文 / 无英文 token → 跳过
+  const titles: string[] = [];
+  const seen = new Set<string>();
+  const pushTitles = (entries: ArxivEntry[]) => {
+    for (const e of entries) {
+      const t = (e.title || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      const key = t.toLowerCase();
+      if (!t || seen.has(key)) continue;
+      seen.add(key);
+      titles.push(t);
+    }
+  };
+  try {
+    pushTitles(await fetchEntriesNoCatFilter(q, 15));
+  } catch {
+    return titles; // 首个请求失败 → 有多少给多少(通常 0)
+  }
+  // 命中太少 → 用前 2-3 个 token 的更宽 query 补一次(仍受 1 请求/s 限速,先 sleep)
+  if (titles.length < 5) {
+    const toks = q.split(' ').filter(Boolean);
+    const broader = toks.slice(0, Math.min(3, toks.length)).join(' ');
+    if (broader && broader !== q) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        pushTitles(await fetchEntriesNoCatFilter(broader, 15));
+      } catch {
+        /* 补充失败无所谓 */
+      }
+    }
+  }
+  return titles.slice(0, 15);
+}
+
+// 把证据标题拼成 prompt 片段;空证据写降级说明,让模型仅依思路拆解、不停摆。
+function buildEvidenceBlock(titles: string[]): string {
+  if (titles.length === 0) {
+    return `【arXiv 证据不可用】未能检索到该主题的真实论文标题,请仅依据研究思路拆解,不要因缺证据而停摆。\n\n`;
+  }
+  const lines = titles.map((t, i) => `  ${i + 1}. ${t}`).join('\n');
+  return (
+    `【arXiv 真实论文标题证据(共 ${titles.length} 条)】\n` +
+    `以下标题来自对你研究思路的轻量检索,仅用于识别该领域真实使用的术语,不要照抄:\n` +
+    lines +
+    `\n\n`
+  );
+}
+
+async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<TopicDecomposition> {
   const cfg = loadSettings() as LLMConfig;
+  // Step 1:轻量 arXiv 探针(失败静默,返回空证据)
+  const evidenceTitles = await probeTopicEvidence(idea);
+
   let userPrompt = `研究思路:\n"""\n${idea.trim()}\n"""\n\n`;
+  // Step 2:证据块紧跟思路
+  userPrompt += buildEvidenceBlock(evidenceTitles);
   // 参考论文(若 selection 非空)拼成上下文。用户可能选 0 篇,这时逻辑与原版完全一致。
   if (seeds && seeds.length > 0) {
     // trunc 风格抄 exploreFromSeeds:每篇 500 字符上限,块与块之间空行
@@ -757,57 +825,117 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Sub
     });
     const seedsBlock = blocks.join('\n\n');
     userPrompt +=
-      `用户已选 ${seeds.length} 篇参考论文(用于迁移/借鉴,不限从中衍生):\n"""\n${seedsBlock}\n"""\n\n` +
-      `请结合研究思路与参考论文,综合出 3-7 个可独立检索的子方向,允许「直接借鉴参考论文的方法路径」` +
-      `与「主题在参考论文之外的新方向」并存。务必混合,不要只输出从参考论文衍生的方向。\n\n`;
+      `用户已选 ${seeds.length} 篇参考论文(用户主动选的先验材料,区别于上面的领域证据;用于迁移/借鉴,不限从中衍生):\n"""\n${seedsBlock}\n"""\n\n` +
+      `请结合研究思路与参考论文拆解,允许「直接借鉴参考论文的方法路径」与「主题在参考论文之外的新方向」并存,` +
+      `不要让所有子方向都变成参考论文的迁移方向。\n\n`;
   }
-  userPrompt += `请输出 3-7 个可独立检索的子方向(严格 JSON 数组,不要其它文字):`;
-  let raw = '';
-  let arr: any[] = [];
-  let attempt = 0;
-  const MAX = 2;
-  while (attempt < MAX) {
-    attempt++;
+  userPrompt += `请输出一个 JSON 对象(顶层含 facets 与 subqs 两个数组,不要其它文字):`;
+
+  const hasSeeds = !!(seeds && seeds.length > 0);
+  let parsed: DecomposeLLMResponse | null = null;
+  let legacyArr: any[] | null = null;
+  const MAX = 3;
+  for (let attempt = 1; attempt <= MAX; attempt++) {
+    let raw = '';
     try {
-      raw = await callLLMRaw(DECOMPOSE_SYSTEM, userPrompt, cfg, true);
+      // 输出含 facets + subqs,预算给 6000(callLLMRaw 内部按 finish_reason=length 再加倍)。
+      // expectedTopLevel='{':前导有说明文字时按对象取,真实首字符仍优先(兼容 legacy 数组)。
+      raw = await callLLMRaw(DECOMPOSE_SYSTEM, userPrompt, cfg, true, 6000, '{');
     } catch (e) {
       if (attempt >= MAX) throw e;
-      continue; // 解析错误重试一次
-    }
-    try {
-      arr = JSON.parse(raw);
-    } catch {
-      if (attempt >= MAX) {
-        throw new Error(`拆解结果不是合法 JSON: ${raw.slice(0, 200)}`);
-      }
       continue;
     }
-    if (Array.isArray(arr) && arr.length > 0) break;
-    // 空数组 → 提示用户细化
-    if (attempt >= MAX) {
-      throw new Error('LLM 未返回任何子方向,试试把思路描述得更具体一些,或换个角度重试');
+    let obj: any;
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      if (attempt >= MAX) throw new Error(`拆解结果不是合法 JSON: ${raw.slice(0, 200)}`);
+      continue;
     }
-    // 否则自动重试
+    // 期望顶层对象含 facets + subqs
+    if (obj && typeof obj === 'object' && !Array.isArray(obj) && Array.isArray(obj.subqs)) {
+      parsed = obj as DecomposeLLMResponse;
+      if (Array.isArray(parsed.subqs) && parsed.subqs.length > 0) break;
+      // subqs 空 → 重试
+      if (attempt >= MAX) {
+        throw new Error('LLM 未返回任何子方向,试试把思路描述得更具体一些,或换个角度重试');
+      }
+      await new Promise((r) => setTimeout(r, 300));
+      continue;
+    }
+    // 顶层是数组(legacy provider / 缓存):最后一次仍如此才作 fallback,否则重试提示要对象
+    if (Array.isArray(obj)) {
+      if (attempt >= MAX) {
+        legacyArr = obj;
+        break;
+      }
+      userPrompt += `\n\n【重要】必须返回一个 JSON 对象(含 facets 与 subqs),不要直接返回数组。`;
+      await new Promise((r) => setTimeout(r, 300));
+      continue;
+    }
+    if (attempt >= MAX) {
+      throw new Error('LLM 拆解输出结构不符合预期(缺 subqs 数组)');
+    }
     await new Promise((r) => setTimeout(r, 300));
   }
-  // 主题报告不需 rebuild,因为 report.relatedArxivIds 跟主题独立 — 用户重新点"📊
-  // 生成报告"按钮就会按新的 summaries + 同样的 prevDimensions 重新生成。
-  const hasSeeds = !!(seeds && seeds.length > 0);
-  const built = arr.slice(0, 7).map((x: any, i: number) => buildSubQ({
-    id: uid('q'),
-    label: x.label ?? `子方向 ${i + 1}`,
-    query: x.query,
-    reason: x.reason,
-    selected: true,
-    source: hasSeeds ? 'manual-with-seeds' : 'manual',
-    aliases: x.aliases,
-  })).filter((q: SubQ) => q.query);
-  // 实测 arXiv 召回 + 命中 0 自动让 LLM 改写闭环;失败时静默返回原数组。
-  try {
-    return await validateAndRewriteSubqs(built, cfg);
-  } catch {
-    return built;
+
+  // ---- 构造 facets(缺 id 兜底、重复 id 加后缀、过 buildFacet)----
+  const facets: Facet[] = [];
+  const rawIdToFacetId = new Map<string, string>();     // LLM 原始 id → 正式 id
+  const labelToFacetId = new Map<string, string>();     // facet label(lower) → 正式 id
+  const usedIds = new Set<string>();
+  if (parsed && Array.isArray(parsed.facets)) {
+    parsed.facets.forEach((f, i) => {
+      const rawId = String(f?.id ?? '').trim();
+      let fid = rawId || `facet-${i + 1}`;
+      // 去重 id
+      if (usedIds.has(fid)) {
+        let n = 2;
+        while (usedIds.has(`${fid}-${n}`)) n++;
+        fid = `${fid}-${n}`;
+      }
+      usedIds.add(fid);
+      const facet = buildFacet({ id: fid, label: f?.label ?? `维度 ${i + 1}`, category: f?.category, note: f?.note });
+      facets.push(facet);
+      if (rawId) rawIdToFacetId.set(rawId, facet.id);
+      if (facet.label) labelToFacetId.set(facet.label.toLowerCase(), facet.id);
+    });
   }
+
+  // ---- 构造 subqs(facetId 映射 → label 兜底 → 未分配;绝不按下标猜)----
+  const rawSubqs = parsed ? parsed.subqs ?? [] : legacyArr ?? [];
+  const built: SubQ[] = rawSubqs.slice(0, 7).map((x: any, i: number) => {
+    // 解析 facetId:先按原始 id 映射,再按 label 完全匹配兜底
+    let facetId: string | undefined;
+    const rawFacetId = String(x?.facetId ?? '').trim();
+    if (rawFacetId) {
+      facetId = rawIdToFacetId.get(rawFacetId) ?? (usedIds.has(rawFacetId) ? rawFacetId : undefined);
+      if (!facetId) facetId = labelToFacetId.get(rawFacetId.toLowerCase());
+    }
+    const facetLabel = facetId ? facets.find((f) => f.id === facetId)?.label : undefined;
+    return buildSubQ({
+      id: uid('q'),
+      label: x?.label ?? `子方向 ${i + 1}`,
+      query: x?.query,
+      reason: x?.reason,
+      selected: true,
+      source: hasSeeds ? 'manual-with-seeds' : 'manual',
+      aliases: x?.aliases,
+      facetId,
+      facetLabel,
+    });
+  }).filter((q: SubQ) => q.query);
+
+  // 实测 arXiv 召回 + 命中 0 自动让 LLM 改写闭环(把探针证据一并喂给改写);失败时静默返回原数组。
+  let finalSubqs = built;
+  try {
+    finalSubqs = await validateAndRewriteSubqs(built, cfg, evidenceTitles);
+  } catch {
+    finalSubqs = built;
+  }
+
+  const coverage = computeFacetCoverage(facets, finalSubqs);
+  return { facets, subqs: finalSubqs, coverage };
 }
 
 // 基于已选论文生成"迁移/探索"子方向 — 复用 decomposeIdea 的重试/解析模式。
@@ -903,7 +1031,9 @@ export async function exploreFromSeeds(
 async function validateSubqHitCount(q: string): Promise<{ count: number; samples: string[] }> {
   const url = `https://export.arxiv.org/api/query?search_query=all%3A%22${encodeURIComponent(q)}%22&max_results=5&sortBy=relevance&sortOrder=descending`;
   try {
-    const res = await fetch(url, { method: 'GET' });
+    // 走 fetchWithDiagnosis 代理链 — 本地开发 arXiv 无 CORS 头时纯 fetch 会全挂,
+    // 导致命中 badge 全显示 0。复用 paper-analyzer 的代理链修这个假 0。
+    const res = await fetchWithDiagnosis(url, `arXiv 命中实测 "${q}"`);
     if (!res.ok) return { count: 0, samples: [] };
     const xml = await res.text();
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
@@ -930,10 +1060,12 @@ async function validateSubqHitCount(q: string): Promise<{ count: number; samples
 // searchForDirection 主 query 失败时的 fallback:不走 searchArxiv(带 cat 过滤),而是
 // 直接打 arXiv API(不带 cat 过滤,max_results=12),parse 出 ArxivEntry[] 用于合并。
 // 这样即使 cat 过滤在某个边缘 case 下完全 0 命中,fallback 仍能给用户至少几条候选。
-async function fetchEntriesNoCatFilter(q: string): Promise<ArxivEntry[]> {
-  const url = `https://export.arxiv.org/api/query?search_query=all%3A%22${encodeURIComponent(q)}%22&max_results=12&sortBy=relevance&sortOrder=descending`;
+async function fetchEntriesNoCatFilter(q: string, maxResults = 12): Promise<ArxivEntry[]> {
+  const url = `https://export.arxiv.org/api/query?search_query=all%3A%22${encodeURIComponent(q)}%22&max_results=${maxResults}&sortBy=relevance&sortOrder=descending`;
   try {
-    const res = await fetch(url, { method: 'GET' });
+    // 走 paper-analyzer 已导出的 fetchWithDiagnosis(直连 → 自定义代理 → 8123 链),
+    // 使本地开发 (arXiv 无 CORS 头) 也能命中,而不是纯 fetch 直接失败。
+    const res = await fetchWithDiagnosis(url, `arXiv 检索 "${q}"`);
     if (!res.ok) return [];
     const xml = await res.text();
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
@@ -977,41 +1109,50 @@ const SUBQ_REWRITE_SYSTEM = `你是研究思路拆解助手的"query 修复"模�
   - query + aliases 是要重新生成的
 - query / aliases 必须遵守 DECOMPOSE_SYSTEM 的【query 真实度纪律】(2-3 个独立英文词,贴近 arXiv 真实标题)
 
-【关键证据 — 已验证召回的真实样本】
-你会拿到 1 个或多个「从其他子方向测出来确实召回的论文标题」。这些标题的关键词拆解后
-可以直接复用,作为新 query / aliases 的种子。例如「Skill-Based Reinforcement Learning」可
-拆出 "skill-based reinforcement" / "skill reinforcement learning" 等合法 alias。
+【facet 纪律 — 防同质化,非常重要】
+- 只改 query / aliases,**不要改变每个子方向的研究维度(facet)边界** —— 改写后它仍应搜的是原方向
+- **绝不**因为证据里某个词高频,就把所有 0 召回子方向都改成同一组词(那会让子方向塌成一条)
+- 不同 0 召回子方向改写后彼此仍要区分,不要互相靠拢
 
-【推荐策略】
-1. **优先复用其他子方向的真实命中样本的关键词组合**,而不是再生成新短语
-2. 如果样本不足,就用**更短、更通用、更早出现的英文术语**(比如把"latent geometry"换成"skill space")
-3. aliases 多给一些(可达 5-7 个),用 arXiv 标题里真实出现过的小词组合
+【证据优先级】
+1. **优先用"主题证据标题"**(对整个主题探针得到的真实论文标题)提取该方向的术语
+2. 其次复用"其他子方向的真实命中样本"关键词
+3. 只有前两者都不足时,才退而用更短、更通用的英文术语
+- aliases 可多给一些(可达 5-7 个),用 arXiv 标题里真实出现过的小词组合
 
 【输出】
 第一行 [,最后一行 ],中间严格 JSON,不要任何其它文字。`;
 
-// 命中 0 闭环重写:把"0 命中子方向列表 + 其他子方向实测命中样本"反馈给 LLM,
-// 让它基于样本证据改写 0 命中的 query。
+// 命中 0 闭环重写:把"0 命中子方向列表 + 主题证据标题 + 其他子方向实测命中样本"反馈给 LLM,
+// 让它基于证据改写 0 命中的 query。evidenceTitles 是拆解阶段对整个主题探针得到的真实标题。
 async function rewriteZeroHitSubqs(
   zeros: SubQ[],
   samplesByLabel: Map<string, string[]>,
+  evidenceTitles: readonly string[],
   cfg: LLMConfig,
 ): Promise<Map<string, { query: string; aliases: string[] }>> {
   if (zeros.length === 0) return new Map();
+  // 主题证据块(优先级最高)
+  const topicEvidenceBlock = evidenceTitles.length > 0
+    ? `\n【主题证据标题(共 ${evidenceTitles.length} 个,对整个主题检索得到,最高优先级)】\n` +
+      evidenceTitles.slice(0, 8).map((s, i) => `  ${i + 1}. ${s}`).join('\n') + '\n'
+    : '';
   // 收集样本(去重 + 截前 6 个标题)
   const allSamples: string[] = [];
   for (const samples of samplesByLabel.values()) {
     for (const s of samples) if (!allSamples.includes(s)) allSamples.push(s);
   }
   const evidenceBlock = allSamples.length > 0
-    ? `\n【已验证召回的样本标题(共 ${allSamples.length} 个,作为新 query 的关键词证据)】\n` +
+    ? `\n【已验证召回的样本标题(共 ${allSamples.length} 个,来自其他子方向)】\n` +
       allSamples.slice(0, 6).map((s, i) => `  ${i + 1}. ${s}`).join('\n') + '\n'
-    : '\n【注意】其他子方向也都没命中 — 整体 query 可能太冷门,建议把 query 换成更通用的英文术语。\n';
+    : evidenceTitles.length > 0
+      ? '\n【注意】其他子方向暂无命中样本,请优先用上面的主题证据标题。\n'
+      : '\n【注意】暂无任何真实证据 — 整体 query 可能太冷门,建议换成更通用的英文术语,但仍保持各方向区分。\n';
 
   const zerosBlock =
     `\n【0 召回子方向(共 ${zeros.length} 个,需要重新生成 query / aliases)】\n` +
-    zeros.map((z, i) => `  ${i + 1}. id=${z.id}\n     label: ${z.label}\n     当前 query: ${z.query}\n     当前 aliases: ${JSON.stringify(z.aliases)}`).join('\n');
-  const userPrompt = `研究主题相关拆解,以下 ${zeros.length} 个子方向的主 query 在 arXiv 上 0 召回,请改写。${evidenceBlock}${zerosBlock}\n请只输出改写后的 JSON 数组:`;
+    zeros.map((z, i) => `  ${i + 1}. id=${z.id}\n     label: ${z.label}${z.facetLabel ? `\n     研究维度: ${z.facetLabel}` : ''}\n     当前 query: ${z.query}\n     当前 aliases: ${JSON.stringify(z.aliases)}`).join('\n');
+  const userPrompt = `研究主题相关拆解,以下 ${zeros.length} 个子方向的主 query 在 arXiv 上 0 召回,请改写(保持各方向研究维度不变、彼此仍区分)。${topicEvidenceBlock}${evidenceBlock}${zerosBlock}\n请只输出改写后的 JSON 数组:`;
 
   try {
     const raw = await callLLMRaw(SUBQ_REWRITE_SYSTEM, userPrompt, cfg, true);
@@ -1034,7 +1175,11 @@ async function rewriteZeroHitSubqs(
 
 // decomposeIdea 后置处理:实测每个 subq 的 arXiv 召回,命中 0 触发一次 LLM 改写闭环。
 // 串行测(arXiv 限速 1 req/s),预计 3-5 个子方向共 3-5s;命中 0 时再调 1 次 LLM(~3-10s)。
-export async function validateAndRewriteSubqs(subqs: SubQ[], cfg: LLMConfig): Promise<SubQ[]> {
+export async function validateAndRewriteSubqs(
+  subqs: SubQ[],
+  cfg: LLMConfig,
+  evidenceTitles: readonly string[] = [],
+): Promise<SubQ[]> {
   if (subqs.length === 0) return subqs;
   // 并行 3 路实测(arXiv API 实际支持一定并发,实测 3 路并发也没问题;但串行更稳,arXiv
   // 偶尔会 429)。先串行,实测后改写循环一次性调 LLM。
@@ -1049,8 +1194,8 @@ export async function validateAndRewriteSubqs(subqs: SubQ[], cfg: LLMConfig): Pr
   }
   if (zeros.length === 0) return subqs;
 
-  // 命中 0 → 让 LLM 改写一次(基于其他子方向的命中样本作为关键词证据)
-  const rewriteMap = await rewriteZeroHitSubqs(zeros, samplesByLabel, cfg);
+  // 命中 0 → 让 LLM 改写一次(优先用主题证据标题,其次其他子方向的命中样本)
+  const rewriteMap = await rewriteZeroHitSubqs(zeros, samplesByLabel, evidenceTitles, cfg);
   // 把改写结果应用回原 subqs,并对改写后的 query 再实测一次。
   // 重要:若改写后实测仍 0 命中,立即**还原** LLM 改写前的原始 query + aliases,
   // 避免「改写把原本命中的 query 改成不命中的」(LLM 看到其他子方向的命中样本后
@@ -1499,6 +1644,166 @@ function renderStageInputSeedsBanner(): void {
   }
 }
 
+// 只更新 subq-meta 文本(facet 改选时用,不重绘整列)——与 renderSubqStage 里的逻辑一致。
+function refreshSubqMeta(): void {
+  if (!current) return;
+  const subqMeta = document.getElementById('subq-meta');
+  if (!subqMeta) return;
+  const selectedCount = current.subqs.filter((s) => s.selected).length;
+  const facets = current.facets ?? [];
+  if (facets.length > 0) {
+    const cov = computeFacetCoverage(facets, current.subqs);
+    const covered = facets.length - cov.uncoveredFacetIds.length;
+    const parts = [`共 ${current.subqs.length} 个,已选 ${selectedCount}`, `维度覆盖 ${covered}/${facets.length}`];
+    if (cov.redundantFacetIds.length > 0) parts.push(`${cov.redundantFacetIds.length} 个可能重复`);
+    if (cov.unassignedSubqIds.length > 0) parts.push(`${cov.unassignedSubqIds.length} 个未归属`);
+    subqMeta.textContent = parts.join(' · ');
+  } else {
+    subqMeta.textContent = `共 ${current.subqs.length} 个,已选 ${selectedCount}`;
+  }
+}
+
+// ============================================================================
+// 阶段 2:研究维度(facet)面板
+// ============================================================================
+
+// 渲染 facet 面板:每个维度一个 chip(label / category / note 可编辑 + subq 计数 + 状态)。
+// 无 facets(旧 session / seed 探索 / legacy 数组 fallback)→ 隐藏面板。
+// 输入 input 事件只存值 + 刷新计数,不整块重绘(防丢焦点);增删 / 改 category 才全重绘。
+function renderFacetStage(): void {
+  const panel = document.getElementById('facet-panel');
+  if (!panel) return;
+  const facets = current?.facets ?? [];
+  if (!current || facets.length === 0) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  const cov = computeFacetCoverage(facets, current.subqs);
+  const countByFacet = new Map<string, number>();
+  for (const sq of current.subqs) {
+    if (sq.facetId) countByFacet.set(sq.facetId, (countByFacet.get(sq.facetId) ?? 0) + 1);
+  }
+
+  const meta = document.getElementById('facet-meta');
+  if (meta) {
+    const covered = facets.length - cov.uncoveredFacetIds.length;
+    meta.textContent = `${facets.length} 个维度 · 已覆盖 ${covered}`;
+  }
+
+  const catOptions = (sel: FacetCategory): string =>
+    (Object.keys(FACET_CATEGORY_LABELS) as FacetCategory[])
+      .map((c) => `<option value="${c}"${c === sel ? ' selected' : ''}>${escapeHtml(FACET_CATEGORY_LABELS[c])}</option>`)
+      .join('');
+
+  const list = document.getElementById('facet-list');
+  if (list) {
+    list.innerHTML = facets
+      .map((f) => {
+        const n = countByFacet.get(f.id) ?? 0;
+        const uncovered = n === 0;
+        const redundant = n > 1;
+        let stateCls = '';
+        let stateTag = `<span class="topic-facet-chip-count">${n} 个子方向</span>`;
+        if (uncovered) {
+          stateCls = ' topic-facet-chip--uncovered';
+          stateTag = `<span class="topic-facet-chip-count topic-facet-chip-state--warn" title="没有子方向归属此维度">未覆盖</span>`;
+        } else if (redundant) {
+          stateCls = ' topic-facet-chip--redundant';
+          stateTag = `<span class="topic-facet-chip-count topic-facet-chip-state--warn" title="${n} 个子方向挂在同一维度,可能重复">${n} 个 · 可能重复</span>`;
+        }
+        return `
+        <div class="topic-facet-chip${stateCls}" data-id="${escapeHtml(f.id)}">
+          <div class="topic-facet-chip-main">
+            <input type="text" class="topic-facet-label-input" data-field="label" value="${escapeHtml(f.label)}" placeholder="研究维度名" aria-label="维度名" />
+            <select class="topic-facet-cat-select" data-field="category" aria-label="维度分类">${catOptions(f.category)}</select>
+            ${stateTag}
+            <button type="button" class="topic-btn ghost topic-facet-del" data-act="del-facet" title="删除此维度(关联子方向变为未分配)">✕</button>
+          </div>
+          <input type="text" class="topic-facet-note-input" data-field="note" value="${escapeHtml(f.note)}" placeholder="一句话说明这个维度在研究什么" aria-label="维度说明" />
+        </div>`;
+      })
+      .join('');
+
+    // 绑定 chip 交互
+    list.querySelectorAll<HTMLElement>('.topic-facet-chip').forEach((chip) => {
+      const fid = chip.dataset.id!;
+      const facet = current!.facets?.find((f) => f.id === fid);
+      if (!facet) return;
+      // label / note:input 事件只存值,不重绘(防丢焦点);label 改动后 subq 显示会在下次
+      // 重绘时按 facetId 查到最新 label,这里同步刷新已归属 subq 的 facetLabel 缓存。
+      chip.querySelector<HTMLInputElement>('[data-field="label"]')?.addEventListener('input', (e) => {
+        facet.label = (e.target as HTMLInputElement).value.slice(0, 60);
+        for (const sq of current!.subqs) if (sq.facetId === fid) sq.facetLabel = facet.label;
+        persistSession(current!);
+      });
+      chip.querySelector<HTMLInputElement>('[data-field="note"]')?.addEventListener('input', (e) => {
+        facet.note = (e.target as HTMLInputElement).value.slice(0, 180);
+        persistSession(current!);
+      });
+      // category 改动 → 全重绘(顺带更新分类显示)
+      chip.querySelector<HTMLSelectElement>('[data-field="category"]')?.addEventListener('change', (e) => {
+        const raw = (e.target as HTMLSelectElement).value;
+        facet.category = raw as FacetCategory;
+        renderFacetStage();
+        persistSession(current!);
+      });
+      // 删除维度:关联 subq 变为未分配(不删 subq / 候选 / 总结)
+      chip.querySelector<HTMLButtonElement>('[data-act="del-facet"]')?.addEventListener('click', () => {
+        current!.facets = (current!.facets ?? []).filter((f) => f.id !== fid);
+        for (const sq of current!.subqs) {
+          if (sq.facetId === fid) {
+            sq.facetId = undefined;
+            sq.facetLabel = undefined;
+          }
+        }
+        if (current!.facets.length === 0) current!.facets = undefined;
+        renderFacetStage();
+        renderSubqStage();
+        persistSession(current!);
+      });
+    });
+  }
+
+  // coverage 文字提示
+  const covEl = document.getElementById('facet-coverage');
+  if (covEl) {
+    const msgs: string[] = [];
+    if (cov.uncoveredFacetIds.length > 0) {
+      const names = cov.uncoveredFacetIds
+        .map((id) => facets.find((f) => f.id === id)?.label || id)
+        .join('、');
+      msgs.push(`未覆盖:${names}`);
+    }
+    if (cov.redundantFacetIds.length > 0) {
+      const names = cov.redundantFacetIds
+        .map((id) => facets.find((f) => f.id === id)?.label || id)
+        .join('、');
+      msgs.push(`可能重复:${names}`);
+    }
+    if (cov.unassignedSubqIds.length > 0) {
+      msgs.push(`${cov.unassignedSubqIds.length} 个子方向尚未归属任何维度`);
+    }
+    if (msgs.length === 0) {
+      covEl.className = 'topic-facet-coverage topic-facet-coverage--ok';
+      covEl.textContent = `已覆盖全部 ${facets.length} 个维度,未发现明显重复。`;
+    } else {
+      covEl.className = 'topic-facet-coverage topic-facet-coverage--warning';
+      covEl.textContent = msgs.join(' · ') + '(仅提示,不影响搜索;可在下方子方向卡片改归属)';
+    }
+  }
+}
+
+// 阶段 2 底部「添加维度」按钮:新增一个空维度供用户手填。
+function addFacet(): void {
+  if (!current) return;
+  if (!current.facets) current.facets = [];
+  current.facets.push(buildFacet({ id: uid('facet'), label: '新维度', category: 'method', note: '' }));
+  renderFacetStage();
+  renderSubqStage();
+  persistSession(current!);
+}
+
 function renderSubqStage(): void {
   const list = $('subq-list');
   const subqMeta = $('subq-meta');
@@ -1510,8 +1815,29 @@ function renderSubqStage(): void {
     return;
   }
   const selectedCount = current.subqs.filter((s) => s.selected).length;
-  subqMeta.textContent = `共 ${current.subqs.length} 个,已选 ${selectedCount}`;
+  const facets = current.facets ?? [];
+  const hasFacets = facets.length > 0;
+  // 覆盖自检 → subq-meta 追加摘要
+  if (hasFacets) {
+    const cov = computeFacetCoverage(facets, current.subqs);
+    const covered = facets.length - cov.uncoveredFacetIds.length;
+    const parts = [`共 ${current.subqs.length} 个,已选 ${selectedCount}`, `维度覆盖 ${covered}/${facets.length}`];
+    if (cov.redundantFacetIds.length > 0) parts.push(`${cov.redundantFacetIds.length} 个可能重复`);
+    if (cov.unassignedSubqIds.length > 0) parts.push(`${cov.unassignedSubqIds.length} 个未归属`);
+    subqMeta.textContent = parts.join(' · ');
+  } else {
+    subqMeta.textContent = `共 ${current.subqs.length} 个,已选 ${selectedCount}`;
+  }
   searchBtn.disabled = selectedCount === 0;
+  // 构造 facet <select> 的 option 列表(仅在有 facets 时展示;无 facets → 旧布局)
+  const facetOptionsFor = (sel?: string): string =>
+    `<option value=""${!sel ? ' selected' : ''}>未分配维度</option>` +
+    facets
+      .map(
+        (f) =>
+          `<option value="${escapeHtml(f.id)}"${sel === f.id ? ' selected' : ''}>${escapeHtml(f.label || f.id)}</option>`,
+      )
+      .join('');
   list.innerHTML = current.subqs.map((q, i) => {
     const badgeHtml = q.explorationType
       ? `<span class="topic-subq-card-badge topic-subq-card-badge--${escapeHtml(q.explorationType)}" title="迁移范式:${escapeHtml(explorationTypeLabel(q.explorationType))}"><span class="topic-subq-card-badge-dot"></span>${escapeHtml(explorationTypeLabel(q.explorationType))}</span>`
@@ -1554,6 +1880,10 @@ function renderSubqStage(): void {
         <div class="topic-subq-card-row">
           <input type="text" class="aliases-input" value="${escapeHtml((q.aliases ?? []).join(' '))}" data-field="aliases" placeholder="arXiv 别名(空格分隔,3-5 个真实常见写法)" aria-label="arXiv 别名" />
         </div>
+        ${hasFacets ? `<div class="topic-subq-card-row topic-subq-card-facet-row">
+          <label class="topic-subq-facet-label">研究维度</label>
+          <select class="facet-select" data-field="facetId" aria-label="子方向 ${i + 1} 归属研究维度">${facetOptionsFor(q.facetId)}</select>
+        </div>` : ''}
         <textarea data-field="reason" placeholder="为什么这个子方向值得检索">${escapeHtml(q.reason)}</textarea>
       </div>
     </div>
@@ -1586,6 +1916,17 @@ function renderSubqStage(): void {
         }
         persistSession(current!);
       });
+    });
+    // facet 归属下拉:改选同步 facetId + facetLabel,只刷新 meta / facet panel 计数,
+    // 不整块重绘 subq 列表(避免用户正在编辑其它输入框时丢焦点)。
+    card.querySelector<HTMLSelectElement>('.facet-select')?.addEventListener('change', (e) => {
+      const fid = (e.target as HTMLSelectElement).value || undefined;
+      subq.facetId = fid;
+      subq.facetLabel = fid ? current!.facets?.find((f) => f.id === fid)?.label : undefined;
+      // 只更新 meta 与 facet 计数/覆盖提示,不重绘卡片
+      refreshSubqMeta();
+      renderFacetStage();
+      persistSession(current!);
     });
     card.querySelector<HTMLButtonElement>('[data-act="del"]')!.addEventListener('click', () => {
       current!.subqs = current!.subqs.filter((s) => s.id !== id);
@@ -1621,12 +1962,13 @@ function renderSubqStage(): void {
         inFlightController = new AbortController();
         setStatus(`重新生成子方向 ${subq.label}...`);
         const newOne = await decomposeIdea(current.topic);
-        if (newOne.length > 0) {
+        if (newOne.subqs.length > 0) {
           // regen 路径走 buildRegenSubQ:label/query/reason 用 LLM 新值;
-          // aliases/explorationType/hitCount/hitSamples 等"用户手动 / 阶段 3 实测"的值
+          // aliases/explorationType/hitCount/hitSamples/facetId 等"用户手动 / 阶段 3 实测"的值
           // 沿用 base(LLM 一次性产出不应覆盖)。这避免了 [[feedback_subq_fields_whitelist]]
-          // 在 regen 路径上的字段漏拷。
-          const merged = buildRegenSubQ({ base: subq, replacement: newOne[0] });
+          // 在 regen 路径上的字段漏拷。整套 newOne.facets 只用于找 replacement,不覆盖
+          // current.facets(用户可能已编辑过维度)。
+          const merged = buildRegenSubQ({ base: subq, replacement: newOne.subqs[0] });
           Object.assign(subq, merged);
           renderSubqStage();
           persistSession(current!);
@@ -2219,6 +2561,7 @@ function renderReportChat(): void {
 function renderAll(): void {
   renderSessionMeta();
   renderInputStage();
+  renderFacetStage();
   renderSubqStage();
   renderCandStage();
   renderSummaryStage();
@@ -2417,9 +2760,10 @@ async function doDecompose(): Promise<void> {
     // 用户在 modal 里选的论文一并喂给 LLM(同时支持 ?from=selection 入口,会
     // 跳过手动 textarea 走 doExploreFromSeeds 单独路径,这里不会与它冲突)。
     const seeds = loadSelection();
-    const subqs = await decomposeIdea(idea, seeds);
+    const decomposition = await decomposeIdea(idea, seeds);
     current.topic = idea;
-    current.subqs = subqs;
+    current.subqs = decomposition.subqs;
+    current.facets = decomposition.facets.length > 0 ? decomposition.facets : undefined;
     // 记录拆解时参考了的论文 ID(用于阶段 5 报告剔除重复时参考,以及
     // UI 提示"这些论文作为前提"),不参与后续逻辑判定。
     current.referenceSeedArxivIds = seeds.map((s) => canonicalId(s.arxivId));
@@ -2433,7 +2777,8 @@ async function doDecompose(): Promise<void> {
     renderAll();
     persistSession(current!);
     const seedNote = seeds.length > 0 ? ` · 已参考 ${seeds.length} 篇已选论文` : '';
-    setStatus(`✓ 已拆解为 ${subqs.length} 个子方向${seedNote}`, 'success');
+    const facetNote = current.facets ? ` · ${current.facets.length} 个研究维度` : '';
+    setStatus(`✓ 已拆解为 ${decomposition.subqs.length} 个子方向${facetNote}${seedNote}`, 'success');
     setTimeout(clearStatus, 2000);
   } catch (e) {
     setStatusErrorWithAction(`拆解失败: ${(e as Error).message}`, '🔄 重试', () => doDecompose());
@@ -3510,6 +3855,8 @@ function init(): void {
     renderSubqStage();
     persistSession(current!);
   });
+  // 阶段 2:添加研究维度(facet)
+  document.getElementById('facet-add-btn')?.addEventListener('click', () => addFacet());
 
   // 顶栏
   $<HTMLButtonElement>('new-session-btn').addEventListener('click', startNewSession);

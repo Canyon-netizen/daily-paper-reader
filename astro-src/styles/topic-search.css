@@ -216,6 +216,103 @@
 }
 .topic-stage-foot-hint a { color: var(--accent); }
 
+/* ===== 研究维度 facet 面板 ===== */
+.topic-facet-panel {
+  margin-bottom: 0.9rem;
+  padding: 0.8rem 0.9rem;
+  background: color-mix(in srgb, var(--fg-subtle) 5%, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.topic-facet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+.topic-facet-header-title { display: flex; align-items: baseline; gap: 0.5rem; }
+.topic-facet-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.topic-facet-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.topic-facet-chip--uncovered { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.topic-facet-chip--redundant { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); }
+.topic-facet-chip-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.topic-facet-label-input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font: inherit;
+  font-weight: 600;
+}
+.topic-facet-cat-select,
+.facet-select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.82rem;
+}
+.topic-facet-note-input {
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg-subtle);
+  font: inherit;
+  font-size: 0.82rem;
+}
+.topic-facet-chip-count {
+  font-size: 0.72rem;
+  padding: 0.16rem 0.5rem;
+  border-radius: 999px;
+  white-space: nowrap;
+  background: rgba(148, 163, 184, 0.15);
+  color: var(--fg-subtle);
+}
+.topic-facet-chip-state--warn {
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-weight: 600;
+}
+.topic-facet-del { flex-shrink: 0; padding: 0.2rem 0.45rem; }
+.topic-facet-coverage {
+  margin-top: 0.55rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+.topic-facet-coverage--ok { color: var(--fg-subtle); }
+.topic-facet-coverage--warning { color: var(--warning); }
+/* 子方向卡片内的 facet 归属行 */
+.topic-subq-card-facet-row { gap: 0.4rem; }
+.topic-subq-facet-label {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+}
+
 /* ===== 子方向卡片 ===== */
 .topic-subq-list {
   display: flex;
@@ -604,6 +701,9 @@
   .topic-candidate-item { grid-template-columns: auto 1fr; }
   .topic-candidate-actions { grid-column: span 2; }
   .topic-stage-body { padding: 0.9rem; }
+  .topic-facet-chip-main { align-items: stretch; }
+  .topic-facet-label-input,
+  .topic-facet-cat-select { flex: 1 1 100%; }
 }
 
 /* ===== 隐藏元素 ===== */

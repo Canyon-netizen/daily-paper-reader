@@ -127,6 +127,18 @@ import '../styles/topic-search.css';
         <span class="topic-stage-toggle">▾</span>
       </summary>
       <div class="topic-stage-body">
+        <!-- 研究维度(facet)面板:拆解出的显式中间层,可编辑 + 覆盖/重复提示。无 facets 时隐藏。 -->
+        <div id="facet-panel" class="topic-facet-panel" hidden>
+          <div class="topic-facet-header">
+            <div class="topic-facet-header-title">
+              <strong>研究维度</strong>
+              <span id="facet-meta" class="topic-stage-title-meta"></span>
+            </div>
+            <button type="button" class="topic-btn ghost" id="facet-add-btn" title="新增一个研究维度">+ 添加维度</button>
+          </div>
+          <div id="facet-list" class="topic-facet-list"></div>
+          <div id="facet-coverage" class="topic-facet-coverage" role="status" aria-live="polite"></div>
+        </div>
         <div id="subq-list" class="topic-subq-list"></div>
         <div class="topic-subq-add">
           <button type="button" class="topic-btn ghost" id="subq-add-btn">+ 添加子方向</button>
