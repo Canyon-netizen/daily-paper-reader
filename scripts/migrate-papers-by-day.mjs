@@ -174,6 +174,7 @@ async function main() {
   log('');
 
   let planned = 0;
+  let plannedMd = 0;
   let conflicts = 0;
   let warnings = 0;
   let movedMd = 0;
@@ -278,6 +279,7 @@ async function main() {
     }
 
     planned += group.length;
+    if (mdEntry) plannedMd++;
 
     if (VERBOSE) {
       if (mdEntry) log(`  MOVE  ${mdEntry.currentRel || `docs/papers/${mdEntry.name}`}  ->  ${targetDirRel}/${mdEntry.name}  [${bucketSource}]`);
