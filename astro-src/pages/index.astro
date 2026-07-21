@@ -1,7 +1,7 @@
 ---
 // 首页
 // 1) 顶部 hero:品牌口号 + 两枚 CTA
-// 2) 数据 stat row:收录论文、来源数、最新更新
+// 2) 数据 stat row:收录论文、主题数量、来源数、最新更新
 // 3) 编辑精选:近 7 天内按 LLM 评分排序的 Top 6 论文卡片
 // 4) 日历视图:按发布日期排布 + 主题 chip 过滤(原 #by-topic 折叠列表已下线)
 // 5) How it works:3 步工作流介绍
@@ -56,6 +56,18 @@ const dailyLean = dailyPapersAll
     categories: p.categories,
     thumbnail: p.thumbnail,
   }));
+
+// 主题数量:库内出现过的 categories.task[0] 集合大小,与日历
+// #cal-topic-count 软标签口径一致(resolveTaskKey:categories.task 优先 →
+// 无则回退 tags[0] 剥 query: → 都没有算 "其他","其他"也算进主题数,
+// 因为它代表"无明确 task 的论文"这个真实存在的桶)。
+// 直接基于 dailyLean.task 聚合,不重复扫盘。
+const topicKeys = new Set<string>();
+for (const p of dailyLean) {
+  const key = p.task;
+  if (key) topicKeys.add(key);
+}
+const topicCount = topicKeys.size;
 ---
 
 <BaseLayout
@@ -101,6 +113,10 @@ const dailyLean = dailyPapersAll
           <div class="stat-value">{totalPapers.toLocaleString()}</div>
           <div class="stat-label">收录论文</div>
         </a>
+        <div class="stat">
+          <div class="stat-value">{topicCount}</div>
+          <div class="stat-label">主题数量</div>
+        </div>
         <div class="stat">
           <div class="stat-value">{sources.length}</div>
           <div class="stat-label">数据来源</div>
