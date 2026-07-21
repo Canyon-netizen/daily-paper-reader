@@ -26,12 +26,51 @@ const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7, ba
 //   旧实现 listAllPaperIds().length 含全部版本数,跟论文库不同步。
 const totalPapers = (await listPapers({ dedup: true })).length;
 const sources = ['arXiv', 'bioRxiv', 'medRxiv', 'ChemRxiv', 'OpenReview']; // pipeline 支持的来源
-// 最近更新:用按 date desc 排后的第一篇论文 date (dedup 后),
-// 而不是 topPapers[0].date —— topPapers 是按 score 排序的,
-// 若 score 最高的论文 date 较早(比如 6 月底),就会显示陈旧,误导用户。
-const latestDate = (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date;
-const latestDateLabel = latestDate
-  ? new Date(latestDate).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
+// 最近更新:拉 GitHub Actions API 找 daily-paper-reader workflow 最近一次
+// conclusion=success 的 run,用 run.updated_at 作为口径(成功完成后才会
+// commit + push,Vercel/Cloudflare 才会重建)。失败 / 进行中不算。
+//
+// 没 GH token 时:dev 本地 build 也会无 token,跳过 API → 退回"最新论文 date"
+// (与原来行为一致,避免 build 报错)。生产环境需要在 Vercel/Cloudflare 配
+// GH_TOKEN (PAT, scope: public_repo 或 repo) 作为构建环境变量。
+// GH_TOKEN 由 astro.config.mjs 顶层从 .env 的 token= 行载入并写到
+// process.env.GH_TOKEN。注意读 process.env.GH_TOKEN 而不是
+// import.meta.env.GH_TOKEN —— import.meta.env 是 Astro 在启动时冻结的快照,
+// 此时 astro.config.mjs 顶层还没跑完;读 process.env 才是当下 Node 进程的
+// 真实值(Astro SSR frontmatter 和 Node 进程共享 process.env)。
+const ghToken = process.env.GH_TOKEN || '';
+const ghRepoOwner = process.env.GH_REPO_OWNER || 'Canyon-netizen';
+const ghRepoName = process.env.GH_REPO_NAME || 'daily-paper-reader';
+const ghWorkflowFile = process.env.GH_WORKFLOW_FILE || 'daily-paper-reader.yml';
+
+async function fetchLastSuccessRunDate(): Promise<string | null> {
+  if (!ghToken) return null;
+  const url = `https://api.github.com/repos/${ghRepoOwner}/${ghRepoName}/actions/workflows/${ghWorkflowFile}/runs?per_page=20&status=success`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${ghToken}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
+    // 过滤 conclusion=success,取 updated_at 最新的一条(run 已 completed 时等于完成时间)
+    for (const r of runs) {
+      if (r && r.conclusion === 'success' && r.updated_at) return r.updated_at;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+const runUpdatedAt = await fetchLastSuccessRunDate();
+const fallbackDate = runUpdatedAt ? null : (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date ?? null;
+const latestDateLabel = (runUpdatedAt ?? fallbackDate)
+  ? new Date(runUpdatedAt ?? fallbackDate as string).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
   : '等待首次抓取';
 
 // 日历视图数据:按 date desc + dedup(取每个 arxiv id 最新 v# 的 date)。

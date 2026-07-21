@@ -2,6 +2,31 @@
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import mdx from '@astrojs/mdx';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+// Dev 时从 .env 把 token=... 映射到 process.env.GH_TOKEN,让 SSR
+// frontmatter 能拿到 GitHub PAT,无需 dotenv 依赖。生产环境 (Vercel /
+// Cloudflare Pages / GitHub Actions) 应通过部署平台的环境变量配置
+// GH_TOKEN,不要从这里读 —— .env 里的 token 实际是 Python pipeline
+// 用的 GitHub PAT,与 Astro 无关;这条桥接只服务本地 dev。
+if (process.env.NODE_ENV !== 'production' && !process.env.GH_TOKEN) {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const envPath = join(here, '.env');
+    const txt = readFileSync(envPath, 'utf8');
+    for (const line of txt.split(/\r?\n/)) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (!m) continue;
+      const [, k, v] = m;
+      // 只把 token 行转成 GH_TOKEN,其它(env 里其它脚本用的字段)按原样
+      if (k === 'token' && !process.env.GH_TOKEN) process.env.GH_TOKEN = v;
+    }
+  } catch {
+    // .env 不存在或读不到时静默忽略,SSR fallback 到"最新论文 date"
+  }
+}
 
 /**
  * paper-disk.mjs / taxonomies-disk.mjs 的处理:
@@ -85,6 +110,11 @@ export default defineConfig({
       // 开发时允许跨域,方便调试
       cors: true,
     },
+    // GH_TOKEN 是 GitHub PAT,绝不能进客户端 bundle。
+    // Astro 默认会把 process.env.* 同步到 import.meta.env(包括客户端),
+    // 这里用 envPrefix 收紧:只允许 PUBLIC_ 前缀注入 import.meta.env,
+    // 其它(GH_TOKEN / API key 等)只活在 process.env 里,前端脚本读不到。
+    envPrefix: ['PUBLIC_'],
     optimizeDeps: {
       // pdfjs-dist / katex 走动态 import(),体积大,显式预构建避免 dev 启动后浏览器拉不到
       include: ['pdfjs-dist', 'katex'],
