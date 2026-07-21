@@ -123,3 +123,71 @@ export async function callChatCompletion(
     reasoningDisabled: isDeepSeek && isReasoning,
   };
 }
+
+// ============================================================================
+// PR-3: 浏览器侧 stage 路由（对齐后端 src/llm_router.py）
+// ============================================================================
+//
+// 这是新增代码；上面的 callChatCompletion / ChatMessage / ChatResponse
+// 签名不变。caller 在调用 chat 之前先 resolveRoute(stage) 拿到 route 的
+// (provider, model, temperature, isStream)，用它替代 LLM_DEFAULTS 硬编码。
+//
+// 浏览器侧与 Actions 侧路由独立配置：浏览器只关心 UI LLM 配置（settings.ts），
+// 这里只是给按 stage 选默认 model 的轻量映射；后端 Actions 路由在 Python
+// `src/llm_router.py`，两者不可互通。
+
+const ROUTE_CACHE_TTL_MS = 60_000; // ms，对齐 Polaris 60s / Python 60s
+
+interface Route {
+  provider: string;
+  model: string;
+  temperature: number;
+  /** 是否走流式（plan §6 stream_stages）。*/
+  isStream?: boolean;
+}
+
+interface RouteCacheEntry {
+  route: Route;
+  cachedAt: number;
+}
+
+const _routeCache = new Map<string, RouteCacheEntry>();
+
+/**
+ * 浏览器侧 stage → (provider, model, temperature) 默认映射。
+ *
+ * key 命名对齐后端 router（plan §4 — 8 个 stage）：
+ *   analyzer_system / analyzer_deepdive — paper-analyzer.ts
+ *   topic_facet / topic_summary / topic_report / topic_cand / topic_explore
+ *     — topic-search.ts
+ *
+ * `provider` 不参与实际 HTTP 选端（settings.baseUrl 决定端点）；这里只是元数据，
+ * 方便 caller 决定 thinking-disable / 流式等策略。
+ */
+const ROUTES: Record<string, Route> = {
+  enrich: { provider: 'blt', model: 'gemini-3-flash-preview', temperature: 0.3 },
+  analyzer_system: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.2 },
+  analyzer_deepdive: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4, isStream: true },
+  topic_facet: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4 },
+  topic_summary: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.3 },
+  topic_report: { provider: 'openai', model: 'gpt-4o-mini', temperature: 0.6, isStream: true },
+  topic_cand: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.3 },
+  topic_explore: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
+  topic_chat: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4 },
+  topic_report_chat: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4 },
+  default: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
+};
+
+export function resolveRoute(stage: string): Route {
+  const cached = _routeCache.get(stage);
+  if (cached && Date.now() - cached.cachedAt < ROUTE_CACHE_TTL_MS) {
+    return cached.route;
+  }
+  const route = ROUTES[stage] || ROUTES.default;
+  _routeCache.set(stage, { route, cachedAt: Date.now() });
+  return route;
+}
+
+export function invalidateRouteCache(): void {
+  _routeCache.clear();
+}

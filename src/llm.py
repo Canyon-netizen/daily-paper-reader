@@ -850,7 +850,7 @@ def parse_provider_model(model_str: str) -> Tuple[str, str]:
 
 class ClientFactory:
     @staticmethod
-    def from_env():
+    def from_env(stage: str = "default"):
         """
         基于环境变量创建具体客户端。
 
@@ -859,12 +859,28 @@ class ClientFactory:
         选填：
         - LLM_API_KEY：通用 API key（优先级高于各 provider 专用 key）
         - LLM_BASE_URL：通用 base_url（优先级高于默认 base_url）
+
+        PR-3：可选 stage 参数决定走哪个 llm_stage_models 路由
+        (plans/pr-plans/pr-3-stage-router.md §3)。默认 "default" 保持
+        现有行为,新代码应显式传 stage。
         """
-        model_env = (os.getenv('LLM_MODEL') or '').strip()
-        if not model_env:
+        # PR-3: 先尝试走 router(stage)。router 不存在或解析失败时
+        # fallback 到原 LLM_MODEL env 行为,保持向后兼容。
+        try:
+            from src.llm_router import get_llm_router
+            router = get_llm_router()
+            if router is not None:
+                route = router.resolve(stage)
+                provider_model = route["provider_model"]
+            else:
+                provider_model = (os.getenv('LLM_MODEL') or '').strip()
+        except Exception:
+            provider_model = (os.getenv('LLM_MODEL') or '').strip()
+
+        if not provider_model:
             raise ValueError("缺少必要环境变量: LLM_MODEL（格式为 'provider/model'）")
 
-        provider, model = parse_provider_model(model_env)
+        provider, model = parse_provider_model(provider_model)
         api_key = (os.getenv('LLM_API_KEY') or '').strip() or None
         base_url = (os.getenv('LLM_BASE_URL') or '').strip() or None
 

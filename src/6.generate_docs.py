@@ -41,13 +41,10 @@ TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezon
 RANGE_DATE_RE = re.compile(r"^(\d{8})-(\d{8})$")
 
 # LLM 配置（使用 llm.py 内的 ClientFactory）
+# PR-3:走 router 的 `doc.generate` stage；未配 llm_stage_models 时 fallback LLM_MODEL env。
 LLM_CLIENT = None
-_model_env = os.getenv("LLM_MODEL")
-_api_key_env = os.getenv("LLM_API_KEY")
-if _model_env:
-    LLM_CLIENT = ClientFactory.from_env()
-elif os.getenv("BLT_API_KEY"):
-    LLM_CLIENT = ClientFactory.from_env()
+if os.getenv("LLM_MODEL") or os.getenv("BLT_API_KEY"):
+    LLM_CLIENT = ClientFactory.from_env(stage="doc.generate")
 
 DEFAULT_DOCS_CONCURRENCY = 4
 

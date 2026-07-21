@@ -29,7 +29,7 @@ import {
   callLLM,
 } from './paper-analyzer';
 import type { ArxivEntry } from './paper-analyzer';
-import { callChatCompletion, REASONING_MODEL_PATTERN_WIDE, type ChatMessage } from '../lib/llm';
+import { callChatCompletion, REASONING_MODEL_PATTERN_WIDE, resolveRoute, type ChatMessage } from '../lib/llm';
 import { debounce, canonicalArxivId as canonicalId, escapeHtml } from '../lib/dom-utils';
 import {
   buildFacet,
@@ -323,7 +323,9 @@ async function filterCandidatesByLLM(targetN: number): Promise<void> {
       // 筛论文是重任务:输入含 N 篇候选(常 100-300)的标题+摘要,推理模型的
       // <think> 逐篇分析会很长。给足 8000 初始预算(callLLMRaw 内部再按
       // finish_reason=length 自动加倍到 16000),避免思考吃光预算导致正文为空。
-      raw = await callLLMRaw(FILTER_CANDIDATES_SYSTEM, userPrompt, cfg, true, 8000);
+      // PR-3:stage=topic_cand(筛候选)。
+      const candRoute = resolveRoute('topic_cand');
+      raw = await callLLMRaw(FILTER_CANDIDATES_SYSTEM, userPrompt, { ...cfg, model: candRoute.model }, true, 8000);
     } catch (e) {
       if (attempt >= MAX) {
         setStatusErrorWithAction(`AI 筛论文失败: ${(e as Error).message}`, '🔄 重试', () => filterCandidatesByLLM(targetN));
@@ -840,7 +842,9 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Top
     try {
       // 输出含 facets + subqs,预算给 6000(callLLMRaw 内部按 finish_reason=length 再加倍)。
       // expectedTopLevel='{':前导有说明文字时按对象取,真实首字符仍优先(兼容 legacy 数组)。
-      raw = await callLLMRaw(DECOMPOSE_SYSTEM, userPrompt, cfg, true, 6000, '{');
+      // PR-3:stage=topic_facet(主题拆解)。
+      const facetRoute = resolveRoute('topic_facet');
+      raw = await callLLMRaw(DECOMPOSE_SYSTEM, userPrompt, { ...cfg, model: facetRoute.model }, true, 6000, '{');
     } catch (e) {
       if (attempt >= MAX) throw e;
       continue;
@@ -984,7 +988,9 @@ export async function exploreFromSeeds(
   while (attempt < MAX) {
     attempt++;
     try {
-      raw = await callLLMRaw(EXPLORE_FROM_SEEDS_SYSTEM, userPrompt, cfg, true);
+      // PR-3:stage=topic_explore(从 seeds 探索)。
+      const exploreRoute = resolveRoute('topic_explore');
+      raw = await callLLMRaw(EXPLORE_FROM_SEEDS_SYSTEM, userPrompt, { ...cfg, model: exploreRoute.model }, true);
     } catch (e) {
       if (attempt >= MAX) throw e;
       continue; // 网络/LLM 错误重试一次
@@ -1155,7 +1161,9 @@ async function rewriteZeroHitSubqs(
   const userPrompt = `研究主题相关拆解,以下 ${zeros.length} 个子方向的主 query 在 arXiv 上 0 召回,请改写(保持各方向研究维度不变、彼此仍区分)。${topicEvidenceBlock}${evidenceBlock}${zerosBlock}\n请只输出改写后的 JSON 数组:`;
 
   try {
-    const raw = await callLLMRaw(SUBQ_REWRITE_SYSTEM, userPrompt, cfg, true);
+    // PR-3:stage=topic_facet(subq rewrite 也走 facet 路由 — 同一 prompt 类目)。
+    const facetRoute2 = resolveRoute('topic_facet');
+    const raw = await callLLMRaw(SUBQ_REWRITE_SYSTEM, userPrompt, { ...cfg, model: facetRoute2.model }, true);
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return new Map();
     const out = new Map<string, SubqRewrite>();
@@ -1446,9 +1454,11 @@ async function chatWithPaper(arxivId: string, question: string): Promise<string>
   ];
   for (const m of history) messages.push({ role: m.role, content: m.content });
   messages.push({ role: 'user', content: question });
-  const response = await callChatCompletion(cfg, {
+  // PR-3:stage=topic_chat(单论文 chat)。
+  const chatRoute = resolveRoute('topic_chat');
+  const response = await callChatCompletion({ ...cfg, model: chatRoute.model }, {
     messages,
-    temperature: 0.4,
+    temperature: chatRoute.temperature,
     signal: inFlightController?.signal,
   });
   let content: string = response.content ?? '';
@@ -1514,9 +1524,11 @@ async function chatWithReport(
   ];
   for (const m of history.slice(-MAX_QA_FOR_LLM)) messages.push({ role: m.role, content: m.content });
   messages.push({ role: 'user', content: question });
-  const response = await callChatCompletion(cfg, {
+  // PR-3:stage=topic_report_chat(主题报告 chat)。
+  const reportChatRoute = resolveRoute('topic_report_chat');
+  const response = await callChatCompletion({ ...cfg, model: reportChatRoute.model }, {
     messages,
-    temperature: 0.4,
+    temperature: reportChatRoute.temperature,
     signal: inFlightController?.signal,
   });
   let content: string = response.content ?? '';
@@ -3215,7 +3227,9 @@ async function generateTopicReport(
   for (let attempt = 1; attempt <= REPORT_LLM_RETRY; attempt++) {
     try {
       // 主题报告也是重任务:输入含 M 篇速览,输出多维度 JSON 对象。给 8000 初始预算。
-      const raw = await callLLMRaw(TOPIC_REPORT_SYSTEM, userPrompt, cfg, true, 8000);
+      // PR-3:stage=topic_report(主题报告)。
+      const reportRoute = resolveRoute('topic_report');
+      const raw = await callLLMRaw(TOPIC_REPORT_SYSTEM, userPrompt, { ...cfg, model: reportRoute.model }, true, 8000);
       try {
         const obj = JSON.parse(raw);
         const report = normalizeReportTopic(obj, prev, mode);

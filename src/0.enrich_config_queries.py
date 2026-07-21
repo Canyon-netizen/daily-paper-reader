@@ -16,7 +16,8 @@ from src._utils import log, group_start, group_end
 SCRIPT_DIR = os.path.dirname(__file__)
 CONFIG_FILE = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "config.yaml"))
 
-MODEL_NAME = os.getenv("BLT_REWRITE_MODEL", "gemini-3-flash-preview")
+# PR-3: 由 router 解析 `enrich` stage;provider/model 由 config.yaml 决定。
+ENRICH_STAGE = "enrich"
 
 
 def build_related_prompt(keyword: str) -> List[Dict[str, str]]:
@@ -140,7 +141,8 @@ def main() -> None:
     keywords = subs.get("keywords") or []
     llm_queries = subs.get("llm_queries") or []
 
-    client = ClientFactory.from_env()
+    # PR-3：走 router 解析 `enrich` stage；provider/model 由 config.yaml 决定。
+    client = ClientFactory.from_env(stage=ENRICH_STAGE)
 
     related_schema = {
       "type": "object",

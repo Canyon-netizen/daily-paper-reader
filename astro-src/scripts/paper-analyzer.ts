@@ -38,6 +38,7 @@ import {
   loadHiddenPapers,
 } from './settings';
 import { debounce, canonicalArxivId, escapeHtml } from '../lib/dom-utils';
+import { resolveRoute } from '../lib/llm';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
@@ -1320,18 +1321,22 @@ export async function callLLM(
 ): Promise<AnalysisResult> {
   const note = statusCb ?? (() => {});
   note('调用 LLM 生成摘要...');
+  // PR-3:按 stage 路由选择 model / temperature；用户 cfg.model 兜底。
+  const route = resolveRoute('analyzer_system');
+  const modelToUse = route.model || cfg.model;
+  const temperatureToUse = route.temperature;
   const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
   // 对 DeepSeek 的 R 系列(reasoning 模型),显式禁用思考块。
   // 非 DeepSeek provider 没这个字段,会报 400,所以只对 deepseek-* 加。
   const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
-  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
+  const isReasoning = /reasoner|reasoning|r1/i.test(modelToUse);
   const requestBody: Record<string, unknown> = {
-    model: cfg.model,
+    model: modelToUse,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: buildUserPrompt(title, abstract, paperBody) },
     ],
-    temperature: 0.2,
+    temperature: temperatureToUse,
     // cap LLM output so JSON is not truncated mid-field
     max_tokens: 4000,
   };
@@ -1571,9 +1576,12 @@ async function invokeChatCompletion(
   statusCb: (msg: string) => void,
   opts: { maxOutputTokens?: number } = {},
 ): Promise<string> {
-  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
-  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(cfg.baseUrl);
-  const isReasoning = /reasoner|reasoning|r1/i.test(cfg.model);
+  // PR-3:按 stage 路由选择 model；用户 cfg.model 兜底。
+  const route = resolveRoute('analyzer_deepdive');
+  const effective: LLMConfig = { ...cfg, model: route.model || cfg.model };
+  const url = `${effective.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+  const isDeepSeek = /^https?:\/\/api\.deepseek\.com/i.test(effective.baseUrl);
+  const isReasoning = /reasoner|reasoning|r1/i.test(effective.model);
 
   // 量 body 字节 — 对纯 ASCII 文本 byteLength === 字符数;含中文时略大于字符数。
   // 用 TextEncoder 量实际 UTF-8 字节数最准确但贵,这里降级用 1.5x 估。
@@ -1582,10 +1590,10 @@ async function invokeChatCompletion(
   ).length;
 
   if (estimatedBytes <= REQUEST_BODY_LIMIT_BYTES) {
-    return await invokeOne(url, cfg, systemMsg, userContent, isDeepSeek, isReasoning, label, estimatedBytes);
+    return await invokeOne(url, effective, systemMsg, userContent, isDeepSeek, isReasoning, label, estimatedBytes);
   }
   statusCb(`请求体过大(≈ ${(estimatedBytes / 1024 / 1024).toFixed(1)} MB),自动分段调用 LLM...`);
-  return await chunkAndCall(url, cfg, systemMsg, userContent, isDeepSeek, isReasoning, label, statusCb);
+  return await chunkAndCall(url, effective, systemMsg, userContent, isDeepSeek, isReasoning, label, statusCb);
 }
 
 async function invokeOne(

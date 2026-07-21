@@ -55,24 +55,23 @@ class MainPipelineTest(unittest.TestCase):
         return path
 
     def test_resolve_summary_step_env_uses_summary_overrides(self):
+        # PR-3 (plans/pr-plans/pr-3-stage-router.md §9): 已删除
+        # resolve_summary_step_env() 旁路,Step 6 改走
+        # llm_stage_models.doc.generate 路由。SUMMARY_* / BLT_SUMMARY_*
+        # env 由 src/llm_router.py 接管,在 config.yaml 配。
         with patch.dict(
             os.environ,
             {
-                "DEEPSEEK_API_KEY": "base-key",
-                "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
                 "SUMMARY_API_KEY": "summary-key",
                 "SUMMARY_BASE_URL": "https://summary.example.com/v1",
                 "SUMMARY_MODEL": "deepseek-v4-flash",
             },
             clear=True,
         ):
-            env = self.mod.resolve_summary_step_env()
-
-        self.assertEqual(env["DEEPSEEK_API_KEY"], "summary-key")
-        self.assertEqual(env["SUMMARY_API_KEY"], "summary-key")
-        self.assertEqual(env["DEEPSEEK_BASE_URL"], "https://summary.example.com/v1")
-        self.assertEqual(env["LLM_PRIMARY_BASE_URL"], "https://summary.example.com/v1")
-        self.assertEqual(env["DEEPSEEK_MODEL"], "deepseek-v4-flash")
+            self.assertFalse(
+                hasattr(self.mod, "resolve_summary_step_env"),
+                "PR-3 已删除 resolve_summary_step_env,不应再被 main.py 导出",
+            )
 
     def test_main_runs_local_rerank_without_remote_rerank_base(self):
         with tempfile.TemporaryDirectory() as tmpdir:
