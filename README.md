@@ -254,6 +254,143 @@ Cloudflare Pages Function (/api/proxy)            GitHub Gist (私有 secret)
 
 ---
 
+## 🌐 网站工作流（site pipeline）
+
+> 「架构总览」一节讲的是 **GitHub Actions** 怎么把论文抓回来、commit 到 `docs/`。这一节讲**站点自身**的工作流：`docs/` 里的 markdown 如何变成用户浏览器里能交互的页面，客户端脚本如何与 LLM / arXiv / GitHub REST 协作。
+>
+> **两节分工**：
+> - 「架构总览」= **CI / 后端 / 调度**（10 个 workflow + 8567 后端）。
+> - 本节 = **站点内容消费 + 渲染 + 交互**（构建产物 / SSR / 客户端脚本 / 浏览器配置中枢 / 主题分类 / Gist 闭环）。
+
+### 1. 数据真相源：`docs/`
+
+整个静态站点的"内容侧"由仓库内 4 类文件共同构成，`astro-src/` 的源码只负责把这些文件**读出来**渲染、不会反向改写它们：
+
+| 路径 | 内容 | 谁写入 | 用途 |
+|---|---|---|---|
+| `docs/papers/YYYY/MM/DD/<arxiv-id>-<slug>.md` | 论文笔记（frontmatter + 速览 4 段 + TLDR + 笔记 body） | [`src/6.generate_docs.py`](src/6.generate_docs.py) | 论文详情页 `[arxiv].astro` 的数据源；命名权威见 [`docs/path-spec.md`](docs/path-spec.md) |
+| `docs/papers/<arxiv-id>.txt` | 同一论文的 PDF 全文（Git LFS 跟踪） | daily pipeline + version-refresh | `/papers/<slug>/` 的 paper-chat **全文模式**首选用作 `paper-fulltext.ts` 数据源 |
+| `docs/assets/figures/arxiv/<id>/fig-NNN.webp` + `meta.json` | 由 pdffigures2 抽取的论文图 | [`src/maintain/paper_figures.py`](src/maintain/paper_figures.py) | 详情页图集 + 列表页缩略图 |
+| `docs/config.yaml` | 推送 / topics / github.owner/repo 等运行时配置 | daily pipeline（`apply_topics_from_gist_env`） | 改方向 / 改仓库 owner 的最简入口 |
+
+frontmatter 里的 `categories: { venue, task, method, type }` 是 4 维分类的"真相源"，与 [`config/taxonomies.json`](config/taxonomies.json) 的白名单**双向互锁**——Python 端写、`astro-src/lib/taxonomies.ts` 端读并按维度上色，旧 `query:` tag 通过 `ALIAS_OLD_TAG_TO_TASK` 自动迁移到新 `task` 标签。
+
+### 2. 构建时：从 markdown 到静态产物
+
+3 个 build-time 步骤在 `bun run dev` / `bun run build` 之前自动跑完（`package.json` 的 `predev` / `prebuild` 钩子）：
+
+| 步骤 | 触发 | 关键脚本 | 产物 | 关键约束 |
+|---|---|---|---|---|
+| 1. 重建 arxiv 索引 | `predev` / `prebuild` | [`astro-src/scripts/build-arxiv-index.mjs`](astro-src/scripts/build-arxiv-index.mjs) | `public/arxiv-index.json`（`{canonicalId: {rel, title}}`） | 同一论文多版本只保留最高 `v#`，供 `/settings/` 的"已隐藏论文"管理用 |
+| 2. 镜像文档资源 | `predev` / `prebuild` | [`astro-src/scripts/copy-docs-assets.mjs`](astro-src/scripts/copy-docs-assets.mjs) | `public/assets/figures/`、`public/assets/tables/`、`public/papers/*.txt` | 多版本 dedup + 24 MiB 单图上限（超了 sharp 自动缩到 4096 px 长边，缺 sharp 时跳过不抛错）；`.txt` 截断到 1 MiB（避开 Cloudflare 单文件 25 MiB 上限） |
+| 3. Astro build | `astro build` | [`astro.config.mjs`](astro.config.mjs)（`srcDir: './astro-src'`、`trailingSlash: 'always'`、`format: 'directory'`） | `dist/`（按部署平台分别走 Vercel / Cloudflare Pages / EdgeOne / GitHub Pages） | 部署到子路径（GH Pages）时由 `DEPLOY_BASE` env 注入 `import.meta.env.BASE_URL`；`figureUrlToAbsolute` / navbar `href` / `<base href>` 全部跟随 |
+
+Astro 通过 [`astro-src/lib/paper.ts`](astro-src/lib/paper.ts) 里的 `walk()` 递归 `docs/papers/**/*.md`，跳过 `_` / `tutorial` / `assets` / `plans` 目录；`getStaticPaths` 在 `papers/[arxiv].astro` 列出全部 `params.arxiv = basename`，URL 形如 `/papers/2607.12345v1-starbench-rpg/`。
+
+### 3. SSR：每个页面怎么读 `docs/`
+
+7 个页面、4 种 SSR 形态：
+
+| 路由 | SSR 数据源 | 关键 client 脚本 | 数据传递方式 |
+|---|---|---|---|
+| `/` | `listPapers({sinceDays:7, sortBy:'score', limit:6})`（精选） + `listPapers({sortBy:'date', dedup:true})`（日历） | [`index-filter.ts`](astro-src/scripts/index-filter.ts) / [`paper-selection.ts`](astro-src/scripts/paper-selection.ts) | `<script id="daily-data">` 内联 JSON；最近一次 Actions 成功 run 日期由 GitHub REST 拉（无 `GH_TOKEN` 时回退最新论文日期） |
+| `/papers/` | `listPapers()` 全量（dedup） | [`paper-library.ts`](astro-src/scripts/paper-library.ts) | `<script id="papers-data">` 内联；客户端虚拟滚动 + 标签筛选 + 详情抽屉 |
+| `/papers/<slug>/` | `getStaticPaths` + `readPaper()` + `readFulltextInline()` | [`paper-chat.ts`](astro-src/scripts/paper-chat.ts) / [`paper-fulltext.ts`](astro-src/scripts/paper-fulltext.ts) / [`paper-figures.ts`](astro-src/scripts/paper-figures.ts) / [`paper-hide.ts`](astro-src/scripts/paper-hide.ts) | 段落级 `data-*` carrier；全文 `.txt` ≤ 200KB 时 base64 内联到 `<section id="paper-chat">`，否则 client 端 fetch `/papers/<id>.txt` |
+| `/topic/` | 无 SSR；5 阶段状态机全 client | [`topic-search.ts`](astro-src/scripts/topic-search.ts) | localStorage 持久化（`dpr_topic_session_v1`，800 KB / session，4 MB 总量上限） |
+| `/paper-analyzer/` | 无 SSR；客户端 pdf.js 抽正文 | [`paper-analyzer.ts`](astro-src/scripts/paper-analyzer.ts) | localStorage + 必要时 Gist 同步（`save-paper.yml`） |
+| `/conferences/` | 无 SSR；前端直连 GitHub REST | [`conferences.ts`](astro-src/scripts/conferences.ts) | 直接 fetch `api.github.com`（`dispatchWorkflow` + `pollRun`，401/403 立即 bail） |
+| `/settings/` | 无 SSR；纯 client 页面 | [`settings.ts`](astro-src/scripts/settings.ts) + [`settings-page.ts`](astro-src/scripts/settings-page.ts) | localStorage 一站读写；同步推送到 Gist |
+
+构建时关键 lib 一览：
+
+- [`astro-src/lib/paper.ts`](astro-src/lib/paper.ts) — `readPaper` / `listPapers` / `dedupByCanonicalArxivId` / `flattenCategories` / `resolveTaskKey`；首页 / 列表 / 详情页全部走它。
+- [`astro-src/lib/markdown.ts`](astro-src/lib/markdown.ts) — KaTeX 数学 + GFM 表格 + 详情页与 chat 模式双套渲染（chat 模式自动降级标题层级 + 跳过图集轮播）。
+- [`astro-src/lib/taxonomies.ts`](astro-src/lib/taxonomies.ts) — 4 维分类白名单 + `ALIAS_OLD_TAG_TO_TASK` 旧 tag 迁移。
+- [`astro-src/lib/venue.ts`](astro-src/lib/venue.ts) — venue 显示名 / 颜色映射。
+- [`astro-src/lib/user-tags.ts`](astro-src/lib/user-tags.ts) — 用户自定义 `kind:label` 标签 Gist 同步。
+- [`astro-src/lib/llm.ts`](astro-src/lib/llm.ts) — OpenAI 兼容 Chat Completions 的跨 provider 适配；被 paper-analyzer + topic + chat 共享。
+
+### 4. 客户端：用户打开页面后发生什么
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户浏览器
+    participant CDN as Cloudflare Pages (CDN)
+    participant S as settings.ts (localStorage)
+    participant L as 用户 LLM 端点
+    participant A as api.github.com / arXiv
+    participant F as functions/api/proxy.ts
+
+    U->>CDN: GET /  (或 /papers/、/topic/、/paper-analyzer/ ...)
+    CDN-->>U: 静态 HTML + <script id="daily-data"> 内联 JSON
+    Note over U: 客户端脚本 (index-filter / paper-library / topic-search ...)<br/>直接读内联 JSON 渲染日历 / 列表 / 抽屉
+    U->>S: 读 LLM provider / API key / Gist
+    alt paper-analyzer 调 LLM
+        U->>L: POST {base}/v1/chat/completions
+        L-->>U: 流式 / 一次性 JSON
+    end
+    alt paper-analyzer / topic 搜 arXiv
+        U->>F: GET /api/proxy?url=arxiv.org/...
+        F->>A: 转发 + 加 CORS 头
+        A-->>F: arXiv XML
+        F-->>U: 透传 (Access-Control-Allow-Origin: *)
+    end
+    alt 保存论文到 GitHub
+        U->>S: 取 github.owner/repo + PAT
+        U->>A: POST /repos/{owner}/{repo}/actions/workflows/save-paper.yml/dispatches
+        A-->>U: 204
+        Note over A: Actions 写 docs/papers/...md → commit<br/>→ 触发 Cloudflare Pages 重建
+    end
+```
+
+**客户端脚本家族**（`astro-src/scripts/`）：
+
+- **设置中枢** [`settings.ts`](astro-src/scripts/settings.ts) — 导出 `STORAGE_KEYS` / `getLLMConfig` / `saveLLMConfig` / `applyTopicUpdates`；**`selection` 类修改必须 emit 事件**（参见 `feedback_settings_selection_must_emit.md`），避免 modal 写 selection 与 settings 写 selection 互相覆盖。
+- **paper-analyzer 导出** — `searchArxiv` / `fetchArxivPdf` / `callLLM` / `SYSTEM_PROMPT`，被 **`/topic/` 复用**（参见 `project_topic_explore_refactor.md`）。
+- **topic 复用** — `callLLMRaw` / `searchArxivById` / `paper-selection-change`；**不动 settings / paper-selection / paper-analyzer**。
+- **paper 全文** [`paper-fulltext.ts`](astro-src/scripts/paper-fulltext.ts) — 本地 `.txt` 优先 + ar5iv 兜底，部署 / 客户端 / gitignore 三处协调（参见 `project_paper_chat_fulltext_source.md`）。
+- **paper 关系图（已下线）** [`paper-relations.ts`](astro-src/lib/paper-relations.ts) — 2026-07-19 论文库改版后 cytoscape 图不再挂载，保留 lib 以备复用。
+
+### 5. 主题 / 分类系统如何在浏览器里工作
+
+4 维分类的"真理源 = frontmatter `categories`"：
+
+- **TS 端** [`astro-src/lib/taxonomies.ts`](astro-src/lib/taxonomies.ts) — 4 维白名单 + `ALIAS_OLD_TAG_TO_TASK` 旧 tag 迁移 + 维度颜色（4 套 bg / border 调色板）。
+- **Python 端** [`src/taxonomy.py`](src/taxonomy.py) — 写入 LLM refine 结果时按 `taxonomies.json` 白名单过滤。
+- **共享配置** [`config/taxonomies.json`](config/taxonomies.json) — TS 通过 Vite JSON import，Python 通过 `json.load` 读，**两边同源**。
+- **首页日历** [`DailyCalendar.astro`](astro-src/components/DailyCalendar.astro) — 按 `categories.task[0]` 归类（缺时回退到 `其他`），`TOPIC_LABELS` 维护 key → 中文名映射；`topicCount` 统计**排除 `其他` fallback**，与日历 select 选项数对齐。
+
+主题报告 (`/topic/`) 5 阶段：① 输入研究思路 → ② LLM 拆解 3-5 个 sub-question（可编辑可删）→ ③ 调 arXiv 检索并 AI 预筛到 30 → ④ 批量调 LLM 生成中文速览 → ⑤ 拼装主题报告 + 多轮追问。sub-q 的字段扩展（`extendBalancedJson` / `callLLMRaw`）必须在 3 处白名单同步：`decomposeIdea` + `exploreFromSeeds` + regen handler（参见 `feedback_subq_fields_whitelist.md`）。
+
+### 6. CI / Gist 闭环（轻描）
+
+> "**站点虽然是静态的，但配置是活的**"——浏览器侧的所有用户偏好都通过 Gist 闭环回到 CI 端。
+
+```mermaid
+flowchart LR
+    A[用户在 /settings/ 改 LLM key] --> B[settings.ts<br/>写 localStorage]
+    B --> C[一键同步到 secret Gist<br/>api.github.com/gists]
+    C --> D[daily-paper-reader.yml<br/>Load secrets from Gist]
+    D --> E[src/4.llm_refine_papers.py<br/>用同一个 key 跑 LLM]
+    E --> F[src/6.generate_docs.py<br/>写 docs/papers/...md]
+    F --> G[Actions commit + push]
+    G --> H[Cloudflare Pages 重建]
+    H --> I[用户下一次打开站点看到新内容]
+```
+
+`save-paper.yml` 同理：浏览器 `paper-analyzer` 调 `POST /repos/{owner}/{repo}/actions/workflows/save-paper.yml/dispatches`，由 Actions 把单篇笔记写进 `docs/papers/<id>-<slug>.md`，下一次 push 触发重建。
+
+### 7. 关键设计取舍
+
+- **0 后端 = 0 服务器** — 所有 LLM / arXiv 调用都从浏览器直出；arXiv CORS 靠仓库自带的 [`functions/api/proxy.ts`](functions/api/proxy.ts)（Cloudflare Pages Function）解决，非 Cloudflare 平台用户提供 5 行 Cloudflare Worker 即可等价。
+- **`localStorage` 即真相** — 配置不进服务器；用户清浏览器数据 = 回到出厂（页面提示"先同步 Gist"）。
+- **4 套部署平台走同一份代码** — `trailingSlash: 'always'` + `format: 'directory'` + `DEPLOY_BASE` env 注入 `import.meta.env.BASE_URL` 保证 Vercel / Cloudflare / EdgeOne / GH Pages URL 一致。
+- **CORS 反代必须可用** — Cloudflare Pages 默认 0 配置（`/api/proxy`）；其它平台若反代缺失，paper-analyzer / topic 搜 arXiv 会 0s 挂（参见 `analyzer_arxiv_cors.md`）。
+- **`docs/` 是 single source of truth** — 网站从来不"自己生成"内容，全部由 GitHub Actions pipeline 写回；本地 `bun run dev` 只能消费仓库里已有的 `docs/papers/`，要新增内容必须跑 pipeline 或调 `save-paper.yml`。
+
+---
+
 ## 🗄️ Supabase schema (`sql/`)
 
 仓库 `sql/` 下的 23 个 `.sql` 是 Supabase 实例的 **DDL 源**——建表 (`create_*_papers_schema.sql`)、检索 RPC (`match_*_papers.sql`)、RLS 策略 (`enable_conference_anon_read_policies.sql`)。
