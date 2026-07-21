@@ -509,3 +509,44 @@ source_backends:
     anon_key: sb_publishable_lX-oi64Uxyd7SIVv3_w2Uw_MTOojeKq
     sync_table: ''
     sync_success_value: ''
+
+# ============================================================================
+# PR-3: LLM Stage Routing (plans/pr-plans/pr-3-stage-router.md §6)
+# ============================================================================
+# 每个 stage 可独立配 (provider_model, temperature);未配置的 stage fallback
+# LLM_MODEL env。${LLM_MODEL} 占位符在 router.resolve() 内展开。
+# stream_stages 标记走流式（PR-3 不动 HTTP 流式，只记录 is_stream 元数据）。
+llm_stage_models:
+  enrich:
+    provider_model: "blt/gemini-3-flash-preview"
+    temperature: 0.3
+  refine:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.2
+  select:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.2
+  doc.generate:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.5
+  analyzer.system:
+    provider_model: "deepseek/deepseek-chat"
+    temperature: 0.5
+  analyzer.deepdive:
+    provider_model: "openai/gpt-4o-mini"
+    temperature: 0.7
+  topic.facet:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.4
+  topic.summary:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.3
+  topic.report:
+    provider_model: "openai/gpt-4o-mini"
+    temperature: 0.6
+  default:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.5
+  stream_stages:
+    - "analyzer.deepdive"
+    - "topic.report"

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -14,6 +15,11 @@ from src.source_config import (
     save_config,
 )
 from src._utils import normalize_arxiv_id
+from src.pipeline_v2 import (
+    checkpoint_read as pipeline_checkpoint_read,
+    checkpoint_write as pipeline_checkpoint_write,
+    list_pending as pipeline_list_pending,
+)
 
 try:
     import yaml  # type: ignore
@@ -48,6 +54,117 @@ def run_step(label: str, args: list[str], env: dict[str, str] | None = None) -> 
     # 用 = 显式覆盖,避免继承到外部已污染的 PYTHONPATH。
     merged["PYTHONPATH"] = ROOT_DIR
     subprocess.run(args, check=True, env=merged, cwd=ROOT_DIR)
+
+
+def run_step_with_checkpoint(
+    step_name: str,
+    args: list[str],
+    *,
+    step_id: str,
+    archive_dir: str,
+    enabled: bool,
+    env: dict[str, str] | None = None,
+    seq: int = 1,
+    rank: int = 0,
+    sub_rank: int = 0,
+) -> bool:
+    """若 enabled=False → 退化到原始 run_step()(不破坏现有调用);否则 checkpoint 包裹。
+
+    PR-1 引入的薄壳。计划:默认 pipeline.checkpoints.enabled=False 时
+    此函数等同于 run_step,但仍返回 bool(原 run_step 返 None)。
+    enabled=True 时:
+      1. checkpoint_read;若 status=succeeded → [SKIP] 日志 + 返 True
+      2. 写 running(attempts 累加)
+      3. 调 run_step,捕获 CalledProcessError 写 failed
+      4. 出口写 succeeded 或 failed
+
+    现有 main.py:761-897 的 6 个 run_step() 调用**保持不变**(默认 enabled=False
+    即走原行为);启用 checkpoints 时,把 caller 改成调 run_step_with_checkpoint
+    即可,不影响 API 兼容。
+    """
+    if not enabled:
+        run_step(step_name, args, env=env)
+        return True
+
+    # 1. checkpoint_read — 已 succeeded 则跳过
+    existing = pipeline_checkpoint_read(archive_dir, step_id)
+    if existing and existing.get("status") == "succeeded":
+        print(f"[SKIP] {step_id} 已 succeeded,跳过", flush=True)
+        return True
+
+    step_type = step_id.split(".")[-1]
+    started_iso = datetime.now(timezone.utc).isoformat()
+
+    # 2. 写 running
+    pipeline_checkpoint_write(
+        archive_dir,
+        step_id,
+        status="running",
+        seq=seq,
+        rank=rank,
+        sub_rank=sub_rank,
+        step_type=step_type,
+        observation={
+            "started_at": started_iso,
+            "attempts": 1,
+        },
+    )
+
+    # 3. 调原始 run_step
+    start = time.time()
+    try:
+        run_step(step_name, args, env=env)
+        elapsed_ms = int((time.time() - start) * 1000)
+        pipeline_checkpoint_write(
+            archive_dir,
+            step_id,
+            status="succeeded",
+            seq=seq,
+            rank=rank,
+            sub_rank=sub_rank,
+            step_type=step_type,
+            observation={
+                "started_at": started_iso,
+                "elapsed_ms": elapsed_ms,
+                "error": None,
+                "attempts": 1,
+            },
+        )
+        return True
+    except subprocess.CalledProcessError as exc:
+        # 仿照 main.py:798-825 fetch 失败的 sentinel 风格:失败也要写盘留痕
+        elapsed_ms = int((time.time() - start) * 1000)
+        pipeline_checkpoint_write(
+            archive_dir,
+            step_id,
+            status="failed",
+            seq=seq,
+            rank=rank,
+            sub_rank=sub_rank,
+            step_type=step_type,
+            observation={
+                "started_at": started_iso,
+                "elapsed_ms": elapsed_ms,
+                "error": (
+                    (exc.stderr or "")[-500:] if exc.stderr else f"returncode={exc.returncode}"
+                ),
+                "attempts": 1,
+            },
+        )
+        raise
+
+
+def pipeline_checkpoints_enabled(config: dict[str, Any] | None = None) -> bool:
+    """读 config.yaml 的 pipeline.checkpoints.enabled,默认 False(零破坏)。
+
+    注意:这是 PR-1 引入的开关读取 helper。读取失败 / 字段缺失一律返 False,
+    保持旧 cron 行为不变。
+    """
+    try:
+        cfg = config if config is not None else _load_full_config()
+        return bool(cfg.get("pipeline", {}).get("checkpoints", {}).get("enabled", False))
+    except Exception:
+        return False
 
 
 def load_gist_env() -> None:
@@ -397,34 +514,6 @@ def prepare_rerank_fallback(input_path: str, output_path: str) -> bool:
     save_json(output_path, data)
     print(f"[INFO] 已生成 Step 3 fallback 结果: {output_path}", flush=True)
     return True
-
-
-def resolve_summary_step_env() -> dict[str, str]:
-    env = os.environ.copy()
-    # 优先使用新的统一环境变量
-    llm_model = _read_env_text("LLM_MODEL")
-    llm_api_key = _read_env_text("LLM_API_KEY")
-    llm_base_url = _read_env_text("LLM_BASE_URL")
-    # 兼容旧的 BLT/SUMMARY 环境变量
-    summary_api_key = _read_env_text("SUMMARY_API_KEY", "BLT_SUMMARY_API_KEY")
-    summary_base_url = _read_env_text("SUMMARY_BASE_URL", "BLT_SUMMARY_BASE_URL")
-    summary_model = _read_env_text("SUMMARY_MODEL", "BLT_SUMMARY_MODEL")
-
-    if llm_api_key:
-        env["LLM_API_KEY"] = llm_api_key
-    if llm_base_url:
-        env["LLM_BASE_URL"] = llm_base_url
-    if llm_model:
-        env["LLM_MODEL"] = llm_model
-    elif summary_api_key:
-        env["BLT_API_KEY"] = summary_api_key
-    if summary_base_url:
-        env["LLM_BASE_URL"] = summary_base_url
-        env["BLT_PRIMARY_BASE_URL"] = summary_base_url
-        env["BLT_API_BASE"] = summary_base_url
-    if summary_model:
-        env["BLT_SUMMARY_MODEL"] = summary_model
-    return env
 
 
 def build_paper_index(papers: Any, trace_set: set[str]) -> dict[str, dict[str, Any]]:
@@ -893,7 +982,6 @@ def main() -> None:
                 else []
             ),
         ],
-        env=resolve_summary_step_env(),
     )
 
 
