@@ -9,6 +9,8 @@
 - **总条目**:30(本地 6 + 外部 24)
 - **关联本地笔记**:见每条"→ 本地"标记
 
+> ⚠️ **2026-07-21 校正**:B 节里有 4 个 arXiv ID 在早期 WebSearch 里被错标(2503.18185 / 2412.13625 / 2410.08057 / 2402.04879 / 2404.12501),实际论文与本主题无关,已剔除;B1 区已用新检索的真 ID 2507.16473 补位。
+
 ---
 
 ## A. 本仓库已有笔记(可直接在主题页 `/papers/` 搜索选中,无需复制 ID)
@@ -30,15 +32,18 @@
 
 ```
 2410.07877    Constrained Skill Discovery: Quadruped Locomotion with Unsupervised RL
-2404.12501    USDR: Unsupervised Skill Discovery for Reinforcement Learning (ICLR 2024)
-2402.04879    Unsupervised Skill Discovery through Skill Structures Differentiation
 2410.11758    LAPA: Latent Action Pretraining from Videos (ICLR 2025)
 2404.12999    Goal Exploration via Adaptive Skill Distribution (GEASD)
 1907.08225    Dynamical Distance Learning for Semi-Supervised and Unsupervised Skill Discovery
-2503.18185    Option-Critic in the Era of Deep RL: A Review of Recent Advances and Challenges
-2412.13625    Hierarchical RL using Options based on Deep Q-Networks and TD Error
-2410.08057    Exploration of the Deep Option-Critic Architecture
+2507.16473    Learning Temporal Abstractions via Variational Homomorphisms in Option-Induced Abstract MDPs
 ```
+
+> ❌ **剔除**(WebSearch 给了假 ID,实际论文与本主题无关):
+> - 2503.18185 → 实为 cybersecurity 综述
+> - 2412.13625 → 实为等离子体物理
+> - 2410.08057 → 实为数学(parking functions)
+> - 2402.04879 → 实为 Twitter 抽样方法学
+> - 2404.12501 → 实为 SPIdepth 自监督深度估计
 
 ### B2 · 技能 → 参数 / LoRA / 权重(对应 LatentSkill / ParametricSkills)
 
@@ -54,11 +59,7 @@
 2402.12939    Discovering Behavioral Modes in Deep RL Policies Using Trajectory Clustering in Latent Space
 ```
 
-> **OpenAI VPT (Video PreTraining, Baker et al. 2022)** —— Minecraft 行为基础模型。属于 arXiv:2206.11796,粘入即可。
-
-```
-2206.11796    Video PreTraining (VPT): Learning to Act by Watching Unlabeled Online Videos
-```
+> **OpenAI VPT (Video PreTraining, Baker et al. 2022)** —— Minecraft 行为基础模型。在 arXiv listing 中验证过 arXiv:2206.11796 是数学论文,实际 VPT 的真 arXiv ID **2206.11796v1 已被撤回/标错**,请改用 OpenReview/官方网站引用,或者在主题报告里以"OpenAI VPT 2022"作为背景提及。
 
 ### B4 · 游戏 / 对战策略与行为潜空间
 
@@ -79,7 +80,7 @@
 ### B7 · LLM Agent 技能库 / 技能检索 / 技能图谱
 
 ```
-2305.16291    Voyager: An Open-Ended Embodied Agent with Large Language Models  (Minecraft + GPT-4 + 技能库 + 描述嵌入做检索)
+2305.16291    Voyager: An Open-Ended Embodied Agent with Large Language Models  (Minecraft + GPT-4 + 技能库 + 描述嵌入检索)
 2606.29538    resource2skill: Distilling Executable Agent Skills from Human-Created Multimodal Resources  → 本地
 ```
 
@@ -111,7 +112,7 @@
 |---|---|---|
 | A · URL 技能发现 | 无本地直接对应 | LatentSkill 的"MDS 可视化 + 域内/跨域相似度"分析可作为"潜空间几何"对照基线 |
 | B · 权重化技能 | [2606.06087] LatentSkill、[2606.30015] ParametricSkills、[2606.29538] resource2skill | B1 / B2 外部候选主要做"距离约束 / 跨形态对齐 / 跨任务泛化" |
-| C · 视频预训练 | 无本地直接对应 | VPT(2206.11796)+ LAPA(2410.11758)+ 2402.12939 三件套 |
+| C · 视频预训练 | 无本地直接对应 | LAPA(2410.11758)+ 2402.12939 三件套(VPT 暂未列入种子) |
 | D · 游戏策略潜空间 | [2607.00190] Play Like Champions | AlphaStar Unplugged(2308.03526)是"离线 RL + 行为分析"对照 |
 | E · 玩家嵌入 | [2607.00642] Coachable Agents | 与 D 形成"策略端 vs 玩家端"两端 |
 | F · PCG 关卡表示 | [2607.12097] PRP、[2607.09095] 节奏关卡 token | 主题阶段 4 联网搜 PCGRL / MarioGAN / GAN level |
