@@ -189,39 +189,50 @@ function cellLabel(c: DayCell): string {
 // 8) 总览统计
 const totalDays = months.reduce((s, m) => s + m.daysWithPapers, 0);
 const grandTotal = months.reduce((s, m) => s + m.totalCount, 0);
-// 全库出现过的 task 集合大小(与月份切换无关,与 byTag.size 口径一致)
-const totalTopicCount = new Set(
-  valid.map((p) => (p.task && p.task.length > 0 ? p.task : null)).filter((x): x is string => !!x)
-).size;
+// 全库出现过的 task 集合大小(与月份切换无关,与 byTag.size 口径一致)。
+// 排除 '其他' 桶:这是 resolveTaskKey 的 fallback,代表"无明确 task 的论文",
+// 不是真实的主题分类 —— UI 上不对用户暴露,stats 与 select 口径保持一致。
+const NAMED_TASKS = valid
+  .map((p) => p.task)
+  .filter((t): t is string => !!t && t !== '其他');
+const totalTopicCount = new Set(NAMED_TASKS).size;
 
-// 9) 主题 → 篇数 统计(用于头部 chip 排序)。
+// 9) 主题 → 篇数 统计(用于头部 select 选项)。
 //    来源:listAllPapersByTag 在 index.astro 也用过口径(key = categories.task[0])。
-//    这里按 vali dLeanPaper.task 重新聚合,保证 chip N 与"按主题分类"段一致。
-const TOPIC_CHIPS = [
-  ['rl', '强化学习'],
-  ['mas', '多智能体系统'],
-  ['llm-agent', 'LLM Agent'],
-  ['agent', '智能体'],
-  ['reasoning', '推理增强'],
-  ['gui', 'GUI'],
-  ['vision', '视觉'],
-  ['game-ai', '游戏 AI'],
-  ['robotics', '机器人'],
-  ['code', '代码生成'],
-  ['self-distillation', '自蒸馏'],
-  ['intervention', '激活干预'],
-] as const;
+//    这里按 valid LeanPaper.task 重新聚合,保证 select 项数 = stats 卡
+//    "主题数量" 口径(剔除 '其他' 后剩余的真实 task 桶)。
+//
+//    TOPIC_LABELS 只是 label 美化映射 — 白名单外的 key 原样显示英文 key,
+//    不再用白名单截断 select,避免 stats 显示 N 但下拉只看到 M 项的错觉。
+const TOPIC_LABELS: Record<string, string> = {
+  'rl': '强化学习',
+  'mas': '多智能体系统',
+  'llm-agent': 'LLM Agent',
+  'agent': '智能体',
+  'reasoning': '推理增强',
+  'gui': 'GUI',
+  'vision': '视觉',
+  'game-ai': '游戏 AI',
+  'robotics': '机器人',
+  'code': '代码生成',
+  'self-distillation': '自蒸馏',
+  'intervention': '激活干预',
+};
 
 const taskCounts = new Map<string, number>();
 for (const p of valid) {
-  const t = p.task || '其他';
+  const t = p.task;
+  if (!t || t === '其他') continue;
   taskCounts.set(t, (taskCounts.get(t) || 0) + 1);
 }
-const topicChips = TOPIC_CHIPS.map(([key, label]) => ({
-  key,
-  label,
-  count: taskCounts.get(key) || 0,
-})).filter((c) => c.count > 0);
+// 按篇数 desc 排,再按 key 字典 asc 兜底稳定排序
+const topicChips = Array.from(taskCounts.entries())
+  .map(([key, count]) => ({
+    key,
+    label: TOPIC_LABELS[key] || key,
+    count,
+  }))
+  .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
 ---
 
 <section id="daily" class="section daily-section">
