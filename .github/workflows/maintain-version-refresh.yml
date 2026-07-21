@@ -64,6 +64,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+
+      - name: Install npm deps
+        # "Rebuild arxiv index" 跑 node build-arxiv-index.mjs,该脚本 import
+        # `gray-matter` (npm 包)。Setup Node 只装运行时,不装 deps;
+        # 没这步脚本会 ERR_MODULE_NOT_FOUND 退出。
+        run: npm ci
 
       - name: Cache Python deps
         uses: actions/cache@v5

@@ -121,12 +121,17 @@ def _clamp_int(value: float | int, min_value: int, max_value: int) -> int:
 def resolve_global_pool_budget(
   total_papers: int,
   intent_query_count: int,
+  *,
+  global_limit_override: Optional[int] = None,
+  guaranteed_per_lane_override: Optional[int] = None,
 ) -> Tuple[int, int, int]:
   """
   统一候选池预算：
-  - lane_top_k 随论文总数递增：1000 篇内 30，每增加 1000 篇 +10，上限 120；
-  - guaranteed_per_lane = lane_top_k 的 25%，限制在 [5, 20]；
-  - global_rrf_top = lane_top_k * intent_query_count，限制在 [60, 300]。
+  - lane_top_k 随论文总数递增:1000 篇内 30,每增加 1000 篇 +10,上限 120;
+  - guaranteed_per_lane = lane_top_k 的 25%,限制在 [5, 20];
+  - global_rrf_top = lane_top_k * intent_query_count,限制在 [60, 300]。
+  - global_limit_override / guaranteed_per_lane_override:test 用来强制压低预算,
+    让小批量场景也能稳定到 split / cap 路径(不影响生产逻辑,默认 None)。
   """
   total = max(int(total_papers or 0), 0)
   intent_count = max(int(intent_query_count or 0), 1)
@@ -135,15 +140,25 @@ def resolve_global_pool_budget(
   else:
     blocks = (total - 1) // 1000
     lane_top_k = min(LANE_TOP_K_BASE + LANE_TOP_K_STEP * blocks, LANE_TOP_K_MAX)
-  guaranteed_per_lane = _clamp_int(
+  default_guaranteed = _clamp_int(
     round(lane_top_k * 0.25),
     GLOBAL_POOL_GUARANTEED_MIN,
     GLOBAL_POOL_GUARANTEED_MAX,
   )
-  global_rrf_top = _clamp_int(
+  default_global_top = _clamp_int(
     lane_top_k * intent_count,
     GLOBAL_POOL_RRF_MIN,
     GLOBAL_POOL_RRF_MAX,
+  )
+  guaranteed_per_lane = (
+    guaranteed_per_lane_override
+    if guaranteed_per_lane_override is not None
+    else default_guaranteed
+  )
+  global_rrf_top = (
+    global_limit_override
+    if global_limit_override is not None
+    else default_global_top
   )
   return lane_top_k, guaranteed_per_lane, global_rrf_top
 
@@ -197,7 +212,15 @@ def iter_batches(
   docs_with_idx: List[Tuple[int, str]],
   query_tokens: int,
   encoder,
+  batch_size: int = BATCH_SIZE,
 ) -> List[Tuple[List[int], List[str]]]:
+  """把候选文档按 rerank 单次请求限制切成多个 batch。
+
+  batch_size 默认 = BATCH_SIZE(=100)。某些公开 rerank 服务(如 zwwen.online)
+  单次最多接 64 篇,调用 process_file 时会把 reranker.max_documents_per_request
+  传入,本函数据此切,避免 4xx batch too large 错误。
+  """
+  batch_size = max(1, int(batch_size or BATCH_SIZE))
   batches: List[Tuple[List[int], List[str]]] = []
   pos = 0
   while pos < len(docs_with_idx):
@@ -205,7 +228,7 @@ def iter_batches(
     batch_docs: List[str] = []
     batch_indices: List[int] = []
 
-    while pos < len(docs_with_idx) and len(batch_docs) < BATCH_SIZE:
+    while pos < len(docs_with_idx) and len(batch_docs) < batch_size:
       orig_idx, doc = docs_with_idx[pos]
       doc_tokens = estimate_tokens(doc, encoder)
       if total_tokens + doc_tokens > TOKEN_SAFETY and batch_docs:
@@ -227,11 +250,14 @@ def rrf_merge(scores: Dict[int, float], rank_idx: int, orig_idx: int) -> None:
 
 
 def process_file(
-  reranker: LLMClient,
+  reranker: "LLMClient",
   input_path: str,
   output_path: str,
   top_n: Optional[int],
   rerank_model: str,
+  *,
+  rerank_global_pool_limit: Optional[int] = None,
+  rerank_guaranteed_per_lane: Optional[int] = None,
 ) -> None:
   data = load_json(input_path)
   papers_list = data.get("papers") or []
@@ -259,6 +285,8 @@ def process_file(
   lane_top_k, guaranteed_per_lane, global_rrf_top = resolve_global_pool_budget(
     len(papers_list),
     len(queries),
+    global_limit_override=rerank_global_pool_limit,
+    guaranteed_per_lane_override=rerank_guaranteed_per_lane,
   )
   global_candidate_ids = build_global_candidate_ids(
     all_queries,
@@ -269,6 +297,7 @@ def process_file(
   data["global_pool_lane_top_k"] = lane_top_k
   data["global_pool_limit"] = global_rrf_top
   data["global_pool_guaranteed_per_lane"] = guaranteed_per_lane
+  data["global_pool_effective_size"] = len(global_candidate_ids)
   if not global_candidate_ids:
     log("[WARN] 未能从任意 query 中构建统一候选池，跳过 rerank。")
     meta_generated_at = data.get("generated_at") or ""
@@ -277,6 +306,15 @@ def process_file(
     save_json(data, output_path)
     return
   encoder = build_token_encoder()
+  # rerank 接口单次最多接收 N 篇(部分公开 rerank 服务有上限,如 zwwen 64)。
+  # process_file 必须尊重 reranker.max_documents_per_request,这是 caller 契约;
+  # 上限比默认 BATCH_SIZE 小时,iter_batches 自动按 effective_batch_size 切。
+  reranker_batch_limit = getattr(reranker, "max_documents_per_request", None)
+  effective_batch_size = (
+    min(BATCH_SIZE, int(reranker_batch_limit))
+    if reranker_batch_limit and int(reranker_batch_limit) > 0
+    else BATCH_SIZE
+  )
   group_start(f"Step 3 - rerank {os.path.basename(input_path)}")
   log(
     f"[INFO] 开始 rerank：queries={len(queries)}（仅 intent/语义查询），papers={len(papers_list)}，"
@@ -298,7 +336,7 @@ def process_file(
     random.shuffle(docs_with_idx)
 
     query_tokens = estimate_tokens(q_text, encoder)
-    batches = iter_batches(docs_with_idx, query_tokens, encoder)
+    batches = iter_batches(docs_with_idx, query_tokens, encoder, batch_size=effective_batch_size)
     log(
       f"[INFO] Query {q_idx}/{len(queries)} tag={q.get('tag') or ''} | candidates={len(top_ids)} "
       f"| batches={len(batches)} | query_tokens≈{query_tokens}"
@@ -373,6 +411,87 @@ def process_file(
 
   save_json(data, output_path)
   group_end()
+
+
+# ---------------------------------------------------------------------------
+# Rerank profile resolution
+# ---------------------------------------------------------------------------
+#
+# Why: 不同部署可能用不同的 rerank 服务(公开 zwwen / siliconflow / 本地 qwen3),
+# 通过 RERANK_PROFILE 环境变量挑 profile。profile 名是规范化后的字符串,
+# _resolve_rerank_profile_config 把字符串映射回 (provider, base_url, model) 配置。
+#
+# 这里只放"映射表 + 归一化 + 默认",不发请求。test_rank_global_pool.py 用这些
+# 入口来固定 profile 配置的契约。
+DEFAULT_RERANK_MODEL = "Qwen/Qwen3-Reranker-0.6B"
+
+
+_RERANK_PROFILE_TABLE = {
+  # 用户旧 profile 名 → 内部规范名(zwwen 公开服务)。
+  "zwwen": "public-zwwen-rerank",
+  "public_zwwen": "public-zwwen-rerank",
+  "public-zwwen-rerank": "public-zwwen-rerank",
+  # SiliconFlow Qwen3 0.6B(免费档,常作开发/dev 兜底)
+  "sf_0.6b": "siliconflow-qwen3-0.6b",
+  "siliconflow": "siliconflow-qwen3-0.6b",
+  "siliconflow-qwen3-0.6b": "siliconflow-qwen3-0.6b",
+  # 本地 / 本地-like 兜底
+  "local-qwen3-0.6b": "local-qwen3-0.6b",
+  "local": "local-qwen3-0.6b",
+}
+
+
+_RERANK_PROFILE_CONFIG = {
+  "public-zwwen-rerank": {
+    "provider": "public_zwwen",
+    "base_url": "https://zwwen.online/rerank",
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "max_documents_per_request": 64,
+  },
+  "siliconflow-qwen3-0.6b": {
+    "provider": "siliconflow",
+    "base_url": "https://api.siliconflow.cn/v1/rerank",
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "max_documents_per_request": 64,
+  },
+  "local-qwen3-0.6b": {
+    "provider": "siliconflow",
+    "base_url": "http://localhost:8000/v1/rerank",
+    "model": "Qwen/Qwen3-Reranker-0.6B",
+    "max_documents_per_request": 64,
+  },
+}
+
+
+def _normalize_rerank_profile(name: Optional[str]) -> str:
+  """把任意用户/profile 输入归一到内部规范名。
+
+  未知 profile 一律回退到 `public-zwwen-rerank`(默认公共 rerank 服务),
+  不抛错 — 调用方通常只是想知道默认是什么。
+  """
+  raw = str(name or "").strip().lower()
+  if not raw:
+    return "public-zwwen-rerank"
+  return _RERANK_PROFILE_TABLE.get(raw, "public-zwwen-rerank")
+
+
+def _resolve_rerank_profile_config(name: Optional[str]) -> Dict[str, Any]:
+  """根据已归一的 profile 名返回 dict:provider/base_url/model/max_documents_per_request。
+
+  未知名走默认 profile。"public-zwwen-rerank" 是测试与生产都期望的兜底。
+  """
+  key = _normalize_rerank_profile(name)
+  return _RERANK_PROFILE_CONFIG[key]
+
+
+def resolve_default_rerank_model() -> str:
+  """读取 RERANK_PROFILE 环境变量并返回对应的 model 名。
+
+  无 RERANK_PROFILE / 未知 profile → 走默认 public zwwen 的 model。
+  这是 process_file 用 LLMClient.from_env() 之外的 fallback 路径。
+  """
+  cfg = _resolve_rerank_profile_config(os.getenv("RERANK_PROFILE", ""))
+  return cfg.get("model") or DEFAULT_RERANK_MODEL
 
 
 def main() -> None:

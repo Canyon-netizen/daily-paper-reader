@@ -97,7 +97,44 @@ class TestWriteEnvLines:
         """Should not crash when env_file is None."""
         load_gist.write_env_lines({"LLM_MODEL": "m"}, None)
         captured = capsys.readouterr()
-        assert "LLM_MODEL=m" in captured.out
+        assert "LLM_MODEL=" in captured.out
+        # 值不能出现在 stdout(防止 secret 走公开 Actions 日志)
+        assert "LLM_MODEL=m\n" not in captured.out
+        assert "m" not in [line.split("=", 1)[1] for line in captured.out.splitlines() if line.startswith("LLM_MODEL=")]
+
+    def test_secret_keys_emitted_as_add_mask(self, capsys):
+        """含 SECRET/API_KEY/PASSWORD/SERVICE_KEY/TOKEN/PRIVATE_KEY 子串的 key
+        必须先 ::add-mask:: 再写 env,且值不进 stdout。"""
+        payload = {
+            "LLM_API_KEY": "sk-real-secret-xyz",
+            "SUPABASE_SERVICE_KEY": "sbp_another_secret",
+            "RERANK_API_KEY": "rk-yet-another",
+            "OPENREVIEW_PASSWORD": "pw-1234",
+            "LLM_BASE_URL": "https://example.com",  # 非 secret
+        }
+        load_gist.write_env_lines(payload, None)
+        captured = capsys.readouterr()
+        # 4 个 secret 必须 emit ::add-mask::
+        for v in ("sk-real-secret-xyz", "sbp_another_secret", "rk-yet-another", "pw-1234"):
+            assert f"::add-mask::{v}" in captured.out, f"missing ::add-mask:: for {v}"
+        # secret 的真实 value 只能以 ::add-mask::<v> 形式出现一次,绝不能裸出现第二次
+        for v in ("sk-real-secret-xyz", "sbp_another_secret", "rk-yet-another", "pw-1234"):
+            assert captured.out.count(v) == 1, f"value {v} appears more than once (leak)"
+        # stdout 必须能看到 key 名,便于诊断 Gist 加载了哪些字段
+        assert "LLM_API_KEY" in captured.out
+        assert "SUPABASE_SERVICE_KEY" in captured.out
+        assert "OPENREVIEW_PASSWORD" in captured.out
+        # 但 LLM_BASE_URL 的真实值也不能再裸出现(为安全一致,我们统一不打印 value)
+        assert "https://example.com" not in captured.out
+        assert "<set" in captured.out  # 长度占位符
+
+    def test_env_file_still_gets_full_values(self, tmp_path):
+        """虽然 stdout 看不到 secret,但 $GITHUB_ENV 文件里值必须完整 — 否则后续步骤读不到。"""
+        env_file = tmp_path / "github_env"
+        payload = {"LLM_API_KEY": "sk-real-secret-xyz"}
+        load_gist.write_env_lines(payload, str(env_file))
+        content = env_file.read_text(encoding="utf-8")
+        assert content == "LLM_API_KEY=sk-real-secret-xyz\n"
 
 
 # ---------------------------------------------------------------------------

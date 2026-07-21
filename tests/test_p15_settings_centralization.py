@@ -38,22 +38,24 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SETTINGS_TS = ROOT / "astro-src" / "scripts" / "settings.ts"
+STORAGE_TS = ROOT / "astro-src" / "scripts" / "settings" / "storage.ts"
 LIB_STORAGE_TS = ROOT / "astro-src" / "lib" / "storage.ts"
 LIB_USER_TAGS_TS = ROOT / "astro-src" / "lib" / "user-tags.ts"
-PAPER_LIBRARY_ASTRO = ROOT / "astro-src" / "components" / "PaperLibrary.astro"
+PAPER_LIBRARY_TS = ROOT / "astro-src" / "scripts" / "paper-library.ts"
 SETTINGS_PAGE_TS = ROOT / "astro-src" / "scripts" / "settings-page.ts"
 
 
 class StorageKeysCentralRegistryTest(unittest.TestCase):
-    """STORAGE_KEYS in settings.ts must include BOTH hiddenPapers AND userTags,
-    so a single rename changes all references."""
+    """STORAGE_KEYS in settings/storage.ts must include BOTH hiddenPapers AND userTags,
+    so a single rename changes all references. STORAGE_KEYS is re-exported from
+    settings.ts for backward compatibility."""
 
     def test_storage_keys_includes_hidden_papers(self):
-        text = SETTINGS_TS.read_text(encoding="utf-8")
+        text = STORAGE_TS.read_text(encoding="utf-8")
         self.assertRegex(text, r"hiddenPapers:\s*'dpr_hidden_papers_v1'")
 
     def test_storage_keys_includes_user_tags(self):
-        text = SETTINGS_TS.read_text(encoding="utf-8")
+        text = STORAGE_TS.read_text(encoding="utf-8")
         self.assertRegex(text, r"userTags:\s*'dpr_user_tags_v1'")
 
 
@@ -241,15 +243,18 @@ class SettingsPageListensToEventsTest(unittest.TestCase):
 
 
 class PaperLibraryStillImportsFromLibTest(unittest.TestCase):
-    """PaperLibrary.astro must still import from '../lib/user-tags' (not switch
-    to '../scripts/settings') — keeps import surface stable for /papers/."""
+    """paper-library.ts must keep importing from '../lib/user-tags' (not switch
+    to '../scripts/settings') — keeps import surface stable for /papers/.
+    Note: PaperLibrary.astro only re-exports '../scripts/paper-library' (the actual
+    userTags import lives there since the 92d921c refactor moved the <script>
+    out of the .astro file)."""
 
     def test_paper_library_imports_user_tags_from_lib(self):
-        text = PAPER_LIBRARY_ASTRO.read_text(encoding="utf-8")
+        text = PAPER_LIBRARY_TS.read_text(encoding="utf-8")
         self.assertRegex(
             text,
             r"from\s*'\.\./lib/user-tags'",
-            "PaperLibrary.astro must keep importing from '../lib/user-tags'",
+            "paper-library.ts must keep importing from '../lib/user-tags'",
         )
 
 

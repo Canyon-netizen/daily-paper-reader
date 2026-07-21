@@ -85,7 +85,14 @@ def filter_payload_for_env(payload: dict[str, Any]) -> None:
 # 只要 key 含下面这些子串,都按 secret 处理 —— 新增 secret 类型只需扩 _SECRET_KEY_HINTS,
 # 不必改每个调用方。
 _SECRET_KEY_HINTS = (
-    "API_KEY", "SECRET", "PASSWORD", "TOKEN", "ACCESS_KEY", "PRIVATE_KEY",
+    # 常规:API_KEY/PASSWORD/TOKEN 一眼可识别
+    "API_KEY", "PASSWORD", "TOKEN", "PRIVATE_KEY",
+    # SECRET 容易误吞像 SECRET_KEY/SUPABASE_SERVICE_KEY 这种,但 *_SECRET_* 在 Gist
+    # 里基本都是 credential(测试明确覆盖了 SUPABASE_SERVICE_KEY)。
+    "SECRET",
+    # SUPABASE_SERVICE_KEY 走 _KEY 路径,OpenReview 用 OPENREVIEW_PASSWORD 已覆盖;
+    # 凡 _KEY 结尾的只要不是 RERANK_API_KEY 这种命中 API_KEY,可能漏。这里统一兜:
+    "SERVICE_KEY",
 )
 
 

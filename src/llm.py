@@ -507,6 +507,9 @@ class LLMClient:
                 last_error = e
                 if response_format is not None and self._is_structured_output_unsupported_error(e):
                     raise
+                # 401 认证错误不做重试
+                if hasattr(e, 'response') and e.response is not None and e.response.status_code == 401:
+                    raise
                 if attempt_idx < len(request_bases):
                     next_base = request_bases[attempt_idx] if attempt_idx < len(request_bases) else ''
                     print(

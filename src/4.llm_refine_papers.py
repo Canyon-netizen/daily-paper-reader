@@ -325,6 +325,11 @@ def call_filter(
                         "evidence_cn": {"type": "string"},
                         "tldr_en": {"type": "string"},
                         "tldr_cn": {"type": "string"},
+                        "title_zh": {"type": "string"},
+                        "motivation_cn": {"type": "string"},
+                        "method_cn": {"type": "string"},
+                        "result_cn": {"type": "string"},
+                        "conclusion_cn": {"type": "string"},
                         "score": {"type": "number"},
                     },
                     "required": [
@@ -399,10 +404,15 @@ def call_filter(
         "they do NOT need to be direct quotes. "
         "Also generate TLDR in both languages: tldr_en and tldr_cn. "
         "TLDR should be one sentence summarizing what the paper does and why it matters. "
-        "Keep TLDR concise: <= 120 characters in English and <= 60 Chinese characters. "
+        "Aim for 150-220 Chinese characters for tldr_cn (and the same range for motivation_cn, "
+        "method_cn, result_cn, conclusion_cn), and 30-70 Chinese characters for title_zh. "
+        "These length targets are guidance, not strict limits — keep the same style as a "
+        "paper-page TLDR abstract (concise summary paragraph, not a bullet list). "
         "Then give a score (0-10). "
         "If unrelated, use evidence_en=\"not relevant\", evidence_cn=\"不相关\", "
-        "tldr_en=\"not relevant\", tldr_cn=\"不相关\", score 0, matched_requirement_index=0."
+        "tldr_en=\"not relevant\", tldr_cn=\"不相关\", score 0, matched_requirement_index=0. "
+        "When the paper IS related, also include title_zh, motivation_cn, method_cn, "
+        "result_cn, conclusion_cn — each a short paragraph in the same character range."
     )
     if retry_note:
         user_prompt += f"\n\nRetry correction note:\n{retry_note}"
@@ -544,6 +554,14 @@ def build_filter_retry_note(
     )
 
 
+class FilterOutputTruncatedError(ValueError):
+    """LLM output hit max_tokens / unexpected finish_reason with a partial batch.
+
+    Retrying the same full-batch rarely recovers more tokens, so callers should
+    split the batch instead. See `recover_filter_results` for handling.
+    """
+
+
 def recover_filter_results(
     batch_docs: List[Dict[str, str]],
     runner: Callable[[List[Dict[str, str]], int, str], List[Dict[str, Any]]],
@@ -559,6 +577,13 @@ def recover_filter_results(
         try:
             raw_results = runner(batch_docs, attempt, retry_note)
             return validate_filter_results(batch_docs, raw_results)
+        except FilterOutputTruncatedError as exc:
+            # Truncation is structural (output budget vs batch size) — retrying
+            # the same batch won't earn more tokens. Skip remaining retries and
+            # fall through to the split-recursion below.
+            last_error = exc
+            log(f"[WARN] filter {debug_tag} attempt {attempt}/{max_attempts} truncated: splitting immediately")
+            break
         except Exception as exc:
             last_error = exc
             log(f"[WARN] filter {debug_tag} attempt {attempt}/{max_attempts} invalid: {exc}")
