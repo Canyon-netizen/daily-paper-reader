@@ -8,6 +8,15 @@ const TMP = resolve(ROOT, '.smoke-out');
 rmSync(TMP, { recursive: true, force: true });
 mkdirSync(TMP, { recursive: true });
 
+// .smoke-out 是 tsc 编译产物目录,每次跑脚本时重新生成。run 结束(成功或失败)
+// 都应清掉 — 否则 git status 会一直把里面的 .js 当成未跟踪文件,误导 contributor
+// 把 .js 误 commit 进版本库。把 rmSync 放进 try/finally 保证异常路径也清理。
+function cleanupTmp() {
+  try { rmSync(TMP, { recursive: true, force: true }); } catch {}
+}
+
+try {
+
 execSync(
   `npx --no-install tsc ` +
   `--target ES2022 --module ES2022 --moduleResolution Bundler ` +
@@ -104,4 +113,20 @@ for (const e of top) {
   console.log(`    ${a?.title_zh || a?.title?.slice(0,30)} <-> ${b?.title_zh || b?.title?.slice(0,30)}: w=${e.weight.toFixed(3)} tags=${e.sharedTags?.join(',')}`);
 }
 
+// 真正的断言:必须有 paper 进来,且 Jaccard 边数量不为 0。之前这里直接 print OK
+// 即使 docs/papers 是空 / 全 .md 解析失败,也会显示通过 → 假阳性。
+// 退化情形(空 / 100% 解析失败)在 console 已有 print,这里只负责 fail-fast。
+if (papers.length === 0) {
+  console.error('\n❌ REAL-DATA SANITY FAIL: docs/papers 没有任何可用 .md');
+  process.exit(1);
+}
+if (edges.length === 0) {
+  console.error('\n❌ REAL-DATA SANITY FAIL: Jaccard 边为空(shared tags 过少 / 论文主题太分散)');
+  process.exit(1);
+}
+
 console.log('\n✅ REAL-DATA SANITY OK');
+
+} finally {
+  cleanupTmp();
+}
