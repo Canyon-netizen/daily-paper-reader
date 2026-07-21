@@ -20,8 +20,10 @@ if (process.env.NODE_ENV !== 'production' && !process.env.GH_TOKEN) {
       const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
       if (!m) continue;
       const [, k, v] = m;
-      // 只把 token 行转成 GH_TOKEN,其它(env 里其它脚本用的字段)按原样
-      if (k === 'token' && !process.env.GH_TOKEN) process.env.GH_TOKEN = v;
+      // 只把 token 行转成 GH_TOKEN,其它(env 里其它脚本用的字段)按原样。
+      // 大小写不敏感:某些部署平台 (Cloudflare Pages UI) 自动把环境变量
+      // 转成小写,这里同时认 'GH_TOKEN' / 'Gh_Token' / 'gh_token' 等。
+      if (k.toUpperCase() === 'GH_TOKEN' && !process.env.GH_TOKEN) process.env.GH_TOKEN = v;
     }
   } catch {
     // .env 不存在或读不到时静默忽略,SSR fallback 到"最新论文 date"
