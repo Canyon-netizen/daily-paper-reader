@@ -11,3 +11,7 @@ Pillow
 opencv-python-headless
 huggingface_hub
 dill
+# ICLR / ICML / NeurIPS conference init 走 openreview API,fetch_openreview.py
+# 顶层 import openreview。之前没列在 requirements 里,CI 起 maintain workflow
+# 时直接 RuntimeError("缺少 openreview-py")。这里 pin 上限避免上游 breaking。
+openreview-py>=0.1,<2.0

@@ -218,7 +218,10 @@ jobs:
           PY
 
       - name: Sync figures_json into existing .md frontmatter
-        if: inputs.mode == 'append-deepdive' || inputs.mode == 'combined'
+        # 只对 append-deepdive 有意义:这种模式 .md 已存在,这里只是把图字段补上。
+        # combined 模式 .md 还不存在("Write paper file" 步才写),如果这里先跑
+        # 会 FileNotFoundError,然后下面的精读步骤也错乱。先修掉。
+        if: inputs.mode == 'append-deepdive'
         env:
           YEAR: ${{ env.YEAR }}
           MONTH: ${{ env.MONTH }}
@@ -261,6 +264,13 @@ jobs:
               existing = f.read()
 
           # 替换或插入 figures_json 行
+          # figures_json 的 value 必须是合法 YAML + 内部 JSON。两种合法写法:
+          #   figures_json: <json.dumps(json_array)>   — JSON-double-quoted,PyYAML 当 plain scalar 解析
+          #   figures_json: "{<json_array>}"            — YAML 双引号字符串包整体(JSON 自身有双引号要转义)
+          # 这里用 json.dumps(..., ensure_ascii=False) 走第一种 —— 与 src/6.generate_docs.py 的
+          # `figures_json: {yaml_escape_value(json.dumps(...))}` 形式对齐。
+          # 之前 insert 分支直接包 "..." 不转义内部 ",PyYAML 解析到第一个内部 " 就报错,
+          # 整个 frontmatter 读不到 → notes 永远没有图。
           if re.search(r'^figures_json:\s', existing, re.MULTILINE):
               new_existing = re.sub(
                   r'^figures_json:\s.*$',
@@ -270,10 +280,10 @@ jobs:
                   flags=re.MULTILINE,
               )
           else:
-              # 插到 --- 闭合前
+              # 插到 --- 闭合前,同样走 json.dumps 包出可解析的 YAML scalar
               new_existing, n = re.subn(
                   r'\n---\n',
-                  f'\nfigures_json: "{figures_json_str}"\n---\n',
+                  f'\nfigures_json: {json.dumps(figures_json_str, ensure_ascii=False)}\n---\n',
                   existing, count=1,
               )
               if n == 0:
@@ -341,10 +351,11 @@ jobs:
                           '{"url":"' + rel + '","caption":"","page":0,"index":' + str(i) + ',"width":0,"height":0}'
                       )
                   figures_json_str = '[' + ','.join(fig_entries) + ']'
-                  # 插到第一个 \n---\n 之前
+                  # 插到第一个 \n---\n 之前。必须走 json.dumps,不能用裸 "..." 包,
+                  # 否则 JSON 内部 " 会让 PyYAML 解析 frontmatter 报错(详情见上一处修复)。
                   new_existing, n = re.subn(
                       r'\n---\n',
-                      '\nfigures_json: "' + figures_json_str + '"\n---\n',
+                      '\nfigures_json: ' + json.dumps(figures_json_str, ensure_ascii=False) + '\n---\n',
                       existing, count=1,
                   )
                   if n > 0:
@@ -390,11 +401,15 @@ jobs:
           DAY: ${{ env.DAY }}
         run: |
           FILE="docs/papers/${YEAR}/${MONTH}/${DAY}/${{ inputs.arxiv_id }}-${{ inputs.slug }}.md"
+          # GitHub Actions 步骤输出必须 echo 到 $GITHUB_OUTPUT,而不是 stdout,
+          # 否则 steps.dup.outputs.exists 永远取不到值,"Skip if already committed"
+          # 和 "Commit and push" 的 if 判断都退化成空串,等效于无脑 push。
           if git log --all --oneline -- "$FILE" | head -n 1 > /dev/null 2>&1; then
             COUNT=$(git log --all --oneline -- "$FILE" | wc -l | tr -d ' ')
-            echo "exists=true count=$COUNT"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Skip if already committed

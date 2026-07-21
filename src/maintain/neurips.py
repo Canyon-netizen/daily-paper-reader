@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 
-from common import (
+from .common import (
     TODAY_STR,
     cleanup_backend,
     default_raw_path,

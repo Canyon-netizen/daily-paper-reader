@@ -39,6 +39,9 @@ jobs:
           open("/tmp/req.txt", "w", encoding="utf-8").write("\n".join(lines))
           PY
           python -m pip install -r /tmp/req.txt
+          # pytest 不在 requirements*.txt 里(它只在测试时用),CI 必须显式装。
+          # 否则 "Run pytest" 步会 No module named pytest 直接退出。
+          python -m pip install pytest
 
       - name: Run pytest (offline-safe subset)
         run: |

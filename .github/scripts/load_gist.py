@@ -77,10 +77,42 @@ def filter_payload_for_env(payload: dict[str, Any]) -> None:
     payload.pop("hiddenPapers", None)
 
 
+# Keys we treat as secrets — their VALUES must never reach stdout or the env
+# file via this function. They come from a Gist, not from ${{ secrets.* }}, so
+# GitHub's automatic log-masking does NOT apply (see review of daily-paper-reader
+# workflow: public fork repo logs are world-readable, leaking these is bad).
+# 约定:这套 Gist 通常含 LLM_* / RERANK_* / SUPABASE_* / OPENREVIEW_* / MINIMAX_* 等。
+# 只要 key 含下面这些子串,都按 secret 处理 —— 新增 secret 类型只需扩 _SECRET_KEY_HINTS,
+# 不必改每个调用方。
+_SECRET_KEY_HINTS = (
+    "API_KEY", "SECRET", "PASSWORD", "TOKEN", "ACCESS_KEY", "PRIVATE_KEY",
+)
+
+
+def _is_secret_key(key: str) -> bool:
+    up = key.upper()
+    return any(h in up for h in _SECRET_KEY_HINTS)
+
+
 def write_env_lines(payload: dict[str, Any], env_file: str | None) -> None:
+    """把 Gist 字段写入 $GITHUB_ENV(后续步骤继承),同时把 secret 值注册为
+    ::add-mask::,防止它们出现在 Actions 日志里。
+
+    设计:
+      - 只在 stdout 打 key 名 + 长度(便于诊断),不打印 value。
+      - 对疑似 secret 的 key,先 ::add-mask::,再写到 env_file — GitHub
+        收到 mask 标记后会替换日志里该值的所有出现。
+      - 非 secret key(URL / 频道名 / 配置开关等)按原样写,方便观察。
+    """
     for key, value in payload.items():
+        if _is_secret_key(key):
+            # 先 mask,再写 env file —— 顺序很重要,mask 必须在日志已经能看到
+            # value 之前注册。
+            print(f"::add-mask::{value}")
         line = f"{key}={value}"
-        print(line)
+        # 只在 stdout 输出"已加载",不输出 value(避免误打 secret)。
+        # value 长度大于 0 时打长度;空值给 "<empty>",便于诊断 Gist 字段缺失。
+        print(f"[load_gist] {key}={'<set, len=' + str(len(value)) + '>' if value else '<empty>'}")
         if env_file:
             with open(env_file, "a", encoding="utf-8") as fp:
                 fp.write(line + "\n")

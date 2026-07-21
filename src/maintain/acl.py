@@ -6,7 +6,7 @@ import argparse
 import os
 import sys
 
-from common import TODAY_STR, cleanup_backend, default_raw_path, ensure_parent_dir, run_step
+from .common import TODAY_STR, cleanup_backend, default_raw_path, ensure_parent_dir, run_step
 
 
 def main() -> None:
