@@ -25,6 +25,7 @@ const links = [
   { href: '/papers/',         label: '论文库',      match: '/papers' },
   { href: '/topic/',          label: '主题探索',    match: '/topic' },
   { href: '/conferences/',    label: '会议',        match: '/conferences' },
+  { href: '/concepts/',       label: '概念',        match: '/concepts' },
   { href: '/settings/',       label: '设置',        match: '/settings' },
   { href: '/tutorial/',       label: '使用教程',    match: '/tutorial' },
   { href: '/zotero-usage/',   label: 'Zotero',      match: '/zotero-usage' },
@@ -205,11 +206,20 @@ const links = [
   }
   .theme-toggle-btn:active { transform: scale(0.95); }
 
-  /* SVG 主题图标切换 */
+  /* SVG 主题图标切换
+   * 关键陷阱:Astro scoped CSS 会给选择器自动加 [data-astro-cid-xxx] 前缀,
+   * 编译后变成 [data-astro-cid-xxx][data-theme=light] — 需要同一元素同时
+   * 拥有 cid + data-theme,然而 data-theme 在 <html>,cid 在 navbar 子元素,
+   * 永远不匹配 → 3 个 SVG 全 display:none。
+   * 用 :global() 让 [data-theme] 选择器穿透,不再被加 cid 前缀。
+   */
   .theme-icon { display: none; line-height: 0; }
-  [data-theme='light']    .theme-icon--light    { display: inline-flex; }
-  [data-theme='dark']     .theme-icon--dark     { display: inline-flex; }
-  [data-theme='contrast'] .theme-icon--contrast { display: inline-flex; }
+  :global([data-theme='light'])    .theme-icon--light    { display: inline-flex; }
+  :global([data-theme='dark'])     .theme-icon--dark     { display: inline-flex; }
+  :global([data-theme='contrast']) .theme-icon--contrast { display: inline-flex; }
+  /* 兜底:data-theme 为空串/null/未识别值时,默认显示 light,避免整框空白 */
+  :global(:root:not([data-theme])) .theme-icon--light,
+  :global(:root[data-theme='']) .theme-icon--light { display: inline-flex; }
 
   @media (max-width: 720px) {
     .brand-sub { display: none; }
