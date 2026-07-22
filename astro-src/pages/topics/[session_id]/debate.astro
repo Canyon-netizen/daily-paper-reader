@@ -2,9 +2,172 @@
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import Navbar from '../../../components/Navbar.astro';
 import Footer from '../../../components/Footer.astro';
+import '../../../styles/topic-search.css';
+import '../../../styles/concepts-graph.css';
 ---
+
 <BaseLayout title="主题辩论 · Daily Paper Reader">
   <Navbar />
-  <main class="topic"><h1>主题 v2 · Elo 辩论</h1><div id="debate-stage"><p>暂无辩论进度。请从主题探索页面启动。</p></div></main>
+  <main class="topic">
+    <header class="topic-intro">
+      <strong>主题辩论</strong> · 本页展示某次 Topic 会话的 Elo 辩论结果。
+      从 <a href={import.meta.env.BASE_URL + 'topic/'}>主题探索</a> 启动一次辩论后,
+      排行 + 对局明细会自动写到这里。
+    </header>
+
+    <section id="debate-empty" class="topic-debate-empty" hidden>
+      <p>暂无辩论进度。请先到 <a href={import.meta.env.BASE_URL + 'topic/'}>主题探索</a> 启用辩论(在 settings 设置 <code>topic.v2.enabled: true</code>),刷新后这里会显示。</p>
+    </section>
+
+    <section id="debate-page-content" class="topic-debate-page" hidden>
+      <h2 class="topic-debate-page-title" id="debate-page-title"></h2>
+      <div id="debate-stage" class="topic-debate-stage"></div>
+      <div id="debate-matches" class="topic-debate-matches"></div>
+    </section>
+  </main>
+
   <Footer />
 </BaseLayout>
+
+<script>
+  // PR-6 v2: 客户端渲染 — 从 localStorage 读 TopicSession.debateProgress 并渲染。
+  //   不依赖 build 期生成数据(浏览器只读)。
+  //
+  // 路径格式: /topics/<session_id>/debate → 优先匹配 sessions[<sid>].debateProgress,
+  //   否则扫 sessions 找第一个有 debateProgress 的 session。
+
+  import type { DebateProgress, DebateIdea } from '../../../lib/schemas';
+
+  const SESSION_KEY = 'dpr_topic_session_v1';
+
+  function escapeHtml(s: string | undefined | null): string {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderLeaderboard(ideas: DebateIdea[]): string {
+    const maxElo = Math.max(...ideas.map((i) => i.elo_rating ?? 1200), 1200);
+    return `
+      <table class="topic-debate-leaderboard">
+        <thead>
+          <tr><th>#</th><th>Title</th><th>Elo</th><th>Wins</th><th>Matches</th><th>Score</th></tr>
+        </thead>
+        <tbody>
+          ${ideas.map((idea, n) => {
+            const elo = Math.round(idea.elo_rating ?? 1200);
+            const pct = ((idea.elo_rating ?? 1200) / maxElo) * 100;
+            return `
+              <tr>
+                <td>${n + 1}</td>
+                <td>${escapeHtml(idea.title)}</td>
+                <td>${elo}</td>
+                <td>${idea.wins ?? 0}</td>
+                <td>${idea.matches ?? 0}</td>
+                <td><div class="topic-debate-leaderboard-bar" style="width:${pct.toFixed(1)}%"></div></td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderPersonaBubble(
+    persona: string,
+    side: 'pro' | 'con' | 'judge',
+    content: string,
+  ): string {
+    const sideLabel = side === 'pro' ? '正方' : side === 'con' ? '反方' : '裁判';
+    const sideClass = `topic-debate-bubble--${side}`;
+    return `
+      <div class="topic-debate-bubble ${sideClass}">
+        <span class="topic-debate-bubble-persona">${escapeHtml(persona)}</span>
+        <span class="topic-debate-bubble-side">${sideLabel}</span>
+        <p class="topic-debate-bubble-content">${escapeHtml(content)}</p>
+      </div>
+    `;
+  }
+
+  function renderMatches(progress: DebateProgress): string {
+    const matches: any[] = (progress as any).matches ?? [];
+    if (!matches.length) return '';
+    return `
+      <h3 class="topic-debate-subtitle">对局明细</h3>
+      ${matches
+        .map(
+          (m: any) => `
+        <details class="topic-debate-match">
+          <summary>
+            <span class="topic-debate-match-meta">A: ${escapeHtml(m.idea_a)} vs B: ${escapeHtml(m.idea_b)}</span>
+            <span class="topic-debate-match-winner">胜者:${escapeHtml(m.winner)}${m.failed ? '(失败)' : ''}</span>
+          </summary>
+          <div class="topic-debate-match-transcript">
+            ${(m.transcript ?? [])
+              .map((t: any) => renderPersonaBubble(t.persona, t.side, t.content))
+              .join('')}
+          </div>
+        </details>
+      `,
+        )
+        .join('')}
+    `;
+  }
+
+  function findProgress(): DebateProgress | null {
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(SESSION_KEY);
+    } catch {
+      return null;
+    }
+    if (!raw) return null;
+    try {
+      const store = JSON.parse(raw);
+      // 形态 1: 顶层 debateProgress(旧 fallback)
+      if (store.debateProgress) return store.debateProgress as DebateProgress;
+      // 形态 2: sessions[currentId].debateProgress(标准 SessionStore)
+      if (store.sessions && store.currentId) {
+        const session = store.sessions[store.currentId];
+        if (session?.debateProgress) return session.debateProgress as DebateProgress;
+      }
+      // 形态 3: 扫所有 sessions 找第一个有 debateProgress 的
+      if (store.sessions) {
+        for (const sid of Object.keys(store.sessions)) {
+          const dp = store.sessions[sid]?.debateProgress;
+          if (dp) return dp as DebateProgress;
+        }
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  function init(): void {
+    const emptyEl = document.getElementById('debate-empty') as HTMLElement | null;
+    const contentEl = document.getElementById('debate-page-content') as HTMLElement | null;
+    const stageEl = document.getElementById('debate-stage');
+    const matchesEl = document.getElementById('debate-matches');
+    const titleEl = document.getElementById('debate-page-title');
+    if (!emptyEl || !contentEl || !stageEl || !matchesEl || !titleEl) return;
+
+    const progress = findProgress();
+    if (!progress || !progress.ideas || progress.ideas.length === 0) {
+      emptyEl.hidden = false;
+      return;
+    }
+
+    emptyEl.hidden = true;
+    contentEl.hidden = false;
+    titleEl.textContent = `Session: ${progress.sessionId} · ${progress.personas?.join(' / ') ?? '辩论'}`;
+    stageEl.innerHTML = renderLeaderboard(progress.ideas);
+    matchesEl.innerHTML = renderMatches(progress);
+  }
+
+  init();
+</script>
