@@ -2690,6 +2690,13 @@ function renderDebateStageSafe(): void {
       } catch (e) {
         console.warn('[topic.v2] failed to sync debateProgress back to current session:', e);
       }
+      // PR-6 v2: 显示 "打开完整辩论页" 链接,href 填当前 session id
+      const linkEl = document.getElementById('debate-detail-link') as HTMLAnchorElement | null;
+      if (linkEl && current) {
+        const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+        linkEl.href = `${base}/topics/${encodeURIComponent(current.id)}/debate/`;
+        linkEl.hidden = false;
+      }
     })
     .catch((e) => console.warn('[topic.v2] renderDebateStage skipped:', e));
 }
