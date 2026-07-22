@@ -92,7 +92,7 @@ def md_with_limitation(tmp_path):
 
 @pytest.fixture
 def md_with_chinese_limitation(tmp_path):
-    """构造一篇带中文 '局限性' heading 的 md。用 \u escape 避免 Windows 编码陷阱。"""
+    """Build a markdown file with Chinese 'limitations' heading. Use ASCII-only docstring."""
     (tmp_path / "papers").mkdir()
     (tmp_path / "papers" / "p1.md").write_text(
         "---\npublished_at: 2026-07-22\n---\n"

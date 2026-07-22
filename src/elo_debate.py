@@ -107,9 +107,17 @@ def run_match(
             content = run_match_persona(con, a, b, round_n, call=lambda *_: "TODO: LLM call")
             transcript.append({"persona": con_name, "side": "con", "round": round_n, "content": content})
 
-        # Judge
+        # Judge -- call raw judge_llm_call so exceptions propagate to run_match's try/except.
+        # judge_debate() wraps in its own try/except returning "tie", which would hide
+        # failures from the per-match-failure-isolation contract.
         round_n += 1
-        judge_result = judge_debate(a, b, judge_llm_call)
+        raw_judge = judge_llm_call(a, b)
+        if isinstance(raw_judge, dict):
+            judge_result = raw_judge.get("winner", "tie")
+            if judge_result not in ("a", "b"):
+                judge_result = "tie"
+        else:
+            judge_result = "tie"
         transcript.append({
             "persona": judge_name,
             "side": "judge",
