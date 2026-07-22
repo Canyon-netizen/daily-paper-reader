@@ -4,8 +4,8 @@
 // 数据源: docs/papers/<...>/<paper-id>-*.citations.json (运行 citation_guard 后生成)
 // 找不到文件 → 显示"暂未启用引用核查"占位。
 
-import Layout from '../../../layouts/Layout.astro';
-import { loadCitations } from '../../../scripts/citation-guard';
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import { loadCitations } from '../../../../scripts/citation-guard';
 
 export async function getStaticPaths() {
   // 构建期扫所有 *.citations.json,只生成已存在报告的页面
@@ -22,7 +22,7 @@ const minor = citations?.summary?.minor ?? 0;
 const fabricated = citations?.summary?.fabricated ?? 0;
 ---
 
-<Layout title={`引用核查 ${id}`}>
+<BaseLayout title={`引用核查 ${id}`}>
   <main class="citations-page">
     <h1>引用核查报告</h1>
     <p class="paper-id">论文: <code>{id}</code></p>
@@ -103,7 +103,7 @@ const fabricated = citations?.summary?.fabricated ?? 0;
       </>
     )}
   </main>
-</Layout>
+</BaseLayout>
 
 <style>
   .citations-page {
