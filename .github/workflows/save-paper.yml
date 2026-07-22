@@ -74,6 +74,12 @@ concurrency:
   group: save-paper
   cancel-in-progress: false
 
+# PR-7: Citation Guard 开关（默认 disabled）。启用后 Deep Dive 写盘后跑引用核查。
+# 在 workflow_dispatch 的 inputs 中可启用（默认 false）。vars.CITATION_GUARD_ENABLED 是
+# 可选的额外通道（若 Repo 设了该 variable，会被 inputs.citation_guard 覆盖）。
+env:
+  CITATION_GUARD_ENABLED: 'false'
+
 jobs:
   commit:
     runs-on: ubuntu-latest
@@ -455,6 +461,20 @@ jobs:
           fi
           git commit -m "${MSG:-$DEFAULT_MSG}"
           git push
+
+      # PR-7: Citation Guard — 写盘后跑引用核查,失败仅 warn,不阻塞 commit。
+      # 默认 disabled（env.CITATION_GUARD_ENABLED 在 workflow 顶层硬编码为 'false'）。
+      # 启用方式：临时把工作流 env.CITATION_GUARD_ENABLED 改成 'true'，或加 inputs.citation_guard。
+      - name: Run citation guard
+        if: ${{ env.CITATION_GUARD_ENABLED == 'true' }}
+        continue-on-error: true
+        run: |
+          echo "[citation-guard] running on docs/papers/**/*.md..."
+          for md in $(git diff --name-only HEAD~1 HEAD -- 'docs/papers/**/*.md' 2>/dev/null); do
+            if [ -f "$md" ]; then
+              python -m citation_guard "$md" || echo "[WARN] citation guard fail: $md"
+            fi
+          done
 
       - name: Trigger Cloudflare Pages rebuild
         if: always()

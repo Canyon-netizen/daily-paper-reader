@@ -1,0 +1,192 @@
+---
+// PR-7: 单篇论文引用核查报告页
+//
+// 数据源: docs/papers/<...>/<paper-id>-*.citations.json (运行 citation_guard 后生成)
+// 找不到文件 → 显示"暂未启用引用核查"占位。
+
+import Layout from '../../../layouts/Layout.astro';
+import { loadCitations } from '../../../scripts/citation-guard';
+
+export async function getStaticPaths() {
+  // 构建期扫所有 *.citations.json,只生成已存在报告的页面
+  // (Astro 静态站 → 不存在的路径会在 build 时返回 404)
+  return [];
+}
+
+const { id } = Astro.params;
+const citations = await loadCitations(id);
+const hasFabricated = (citations?.summary?.fabricated ?? 0) > 0;
+const total = citations?.summary?.total ?? 0;
+const exact = citations?.summary?.exact ?? 0;
+const minor = citations?.summary?.minor ?? 0;
+const fabricated = citations?.summary?.fabricated ?? 0;
+---
+
+<Layout title={`引用核查 ${id}`}>
+  <main class="citations-page">
+    <h1>引用核查报告</h1>
+    <p class="paper-id">论文: <code>{id}</code></p>
+
+    {!citations ? (
+      <div class="empty-state">
+        <p>⚠️ 暂未找到该论文的 <code>.citations.json</code> 报告。</p>
+        <p class="hint">
+          默认 <code>citation_guard.enabled: false</code>，仅在 CLI 模式
+          或 <code>save-paper.yml</code> 启用 <code>CITATION_GUARD_ENABLED=true</code> 时才会生成。
+        </p>
+        <p class="hint">
+          手动触发: <code>python -m citation_guard docs/papers/&lt;...&gt;/&lt;paper-id&gt;-&lt;slug&gt;.md</code>
+        </p>
+      </div>
+    ) : (
+      <>
+        <section class="summary">
+          <div class={`badge ${citations.pass ? 'pass' : 'fail'}`}>
+            {citations.pass ? '✓ 通过' : '✗ 未通过'}
+          </div>
+          <div class="counts">
+            <span>总计 {total}</span>
+            <span class="ok">exact {exact}</span>
+            <span class="warn">minor {minor}</span>
+            <span class="bad">fabricated {fabricated}</span>
+          </div>
+          <p class="timestamp">核查时间: {citations.verified_at}</p>
+        </section>
+
+        {hasFabricated && (
+          <section class="warning">
+            <h2>⚠️ 警告</h2>
+            <p>
+              检测到 {fabricated} 处可能编造的引用。
+              浏览器侧 UI 已显示红色徽章，但本核查 <strong>不阻塞 commit</strong>。
+              详见报告 JSON。
+            </p>
+          </section>
+        )}
+
+        <section class="citations-list">
+          <h2>引用明细</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>标记</th>
+                <th>原文</th>
+                <th>existence</th>
+                <th>support</th>
+                <th>匹配</th>
+              </tr>
+            </thead>
+            <tbody>
+              {citations.citations?.map((c: any) => (
+                <tr class={`row-${c.existence}`}>
+                  <td><code>{c.marker}</code></td>
+                  <td class="raw-text">{c.raw_text}</td>
+                  <td>
+                    <span class={`tag tag-${c.existence}`}>{c.existence}</span>
+                  </td>
+                  <td>{c.support || 'not_checked'}</td>
+                  <td>
+                    {c.match ? (
+                      <span>
+                        {c.match.source} · sim={c.match.similarity?.toFixed(2)}
+                        {c.match.year ? ` · ${c.match.year}` : ''}
+                      </span>
+                    ) : (
+                      <span class="muted">无</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </>
+    )}
+  </main>
+</Layout>
+
+<style>
+  .citations-page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 1.5rem;
+    line-height: 1.6;
+  }
+  .paper-id code {
+    background: #f4f4f4;
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+  .empty-state {
+    background: #fffbea;
+    border-left: 4px solid #f0b400;
+    padding: 1rem 1.25rem;
+    margin: 1.5rem 0;
+  }
+  .empty-state .hint {
+    font-size: 0.9em;
+    color: #666;
+  }
+  .empty-state code {
+    background: #fff5d6;
+    padding: 0.1em 0.3em;
+    border-radius: 3px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 0.3em 0.8em;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+  .badge.pass {
+    background: #d4edda;
+    color: #155724;
+  }
+  .badge.fail {
+    background: #f8d7da;
+    color: #721c24;
+  }
+  .counts {
+    display: flex;
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .counts .ok { color: #155724; }
+  .counts .warn { color: #856404; }
+  .counts .bad { color: #721c24; }
+  .timestamp {
+    color: #888;
+    font-size: 0.85em;
+  }
+  .warning {
+    background: #f8d7da;
+    border-left: 4px solid #dc3545;
+    padding: 1rem 1.25rem;
+    margin: 1rem 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem;
+    border-bottom: 1px solid #eee;
+    vertical-align: top;
+  }
+  .raw-text {
+    max-width: 320px;
+    word-break: break-word;
+  }
+  .tag {
+    padding: 0.15em 0.5em;
+    border-radius: 3px;
+    font-size: 0.85em;
+  }
+  .tag-exact { background: #d4edda; color: #155724; }
+  .tag-minor { background: #fff3cd; color: #856404; }
+  .tag-fabricated { background: #f8d7da; color: #721c24; }
+  .row-fabricated { background: #fff5f5; }
+  .muted { color: #999; }
+</style>

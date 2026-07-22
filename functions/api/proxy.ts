@@ -147,6 +147,10 @@ export async function onRequest(context: EventContext): Promise<Response> {
     // paper-fulltext.ts 的 fetchAr5ivHtml 会走本代理拉 https://ar5iv.org/html/<id>
     'ar5iv.org',
     'www.ar5iv.org',
+    // Semantic Scholar API — citation guard 用于引用核查
+    'api.semanticscholar.org',
+    // OpenAlex API — citation guard fallback 用于引用核查
+    'api.openalex.org',
     // PDF.js worker 专用 — 仅放行下面的 PDFJS_WORKER_PATH_PREFIX,
     // 避免本端点被滥用代理任意 bootcdn 资源。
     'cdn.bootcdn.net',

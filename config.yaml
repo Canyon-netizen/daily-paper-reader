@@ -611,3 +611,22 @@ concepts:
     - dataset
     - other
   slug_pattern: "^[a-z0-9-]+$"
+
+# ============================================================================
+# PR-7: Citation Guard (plans/pr-plans/pr-7-citation-guard.md §11)
+# ============================================================================
+# 零破坏：默认 enabled: false，save-paper.yml guard step 不跑，CLI 不阻塞 commit。
+# 启用后 Deep Dive 产物 *.citations.json 由 src/citation_guard.py::run_guard 写出，
+# 三源核查（library / S2 / OpenAlex），fabricated 引用按 fabricated_action 处理。
+citation_guard:
+  enabled: false
+  sources: ["semantic_scholar", "openalex", "in_library"]
+  fabricated_action: "replace_with_question_mark"
+  run_support_check: false
+  exact_similarity: 0.92
+  minor_similarity: 0.75
+  year_tolerance: 1
+  pass_rating: 6.0
+  max_support_checks: 30
+  s2_rate_limit_per_min: 100
+  s2_retry_max: 5
