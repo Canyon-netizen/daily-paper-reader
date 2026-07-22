@@ -2647,24 +2647,49 @@ function renderAll(): void {
 /** PR-6: 动态 import 包装,默认 enabled=false 时 noop,失败不抛。
  *
  * v2 renderDebateStage 是 fire-and-forget：内部自己跑 Elo + 写 localStorage + 可视化。
- * 我们的接入点只确保：(1) 启用检查；(2) 调用安全。
+ * 我们的接入点只确保：(1) 启用检查；(2) 调用安全；(3) 同步 TopicSession.debateProgress。
  */
 function renderDebateStageSafe(): void {
   if (!current) return;
   const cfg = (loadSettings() as unknown as { topic?: { v2?: { enabled?: boolean } } }) || {};
-  if (!cfg.topic?.v2?.enabled) return;
-  // 从 current.summaries 抽出 idea-like 输入（每个 summary 视作一个 idea 候选）
-  const ideas: Array<Record<string, unknown>> = (current.summaries || []).map((s) => ({
+  if (!cfg.topic?.v2?.enabled) {
+    // 关闭辩论 stage 容器 + 隐藏 #stage-debate
+    const stage = document.getElementById('stage-debate');
+    if (stage) (stage as HTMLDetailsElement).hidden = true;
+    return;
+  }
+  // 显示 stage 4.5 容器
+  const stage = document.getElementById('stage-debate');
+  if (stage) (stage as HTMLDetailsElement).hidden = false;
+
+  // 从 current.summaries 抽出 idea-like 输入(每个 summary 视作一个 idea 候选)
+  //   关键修复:Summary interface 没有顶层 title(在 summary.title),取自 s.summary.title。
+  const ideas = (current.summaries || []).map((s: any) => ({
     id: s.arxivId,
-    title: s.title,
+    title: s.summary?.title || s.title || s.arxivId,  // 修复:之前取 s.title 为 undefined
     elo_rating: 1200,
   }));
+  if (ideas.length < 2) {
+    // 至少 2 篇才能辩论
+    const meta = document.getElementById('debate-meta');
+    if (meta) meta.textContent = '至少需要 2 篇速览笔记才能辩论';
+    return;
+  }
   import('./topic-search-v2')
     .then((mod) => mod.renderDebateStage(current!.id, ideas))
     .then(() => {
-      // v2 renderDebateStage 内部已写 localStorage；这里仅同步到 TopicSession.debateProgress
-      // 字段（如果用户切 session 后还查得到）。
-      // 真正写盘由 saveDebateProgress 完成；UI 重新渲染由下次 renderAll 触发。
+      // v2 renderDebateStage 内部已写 localStorage(顶层 store.debateProgress);
+      // 这里把该字段同步到 current!.debateProgress 让 TopicSession 保持一致。
+      try {
+        const raw = localStorage.getItem('dpr_topic_session_v1');
+        if (raw) {
+          const store = JSON.parse(raw);
+          const dp = store.debateProgress || (store.sessions && store.sessions[store.currentId]?.debateProgress);
+          if (dp && current) current.debateProgress = dp;
+        }
+      } catch (e) {
+        console.warn('[topic.v2] failed to sync debateProgress back to current session:', e);
+      }
     })
     .catch((e) => console.warn('[topic.v2] renderDebateStage skipped:', e));
 }
