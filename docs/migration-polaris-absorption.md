@@ -604,11 +604,40 @@ citation_guard: { enabled: false }
 
 [plans/polaris-absorption.md](../plans/polaris-absorption.md) 是设计文档,本文是落地状态。**实际 LOC 比 plan 估的少约 40%**,主要因为:
 
-- PR 6 大幅简化(plan 估 1400 LOC → 实际 282,见上文偏离表)
+- PR 6 大幅简化(plan 估 1400 LOC → 实际 282,见下文偏离表)
 - 部分能力删掉了 plan 里描述但未真正实现的细节(如 `observation.error` 短路、`BLT_REWRITE_MODEL` 旁路、`resolve_summary_step_env` 旁路 — 已吸进 router)
 - 没有引入 Polaris 的 Postgres / pgvector / Yjs CRDT / MCP — 这符合 plan 第 1240 行"不吸收清单"
 
 **所有 plan 的"不吸收清单"仍生效** — 不引入多用户 / RBAC / SSH Experiment Lab / Yjs / Voyage 实时 UI / MCP Tool Registry / Plan 动态编辑 / 人工 gate。
+
+---
+
+## PR 6 v2 完整化(2026-07-22)
+
+之前 PR 6 的实现只覆盖了 plan §14 的 ~30%(Elo 引擎 + 简化可视化)。本次 commit 把 plan 偏离项**实质性回填**:
+
+| plan §14 描述 | v1 状态(282 LOC) | v2 完整化后 | 实现位置 |
+|---|---|---|---|
+| 4 信号采集(concept_holes/trends/limitations/survey_gap) | 函数存在但**不被调用** | ✅ 修 mojibake + 加 `concept_paper_map` + Swiss 排序 + limitation 段落扫描 | [src/idea_signals.py](../src/idea_signals.py) |
+| orchestrator 入口 | ❌ 无 | ✅ `run_topic_v2(session_id, judge_llm_call)` 串 signals→ideas→debate→archive | [src/topic_v2.py](../src/topic_v2.py) |
+| `archive/<session_id>/debate/idea_<id>.json` 落盘 | ❌ 无 | ✅ 每个 idea 单独 JSON | [src/topic_v2.py](../src/topic_v2.py) `_write_json` |
+| Swiss 配对(elo 降序相邻) | TS 用相邻配对,**未排序** | ✅ Python + TS 都按 elo 降序排序后相邻配对 | [src/elo_debate.py:swiss_pairs](../src/elo_debate.py) + [topic-search-v2.ts:swissPairs](../astro-src/scripts/topic-search-v2.ts) |
+| per-match failure isolation | TS 有 try/catch | ✅ Python + TS 双实现,transcript 累积,`failed=true` 不阻塞 | [src/elo_debate.py:run_match](../src/elo_debate.py) |
+| judge persona 判定 | TS 单 prompt | ✅ Python `judge_debate(a, b, judge_llm_call)` 接口,3 persona 分工(对齐 Polaris DEFAULT_PERSONAS) | [src/elo_debate.py:DEFAULT_PERSONAS](../src/elo_debate.py) |
+| budget_tokens 控制 | ❌ 无 | ✅ `run_debate` 用 `TOKENS_PER_MATCH_CALL * matches` 累计,超 `budget_tokens` 提前结束 | [src/elo_debate.py:run_debate](../src/elo_debate.py) |
+| Elo K=32 / initial 1200 | ✅ | ✅ 不变(常量对齐) | 两端一致 |
+| 真可视化(persona 气泡 + 进度条 + 排行榜) | 纯文本排行 | ✅ persona 气泡(`.topic-debate-bubble--{pro/con/judge}`)+ progress bar + leaderboard table + 每场对局明细 | [topic-search-v2.ts:showDebateVisualization](../astro-src/scripts/topic-search-v2.ts) |
+| `#debate-stage` DOM 容器 | ❌ 无(v1 fallback 到 `#status-bar`) | ✅ topic.astro 加 stage 4.5 `<details id="stage-debate">` | [astro-src/pages/topic.astro](../astro-src/pages/topic.astro) |
+| `TopicSession.debateProgress` 回写 | ❌ 字段存在但从不写 | ✅ `renderDebateStageSafe` 同步 localStorage → current session | [astro-src/scripts/topic-search.ts:renderDebateStageSafe](../astro-src/scripts/topic-search.ts) |
+| innerHTML XSS 防护 | ❌ 直插未转义 | ✅ `escapeHtml()` 函数全链路 | [topic-search-v2.ts:escapeHtml](../astro-src/scripts/topic-search-v2.ts) |
+| `s.title` undefined bug | ❌ Summary 没顶层 title | ✅ `s.summary?.title || s.title || s.arxivId` | [topic-search.ts:renderDebateStageSafe](../astro-src/scripts/topic-search.ts) |
+| 跨语言一致性 | ❌ Python/TS 行为可能分歧 | ✅ `tests/test_idea_signals.py` + `tests/test_elo_debate.py` + `tests/test_topic_v2.py` 覆盖 Python;TS 端导出 `__testing__` 给 .test.ts 用 |
+
+**新增**:
+- `src/topic_v2.py` — 离线批处理 orchestrator,可由 `python -m src.topic_v2 [session_id]` 跑
+- `tests/test_topic_v2.py` — 5 个单测覆盖完整流程
+
+**测试状态**: Python 端 `tests/test_idea_signals.py` + `tests/test_elo_debate.py` + `tests/test_topic_v2.py` 通过。TS 端 `.test.ts` 框架已就位(见 `tests/test_paper_dedup.test.ts`),`topic-search-v2.ts` 的 `__testing__` export 提供 `expectedScore/updateElo/swissPairs/runMatch` 给 cross-language parity 测试用。
 
 ---
 
@@ -659,6 +688,7 @@ citation_guard: { enabled: false }
 - [src/concept_index.py](src/concept_index.py) — PR 5
 - [src/elo_debate.py](src/elo_debate.py) — PR 6
 - [src/idea_signals.py](src/idea_signals.py) — PR 6
+- [src/topic_v2.py](src/topic_v2.py) — PR 6 v2 完整化(orchestrator)
 - [src/citation_guard.py](src/citation_guard.py) — PR 7
 
 ### 新增的前端模块
