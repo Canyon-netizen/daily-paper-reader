@@ -19,7 +19,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -205,7 +205,7 @@ def run_topic_v2(session_id: str | None = None,
     session["debate_progress"] = {
         "session_id": session_id,
         "ideas": ranked_ideas,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
         "personas": DEFAULT_PERSONAS,
         "rounds": DEFAULT_ROUNDS,
     }
