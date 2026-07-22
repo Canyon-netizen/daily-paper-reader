@@ -99,6 +99,12 @@ def _load_cached_tables(meta_path: str) -> List[Dict[str, Any]]:
 
 def _save_media_meta(meta_path: str, items: List[Dict[str, Any]], *, extractor: str, key: str) -> None:
     os.makedirs(os.path.dirname(meta_path), exist_ok=True)
+    # 把 extractor 盖到每个 item 上,让前端能逐图区分来源(整页预览 vs 真图)。
+    # 直接原地写回,使返回给上游的 figures/tables 列表(会进 frontmatter figures_json)
+    # 也带上 extractor,前端 meta.json 与 frontmatter 两条读取路径口径一致。
+    for item in items:
+        if isinstance(item, dict):
+            item.setdefault("extractor", extractor)
     with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(
             {
@@ -744,6 +750,147 @@ def _page_should_skip(page_text_lower: str) -> bool:
     return first in RASTER_FALLBACK_SKIP_HEADINGS
 
 
+# ============================================================================
+# 中档 fallback:caption 感知的矢量图裁剪。
+# 适用场景:纯 TikZ/PGFplots 矢量图论文 —— e-print 源码里没有独立图片文件,
+# PDF 里也没有 embedded raster image,但论文确实有 "Figure 1/2/3" 这样的图。
+# 这些图是矢量 drawing(page.get_drawings() 有大量 path),整页 rasterize 会把
+# 图混在正文里、且漏掉正文后段(第 9/19 页)的图。
+#
+# 实现:
+#   - 逐页扫 text block,匹配以 "Figure N" / "图 N" 开头的 caption block
+#   - 用 caption 上方、同页的 vector drawing bbox 并集算出图形区域
+#   - 裁剪 [图顶, caption 底] 区间,高 DPI 渲染成 webp,带真实 caption
+# 抓不到任何 caption 图时返回 [],交给整页 rasterize 末档兜底。
+# ============================================================================
+_FIGURE_CAPTION_RE = re.compile(
+    r"^\s*(?:figure|fig\.?|图)\s*([0-9]+)\s*[:.、：]", re.IGNORECASE
+)
+# 单个 drawing bbox 视为图形部件的最小面积(pt^2)。
+# 经验值:TikZ MDP 示意图单个 path bbox 可能只有 ~500pt^2(几个圆圈+箭头),
+# 太严会漏掉 Figure 1/2 这种小图;但放宽到 < 50 又会把页眉/页脚等装饰 line 抓进来。
+_CROP_MIN_DRAW_AREA = 80.0
+_CROP_MIN_REGION_HEIGHT = 30.0  # 图形区高度下限,过矮多半是误抓
+
+
+def crop_pdf_caption_figures(
+    pdf_path: str,
+    output_dir: str,
+    relative_prefix: str,
+    *,
+    dpi_scale: float = 3.0,
+    max_figures: int = 12,
+) -> List[Dict[str, Any]]:
+    """按 "Figure N:" caption 裁剪矢量图区域,渲染成 webp。"""
+    os.makedirs(output_dir, exist_ok=True)
+    figures: List[Dict[str, Any]] = []
+    fig_index = 1
+
+    with fitz.open(pdf_path) as doc:
+        for page_idx in range(len(doc)):
+            if len(figures) >= max_figures:
+                break
+            page = doc[page_idx]
+            try:
+                page_text = page.get_text("text") or ""
+            except Exception:
+                page_text = ""
+            if _page_should_skip(page_text.lower()):
+                break
+
+            try:
+                blocks = page.get_text("blocks") or []
+            except Exception:
+                continue
+            # blocks: (x0, y0, x1, y1, text, block_no, block_type)
+            caption_blocks = [
+                b for b in blocks
+                if len(b) >= 5 and isinstance(b[4], str) and _FIGURE_CAPTION_RE.match(b[4])
+            ]
+            if not caption_blocks:
+                continue
+
+            try:
+                drawings = page.get_drawings() or []
+            except Exception:
+                drawings = []
+            draw_rects = []
+            for d in drawings:
+                rect = d.get("rect") if isinstance(d, dict) else None
+                if rect is None:
+                    continue
+                if rect.is_empty or rect.is_infinite:
+                    continue
+                if rect.width * rect.height < _CROP_MIN_DRAW_AREA:
+                    continue
+                draw_rects.append(rect)
+
+            page_rect = page.rect
+            for cap in caption_blocks:
+                if len(figures) >= max_figures:
+                    break
+                cap_x0, cap_y0, cap_x1, cap_y1 = cap[0], cap[1], cap[2], cap[3]
+                caption_text = re.sub(r"\s+", " ", str(cap[4] or "")).strip()
+                # 收集 caption 上方、水平方向与 caption 有交叠的 drawing 部件
+                parts = [
+                    r for r in draw_rects
+                    if r.y1 <= cap_y0 + 2 and r.x1 > page_rect.x0 and r.x0 < page_rect.x1
+                ]
+                if not parts:
+                    continue
+                fig_top = min(r.y0 for r in parts)
+                fig_left = min(r.x0 for r in parts)
+                fig_right = max(r.x1 for r in parts)
+                # 只保留贴着 caption 上方的图形块(避免把上一段正文/上一张图并进来):
+                # 从 caption 往上找,遇到高度 > 1.5 倍行距的竖直空隙就断开。
+                if cap_y0 - fig_top < _CROP_MIN_REGION_HEIGHT:
+                    continue
+                margin = 6.0
+                clip = fitz.Rect(
+                    max(page_rect.x0, min(fig_left, cap_x0) - margin),
+                    max(page_rect.y0, fig_top - margin),
+                    min(page_rect.x1, max(fig_right, cap_x1) + margin),
+                    min(page_rect.y1, cap_y1 + margin),
+                )
+                if clip.is_empty or clip.width < 20 or clip.height < 40:
+                    continue
+
+                mat = fitz.Matrix(dpi_scale, dpi_scale)
+                try:
+                    pix = page.get_pixmap(matrix=mat, clip=clip, alpha=False)
+                except Exception:
+                    continue
+                png_path = os.path.join(output_dir, f"_crop_{fig_index:03d}.png")
+                file_name = f"fig-{fig_index:03d}.webp"
+                webp_path = os.path.join(output_dir, file_name)
+                try:
+                    pix.save(png_path)
+                    width, height = _save_webp_from_path(png_path, webp_path)
+                except Exception:
+                    continue
+                finally:
+                    try:
+                        os.remove(png_path)
+                    except OSError:
+                        pass
+
+                figures.append(
+                    {
+                        "url": "/".join([relative_prefix.strip("/"), file_name]),
+                        "caption": caption_text,
+                        "page": page_idx + 1,
+                        "index": fig_index,
+                        "width": width,
+                        "height": height,
+                    }
+                )
+                fig_index += 1
+
+    if figures:
+        _save_figures_meta(os.path.join(output_dir, "meta.json"), figures, extractor="pdf-caption-crop")
+    return figures
+
+
 def rasterize_pdf_pages_as_figures(
     pdf_path: str,
     output_dir: str,
@@ -890,6 +1037,12 @@ def ensure_paper_media(
         figures = extract_figures_from_pdf(tmp_path, figure_dir, figure_relative_prefix)
         if figures:
             return figures, []
+
+        # 中档:caption 感知矢量图裁剪。纯 TikZ 论文没有 embedded image,但
+        # "Figure N:" 上方是矢量 drawing,按 caption 裁出真正的 Figure 1/2/3。
+        cropped = crop_pdf_caption_figures(tmp_path, figure_dir, figure_relative_prefix)
+        if cropped:
+            return cropped, []
 
         # 末档:TikZ 矢量图 / 纯文字论文,PDF 里没 embedded image,转成整页渲染图。
         raster = rasterize_pdf_pages_as_figures(tmp_path, figure_dir, figure_relative_prefix)
