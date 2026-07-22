@@ -58,3 +58,13 @@ export function escapeHtml(s: unknown): string {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+/**
+ * 按 id 取 DOM 元素；找不到时抛错（topic-search / paper-analyzer 等多入口共用约定）。
+ * 之所以写在这里而不是各模块自建 $ helper：消除 scripts/ 三处副本。
+ */
+export function $<T extends HTMLElement = HTMLElement>(id: string): T {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`#${id} not found`);
+  return el as T;
+}

@@ -79,6 +79,14 @@ import {
   SUMMARIZE_CONCURRENCY,
   PDF_PREFETCH_CONCURRENCY,
 } from './topic-search/pipeline';
+import {
+  setStatus,
+  setStatusErrorWithAction,
+  clearStatus,
+  stopInFlight,
+  renderBanner,
+  clearBanner,
+} from './topic-search/status';
 // decomposeIdea / searchForDirection / chatWithPaper / chatWithReport 同属 pipeline 域逻辑,
 // 但只在本文件 (orchestrator) 内被 doDecompose / doSearch / sendChat / doSendReportChat 等 action 调用,
 // 故不作为公开 re-export,直接走命名 import。
@@ -254,68 +262,6 @@ let inFlightController: AbortController | null = null;
 
 // ============================================================================
 // DOM 渲染
-// ============================================================================
-
-function setStatus(msg: string, kind: '' | 'error' | 'success' = ''): void {
-  const el = $('status-bar');
-  el.classList.remove('topic-hidden');
-  el.classList.toggle('error', kind === 'error');
-  el.classList.toggle('success', kind === 'success');
-  // spinner + ⏹ 停止按钮只在「确实有任务在飞」(inFlightController 非空) 且非完成态时出现。
-  // 之前无条件渲染 spinner,导致每条 ✓ 完成/已复制/已下载 消息都一直转圈,
-  // 误导用户以为还在忙。success / error 是明确的终态,永不转圈、永不挂停止按钮。
-  const busy = kind === '' && inFlightController !== null;
-  const stopBtn = busy
-    ? `<button type="button" class="topic-btn ghost" id="status-stop-btn" style="margin-left:auto">⏹ 停止</button>`
-    : '';
-  const icon = kind === 'error'
-    ? '<span>⚠️</span>'
-    : kind === 'success'
-      ? '<span>✅</span>'
-      : busy
-        ? '<span class="topic-status-spinner"></span>'
-        : '<span>ℹ️</span>';
-  el.innerHTML = `${icon}<span>${escapeHtml(msg)}</span>${stopBtn}`;
-  if (busy) {
-    document.getElementById('status-stop-btn')?.addEventListener('click', stopInFlight);
-  }
-}
-
-// 失败时挂一个按钮(label + onClick),方便用户一键重试
-function setStatusErrorWithAction(msg: string, actionLabel: string, action: () => void): void {
-  const el = $('status-bar');
-  el.classList.remove('topic-hidden');
-  el.classList.add('error');
-  el.innerHTML = `<span>⚠️</span><span>${escapeHtml(msg)}</span><button type="button" class="topic-btn ghost" id="status-action-btn" style="margin-left:auto">${escapeHtml(actionLabel)}</button>`;
-  document.getElementById('status-action-btn')?.addEventListener('click', () => {
-    clearStatus();
-    action();
-  });
-}
-
-function clearStatus(): void {
-  const el = $('status-bar');
-  el.classList.add('topic-hidden');
-  el.innerHTML = '';
-}
-
-// 全局「⏹ 停止」按钮触发。AbortController 中断正在跑的 LLM fetch / PDF 下载;
-// runConcurrent 的 in-flight Promise 会被 reject,然后 doSearch / doSummarize
-// 的 finally 把 inFlightController 置 null,UI 状态条变 error。
-function stopInFlight(): void {
-  if (inFlightController) {
-    inFlightController.abort();
-    setStatus('⏹ 已停止当前任务', 'error');
-  }
-}
-
-function renderBanner(msg: string, info = false): void {
-  const slot = $('banner-slot');
-  slot.innerHTML = `<div class="topic-banner ${info ? 'info' : ''}">${escapeHtml(msg)}</div>`;
-}
-function clearBanner(): void {
-  $('banner-slot').innerHTML = '';
-}
 
 function renderSessionMeta(): void {
   const meta = $('session-meta');
