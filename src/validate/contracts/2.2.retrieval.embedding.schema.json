@@ -1,0 +1,12 @@
+{
+  "step_id": "2.2.retrieval.embedding",
+  "checks": [
+    { "kind": "no_error" },
+    { "kind": "exit_code", "value": 0 },
+    { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/retrieval/embedding/${RUN_DATE}.json" },
+    { "kind": "schema_valid", "field": "embedding_results", "required_keys": ["similarity_scores", "ranked_papers"] },
+    { "kind": "min_count", "field": "ranked_papers", "value": 1 }
+  ],
+  "rubric_enabled": false,
+  "on_fail": "mark_needs_review"
+}

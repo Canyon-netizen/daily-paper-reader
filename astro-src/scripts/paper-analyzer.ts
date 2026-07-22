@@ -39,6 +39,10 @@ import {
 } from './settings';
 import { debounce, canonicalArxivId, escapeHtml } from '../lib/dom-utils';
 import { resolveRoute } from '../lib/llm';
+import {
+  injectIntoPromptSync,
+  type PromptTarget,
+} from './prompt-pack';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
@@ -1173,6 +1177,37 @@ const TASK_LINES = TASK_VALUES.map((v) => `- ${v}`).join('\n');
 const METHOD_LINES = METHOD_VALUES.map((v) => `- ${v}`).join('\n');
 const TYPE_LINES = TYPE_VALUES.map((v) => `- ${v}`).join('\n');
 
+// ============================================================================
+// PR-4 Prompt Pack 注入层（对齐 src/prompt_pack.py 的 inject_into_prompt）
+// - 默认所有 pin 都为 null → 原 SYSTEM_PROMPT 不变（零破坏）
+// - 注入规则：pack.body 拼到 prompt 前；超过 24000 chars 截断
+// ============================================================================
+
+/**
+ * 获取「analyzer.system」target 当前生效的 prompt。
+ * 默认走原 SYSTEM_PROMPT 硬编码；pin 配置后自动拼 pack.body 在前。
+ */
+export function getActiveSystemPrompt(): string {
+  try {
+    const cfg = loadSettings() as unknown;
+    return injectIntoPromptSync(SYSTEM_PROMPT, 'analyzer.system', cfg);
+  } catch {
+    return SYSTEM_PROMPT;
+  }
+}
+
+/**
+ * 获取「analyzer.deepdive」target 当前生效的 prompt。
+ */
+export function getActiveDeepdivePrompt(): string {
+  try {
+    const cfg = loadSettings() as unknown;
+    return injectIntoPromptSync(DEEPDIVE_SYSTEM_PROMPT, 'analyzer.deepdive', cfg);
+  } catch {
+    return DEEPDIVE_SYSTEM_PROMPT;
+  }
+}
+
 // 字段:title / title_en / authors / tldr / motivation / method / result / conclusion。
 export const SYSTEM_PROMPT = `你是论文速览助手，请用中文生成信息密度高、但不冗长的论文速览。
 
@@ -1333,7 +1368,7 @@ export async function callLLM(
   const requestBody: Record<string, unknown> = {
     model: modelToUse,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: getActiveSystemPrompt() },
       { role: 'user', content: buildUserPrompt(title, abstract, paperBody) },
     ],
     temperature: temperatureToUse,
@@ -1800,7 +1835,7 @@ NNN 用三位数(001, 002, ...);只能引用实际存在的图(不要编造编�
   // 走 invokeChatCompletion:超 900KB body 自动按字符切 chunk 串行调用再拼合。
   const content = await invokeChatCompletion(
     cfg,
-    DEEPDIVE_SYSTEM_PROMPT,
+    getActiveDeepdivePrompt(),
     userPrompt,
     '精读生成',
     statusCb,

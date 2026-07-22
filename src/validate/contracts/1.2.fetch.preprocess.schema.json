@@ -1,0 +1,12 @@
+{
+  "step_id": "1.2.fetch.preprocess",
+  "checks": [
+    { "kind": "no_error" },
+    { "kind": "exit_code", "value": 0 },
+    { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/raw/arxiv_papers_${RUN_DATE}.json" },
+    { "kind": "schema_valid", "field": "papers", "required_keys": ["paper_id", "title", "abstract", "pdf_url", "published"] },
+    { "kind": "min_count", "field": "papers", "value": 1 }
+  ],
+  "rubric_enabled": false,
+  "on_fail": "mark_needs_review"
+}

@@ -550,3 +550,42 @@ llm_stage_models:
   stream_stages:
     - "analyzer.deepdive"
     - "topic.report"
+
+# ============================================================================
+# PR-4: Prompt Packs（plans/pr-plans/pr-4-prompt-pack.md §5）
+# ============================================================================
+# 零破坏：默认所有 active.<target> 都为 null（走硬编码 const）。
+# 启用方式：把对应 target 的 value 改为 "<pack_id>:<version>" 即可
+# （pack_id/version 必须在 config/prompts/<pack_id>/<version>/ 下存在 manifest + body）。
+# available_targets:
+#   enrich / refine / select / doc.generate
+#   analyzer.system / analyzer.deepdive
+#   topic.facet / topic.cand / topic.explore / topic.summary / topic.report
+prompt_packs:
+  enabled: false
+  taxonomies_version: "2026-07-01"
+  active:
+    enrich: null
+    refine: null
+    select: null
+    doc.generate: null
+    analyzer.system: null
+    analyzer.deepdive: null
+    topic.facet: null
+    topic.cand: null
+    topic.explore: null
+    topic.summary: null
+    topic.report: null
+
+# ============================================================================
+# PR-2: Pipeline Validate (plans/pr-plans/pr-2-validate.md §5)
+# ============================================================================
+# 零破坏：默认 enabled: false，老 cron 行为不变。
+# 开启后每个 sub-step 出口插入 verify() → verdict 写进 checkpoint。
+# failure_handling: abort / mark_needs_review / clamp
+pipeline:
+  validate:
+    enabled: false
+    contracts_dir: "src/validate/contracts"
+    failure_handling: "mark_needs_review"
+    rubric_enabled: false

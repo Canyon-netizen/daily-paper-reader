@@ -1,0 +1,91 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://daily-paper-reader.local/schemas/pack_manifest.schema.json",
+  "title": "PR-4 Prompt Pack Manifest",
+  "description": "manifest.json 必填字段 + Taxonomy 兼容校验。Pr-4 §5/§7。",
+  "type": "object",
+  "required": ["pack_id", "version", "display_name", "kind", "targets", "body_file"],
+  "additionalProperties": true,
+  "properties": {
+    "pack_id": {
+      "type": "string",
+      "description": "pack 标识 (kebab-case),与目录名一致",
+      "pattern": "^[a-z0-9][a-z0-9-]*[a-z0-9]$",
+      "minLength": 2,
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "description": "YYYY-MM-DD 日期字符串",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "display_name": {
+      "type": "string",
+      "description": "UI 显示用名 (中英文都可)",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["guidance", "persona", "tool", "workflow"],
+      "description": "kind 与 Polaris SkillManifest kind 字段对齐"
+    },
+    "targets": {
+      "type": "array",
+      "description": "本 pack 可注入的 target ID 列表",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "enum": [
+          "enrich",
+          "refine",
+          "select",
+          "doc.generate",
+          "analyzer.system",
+          "analyzer.deepdive",
+          "topic.facet",
+          "topic.cand",
+          "topic.explore",
+          "topic.summary",
+          "topic.report"
+        ]
+      }
+    },
+    "body_file": {
+      "type": "string",
+      "description": "相对 pack 目录的 body 文件名(默认 body.md)",
+      "default": "body.md"
+    },
+    "examples_file": {
+      "type": ["string", "null"],
+      "description": "可选 few-shot 示例 jsonl 文件名"
+    },
+    "output_contract": {
+      "type": ["string", "null"],
+      "description": "可选 JSON Schema 文件路径(对标 Polaris output_contract)"
+    },
+    "personas": {
+      "type": ["array", "null"],
+      "description": "可选 persona 列表"
+    },
+    "steps": {
+      "type": ["array", "null"],
+      "description": "可选 workflow steps(PR-6 用)"
+    },
+    "config": {
+      "type": "object",
+      "description": "pack 级 config (e.g. citation_style, max_chars)",
+      "additionalProperties": true
+    },
+    "requires_taxonomies_version": {
+      "type": ["string", "null"],
+      "description": "Taxonomy 兼容版本(YYYY-MM-DD),加载时校验。null 表示不校验",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "附属信息 (author / created_at / tags / rating)",
+      "additionalProperties": true
+    }
+  }
+}

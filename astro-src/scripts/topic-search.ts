@@ -31,6 +31,7 @@ import {
 import type { ArxivEntry } from './paper-analyzer';
 import { callChatCompletion, REASONING_MODEL_PATTERN_WIDE, resolveRoute, type ChatMessage } from '../lib/llm';
 import { debounce, canonicalArxivId as canonicalId, escapeHtml } from '../lib/dom-utils';
+import { injectIntoPromptSync } from './prompt-pack';
 import {
   buildFacet,
   buildRegenSubQ,
@@ -88,6 +89,61 @@ const REPORT_LLM_RETRY = 2;
 // ============================================================================
 // Prompt 模板
 // ============================================================================
+
+// ============================================================================
+// PR-4 Prompt Pack 注入层（对齐 src/prompt_pack.py 的 inject_into_prompt）
+// - 默认所有 pin 都为 null → 三个硬编码 prompt 不变（零破坏）
+// - 注入规则：pack.body 拼到 prompt 前；超过 24000 chars 截断
+// ============================================================================
+
+/**
+ * 获取「topic.facet」target 当前生效的 prompt。
+ * 默认走原 DECOMPOSE_SYSTEM 硬编码；pin 配置后自动拼 pack.body 在前。
+ */
+export function getActiveFacetPrompt(): string {
+  try {
+    const cfg = loadSettings() as unknown;
+    return injectIntoPromptSync(DECOMPOSE_SYSTEM, 'topic.facet', cfg);
+  } catch {
+    return DECOMPOSE_SYSTEM;
+  }
+}
+
+/**
+ * 获取「topic.cand」target 当前生效的 prompt（候选筛选）。
+ */
+export function getActiveCandPrompt(): string {
+  try {
+    const cfg = loadSettings() as unknown;
+    return injectIntoPromptSync(FILTER_CANDIDATES_SYSTEM, 'topic.cand', cfg);
+  } catch {
+    return FILTER_CANDIDATES_SYSTEM;
+  }
+}
+
+/**
+ * 获取「topic.explore」target 当前生效的 prompt（seeds 探索）。
+ */
+export function getActiveExplorePrompt(): string {
+  try {
+    const cfg = loadSettings() as unknown;
+    return injectIntoPromptSync(EXPLORE_FROM_SEEDS_SYSTEM, 'topic.explore', cfg);
+  } catch {
+    return EXPLORE_FROM_SEEDS_SYSTEM;
+  }
+}
+
+/**
+ * 获取「topic.report」target 当前生效的 prompt（主题报告）。
+ */
+export function getActiveReportPrompt(): string {
+  try {
+    const cfg = loadSettings() as unknown;
+    return injectIntoPromptSync(TOPIC_REPORT_SYSTEM, 'topic.report', cfg);
+  } catch {
+    return TOPIC_REPORT_SYSTEM;
+  }
+}
 
 const DECOMPOSE_SYSTEM = `你是研究思路拆解助手。用户给出一段研究思路(中英文均可),你要先把该主题拆成
 **显式的研究维度(facet)清单**,再从这些维度出发拆出 **3-5 个可独立在 arXiv 检索的子方向**。
@@ -325,7 +381,7 @@ async function filterCandidatesByLLM(targetN: number): Promise<void> {
       // finish_reason=length 自动加倍到 16000),避免思考吃光预算导致正文为空。
       // PR-3:stage=topic_cand(筛候选)。
       const candRoute = resolveRoute('topic_cand');
-      raw = await callLLMRaw(FILTER_CANDIDATES_SYSTEM, userPrompt, { ...cfg, model: candRoute.model }, true, 8000);
+      raw = await callLLMRaw(getActiveCandPrompt(), userPrompt, { ...cfg, model: candRoute.model }, true, 8000);
     } catch (e) {
       if (attempt >= MAX) {
         setStatusErrorWithAction(`AI 筛论文失败: ${(e as Error).message}`, '🔄 重试', () => filterCandidatesByLLM(targetN));
@@ -844,7 +900,7 @@ async function decomposeIdea(idea: string, seeds?: SelectionItem[]): Promise<Top
       // expectedTopLevel='{':前导有说明文字时按对象取,真实首字符仍优先(兼容 legacy 数组)。
       // PR-3:stage=topic_facet(主题拆解)。
       const facetRoute = resolveRoute('topic_facet');
-      raw = await callLLMRaw(DECOMPOSE_SYSTEM, userPrompt, { ...cfg, model: facetRoute.model }, true, 6000, '{');
+      raw = await callLLMRaw(getActiveFacetPrompt(), userPrompt, { ...cfg, model: facetRoute.model }, true, 6000, '{');
     } catch (e) {
       if (attempt >= MAX) throw e;
       continue;
@@ -990,7 +1046,7 @@ export async function exploreFromSeeds(
     try {
       // PR-3:stage=topic_explore(从 seeds 探索)。
       const exploreRoute = resolveRoute('topic_explore');
-      raw = await callLLMRaw(EXPLORE_FROM_SEEDS_SYSTEM, userPrompt, { ...cfg, model: exploreRoute.model }, true);
+      raw = await callLLMRaw(getActiveExplorePrompt(), userPrompt, { ...cfg, model: exploreRoute.model }, true);
     } catch (e) {
       if (attempt >= MAX) throw e;
       continue; // 网络/LLM 错误重试一次
@@ -3229,7 +3285,7 @@ async function generateTopicReport(
       // 主题报告也是重任务:输入含 M 篇速览,输出多维度 JSON 对象。给 8000 初始预算。
       // PR-3:stage=topic_report(主题报告)。
       const reportRoute = resolveRoute('topic_report');
-      const raw = await callLLMRaw(TOPIC_REPORT_SYSTEM, userPrompt, { ...cfg, model: reportRoute.model }, true, 8000);
+      const raw = await callLLMRaw(getActiveReportPrompt(), userPrompt, { ...cfg, model: reportRoute.model }, true, 8000);
       try {
         const obj = JSON.parse(raw);
         const report = normalizeReportTopic(obj, prev, mode);

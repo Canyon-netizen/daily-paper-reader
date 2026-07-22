@@ -1,0 +1,12 @@
+{
+  "step_id": "2.1.retrieval.bm25",
+  "checks": [
+    { "kind": "no_error" },
+    { "kind": "exit_code", "value": 0 },
+    { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/retrieval/bm25/${RUN_DATE}.json" },
+    { "kind": "schema_valid", "field": "bm25_results", "required_keys": ["retrieval_metric", "ranked_papers", "score"] },
+    { "kind": "metric", "name": "ranked_papers", "op": ">=", "value": 0 }
+  ],
+  "rubric_enabled": false,
+  "on_fail": "mark_needs_review"
+}

@@ -1,0 +1,12 @@
+{
+  "step_id": "2.3.retrieval.rrf",
+  "checks": [
+    { "kind": "no_error" },
+    { "kind": "exit_code", "value": 0 },
+    { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/retrieval/rrf/${RUN_DATE}.json" },
+    { "kind": "schema_valid", "field": "final_results", "required_keys": ["final_score", "ranked_papers"] },
+    { "kind": "min_count", "field": "ranked_papers", "value": 0 }
+  ],
+  "rubric_enabled": false,
+  "on_fail": "mark_needs_review"
+}
