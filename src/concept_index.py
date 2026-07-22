@@ -212,6 +212,10 @@ def rebuild(
                 "paper_id": paper["paper_id"],
                 "slug": paper["slug"],
                 "title": paper["title"],
+                # PR-5 v2: 把 concept 自己的 display_name / category / centrality 透传,
+                # _write_concept_index 用这些字段写 _index.json —— 旧版只用 paper.title,
+                # 导致概念卡片显示"StarBench: A Turn-Based..."而不是"Vision-Language Model"。
+                "display_name": c.get("display_name") or c["slug"],
                 "category": c.get("category"),
                 "centrality": c.get("centrality", 0.0),
             })
@@ -251,9 +255,10 @@ def _write_concept_graph(
     for slug, paper_records in concept_to_papers.items():
         # concept 节点
         first = paper_records[0] if paper_records else {}
+        # PR-5 v2: 用 concept 自己的 display_name 做 label,不是 paper.title
         nodes.append({
             "id": slug,
-            "label": first.get("title") or slug,
+            "label": first.get("display_name") or slug,
             "category": first.get("category") or "other",
             "weight": len(paper_records),
             "kind": "concept",
@@ -296,7 +301,9 @@ def _write_concept_index(
         first = paper_records[0]
         rows.append({
             "slug": slug,
-            "display_name": first.get("title") or slug,
+            # PR-5 v2: 用 concept 自己的 display_name (透传自 paper frontmatter),
+            # 不是 paper title —— 否则 grid 卡片显示 paper 标题而不是概念名。
+            "display_name": first.get("display_name") or slug,
             "category": first.get("category") or "other",
             "paper_count": len(paper_records),
         })
@@ -314,7 +321,8 @@ def _upsert_concept_page(
     if not os.path.exists(md_path):
         # 新建:简单 frontmatter + 出处段 + 反向链接段
         first = papers[0]
-        display_name = first.get("title") or slug
+        # PR-5 v2: 用 concept 的 display_name(透传自 paper frontmatter),不是 paper.title
+        display_name = first.get("display_name") or slug
         body = _render_concept_md(slug, display_name, papers)
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(body)
