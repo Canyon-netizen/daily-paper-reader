@@ -1052,6 +1052,7 @@ from src.generate_docs_md_io import (
     upsert_auto_block,
     upsert_glance_block_in_text,
     upsert_front_matter_field,
+    upsert_front_matter_field_to_path,
     verify_paper_md_was_written,
 )
 
@@ -1636,6 +1637,29 @@ def process_paper(
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
     atomic_write_text(md_path, content)
     verify_paper_md_was_written(md_path)
+
+    # PR-5: 概念图谱提取(默认 disabled)
+    try:
+        _pipeline_cfg = load_config() or {}
+        _concepts_cfg = (_pipeline_cfg.get("concepts") or {}) if isinstance(_pipeline_cfg, dict) else {}
+    except Exception:
+        _concepts_cfg = {}
+    if _concepts_cfg.get("enabled") and os.path.exists(md_path):
+        try:
+            from src.concept_extractor import extract_concepts
+            with open(md_path, "r", encoding="utf-8") as f:
+                _md_text = f.read()
+            _concepts = extract_concepts(_md_text, _pipeline_cfg)
+            from datetime import datetime, timezone
+            upsert_front_matter_field_to_path(md_path, "wiki_compiled", True)
+            upsert_front_matter_field_to_path(
+                md_path,
+                "wiki_compiled_at",
+                datetime.now(timezone.utc).isoformat(),
+            )
+            upsert_front_matter_field_to_path(md_path, "concepts", _concepts)
+        except Exception as e:  # 概念提取失败不阻塞主流程
+            print(f"[concepts] extract failed: {e}", flush=True)
 
     # 精读区：生成详细总结
     if section == "deep":

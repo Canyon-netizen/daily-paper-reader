@@ -153,3 +153,38 @@ def upsert_glance_block_in_text(md_text: str, glance: str) -> str:
         return f"{before}\n\n## 速览\n{glance}\n\n---\n\n{after}"
     return (txt.rstrip() + f"\n\n## 速览\n{glance}\n").rstrip() + "\n"
 
+
+# --- batch D: path-based frontmatter upsert (PR-5) ---
+
+def upsert_front_matter_field_to_path(md_path: str, key: str, value) -> bool:
+    """PR-5: 路径版 frontmatter upsert;支持 dict / list / bool / scalar。
+
+    走现有 upsert_front_matter_field (md_text 形式) 复用字符串替换逻辑,
+    JSON 序列化非字符串 value 以保证 YAML 可解析。
+    返回 True 表示磁盘已改写。
+    """
+    if not md_path or not os.path.exists(md_path):
+        return False
+    import json as _json
+    try:
+        with open(md_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return False
+    if isinstance(value, str):
+        serialized = value
+    else:
+        try:
+            serialized = _json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            serialized = str(value)
+    updated, changed = upsert_front_matter_field(text, key, serialized)
+    if not changed:
+        return False
+    try:
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(updated + ("\n" if not updated.endswith("\n") else ""))
+    except OSError:
+        return False
+    return True
+

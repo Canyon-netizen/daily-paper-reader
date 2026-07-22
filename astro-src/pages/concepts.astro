@@ -1,0 +1,116 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import { loadConceptIndex, searchConcepts, sortConceptsByHeat } from '../lib/concept_graph';
+import '../styles/page.css';
+---
+
+<BaseLayout
+  title="概念图谱 · Daily Paper Reader"
+  description="Daily Paper Reader 收录论文中提炼的核心概念图谱。"
+>
+  <Navbar />
+
+  <main class="concepts-page">
+    <header class="concepts-intro">
+      <strong>概念图谱</strong> · 从收录的论文笔记中提炼的核心概念。
+      每个概念附带「出处论文」和「反向链接」段,
+      通过 <code>[[wikilink]]</code> 与 Obsidian / VSCode 兼容。
+      <a class="concepts-intro-link" href={import.meta.env.BASE_URL + 'papers/'}>(论文库 →)</a>
+    </header>
+
+    <section class="concepts-toolbar">
+      <input
+        type="search"
+        id="concept-search"
+        class="concepts-search"
+        placeholder="搜索概念 (display_name / slug / category)..."
+        autocomplete="off"
+      />
+      <span class="concepts-count" id="concepts-count"></span>
+    </section>
+
+    <section id="concepts-grid" class="concepts-grid" data-state="loading">
+      <p class="concepts-empty" id="concepts-empty" hidden>
+        暂未启用概念图谱 — 在 <code>config.yaml</code> 打开 <code>concepts.enabled</code> 后,
+        重跑 Step 6 即可生成 <code>wiki/concepts/*.md</code> 与 <code>_index.json</code>。
+      </p>
+    </section>
+  </main>
+
+  <Footer />
+</BaseLayout>
+
+<script>
+  import { searchConcepts, sortConceptsByHeat, type ConceptMeta } from '../lib/concept_graph';
+
+  const grid = document.getElementById('concepts-grid') as HTMLElement | null;
+  const emptyEl = document.getElementById('concepts-empty') as HTMLElement | null;
+  const countEl = document.getElementById('concepts-count') as HTMLElement | null;
+  const searchEl = document.getElementById('concept-search') as HTMLInputElement | null;
+
+  let allConcepts: ConceptMeta[] = [];
+
+  function render(list: ConceptMeta[]) {
+    if (!grid) return;
+    if (!list.length) {
+      grid.innerHTML = '';
+      if (emptyEl) emptyEl.hidden = false;
+      if (countEl) countEl.textContent = '0 个概念';
+      grid.dataset.state = 'empty';
+      return;
+    }
+    if (emptyEl) emptyEl.hidden = true;
+    grid.dataset.state = 'ready';
+    const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+    grid.innerHTML = list
+      .map(
+        (c) => `
+        <a class="concept-card" data-cat="${escapeAttr(c.category)}" href="${base}/wiki/concepts/${encodeURIComponent(c.slug)}/">
+          <div class="concept-name">${escapeHtml(c.display_name)}</div>
+          <div class="concept-meta">
+            <span class="concept-cat">${escapeHtml(c.category)}</span>
+            <span class="concept-count">${c.paper_count || 0} 篇论文</span>
+          </div>
+        </a>`,
+      )
+      .join('');
+    if (countEl) countEl.textContent = `${list.length} 个概念`;
+  }
+
+  function escapeHtml(s: string): string {
+    return String(s || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+  function escapeAttr(s: string): string {
+    return escapeHtml(s);
+  }
+
+  async function init() {
+    const res = await fetch(
+      `${(import.meta.env.BASE_URL || '/').replace(/\/$/, '')}/wiki/concepts/_index.json`,
+    );
+    if (res.ok) {
+      try {
+        const data = await res.json();
+        allConcepts = Array.isArray(data) ? data : (data?.concepts || []);
+      } catch {
+        allConcepts = [];
+      }
+    } else {
+      allConcepts = [];
+    }
+    render(sortConceptsByHeat(allConcepts));
+
+    searchEl?.addEventListener('input', () => {
+      const q = searchEl.value || '';
+      render(sortConceptsByHeat(searchConcepts(q, allConcepts)));
+    });
+  }
+
+  init();
+</script>

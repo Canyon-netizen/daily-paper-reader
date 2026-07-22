@@ -1,0 +1,83 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/page.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  // v1 简化：构建期从 public/wiki/concepts/_index.json 读取(若不存在 → 仅 slug 占位)。
+  // 真实生产用法由 build script 跑前生成 _index.json。
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const indexPath = path.join(process.cwd(), 'public', 'wiki', 'concepts', '_index.json');
+  try {
+    const raw = await fs.readFile(indexPath, 'utf-8');
+    const data = JSON.parse(raw);
+    const list = Array.isArray(data) ? data : (data?.concepts || []);
+    return list
+      .filter((c: any) => c && c.slug)
+      .map((c: any) => ({ params: { slug: String(c.slug) } }));
+  } catch {
+    return [];
+  }
+}
+
+const { slug } = Astro.params;
+const slugStr = String(slug || '').trim();
+
+let meta: any = null;
+try {
+  const fs = await import('node:fs/promises');
+  const path = await import('node:path');
+  const indexPath = path.join(process.cwd(), 'public', 'wiki', 'concepts', '_index.json');
+  const raw = await fs.readFile(indexPath, 'utf-8');
+  const data = JSON.parse(raw);
+  const list: any[] = Array.isArray(data) ? data : data?.concepts || [];
+  meta = list.find((c) => c.slug === slugStr) || null;
+} catch {
+  meta = null;
+}
+---
+
+<BaseLayout
+  title={`${meta?.display_name || slugStr} · 概念图谱`}
+  description={meta ? `Daily Paper Reader 概念图谱:${meta.display_name} (${meta.category},${meta.paper_count} 篇论文)。` : '概念详情'}
+>
+  <Navbar />
+
+  <main class="concepts-page">
+    <a class="concepts-back" href={base + '/concepts/'}>← 返回概念图谱</a>
+
+    {meta ? (
+      <>
+        <header class="concept-detail-head">
+          <h1>{meta.display_name}</h1>
+          <div class="concept-detail-meta">
+            <span class="concept-cat">{meta.category}</span>
+            <span class="concept-count">{meta.paper_count} 篇论文</span>
+          </div>
+        </header>
+        <section class="concept-detail-body">
+          <p class="concept-detail-empty">
+            详细"出处 / 反向链接 / 邻近概念"段落由 <code>wiki/concepts/{slugStr}.md</code> 渲染。
+            在 Obsidian / VSCode 直接打开该 md 即可看到自动生成的反向链接段。
+          </p>
+          <p class="concept-detail-empty">
+            当前 Astro 站点未做 md → HTML 实时渲染;开启 <code>concepts.enabled</code> 后,
+            <code>wiki/concepts/{slugStr}.md</code> 会被 <code>src/concept_index.py rebuild()</code> 创建。
+          </p>
+        </section>
+      </>
+    ) : (
+      <section class="concept-detail-empty">
+        <h1>概念「{slugStr}」暂未收录</h1>
+        <p>该 slug 不在 <code>_index.json</code> 中。检查 <code>wiki/concepts/{slugStr}.md</code> 是否存在,
+          或在 <code>config.yaml</code> 启用 <code>concepts.enabled</code> 后重跑 Step 6 + <code>concept_index.rebuild()</code>。</p>
+      </section>
+    )}
+  </main>
+
+  <Footer />
+</BaseLayout>

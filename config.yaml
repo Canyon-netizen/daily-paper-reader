@@ -589,3 +589,25 @@ pipeline:
     contracts_dir: "src/validate/contracts"
     failure_handling: "mark_needs_review"
     rubric_enabled: false
+
+# ============================================================================
+# PR-5: Concept Backlinks (plans/pr-plans/pr-5-concept-backlinks.md §8)
+# ============================================================================
+# 零破坏：默认 enabled: false，老 cron 行为不变（不调 LLM，不写 wiki_compiled 字段）。
+# 启用后 Step 6 多调 1 次 LLM（stage "concept.extract"），每篇 md 追加 3 个 frontmatter 字段
+# （wiki_compiled / wiki_compiled_at / concepts），由 src/concept_index.py 聚合生成 wiki/concepts/*.md。
+concepts:
+  enabled: false
+  min_appearances: 2
+  max_concepts_per_paper: 7
+  blacklist_file: "config/concept_blacklist.yaml"
+  aliases_file: "config/concept_aliases.yaml"
+  category_enum:
+    - method
+    - architecture
+    - methodology
+    - problem
+    - metric
+    - dataset
+    - other
+  slug_pattern: "^[a-z0-9-]+$"

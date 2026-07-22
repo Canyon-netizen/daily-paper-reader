@@ -1,0 +1,296 @@
+"""PR-5 Concept Backlinks — 概念聚合 + 反向链接构建。
+
+扫描 docs/papers/**/*-{slug}.md 中 frontmatter.concepts 字段
+(仅 wiki_compiled: true 的),聚合成 wiki/concepts/<slug>.md:
+
+  ## 出处
+  ## 反向链接
+"""
+from __future__ import annotations
+
+import os
+import re
+from typing import Any, Dict, List, Optional, Tuple
+
+from src.concept_slug import wiki_slug
+
+
+# --- YAML front matter parsing (无外部依赖,容忍简陋格式) ---
+
+_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+
+
+def _parse_front_matter(text: str) -> Tuple[Dict[str, Any], str]:
+    """轻量 frontmatter 解析;只支持概念字段用到的 scalar / list / dict of dicts."""
+    if not text:
+        return {}, ""
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return {}, text
+    block = m.group(1)
+    body = text[m.end():]
+    try:
+        import yaml  # type: ignore
+        parsed = yaml.safe_load(block) or {}
+    except Exception:
+        parsed = _fallback_yaml(block)
+    if not isinstance(parsed, dict):
+        parsed = {}
+    return parsed, body
+
+
+def _fallback_yaml(block: str) -> Dict[str, Any]:
+    """极简 fallback:key: value 行 + 顶层 list 形态(只够定位 wiki_compiled/concepts)。"""
+    out: Dict[str, Any] = {}
+    lines = block.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+        m = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", line)
+        if not m:
+            i += 1
+            continue
+        key, value = m.group(1), m.group(2).strip()
+        if value == "":
+            # 可能是嵌套 list / dict
+            nested, consumed = _consume_block(lines, i + 1)
+            out[key] = nested
+            i += consumed + 1
+        else:
+            if value.startswith("[") and value.endswith("]"):
+                inner = value[1:-1].strip()
+                if inner:
+                    out[key] = [v.strip().strip('"').strip("'") for v in inner.split(",")]
+                else:
+                    out[key] = []
+            elif value.lower() in ("true", "false"):
+                out[key] = value.lower() == "true"
+            else:
+                out[key] = value.strip('"').strip("'")
+            i += 1
+    return out
+
+
+def _consume_block(lines: List[str], start: int) -> Tuple[Any, int]:
+    """从 start 起收集一个缩进 list / dict 块,返回 (parsed, lines_consumed)。"""
+    items: List[Any] = []
+    mapping: Dict[str, Any] = {}
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        if not line.startswith(("  ", "\t")):
+            break
+        stripped = line.lstrip(" \t")
+        if stripped.startswith("- "):
+            item = stripped[2:].strip()
+            if ":" in item:
+                # inline dict within list 形态
+                k, v = item.split(":", 1)
+                items.append({k.strip(): _coerce_scalar(v.strip())})
+            else:
+                items.append(_coerce_scalar(item))
+            i += 1
+        else:
+            mm = re.match(r"^([A-Za-z0-9_-]+):\s*(.*)$", stripped)
+            if mm:
+                k, v = mm.group(1), mm.group(2).strip()
+                mapping[k] = _coerce_scalar(v)
+            i += 1
+    if items and not mapping:
+        return items, i - start
+    if mapping:
+        return mapping, i - start
+    return {}, i - start
+
+
+def _coerce_scalar(v: str) -> Any:
+    if v == "":
+        return ""
+    if v.startswith("[") and v.endswith("]"):
+        inner = v[1:-1].strip()
+        if not inner:
+            return []
+        return [x.strip().strip('"').strip("'") for x in inner.split(",")]
+    if v.lower() in ("true", "false"):
+        return v.lower() == "true"
+    if v.startswith('"') and v.endswith('"'):
+        return v[1:-1]
+    try:
+        return float(v)
+    except ValueError:
+        return v.strip('"').strip("'")
+
+
+# --- 扫描与索引 ---
+
+def scan_papers_with_wiki_compiled(
+    docs_dir: str = "docs/papers",
+) -> List[Dict[str, Any]]:
+    """扫 frontmatter 含 wiki_compiled: true 的 md。
+
+    返回 [{paper_id, slug, title, concepts}, ...]
+    """
+    out: List[Dict[str, Any]] = []
+    if not docs_dir or not os.path.isdir(docs_dir):
+        return out
+    for root, _, files in os.walk(docs_dir):
+        for name in files:
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            meta, _ = _parse_front_matter(text)
+            if not meta.get("wiki_compiled"):
+                continue
+            concepts = meta.get("concepts")
+            if not isinstance(concepts, list) or not concepts:
+                continue
+            paper_id = str(meta.get("paper_id") or "")
+            if not paper_id:
+                # fallback: paper_id 反推自文件名 <arxiv-id>-<slug>.md
+                stem = os.path.splitext(name)[0]
+                paper_id = f"papers/{stem}"
+            title = str(meta.get("title") or meta.get("title_en") or "")
+            cleaned = []
+            for c in concepts:
+                if isinstance(c, dict) and c.get("slug"):
+                    cleaned.append({
+                        "slug": str(c["slug"]),
+                        "display_name": str(c.get("display_name") or c.get("name") or c["slug"]),
+                        "category": str(c.get("category") or "other"),
+                        "novelty": c.get("novelty", 0.0),
+                        "centrality": c.get("centrality", 0.0),
+                    })
+            if not cleaned:
+                continue
+            stem = os.path.splitext(name)[0]
+            out.append({
+                "paper_id": paper_id,
+                "slug": stem,
+                "title": title,
+                "concepts": cleaned,
+                "md_path": path,
+            })
+    return out
+
+
+def rebuild(
+    archive_dir: str = "wiki",
+    docs_dir: str = "docs/papers",
+    *,
+    min_appearances: int = 2,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """聚合 concepts → 写 wiki/concepts/<slug>.md。
+
+    返回 {slug: [paper_records]} 映射(便于测试)。
+    出现次数 < min_appearances 的 concept 不建独立 md,但仍计入返回结果。
+    """
+    papers = scan_papers_with_wiki_compiled(docs_dir)
+    concept_to_papers: Dict[str, List[Dict[str, Any]]] = {}
+    for paper in papers:
+        for c in paper["concepts"]:
+            concept_to_papers.setdefault(c["slug"], []).append({
+                "paper_id": paper["paper_id"],
+                "slug": paper["slug"],
+                "title": paper["title"],
+                "category": c.get("category"),
+                "centrality": c.get("centrality", 0.0),
+            })
+
+    archive_path = os.path.join(archive_dir, "concepts")
+    if min_appearances >= 1:
+        os.makedirs(archive_path, exist_ok=True)
+
+    for slug, paper_records in concept_to_papers.items():
+        if len(paper_records) < min_appearances:
+            continue
+        md_path = os.path.join(archive_path, f"{slug}.md")
+        _upsert_concept_page(md_path, slug, paper_records)
+
+    return concept_to_papers
+
+
+def _upsert_concept_page(
+    md_path: str,
+    slug: str,
+    papers: List[Dict[str, Any]],
+) -> None:
+    """新建或更新 wiki/concepts/<slug>.md。"""
+    if not os.path.exists(md_path):
+        # 新建:简单 frontmatter + 出处段 + 反向链接段
+        first = papers[0]
+        display_name = first.get("title") or slug
+        body = _render_concept_md(slug, display_name, papers)
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(body)
+    else:
+        # 更新:替换 ## 出处 / ## 反向链接 块
+        with open(md_path, "r", encoding="utf-8") as f:
+            text = f.read()
+        updated = _replace_block(text, "出处", _render_origin_section(papers))
+        updated = _replace_block(updated, "反向链接", _render_reverse_links_section(papers))
+        if updated != text:
+            with open(md_path, "w", encoding="utf-8") as f:
+                f.write(updated)
+
+
+def _render_concept_md(slug: str, display_name: str, papers: List[Dict[str, Any]]) -> str:
+    origin = _render_origin_section(papers)
+    reverse = _render_reverse_links_section(papers)
+    return (
+        f"---\n"
+        f"concept_id: {slug}\n"
+        f"display_name: {display_name}\n"
+        f"category: {papers[0].get('category') or 'other'}\n"
+        f"---\n\n"
+        f"# {display_name}\n\n"
+        f"{origin}\n\n"
+        f"{reverse}\n"
+    )
+
+
+def _render_origin_section(papers: List[Dict[str, Any]]) -> str:
+    lines = ["## 出处", ""]
+    for p in papers:
+        lines.append(f"- [[{p['paper_id']}]] — {p.get('title') or p.get('slug') or p['paper_id']}")
+    return "\n".join(lines)
+
+
+def _render_reverse_links_section(papers: List[Dict[str, Any]]) -> str:
+    ids = sorted({str(p["paper_id"]) for p in papers})
+    lines = ["## 反向链接", ""]
+    if ids:
+        lines.append("(自动生成)")
+        for pid in ids:
+            lines.append(f"- [[{pid}]]")
+    else:
+        lines.append("（无）")
+    return "\n".join(lines)
+
+
+_HEADING_KEY = "__HEADING__"
+
+
+def _replace_block(text: str, heading: str, new_section: str) -> str:
+    """替换 ## {heading} ... 直到下一个 ## heading 或文件末尾。"""
+    marker = f"## {heading}"
+    idx = text.find(marker)
+    if idx == -1:
+        # 追加
+        sep = "\n\n" if not text.endswith("\n") else "\n"
+        return text + sep + new_section + "\n"
+    # 找下一个 "## "
+    rest_start = idx + len(marker)
+    next_heading = re.search(r"^## ", text[rest_start:], re.MULTILINE)
+    end = rest_start + next_heading.start() if next_heading else len(text)
+    before = text[:idx].rstrip() + "\n\n"
+    after = text[end:].lstrip("\n")
+    rebuilt = before + new_section + ("\n\n" + after if after else "\n")
+    return rebuilt
