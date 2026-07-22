@@ -377,6 +377,32 @@ export interface TopicSession {
   report?: TopicReport;
   /** 最近一次 doDecompose 拆解时参考的论文 ID。 */
   referenceSeedArxivIds?: string[];
+  /** PR-6: Elo 辩论 stage 进度（默认 disabled → 老 session 缺这字段，UI 走 `?? null` 跳过）。 */
+  debateProgress?: DebateProgress | null;
+}
+
+/** PR-6: 单个 idea 的 Elo 辩论快照。 */
+export interface DebateIdea {
+  id: string;
+  title: string;
+  /** 起始 Elo 评分（默认 1200）。 */
+  elo_rating: number;
+  /** 累计参与匹配次数。 */
+  matches: number;
+  /** 累计获胜次数（不含 tie）。 */
+  wins: number;
+  /** 单场失败明细（对齐 Polaris per-match-failure-isolation）。 */
+  debate_errors?: Array<{ round: number; error: string }>;
+}
+
+export interface DebateProgress {
+  sessionId: string;
+  /** Swiss 配对后所有参与辩论的 idea 快照（按最终 elo_rating 降序）。 */
+  ideas: DebateIdea[];
+  /** 辩论所用 personas（默认 ["方法论者", "工程师", "怀疑论者"]）。 */
+  personas: string[];
+  /** 最近一次辩论时间戳。 */
+  updatedAt: number;
 }
 
 /** localStorage schema 版本号 (topic-search.ts 内部使用) */

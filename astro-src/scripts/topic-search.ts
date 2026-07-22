@@ -54,6 +54,8 @@ import {
   type TopicReportDimension,
   type TopicReportDimensionPaper,
   type TopicSession,
+  type DebateProgress,
+  type DebateIdea,
 } from '../lib/schemas';
 
 // ============================================================================
@@ -2634,8 +2636,37 @@ function renderAll(): void {
   renderSubqStage();
   renderCandStage();
   renderSummaryStage();
+  // PR-6: 可选 Elo 辩论 stage（默认 disabled,topic.v2.enabled=true 才走）
+  // renderDebateStage 在 topic-search-v2.ts 内导出,实现细节看那里。
+  // 此处不阻塞 v1 流程：dynamic import 失败 / enabled=false 都直接跳过。
+  renderDebateStageSafe();
   renderReportStage();
   updateSeedsCounter();
+}
+
+/** PR-6: 动态 import 包装,默认 enabled=false 时 noop,失败不抛。
+ *
+ * v2 renderDebateStage 是 fire-and-forget：内部自己跑 Elo + 写 localStorage + 可视化。
+ * 我们的接入点只确保：(1) 启用检查；(2) 调用安全。
+ */
+function renderDebateStageSafe(): void {
+  if (!current) return;
+  const cfg = (loadSettings() as unknown as { topic?: { v2?: { enabled?: boolean } } }) || {};
+  if (!cfg.topic?.v2?.enabled) return;
+  // 从 current.summaries 抽出 idea-like 输入（每个 summary 视作一个 idea 候选）
+  const ideas: Array<Record<string, unknown>> = (current.summaries || []).map((s) => ({
+    id: s.arxivId,
+    title: s.title,
+    elo_rating: 1200,
+  }));
+  import('./topic-search-v2')
+    .then((mod) => mod.renderDebateStage(current!.id, ideas))
+    .then(() => {
+      // v2 renderDebateStage 内部已写 localStorage；这里仅同步到 TopicSession.debateProgress
+      // 字段（如果用户切 session 后还查得到）。
+      // 真正写盘由 saveDebateProgress 完成；UI 重新渲染由下次 renderAll 触发。
+    })
+    .catch((e) => console.warn('[topic.v2] renderDebateStage skipped:', e));
 }
 
 // ============================================================================
