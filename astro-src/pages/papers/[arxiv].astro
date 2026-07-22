@@ -8,7 +8,8 @@ import { join } from 'node:path';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import { readPaper, listAllPaperIds, flattenCategories } from '../../lib/paper';
-import { renderMarkdownBody } from '../../lib/markdown';
+import { renderMarkdownBody, renderTitleHtml } from '../../lib/markdown';
+import { paperPlainTitle } from '../../lib/title';
 import '../../styles/paper-chat.css';
 import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
@@ -74,9 +75,13 @@ const id = fullId || `papers/${arxiv}`;
 const paper = await readPaper(id);
 const base = import.meta.env.BASE_URL;
 const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(id) : '';
+// 浏览器 <title> / 富标题:纯文本用于 tab 标题,富 HTML 用于页面 <h1>/<h2> 渲染数学。
+const plainZh = paper ? paperPlainTitle(paper.title_zh, paper.title_zh_plain) : '';
+const plainEn = paper ? paperPlainTitle(paper.title, paper.title_plain) : '';
+const tabTitle = plainZh || plainEn || id;
 ---
 
-<BaseLayout title={paper?.title_zh || paper?.title || id}>
+<BaseLayout title={tabTitle}>
   <Navbar />
   <main class="paper-page">
     {paper ? (
@@ -119,9 +124,9 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(id) :
                   </div>
                 )}
               </div>
-              <h1 class="paper-title-zh">{paper.title_zh || paper.title}</h1>
+              <h1 class="paper-title-zh" set:html={renderTitleHtml(paper.title_zh || paper.title || '')}></h1>
               {paper.title_zh && paper.title && paper.title !== paper.title_zh && (
-                <h2 class="paper-title-en">{paper.title}</h2>
+                <h2 class="paper-title-en" set:html={renderTitleHtml(paper.title)}></h2>
               )}
               <div class="paper-meta">
                 {paper.authors && (
@@ -244,8 +249,8 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(id) :
       <section
         id="paper-chat"
         aria-hidden="true"
-        data-title={paper.title || ''}
-        data-title-zh={paper.title_zh || ''}
+        data-title={plainEn || paper.title || ''}
+        data-title-zh={plainZh || paper.title_zh || ''}
         data-authors={paper.authors || ''}
         data-tldr={paper.tldr || ''}
         data-motivation={paper.motivation || ''}
@@ -276,8 +281,8 @@ const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(id) :
         id="paper-select"
         aria-hidden="true"
         data-arxiv-id={paper.arxivId || ''}
-        data-title={paper.title || ''}
-        data-title-zh={paper.title_zh || ''}
+        data-title={plainEn || paper.title || ''}
+        data-title-zh={plainZh || paper.title_zh || ''}
         data-tldr={paper.tldr || ''}
         data-motivation={paper.motivation || ''}
         data-method={paper.method || ''}

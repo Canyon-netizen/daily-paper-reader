@@ -6,6 +6,7 @@
 // 4) 挂载 <PaperLibrary /> — 客户端脚本接管分屏布局、cytoscape 节点网络、抽屉编辑
 import type { GetStaticPaths } from 'astro';
 import { listPapers, flattenCategories, listAllPapersByTag } from '../../lib/paper';
+import { paperPlainTitle } from '../../lib/title';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
@@ -34,8 +35,8 @@ const uniqueTagCount = byTag.size;
 // 客户端载荷:把 categories 拍平为 'dim:label' tokens,与 B4 paper-selection 一致
 const clientPapers = papers.map((p) => ({
   id: p.id,
-  title: p.title || '',
-  title_zh: p.title_zh || '',
+  title: paperPlainTitle(p.title, p.title_plain),
+  title_zh: paperPlainTitle(p.title_zh, p.title_zh_plain),
   authors: p.authors || '',
   date: p.date || '',
   pdf: p.pdf || '',

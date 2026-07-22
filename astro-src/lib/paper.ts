@@ -15,6 +15,7 @@
 import yaml from 'js-yaml';
 import { buildCategories, type Categories } from './taxonomies';
 import { extractVenue } from './venue';
+import { stripTitleMarkup } from './title';
 
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
 const PREFIX_SKIP_DIR = '_';
@@ -22,6 +23,10 @@ const PREFIX_SKIP_DIR = '_';
 export interface PaperFrontmatter {
   title?: string;
   title_zh?: string;
+  /** 纯文本标题(剥掉 inline TeX),用于 <title>/列表/搜索/a11y。
+   *  缺失时 reader 用 stripTitleMarkup(title) 兜底。 */
+  title_plain?: string;
+  title_zh_plain?: string;
   authors?: string;
   date?: string;          // YYYY-MM-DD (after normalization)
   generated_at?: string;
@@ -65,6 +70,7 @@ export interface FigureEntry {
   index?: number;
   width?: number;
   height?: number;
+  extractor?: string;
 }
 
 function parseFigureList(raw: unknown): FigureEntry[] {
@@ -99,6 +105,7 @@ function normalizeFigureEntry(item: unknown, fallbackIndex: number): FigureEntry
     index: typeof obj.index === 'number' ? obj.index : fallbackIndex + 1,
     width: typeof obj.width === 'number' ? obj.width : 0,
     height: typeof obj.height === 'number' ? obj.height : 0,
+    extractor: typeof obj.extractor === 'string' ? obj.extractor : '',
   };
 }
 
@@ -218,6 +225,9 @@ export async function readPaper(id: string): Promise<Paper | null> {
     venue,
     accepted,
     categories,
+    // 纯文本标题:优先 frontmatter 预算字段,缺失时运行时剥标记兜底。
+    title_plain: (parsed.data.title_plain as string) || stripTitleMarkup(parsed.data.title || ''),
+    title_zh_plain: (parsed.data.title_zh_plain as string) || stripTitleMarkup(parsed.data.title_zh || ''),
     body: parsed.body,
     isBroken: false,
     figures,
@@ -240,6 +250,8 @@ export interface PaperListItem {
   id: string;
   title?: string;
   title_zh?: string;
+  title_plain?: string;
+  title_zh_plain?: string;
   authors?: string;
   date?: string;
   pdf?: string;
@@ -369,6 +381,8 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       id: p.id,
       title: p.title,
       title_zh: p.title_zh,
+      title_plain: p.title_plain,
+      title_zh_plain: p.title_zh_plain,
       authors: p.authors,
       date: p.date,
       pdf: p.pdf,

@@ -40,12 +40,25 @@ function splitVersion(id) {
 // 读 frontmatter 提 title_zh / title;frontmatter 损坏或缺失则 null。
 // 用 gray-matter 是因为它已经是项目依赖,且 lib/paper.ts 里用过,
 // 解析规则一致(包括 title_zh 缺失时 fallback title 的约定)。
+// 标题可能含 inline TeX(如 `$\max$@$k$`),settings "已隐藏论文" 面板是纯文本 UI,
+// 优先取 pipeline 预算好的 title_*_plain,缺失时轻量剥一遍 TeX 标记再兜底。
+function stripTitleMarkupLite(value) {
+  let text = String(value || '');
+  // 成对 $...$ / $$...$$ 内的命令名保留、符号剥掉;未成对 $ 最后统一删。
+  text = text.replace(/\$+/g, ' ');
+  text = text.replace(/\\([A-Za-z]+)/g, '$1'); // \max -> max
+  text = text.replace(/[{}^_~]/g, '');
+  return text.replace(/\s+/g, ' ').trim();
+}
+
 function readTitle(absPath) {
   try {
     const raw = readFileSync(absPath, 'utf-8');
     const fm = matter(raw);
     const d = fm.data || {};
-    return d.title_zh || d.title || null;
+    const zh = d.title_zh_plain || (d.title_zh ? stripTitleMarkupLite(d.title_zh) : '');
+    const en = d.title_plain || (d.title ? stripTitleMarkupLite(d.title) : '');
+    return zh || en || null;
   } catch {
     return null;
   }

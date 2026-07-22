@@ -101,6 +101,7 @@ import {
   type Categories as PaperCategories,
 } from '../lib/taxonomies';
 import { buildCategories } from '../lib/schemas';
+import { stripTitleMarkup } from '../lib/title';
 // 旧 3-层结构 (domain/task/method) — 现已被 4-dim PaperCategories 取代。
 // 仅保留类型作 union 占位(便于旧 history 读取),写路径已弃用。
 export interface TopicTags {
@@ -2316,9 +2317,13 @@ function buildFrontmatter(r: AnalysisResult, entry: ArxivEntry | null, now: stri
     : buildCategories({});
   // 标题/作者等含特殊字符(: , # 等)时统一加双引号,避免 YAML 解析失败。
   const yamlStr = (s: string): string => `"${(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
+  const titleEn = r.title_en || r.title || '(untitled)';
+  const titlePlain = stripTitleMarkup(titleEn);
   return [
     '---',
-    `title: ${yamlStr(r.title_en || r.title || '(untitled)')}`,
+    `title: ${yamlStr(titleEn)}`,
+    // 纯文本标题:用于浏览器 <title>/列表卡片/搜索索引/a11y。仅当与原值不同时 emit。
+    titlePlain && titlePlain !== titleEn ? `title_plain: ${yamlStr(titlePlain)}` : null,
     r.authors ? `authors: ${yamlStr(r.authors)}` : null,
     arxivId ? `date: ${(entry?.published || now).slice(0, 10)}` : null,
     `generated_at: ${yamlStr(now)}`,
