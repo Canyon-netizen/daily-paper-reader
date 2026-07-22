@@ -4,6 +4,7 @@ import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
 import { loadConceptIndex, searchConcepts, sortConceptsByHeat } from '../lib/concept_graph';
 import '../styles/page.css';
+import '../styles/concepts-graph.css';
 ---
 
 <BaseLayout
@@ -36,6 +37,11 @@ import '../styles/page.css';
         暂未启用概念图谱 — 在 <code>config.yaml</code> 打开 <code>concepts.enabled</code> 后,
         重跑 Step 6 即可生成 <code>wiki/concepts/*.md</code> 与 <code>_index.json</code>。
       </p>
+    </section>
+
+    <section class="concepts-graph-section">
+      <h3 class="concepts-graph-title">概念图谱(cytoscape)</h3>
+      <div id="concepts-graph" class="concepts-graph"></div>
     </section>
   </main>
 
@@ -109,6 +115,92 @@ import '../styles/page.css';
     searchEl?.addEventListener('input', () => {
       const q = searchEl.value || '';
       render(sortConceptsByHeat(searchConcepts(q, allConcepts)));
+    });
+
+    // PR-5 v2: 加载 _graph.json 并用 cytoscape 渲染
+    loadConceptGraph().catch((e) => console.warn('[concepts] graph load failed:', e));
+  }
+
+  /**
+   * PR-5 v2: 用 cytoscape 渲染 _graph.json 里的 nodes + edges。
+   *
+   * 节点分两类:
+   *   - concept 节点(紫色大点):有 paper_count / category / 显示名
+   *   - paper 节点(灰色小点):只有 paper_id / title
+   * 边只有一种 "mentions"(paper → concept)。
+   *
+   * 失败(无 graph.json / 无 cytoscape / 节点空)→ 静默跳过,不破坏主 grid。
+   */
+  async function loadConceptGraph(): Promise<void> {
+    const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+    const res = await fetch(`${base}/wiki/concepts/_graph.json`);
+    if (!res.ok) return;
+    const graph = await res.json();
+    const nodes = graph?.nodes || [];
+    const edges = graph?.edges || [];
+    if (!nodes.length) return;
+
+    const container = document.getElementById('concepts-graph');
+    if (!container) return;
+
+    // 动态 import cytoscape(避免 build 时 SSR 报错)
+    let cytoscape: any;
+    try {
+      cytoscape = (await import('cytoscape')).default;
+    } catch (e) {
+      console.warn('[concepts] cytoscape not available:', e);
+      return;
+    }
+
+    const cy = cytoscape({
+      container,
+      elements: [
+        ...nodes.map((n: any) => ({ data: { id: n.id, label: n.label, kind: n.kind, weight: n.weight || 1, category: n.category || 'other' } })),
+        ...edges.map((e: any, i: number) => ({ data: { id: `e${i}`, source: e.source, target: e.target, kind: e.kind } })),
+      ],
+      style: [
+        {
+          selector: 'node[kind = "concept"]',
+          style: {
+            'background-color': '#7c5cff',
+            'label': 'data(label)',
+            'font-size': '11px',
+            'color': '#1f2937',
+            'text-valign': 'bottom',
+            'text-margin-y': 4,
+            'width': 'mapData(weight, 1, 10, 16, 40)',
+            'height': 'mapData(weight, 1, 10, 16, 40)',
+            'text-background-color': '#fff',
+            'text-background-opacity': 0.85,
+            'text-background-padding': 2,
+          },
+        },
+        {
+          selector: 'node[kind = "paper"]',
+          style: {
+            'background-color': '#9ca3af',
+            'label': '',
+            'width': 5,
+            'height': 5,
+          },
+        },
+        {
+          selector: 'edge',
+          style: {
+            'line-color': '#cbd5e1',
+            'width': 1,
+            'curve-style': 'straight',
+            'opacity': 0.6,
+          },
+        },
+      ],
+      layout: { name: 'cose', animate: false, fit: true, padding: 20 },
+    });
+
+    // 点击 concept 节点 → 跳详情页(对齐现有 card 行为)
+    cy.on('tap', 'node[kind = "concept"]', (evt: any) => {
+      const slug = evt.target.id();
+      window.location.href = `${base}/wiki/concepts/${encodeURIComponent(slug)}/`;
     });
   }
 
