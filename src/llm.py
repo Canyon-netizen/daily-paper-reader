@@ -346,12 +346,16 @@ class LLMClient:
             return True
         return False
 
-    def chat(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None) -> dict:
+    def chat(self, messages: List[Dict[str, str]], response_format: Optional[Dict[str, Any]] = None, temperature: Optional[float] = None, stream: Optional[bool] = None, **kwargs: Any) -> dict:
         """
         统一 Chat Completions 请求。
 
         :param messages: OpenAI 格式的消息列表
         :param response_format: 可选，结构化输出配置（柏拉图支持）
+        :param temperature: 可选,覆盖 self.kwargs['temperature'] 默认值。
+            PR-3 router.call() 会按 stage 路由传温度(温度策略不同),
+            若 chat() 不接这个 kwarg 会被 TypeError 拦截,extract_concepts 这种
+            "try/except → return []" 包装会静默返空 —— 根因排查极痛。
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -384,6 +388,11 @@ class LLMClient:
             for k, v in self.kwargs.items():
                 if k in allowed_keys:
                     payload[k] = v
+        if temperature is not None and isinstance(self.kwargs, dict):
+            # PR-3 router 透传 stage 路由温度;只在显式传入时覆盖 self.kwargs 默认。
+            payload['temperature'] = temperature
+        if stream is True:
+            payload['stream'] = True
         if response_format is not None:
             payload['response_format'] = response_format
 

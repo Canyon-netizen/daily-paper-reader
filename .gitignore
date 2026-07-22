@@ -53,6 +53,14 @@ public/papers/
 # prebuild 自动生成的索引文件(build-arxiv-index.mjs 跑出来的)
 public/arxiv-index.json
 
+# PR-5 Concept Backlinks 产物(由 backfill_concepts.py 生成 + copy 到 public/)
+# wiki/concepts/ 是源,public/wiki/ 是 Astro 构建副本,都不入库
+wiki/concepts/
+public/wiki/
+
+# LLM usage 日志(每次 LLM call 追加,体积增长,不入库)
+archive/llm_usage_*.jsonl
+
 # Bun 锁文件格式
 # 当前用文本 bun.lock (1.2+);如未来切回二进制格式,启用此行
 bun.lockb

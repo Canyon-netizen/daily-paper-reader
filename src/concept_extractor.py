@@ -190,7 +190,16 @@ def extract_concepts(
             messages=messages,
             response_format={"type": "json_object"},
         )
-        raw_text = response.choices[0].message.content
+        # PR-3 router wrapper 把 LLMClient.chat 的内部 dict 包成 OpenAI-style
+        # {'choices': [{'message': {'content': ...}}]} 形态(见 src/llm_router.py:118)。
+        # 但 .choices 是 dict key,不是 attribute — 必须用 ["choices"] 取。
+        # 旧版按 .choices 属性访问 → AttributeError,被本 try/except 吞掉 → 静默返 [],
+        # backfill 跑 333 篇 0 概念 —— 根因排查极痛(踩过 3 轮才定位)。
+        choices = response["choices"] if isinstance(response, dict) and "choices" in response else None
+        if choices:
+            raw_text = choices[0]["message"]["content"]
+        else:
+            raw_text = response.get("content") if isinstance(response, dict) else None
     except Exception:
         return []
 

@@ -109,6 +109,30 @@ class LLMRouter:
 
         # 记录 usage
         self._record_usage(stage, provider, model, actual_temp, response)
+        # PR-5 concept.extract 期望从 response['content'] 读(LLMClient.chat 返回 dict,
+        # 含 'content' / 'raw_response' / 'message' / 'finish_reason' / 'tokens' 键)。
+        # 早期代码用 .choices[0].message.content(OpenAI 原生形态),LLMClient 已
+        # 重构为内部 dict 形态,继续按原形态取 → AttributeError,被 extract_concepts
+        # 的 try/except 吞掉 → 静默返 []。透明兼容:若 response 是 dict 且有
+        # 'content' 键就包装成 .choices[0].message.content 形态,反之原样返回。
+        if isinstance(response, dict) and "content" in response and "choices" not in response:
+            content = response.get("content") or ""
+            message = response.get("message") or {}
+            response = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": content,
+                            "reasoning_content": response.get("reasoning_content"),
+                            "refusal": response.get("refusal"),
+                            **({"role": message.get("role")} if "role" in message else {}),
+                        },
+                        "finish_reason": response.get("finish_reason"),
+                    }
+                ],
+                "raw_response": response.get("raw_response"),
+                "tokens": response.get("tokens", {}),
+            }
         return response
 
     def _record_usage(self, stage: str, provider: str, model: str, temperature: float, response: Any) -> None:
