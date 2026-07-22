@@ -187,10 +187,22 @@ def rebuild(
     *,
     min_appearances: int = 2,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """聚合 concepts → 写 wiki/concepts/<slug>.md。
+    """聚合 concepts → 写 wiki/concepts/<slug>.md + wiki/concepts/_graph.json。
 
     返回 {slug: [paper_records]} 映射(便于测试)。
-    出现次数 < min_appearances 的 concept 不建独立 md,但仍计入返回结果。
+    出现次数 < min_appearances 的 concept 不建独立 md,但仍计入返回结果 + graph。
+
+    graph.json 形态(对齐 Polaris `services/graph.py::build_graph` 简化版):
+        {
+          "nodes": [
+            {"id": <slug>, "label": <display_name>, "category": <cat>,
+             "weight": <paper_count>, "kind": "concept"}
+            ... + 论文节点 {"id": <paper_id>, "label": <title>, "kind": "paper"}
+          ],
+          "edges": [
+            {"source": <paper_id>, "target": <slug>, "kind": "mentions"}
+          ]
+        }
     """
     papers = scan_papers_with_wiki_compiled(docs_dir)
     concept_to_papers: Dict[str, List[Dict[str, Any]]] = {}
@@ -214,7 +226,83 @@ def rebuild(
         md_path = os.path.join(archive_path, f"{slug}.md")
         _upsert_concept_page(md_path, slug, paper_records)
 
+    # PR-5 v2: 写 _graph.json + _index.json (对齐 plan §14 PR 5)
+    _write_concept_graph(archive_path, concept_to_papers)
+    _write_concept_index(archive_path, concept_to_papers, min_appearances)
+
     return concept_to_papers
+
+
+def _write_concept_graph(
+    archive_path: str,
+    concept_to_papers: Dict[str, List[Dict[str, Any]]],
+) -> None:
+    """写 wiki/concepts/_graph.json(plan §14 PR 5 原话未实现,本次补)。
+
+    简化版 graph(对齐 Polaris graph.py:不引入 pgvector,只用节点 + 边静态 JSON):
+      - concept 节点:权重 = 关联论文数
+      - paper 节点: 包含 paper_id + title
+      - mentions 边: paper → concept
+    """
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+    seen_papers: set = set()
+
+    for slug, paper_records in concept_to_papers.items():
+        # concept 节点
+        first = paper_records[0] if paper_records else {}
+        nodes.append({
+            "id": slug,
+            "label": first.get("title") or slug,
+            "category": first.get("category") or "other",
+            "weight": len(paper_records),
+            "kind": "concept",
+        })
+        for p in paper_records:
+            pid = p["paper_id"]
+            # paper 节点(去重)
+            if pid not in seen_papers:
+                seen_papers.add(pid)
+                nodes.append({
+                    "id": pid,
+                    "label": p.get("title") or pid,
+                    "kind": "paper",
+                })
+            # mentions 边
+            edges.append({
+                "source": pid,
+                "target": slug,
+                "kind": "mentions",
+            })
+
+    payload = {"nodes": nodes, "edges": edges}
+    path = os.path.join(archive_path, "_graph.json")
+    import json as _json
+    with open(path, "w", encoding="utf-8") as f:
+        _json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _write_concept_index(
+    archive_path: str,
+    concept_to_papers: Dict[str, List[Dict[str, Any]]],
+    min_appearances: int,
+) -> None:
+    """写 wiki/concepts/_index.json(浏览器端 /concepts 页 grid 渲染用)。"""
+    import json as _json
+    rows: List[Dict[str, Any]] = []
+    for slug, paper_records in concept_to_papers.items():
+        if len(paper_records) < min_appearances:
+            continue
+        first = paper_records[0]
+        rows.append({
+            "slug": slug,
+            "display_name": first.get("title") or slug,
+            "category": first.get("category") or "other",
+            "paper_count": len(paper_records),
+        })
+    path = os.path.join(archive_path, "_index.json")
+    with open(path, "w", encoding="utf-8") as f:
+        _json.dump(rows, f, ensure_ascii=False, indent=2)
 
 
 def _upsert_concept_page(
