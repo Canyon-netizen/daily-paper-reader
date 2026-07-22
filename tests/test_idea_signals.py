@@ -99,20 +99,27 @@ def md_with_chinese_limitation(tmp_path):
     no source-level non-ASCII bytes exist (which can be corrupted by Windows
     cp1252 encoders when pytest writes the fixture to disk).
 
-    Body content padded to >= 60 chars so limitation_excerpts's length threshold
-    is satisfied.
+    Body content padded to >= 60 chars (limitation_excerpts threshold) by
+    appending additional Chinese text via repeated chr() calls.
     """
     (tmp_path / "papers").mkdir()
-    heading = chr(0x5C40) + chr(0x9650) + chr(0x6027)
-    # 本文存在 small sample 问题，数据集偏小，缺乏跨域验证，未来工作应该涵盖。
+    heading = chr(0x5C40) + chr(0x9650) + chr(0x6027)   # 局限性
+    # Body: 本文存在 small sample 问题，数据集偏小。
     body = (
         chr(0x672C) + chr(0x6587) + chr(0x5B58) + chr(0x5728)
         + " small sample "
         + chr(0x95EE) + chr(0x9898) + chr(0xFF0C)
-        + chr(0x6570) + chr(0x636E) + chr(0x96C6) + chr(0x504F) + chr(0x5C0F) + chr(0xFF0C)
-        + chr(0x7F3A) + chr(0x7F18) + chr(0x57DF) + chr(0x9A8C) + chr(0x8BC1) + chr(0xFF0C)
-        + chr(0x672A) + chr(0x6765) + chr(0x5DE5) + chr(0x4F5C) + chr(0x5E94) + chr(0x8BE5) + chr(0x5305) + chr(0x6DB5)
+        + chr(0x6570) + chr(0x636E) + chr(0x96C6) + chr(0x504F) + chr(0x5C0F)
     )
+    # Pad: 我们建议在更大规模的数据集上验证本方法的泛化能力，并扩展到多模态场景。
+    pad = (
+        chr(0x6211) + chr(0x4EEC) + chr(0x5EFA) + chr(0x8BAE) + chr(0x5728)
+        + chr(0x66F4) + chr(0x5927) + chr(0x89C4) + chr(0x6A21) + chr(0x7684)
+        + chr(0x6570) + chr(0x636E) + chr(0x96C6) + chr(0x4E0A) + chr(0x9A8C) + chr(0x8BC1)
+        + chr(0x672C) + chr(0x65B9) + chr(0x6CD5) + chr(0x7684) + chr(0x6CDB) + chr(0x5316) + chr(0x80FD) + chr(0x529B) + chr(0xFF0C)
+        + chr(0x5E76) + chr(0x6269) + chr(0x5C55) + chr(0x5230) + chr(0x591A) + chr(0x6A21) + chr(0x6001) + chr(0x573A) + chr(0x666F) + chr(0x3002)
+    )
+    body = body + pad
     future = (
         chr(0x672A) + chr(0x6765) + chr(0x5C06) + chr(0x6269) + chr(0x5C55)
         + chr(0x5230) + chr(0x591A) + chr(0x6A21) + chr(0x6001) + chr(0x573A) + chr(0x666F) + chr(0x3002)
