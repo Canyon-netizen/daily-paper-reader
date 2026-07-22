@@ -88,6 +88,10 @@ def run_match(
         }
     """
     pro, con, judge = personas[0], personas[1], personas[2]
+    # Accept both dict (runtime: {"name", "stance"}) and str (test fixture) forms
+    def _name(p):
+        return p["name"] if isinstance(p, dict) else str(p)
+    pro_name, con_name, judge_name = _name(pro), _name(con), _name(judge)
     transcript: list[dict] = []
     round_n = 0
 
@@ -96,18 +100,18 @@ def run_match(
             # Pro (正方)
             round_n += 1
             content = run_match_persona(pro, a, b, round_n, call=lambda *_: "TODO: LLM call")
-            transcript.append({"persona": pro["name"], "side": "pro", "round": round_n, "content": content})
+            transcript.append({"persona": pro_name, "side": "pro", "round": round_n, "content": content})
 
             # Con (反方)
             round_n += 1
             content = run_match_persona(con, a, b, round_n, call=lambda *_: "TODO: LLM call")
-            transcript.append({"persona": con["name"], "side": "con", "round": round_n, "content": content})
+            transcript.append({"persona": con_name, "side": "con", "round": round_n, "content": content})
 
         # Judge
         round_n += 1
         judge_result = judge_debate(a, b, judge_llm_call)
         transcript.append({
-            "persona": judge["name"],
+            "persona": judge_name,
             "side": "judge",
             "round": round_n,
             "content": f"判定胜者:{judge_result}。"
@@ -172,10 +176,11 @@ def run_debate(
     used_tokens = 0
 
     for a, b in swiss_pairs(sorted(ideas, key=lambda i: -elo[i["id"]])):
+        # Budget check BEFORE running match (don't waste budget on a match we can't process)
+        if used_tokens + TOKENS_PER_MATCH_CALL > budget_tokens:
+            break
         match = run_match(a, b, personas, rounds, judge_llm_call)
         used_tokens += TOKENS_PER_MATCH_CALL
-        if used_tokens >= budget_tokens:
-            break
 
         if match["failed"]:
             # 记录失败但继续

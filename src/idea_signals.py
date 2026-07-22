@@ -158,17 +158,17 @@ def trend_concepts(
         if d < cutoff:
             continue
         # frontmatter.concepts is a structured slug list
+        # Find frontmatter block, then extract all "slug: <name>" entries inside it
         m_fm = re.search(r"^---\s*$([\s\S]*?)^---\s*$", text, re.MULTILINE)
         if not m_fm:
             continue
-        m_concepts = re.search(
-            r"^concepts:\s*$\s*((?:[-+]?\s+-\s+slug:\s*[\w-]+.*\n?)+)",
-            m_fm.group(1),
-            re.MULTILINE,
-        )
-        if not m_concepts:
+        fm_block = m_fm.group(1)
+        # Only count slugs that appear within a "concepts:" list section.
+        # Detect by checking "concepts:" exists, then extract slug: lines until end of list.
+        if not re.search(r"^concepts:\s*$", fm_block, re.MULTILINE):
             continue
-        for slug in re.findall(r"-\s+slug:\s*([\w-]+)", m_concepts.group(1)):
+        # Match "  - slug: <name>" lines (allow multiple spaces after dash)
+        for slug in re.findall(r"^\s*-\s*slug:\s*([\w-]+)\s*$", fm_block, re.MULTILINE):
             counts[slug] += 1
 
     sorted_pairs = sorted(counts.items(), key=lambda x: (-x[1], x[0]))[:top_n]

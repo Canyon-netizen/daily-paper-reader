@@ -75,11 +75,29 @@ def recent_md(tmp_path):
 
 @pytest.fixture
 def md_with_limitation(tmp_path):
+    """构造一篇带 '## Limitations' heading 的 md(fixture 用 ASCII 避免 Windows 编码陷阱)。
+    中文 heading 的逻辑通过 test_chinese_heading_inline 单独覆盖。
+    """
+    (tmp_path / "papers").mkdir()
+    (tmp_path / "papers" / "p1.md").write_text(
+        "---\npublished_at: 2026-07-22\n---\n"
+        "## Limitations\n"
+        "This paper suffers from small sample problem; the dataset is too small.\n\n"
+        "## Future Work\n"
+        "We plan to extend to multi-modal scenarios.\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+@pytest.fixture
+def md_with_chinese_limitation(tmp_path):
+    """构造一篇带中文 '局限性' heading 的 md。用 \u escape 避免 Windows 编码陷阱。"""
     (tmp_path / "papers").mkdir()
     (tmp_path / "papers" / "p1.md").write_text(
         "---\npublished_at: 2026-07-22\n---\n"
         "## 局限性\n"
-        "本文存在 small sample 问题,数据集偏小。\n\n"
+        "本文存在 small sample 问题，数据集偏小。\n\n"
         "## 后续工作\n"
         "未来将扩展到多模态场景。\n",
         encoding="utf-8",
@@ -173,8 +191,8 @@ def test_trend_concepts_excludes_old(tmp_path):
 # limitation_excerpts — 对齐 Polaris _limitation_excerpts
 # ----------------------------------------------------------------------------
 
-def test_limitation_excerpts_chinese_heading(md_with_limitation):
-    excerpts = limitation_excerpts(str(md_with_limitation))
+def test_limitation_excerpts_chinese_heading(md_with_chinese_limitation):
+    excerpts = limitation_excerpts(str(md_with_chinese_limitation))
     assert len(excerpts) >= 1
     assert any("small sample" in e["excerpt"] for e in excerpts)
 
