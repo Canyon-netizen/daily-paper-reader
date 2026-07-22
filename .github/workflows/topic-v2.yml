@@ -1,0 +1,77 @@
+name: topic-v2
+
+# PR-6 v2: Topic v2 离线批处理 cron — 跑 4 信号 + Elo 辩论 + 落盘 archive。
+#
+# 设计: 单独的工作流,默认每周一次(辩论成本高),可手动触发。
+# 与 daily-paper-reader.yml(每日)解耦,允许独立失败/独立回滚。
+
+on:
+  schedule:
+    - cron: "0 4 * * 0"  # 每周日 04:00 UTC(北京时间 12:00)跑一次
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: "可选: 指定 session id;留空则自动生成"
+        required: false
+        default: ""
+      judge_mode:
+        description: "judge 模式: stub / llm (stub = tie,无 LLM call)"
+        required: false
+        default: "stub"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: topic-v2
+  cancel-in-progress: false
+
+jobs:
+  run-debate:
+    if: github.repository == 'Canyon-netizen/daily-paper-reader' || github.repository == 'ziwenhahaha/daily-paper-reader' || github.repository == '5-xj/daily-paper-reader'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: "1"
+      TOPIC_V2_JUDGE_MODE: ${{ github.event.inputs.judge_mode || 'stub' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run Topic v2 orchestrator
+        env:
+          TOPIC_V2_SESSION_ID: ${{ github.event.inputs.session_id || '' }}
+        run: |
+          if [ -n "$TOPIC_V2_SESSION_ID" ]; then
+            python -m src.topic_v2 "$TOPIC_V2_SESSION_ID"
+          else
+            python -m src.topic_v2
+          fi
+
+      - name: Commit archive/<session_id>/debate/ if changed
+        run: |
+          if [ -d archive ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add archive/
+            if git diff --staged --quiet; then
+              echo "No archive changes to commit"
+            else
+              git commit -m "topic-v2: update archive/<session_id>/debate/ [skip ci]"
+              git push
+            fi
+          else
+            echo "No archive/ directory created"
+          fi
