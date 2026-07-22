@@ -65,9 +65,9 @@ import {
   getActiveExplorePrompt,
   getActiveReportPrompt,
 } from './topic-search/prompts';
-import { finalizeLLMJson } from './topic-search/json-heal';
 import { uid, runConcurrent } from './topic-search/concurrency';
 import { persistSession, deleteSession, trimSessionToLimit, MAX_QA_PER_PAPER, MAX_QA_FOR_REPORT, loadStore, saveStore } from './topic-search/store';
+import { callLLMRaw } from './topic-search/llm-call';
 // getActiveXxxPrompt 是历史公开 API — 从 ./topic-search/prompts 再导出，保持原 import 路径。
 export {
   getActiveFacetPrompt,
@@ -230,61 +230,6 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
 
 let current: TopicSession | null = null;
 let inFlightController: AbortController | null = null;
-
-// ============================================================================
-// LLM 调用(独立的轻量调用,与 callLLM 解耦 — 这里用于拆解和追问)
-// ============================================================================
-
-
-async function callLLMRaw(
-  systemPrompt: string,
-  userContent: string,
-  cfg: LLMConfig,
-  jsonOnly = true,
-  maxTokens = 4000,
-  expectedTopLevel?: '[' | '{',
-): Promise<string> {
-  // finish_reason=length(被输出预算截断)时,自动加倍预算重试一次。
-  // 主要救推理模型:它会先输出一大段 reasoning,重任务思考很长,可能烧光整个 maxTokens,
-  // 剥掉思考后正文为空。
-  let budget = maxTokens;
-  const MAX_BUDGET = 16000;
-  for (let attempt = 0; ; attempt++) {
-    const response = await callChatCompletion(
-      cfg,
-      {
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        temperature: 0.3,
-        maxTokens: budget,
-        signal: inFlightController?.signal,
-        reasoningModelPattern: REASONING_MODEL_PATTERN_WIDE,
-      },
-    );
-    const content = response.content;
-    const finishReason = response.finishReason;
-    const stripped = content
-      .replace(/<\/think>/gi, "")
-      .replace(/<\/think[\s\S]*\$/i, "")
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```\s*$/, "")
-      .trim();
-    if (
-      finishReason === "length" &&
-      stripped.length < 20 &&
-      budget < MAX_BUDGET &&
-      attempt < 3
-    ) {
-      budget = Math.min(budget * 2, MAX_BUDGET);
-      continue;
-    }
-    return finalizeLLMJson(content, stripped, finishReason, jsonOnly, expectedTopLevel);
-  }
-}
-
-
 // ============================================================================
 // 状态机:5 个阶段
 // ============================================================================

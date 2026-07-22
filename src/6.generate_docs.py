@@ -29,6 +29,7 @@ if SCRIPT_DIR not in sys.path:
 from src._utils import normalize_arxiv_id
 from src.paper_figures import ensure_paper_media
 from src.paper_formulas import ensure_paper_formulas
+from src.title_utils import strip_title_markup
 from src.venue_extract import venue_label_list
 from src.taxonomy import (
     normalize_category_dim,
@@ -1178,8 +1179,17 @@ def build_markdown_content(
     # 构建 YAML front matter
     lines = ["---"]
     lines.append(f"title: {yaml_escape_value(title)}")
+    # 纯文本标题:标题里可能含 inline TeX(如 `$\max$@$k$`),原始值保留给富渲染,
+    # 但浏览器 <title> / 列表卡片 / 搜索索引 / a11y 文本需要一份剥掉标记的版本。
+    # 仅当剥掉后与原值不同才 emit,避免为纯英文标题写冗余字段。
+    title_plain = strip_title_markup(title)
+    if title_plain and title_plain != title:
+        lines.append(f"title_plain: {yaml_escape_value(title_plain)}")
     if zh_title:
         lines.append(f"title_zh: {yaml_escape_value(zh_title)}")
+        zh_title_plain = strip_title_markup(zh_title)
+        if zh_title_plain and zh_title_plain != zh_title:
+            lines.append(f"title_zh_plain: {yaml_escape_value(zh_title_plain)}")
     lines.append(f"authors: {yaml_escape_value(', '.join(authors) if authors else 'Unknown')}")
     lines.append(f"date: {yaml_escape_value(published or 'Unknown')}")
     lines.append(f"generated_at: {yaml_escape_value(datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC'))}")

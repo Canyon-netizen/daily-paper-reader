@@ -124,6 +124,48 @@ class GenerateDocsMetaParseTest(unittest.TestCase):
         self.assertNotIn(("query", "sr"), tags)
         self.assertNotIn(("query", "equation-discovery"), tags)
 
+    def test_build_markdown_content_emits_title_plain(self):
+        """含 TeX 标记的标题应同时写出 title_plain / title_zh_plain,纯文本不重复"""
+        paper = {
+            "title": "Theoretical Foundations of $\\max$@$k$ Reinforcement Learning",
+            "authors": ["Author"],
+            "published": "2026-07-21T00:00:00+00:00",
+            "link": "https://arxiv.org/pdf/2607.17823v1",
+            "abstract": "abstract body",
+            "source": "arxiv",
+        }
+        md = self.mod.build_markdown_content(
+            paper, "quick",
+            "$\\max$@$k$ 强化学习的理论基础",
+            "中文摘要", [],
+        )
+        meta = self.mod._parse_front_matter(md)
+        # title / title_zh 保留原始 TeX 富文本
+        self.assertIn("$\\max$", meta["title"])
+        self.assertIn("$\\max$", meta["title_zh"])
+        # title_plain / title_zh_plain 剥掉 TeX,字母命令转可读名
+        self.assertEqual(
+            meta["title_plain"],
+            "Theoretical Foundations of max@k Reinforcement Learning",
+        )
+        self.assertEqual(
+            meta["title_zh_plain"],
+            "max@k 强化学习的理论基础",
+        )
+
+        # 无 TeX 时不 emit title_plain,避免冗余字段
+        paper2 = {
+            "title": "Plain Title",
+            "authors": ["Author"],
+            "published": "2026-07-21T00:00:00+00:00",
+            "link": "https://arxiv.org/pdf/2607.17824v1",
+            "abstract": "abstract body",
+            "source": "arxiv",
+        }
+        md2 = self.mod.build_markdown_content(paper2, "quick", "", "", [])
+        meta2 = self.mod._parse_front_matter(md2)
+        self.assertNotIn("title_plain", meta2)
+
     def test_build_markdown_content_writes_media_json_front_matter(self):
         paper = {
             "title": "Figure Test",
