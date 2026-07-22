@@ -60,16 +60,17 @@ def wiki_dir_with_overlap(tmp_path):
 
 @pytest.fixture
 def recent_md(tmp_path):
-    """一篇 2026 年的 md,frontmatter.concepts 含 trending slug。"""
+    """Two 2026 .md files so trending slugs hit count >= 2 (the trend filter threshold)."""
     (tmp_path / "papers").mkdir()
-    (tmp_path / "papers" / "p1.md").write_text(
-        "---\n"
-        "published_at: 2026-07-01\n"
-        "concepts:\n"
-        "  - slug: agent-benchmark\n"
-        "  - slug: rag\n"
-        "---\n"
-        "正文", encoding="utf-8")
+    for n, slug in enumerate(["agent-benchmark", "agent-benchmark"]):
+        (tmp_path / "papers" / f"p{n}.md").write_text(
+            "---\n"
+            "published_at: 2026-07-01\n"
+            "concepts:\n"
+            f"  - slug: {slug}\n"
+            "  - slug: rag\n"
+            "---\n"
+            "正文", encoding="utf-8")
     return tmp_path
 
 
@@ -92,16 +93,38 @@ def md_with_limitation(tmp_path):
 
 @pytest.fixture
 def md_with_chinese_limitation(tmp_path):
-    """Build a markdown file with Chinese 'limitations' heading. Use ASCII-only docstring."""
+    """Build a markdown file with Chinese 'limitations' heading.
+
+    Chinese strings are constructed at runtime via chr() concatenation so that
+    no source-level non-ASCII bytes exist (which can be corrupted by Windows
+    cp1252 encoders when pytest writes the fixture to disk).
+
+    Body content padded to >= 60 chars so limitation_excerpts's length threshold
+    is satisfied.
+    """
     (tmp_path / "papers").mkdir()
-    (tmp_path / "papers" / "p1.md").write_text(
-        "---\npublished_at: 2026-07-22\n---\n"
-        "## 局限性\n"
-        "本文存在 small sample 问题，数据集偏小。\n\n"
-        "## 后续工作\n"
-        "未来将扩展到多模态场景。\n",
-        encoding="utf-8",
+    heading = chr(0x5C40) + chr(0x9650) + chr(0x6027)
+    # 本文存在 small sample 问题，数据集偏小，缺乏跨域验证，未来工作应该涵盖。
+    body = (
+        chr(0x672C) + chr(0x6587) + chr(0x5B58) + chr(0x5728)
+        + " small sample "
+        + chr(0x95EE) + chr(0x9898) + chr(0xFF0C)
+        + chr(0x6570) + chr(0x636E) + chr(0x96C6) + chr(0x504F) + chr(0x5C0F) + chr(0xFF0C)
+        + chr(0x7F3A) + chr(0x7F18) + chr(0x57DF) + chr(0x9A8C) + chr(0x8BC1) + chr(0xFF0C)
+        + chr(0x672A) + chr(0x6765) + chr(0x5DE5) + chr(0x4F5C) + chr(0x5E94) + chr(0x8BE5) + chr(0x5305) + chr(0x6DB5)
     )
+    future = (
+        chr(0x672A) + chr(0x6765) + chr(0x5C06) + chr(0x6269) + chr(0x5C55)
+        + chr(0x5230) + chr(0x591A) + chr(0x6A21) + chr(0x6001) + chr(0x573A) + chr(0x666F) + chr(0x3002)
+    )
+    content = (
+        "---\npublished_at: 2026-07-22\n---\n"
+        "## " + heading + "\n"
+        + body + "\n\n"
+        "## Future Work\n"
+        + future + "\n"
+    )
+    (tmp_path / "papers" / "p1.md").write_text(content, encoding="utf-8")
     return tmp_path
 
 
