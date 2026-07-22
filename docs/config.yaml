@@ -509,3 +509,140 @@ source_backends:
     anon_key: sb_publishable_lX-oi64Uxyd7SIVv3_w2Uw_MTOojeKq
     sync_table: ''
     sync_success_value: ''
+
+# ============================================================================
+# PR-3: LLM Stage Routing (plans/pr-plans/pr-3-stage-router.md §6)
+# ============================================================================
+# 每个 stage 可独立配 (provider_model, temperature);未配置的 stage fallback
+# LLM_MODEL env。${LLM_MODEL} 占位符在 router.resolve() 内展开。
+# stream_stages 标记走流式（PR-3 不动 HTTP 流式，只记录 is_stream 元数据）。
+llm_stage_models:
+  enrich:
+    provider_model: "blt/gemini-3-flash-preview"
+    temperature: 0.3
+  refine:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.2
+  select:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.2
+  doc.generate:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.5
+  analyzer.system:
+    provider_model: "deepseek/deepseek-chat"
+    temperature: 0.5
+  analyzer.deepdive:
+    provider_model: "openai/gpt-4o-mini"
+    temperature: 0.7
+  topic.facet:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.4
+  topic.summary:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.3
+  topic.report:
+    provider_model: "openai/gpt-4o-mini"
+    temperature: 0.6
+  default:
+    provider_model: "${LLM_MODEL}"
+    temperature: 0.5
+  stream_stages:
+    - "analyzer.deepdive"
+    - "topic.report"
+
+# ============================================================================
+# PR-4: Prompt Packs（plans/pr-plans/pr-4-prompt-pack.md §5）
+# ============================================================================
+# 零破坏：默认所有 active.<target> 都为 null（走硬编码 const）。
+# 启用方式：把对应 target 的 value 改为 "<pack_id>:<version>" 即可
+# （pack_id/version 必须在 config/prompts/<pack_id>/<version>/ 下存在 manifest + body）。
+# available_targets:
+#   enrich / refine / select / doc.generate
+#   analyzer.system / analyzer.deepdive
+#   topic.facet / topic.cand / topic.explore / topic.summary / topic.report
+prompt_packs:
+  enabled: false
+  taxonomies_version: "2026-07-01"
+  active:
+    enrich: null
+    refine: null
+    select: null
+    doc.generate: null
+    analyzer.system: null
+    analyzer.deepdive: null
+    topic.facet: null
+    topic.cand: null
+    topic.explore: null
+    topic.summary: null
+    topic.report: null
+
+# ============================================================================
+# PR-2: Pipeline Validate (plans/pr-plans/pr-2-validate.md §5)
+# ============================================================================
+# 零破坏：默认 enabled: false，老 cron 行为不变。
+# 开启后每个 sub-step 出口插入 verify() → verdict 写进 checkpoint。
+# failure_handling: abort / mark_needs_review / clamp
+pipeline:
+  validate:
+    enabled: false
+    contracts_dir: "src/validate/contracts"
+    failure_handling: "mark_needs_review"
+    rubric_enabled: false
+
+# ============================================================================
+# PR-5: Concept Backlinks (plans/pr-plans/pr-5-concept-backlinks.md §8)
+# ============================================================================
+# 零破坏：默认 enabled: false，老 cron 行为不变（不调 LLM，不写 wiki_compiled 字段）。
+# 启用后 Step 6 多调 1 次 LLM（stage "concept.extract"），每篇 md 追加 3 个 frontmatter 字段
+# （wiki_compiled / wiki_compiled_at / concepts），由 src/concept_index.py 聚合生成 wiki/concepts/*.md。
+concepts:
+  enabled: false
+  min_appearances: 2
+  max_concepts_per_paper: 7
+  blacklist_file: "config/concept_blacklist.yaml"
+  aliases_file: "config/concept_aliases.yaml"
+  category_enum:
+    - method
+    - architecture
+    - methodology
+    - problem
+    - metric
+    - dataset
+    - other
+  slug_pattern: "^[a-z0-9-]+$"
+
+# ============================================================================
+# PR-7: Citation Guard (plans/pr-plans/pr-7-citation-guard.md §11)
+# ============================================================================
+# 零破坏：默认 enabled: false，save-paper.yml guard step 不跑，CLI 不阻塞 commit。
+# 启用后 Deep Dive 产物 *.citations.json 由 src/citation_guard.py::run_guard 写出，
+# 三源核查（library / S2 / OpenAlex），fabricated 引用按 fabricated_action 处理。
+citation_guard:
+  enabled: false
+  sources: ["semantic_scholar", "openalex", "in_library"]
+  fabricated_action: "replace_with_question_mark"
+  run_support_check: false
+  exact_similarity: 0.92
+  minor_similarity: 0.75
+  year_tolerance: 1
+  pass_rating: 6.0
+  max_support_checks: 30
+  s2_rate_limit_per_min: 100
+  s2_retry_max: 5
+
+# PR-6 Topic v2
+topic:
+  v2:
+    enabled: false
+    elo_k: 32
+    elo_initial: 1200
+    debate_rounds: 3
+    debate_max_ideas: 8
+    budget_tokens: 800000
+    personas: ["方法论者", "工程师", "怀疑论者"]
+    hole_top_concepts: 8
+    hole_max_pairs: 5
+    trend_window_days: 90
+    trend_max: 5
+    dedup_threshold: 0.85
