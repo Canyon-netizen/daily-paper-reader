@@ -159,13 +159,5 @@ jobs:
 
       - name: Trigger Cloudflare Pages rebuild
         if: ${{ always() && github.event.inputs.dry_run != 'true' }}
-        continue-on-error: true
-        env:
-          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
-        run: |
-          if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
-            echo "CF_DEPLOY_HOOK_URL not set, skipping deploy hook"
-            exit 0
-          fi
-          curl -X POST "$CF_DEPLOY_HOOK_URL" -f
-          echo "Cloudflare Pages rebuild queued"
+        # 用 .github/actions/ping-cf-pages-deploy-hook,缺失 secret 硬失败
+        uses: ./.github/actions/ping-cf-pages-deploy-hook

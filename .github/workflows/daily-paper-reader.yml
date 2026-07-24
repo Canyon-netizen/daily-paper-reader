@@ -295,15 +295,6 @@ jobs:
           git push origin HEAD:"$branch"
 
       - name: Trigger Cloudflare Pages rebuild
-        if: always()
-        continue-on-error: true
-        env:
-          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
-        run: |
-          if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
-            echo "CF_DEPLOY_HOOK_URL not set, skipping deploy hook"
-            exit 0
-          fi
-          echo "Pinging Cloudflare Pages deploy hook..."
-          curl -X POST "$CF_DEPLOY_HOOK_URL" -f
-          echo "Cloudflare Pages rebuild queued"
+        # 用 .github/actions/ping-cf-pages-deploy-hook,缺失 secret 硬失败
+        # (替代原来的 `if [ -z "$URL" ] exit 0` 静默跳过,见 PR 2026-07-24)
+        uses: ./.github/actions/ping-cf-pages-deploy-hook

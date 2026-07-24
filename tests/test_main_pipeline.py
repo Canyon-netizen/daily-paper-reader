@@ -105,8 +105,22 @@ class MainPipelineTest(unittest.TestCase):
                 self.mod.main()
 
             labels = [item[0] for item in calls]
-            self.assertIn("Step 3 - Rerank", labels)
-            self.assertIn("Step 4 - LLM refine", labels)
+            # PR-1 之后:Step 3 (rerank) 退化为本地兜底(无独立 step label),
+            # main() 只跑 6 个 step: 2.1 BM25, 2.2 Embedding, 2.3 RRF,
+            # 4 LLM refine, 5 Select, 6 Generate Docs。
+            self.assertEqual(
+                labels,
+                [
+                    "Step 2.1 - BM25",
+                    "Step 2.2 - Embedding",
+                    "Step 2.3 - RRF",
+                    "Step 4 - LLM refine",
+                    "Step 5 - Select",
+                    "Step 6 - Generate Docs",
+                ],
+            )
+            # 防御:Step 3 rerank 已退化,不应出现在 labels
+            self.assertNotIn("Step 3 - Rerank", labels)
 
     def test_main_keeps_local_rerank_in_deepseek_mode(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -140,7 +154,21 @@ class MainPipelineTest(unittest.TestCase):
                 self.mod.main()
 
             labels = [item[0] for item in calls]
-            self.assertIn("Step 3 - Rerank", labels)
+            # PR-1 之后:deepseek mode 跟其它模式一样跑 6 step (Step 3 退化)。
+            # 早期这个测试想验证"deepseek 模式下还跑 local rerank",但 Step 3
+            # 退化为本地兜底后不再有独立 label;现在改为验证 step 序列完整。
+            self.assertEqual(
+                labels,
+                [
+                    "Step 2.1 - BM25",
+                    "Step 2.2 - Embedding",
+                    "Step 2.3 - RRF",
+                    "Step 4 - LLM refine",
+                    "Step 5 - Select",
+                    "Step 6 - Generate Docs",
+                ],
+            )
+            self.assertNotIn("Step 3 - Rerank", labels)
 
 
 if __name__ == "__main__":

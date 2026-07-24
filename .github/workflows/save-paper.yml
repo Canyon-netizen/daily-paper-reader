@@ -478,13 +478,5 @@ jobs:
 
       - name: Trigger Cloudflare Pages rebuild
         if: always()
-        continue-on-error: true
-        env:
-          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
-        run: |
-          if [ -n "$CF_DEPLOY_HOOK_URL" ]; then
-            echo "Pinging Cloudflare Pages deploy hook..."
-            curl -X POST "$CF_DEPLOY_HOOK_URL" -f
-          else
-            echo "CF_DEPLOY_HOOK_URL not set, skipping"
-          fi
+        # 用 .github/actions/ping-cf-pages-deploy-hook,缺失 secret 硬失败
+        uses: ./.github/actions/ping-cf-pages-deploy-hook

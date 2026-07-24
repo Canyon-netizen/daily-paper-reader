@@ -1,0 +1,48 @@
+# Ping Cloudflare Pages deploy hook with hard-fail on missing secret.
+#
+# 替代 5 个 workflow 里重复的 12 行 block,daily-paper-reader / maintain-version-refresh /
+# save-paper / pages-rebuild-on-push 都用这个。原版问题是
+#   if [ -z "$URL" ]; then echo skip; exit 0; fi
+# 让 secret 缺失时 step 仍标 success,部署不更新却无从排查。
+#
+# 用法:
+#   - uses: ./.github/actions/ping-cf-pages-deploy-hook
+#     if: success()  # (主 workflow 决定是否要在前 step 失败时跳过)
+#
+# 参数:
+#   skip-if-failed-before (默认 false):true → 前置 step 失败时跳过(原 continue-on-error 行为)
+#
+# 输入:secrets.CF_DEPLOY_HOOK_URL
+# 输出:无
+name: ping-cf-pages-deploy-hook
+description: Ping Cloudflare Pages deploy hook with hard-fail on missing secret
+inputs:
+  skip-if-failed-before:
+    description: |
+      true → 当前置 step 失败时跳过(继续走 GitHub Actions UI 红 ❌ 但不
+      触发部署)。默认 false → 缺失 secret 时硬失败,UI 立刻可见修复路径。
+    required: false
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Validate CF_DEPLOY_HOOK_URL secret is set
+      shell: bash
+      env:
+        CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
+      run: |
+        if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
+          echo "::error title=CF_DEPLOY_HOOK_URL secret missing::Deploy hook URL 未配置,Cloudflare Pages rebuild 不会发生。请到 GitHub repo Settings > Secrets and variables > Actions 添加 CF_DEPLOY_HOOK_URL(Cloudflare Pages 项目 Settings > Builds > Deploy hooks > Add hook 拿 URL)。"
+          exit 1
+        fi
+        echo "CF_DEPLOY_HOOK_URL 已配置 (长度: ${#CF_DEPLOY_HOOK_URL} 字符,内容已 mask)"
+
+    - name: Ping Cloudflare Pages rebuild
+      if: ${{ inputs.skip-if-failed-before != 'true' || success() }}
+      shell: bash
+      env:
+        CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
+      run: |
+        echo "Pinging Cloudflare Pages deploy hook..."
+        curl -X POST "$CF_DEPLOY_HOOK_URL" -f -s -o /dev/null -w "HTTP %{http_code} | total %{time_total}s\n"
+        echo "Cloudflare Pages rebuild queued (若 HTTP 不是 2xx,step 会失败)"

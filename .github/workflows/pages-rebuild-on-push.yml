@@ -45,23 +45,6 @@ jobs:
     name: Ping Cloudflare Pages deploy hook
     runs-on: ubuntu-latest
     steps:
-      - name: Validate CF_DEPLOY_HOOK_URL secret is set
-        env:
-          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
-        run: |
-          if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
-            echo "::error title=CF_DEPLOY_HOOK_URL secret missing::Deploy hook URL 未配置,Cloudflare Pages rebuild 不会发生。请到 GitHub repo Settings > Secrets and variables > Actions 添加 CF_DEPLOY_HOOK_URL(Cloudflare Pages 项目 Settings > Builds > Deploy hooks > Add hook 拿 URL)。"
-            exit 1
-          fi
-          # 仅展示前缀长度,不暴露内容(GH 也会 mask 整个 env var)
-          prefix_len=${#CF_DEPLOY_HOOK_URL}
-          echo "CF_DEPLOY_HOOK_URL 已配置 (长度: ${prefix_len} 字符,内容已 mask)"
-
-      - name: Ping Cloudflare Pages rebuild
-        if: success()
-        env:
-          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
-        run: |
-          echo "Pinging Cloudflare Pages deploy hook..."
-          curl -X POST "$CF_DEPLOY_HOOK_URL" -f -s -o /dev/null -w "HTTP %{http_code} | total %{time_total}s\n"
-          echo "Cloudflare Pages rebuild queued (若 HTTP 不是 2xx,step 会失败)"
+      # 用 .github/actions/ping-cf-pages-deploy-hook,缺失 secret 硬失败。
+      # 这个 workflow 是 single-purpose,直接引用 composite action。
+      - uses: ./.github/actions/ping-cf-pages-deploy-hook

@@ -84,7 +84,7 @@ jobs:
           set -x
 
           if [ -z "${SUPABASE_SERVICE_KEY}" ]; then
-            echo "[WARN] 未配置 SUPABASE_SERVICE_KEY，已跳过 medRxiv 维护同步。"
+            echo "::warning title=SUPABASE_SERVICE_KEY 未配置,已跳过 medRxiv 维护同步::Fork 用户如需维护 Supabase 同步,请到 GitHub repo Settings > Secrets and variables > Actions 添加 SUPABASE_SERVICE_KEY(Supabase Project Settings > API > service_role key)。"
             exit 0
           fi
 

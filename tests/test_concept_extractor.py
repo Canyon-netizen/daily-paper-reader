@@ -153,15 +153,26 @@ def test_novelty_centrality_clamped():
 
 # ---- 集成: extract_concepts with mock router -------------------------
 
-class _FakeChoice:
+class _FakeChoice(dict):
+    """OpenAI-style choice — dict-key 协议(见 src/concept_extractor.py:198-202).
+
+    旧版用 MagicMock attribute,导致 response["choices"] / choice["message"]
+    / message["content"] 这种 dict-key access 抛 TypeError,被 try/except 吞掉
+    返回 []。这是 Polaris §3.1 关注的"dict-key vs attribute 混用导致静默
+    返回空 concepts"问题的同类(也是 MEMORY feedback_pr5_concept_extract_silent_failures
+    提到的根因模式)。改为继承 dict 后,fixture 与真实 router 行为一致。
+    """
     def __init__(self, content: str):
-        self.message = MagicMock()
-        self.message.content = content
+        super().__init__()
+        self["message"] = {"content": content}
 
 
-class _FakeResponse:
+class _FakeResponse(dict):
+    """OpenAI-style response — dict-key 协议."""
+
     def __init__(self, content: str):
-        self.choices = [_FakeChoice(content)]
+        super().__init__()
+        self["choices"] = [_FakeChoice(content)]
 
 
 def test_extract_concepts_with_mock_router():
