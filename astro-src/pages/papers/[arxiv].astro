@@ -141,7 +141,7 @@ const tabTitle = plainZh || plainEn || id;
                     <span class="meta-value">{paper.evidence}</span>
                   </div>
                 )}
-                {paper.score !== undefined && (
+                {typeof paper.score === 'number' && Number.isFinite(paper.score) && (
                   <div class="meta-row">
                     <span class="meta-label">SCORE</span>
                     <span class="meta-value score-pill">{paper.score.toFixed(1)}</span>

@@ -4,6 +4,11 @@ import Navbar from '../../../components/Navbar.astro';
 import Footer from '../../../components/Footer.astro';
 import '../../../styles/topic-search.css';
 import '../../../styles/concepts-graph.css';
+
+// 整页客户端渲染 — localStorage 取 TopicSession.debateProgress,
+// build 期不知道有哪些 session_id。占位一个静态路径跑通 SSG,
+// 真正的 session_id 由 client JS 读 URL 匹配([session_id] 路由参数)。
+export const getStaticPaths = async () => [{ params: { session_id: '_' } }];
 ---
 
 <BaseLayout title="主题辩论 · Daily Paper Reader">

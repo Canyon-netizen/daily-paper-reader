@@ -163,7 +163,7 @@ const topicCount = topicKeys.size;
                       <span class="paper-rank-num">{String(i + 1).padStart(2, '0')}</span>
                       <span class="paper-rank-label">{medal ? `${medal} 编辑精选` : '编辑精选'}</span>
                     </div>
-                    {p.score !== undefined && (
+                    {typeof p.score === 'number' && Number.isFinite(p.score) && (
                       <div class="paper-score" title="LLM 评分">
                         <span class="paper-score-star" aria-hidden="true">★</span>
                         <span class="paper-score-value">{p.score.toFixed(1)}</span>
