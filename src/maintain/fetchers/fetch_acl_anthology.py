@@ -7,19 +7,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
-import sys
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import requests
 from bs4 import BeautifulSoup
-
-
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
-
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))

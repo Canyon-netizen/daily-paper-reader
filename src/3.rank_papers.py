@@ -8,7 +8,7 @@ import random
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from llm import ClientFactory
+from src.llm import ClientFactory
 from src._utils import log, group_start, group_end
 
 SCRIPT_DIR = os.path.dirname(__file__)

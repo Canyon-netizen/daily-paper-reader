@@ -21,9 +21,8 @@ import re
 import sys
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from paper_figures import ensure_paper_figures  # noqa: E402
+from src.paper_figures import ensure_paper_figures  # noqa: E402
 
 DOCS_DIR = os.path.join(ROOT, "docs")
 PAPERS_DIR = os.path.join(DOCS_DIR, "papers")

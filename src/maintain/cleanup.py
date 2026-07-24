@@ -5,15 +5,10 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timedelta, timezone
 import os
-import sys
 from typing import Any, Dict, List
 from urllib.parse import quote
 
 import requests
-
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
 
 from src.source_config import get_source_backend, load_config_with_source_migration
 

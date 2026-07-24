@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
-from model_loader import is_remote_embedding_enabled, load_sentence_transformer
+from src.model_loader import is_remote_embedding_enabled, load_sentence_transformer
 
 if TYPE_CHECKING:
   from sentence_transformers import SentenceTransformer

@@ -170,9 +170,8 @@ def build_command(workflow_key: str, workflow_file: str, inputs: dict[str, str])
                 f"YEARS_INPUT={shlex.quote(years)} "
                 f"{shlex.quote(python)} -c "
                 + shlex.quote(
-                    "import os, sys; "
-                    "sys.path.insert(0, 'src'); "
-                    "from conference_retrieval import build_years_token, parse_conferences, parse_years; "
+                    "import os; "
+                    "from src.conference_retrieval import build_years_token, parse_conferences, parse_years; "
                     "print('-'.join(parse_conferences(os.environ.get('CONFERENCE_INPUT', '')))); "
                     "print(build_years_token(parse_years(os.environ.get('YEARS_INPUT', ''))))"
                 )
@@ -186,9 +185,8 @@ def build_command(workflow_key: str, workflow_file: str, inputs: dict[str, str])
                 "TOPIC_MARKER=$(CONF_TOKEN=\"$CONF_TOKEN\" YEAR_TOKEN=\"$YEAR_TOKEN\" "
                 "PROFILE_TAG=\"$DPR_FILTER_PROFILE_TAG\" "
                 f"{shlex.quote(python)} - <<'PY'\n"
-                "import os, sys\n"
-                "sys.path.insert(0, 'src')\n"
-                "from conference_sidebar import build_conference_topic_marker, topic_from_profile_tag\n"
+                "import os\n"
+                "from src.conference_sidebar import build_conference_topic_marker, topic_from_profile_tag\n"
                 "kind, label = topic_from_profile_tag(os.environ.get('PROFILE_TAG', ''))\n"
                 "print(build_conference_topic_marker(os.environ['CONF_TOKEN'], os.environ['YEAR_TOKEN'], kind, label))\n"
                 "PY\n"

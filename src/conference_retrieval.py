@@ -31,9 +31,6 @@ TODAY_STR = str(os.getenv("DPR_RUN_DATE") or "").strip() or datetime.now(timezon
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "archive" / TODAY_STR / "filtered"
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
 from src.filter import E5_QUERY_PREFIX, encode_queries  # noqa: E402
 from src.model_loader import load_sentence_transformer  # noqa: E402
 from src.source_config import get_source_backend, get_supabase_shared_config  # noqa: E402

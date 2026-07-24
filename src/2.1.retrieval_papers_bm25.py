@@ -35,8 +35,8 @@ from src.retrieval.time_window import (
 )
 from src.source_backend_router import group_queries_by_source, merge_pipeline_results
 from src.source_config import ARXIV_SOURCE_KEY, get_source_backend, load_config_with_source_migration, normalize_source_list
-from subscription_plan import build_pipeline_inputs
-from supabase_source import (
+from src.subscription_plan import build_pipeline_inputs
+from src.supabase_source import (
   count_papers_by_date_range,
   get_supabase_read_config,
   match_papers_by_bm25,

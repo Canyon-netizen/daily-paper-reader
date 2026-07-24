@@ -12,12 +12,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from reranker_api import (
+from src.reranker_api import (
   DEFAULT_QWEN3_RERANK_INSTRUCTION,
   SILICONFLOW_QWEN3_RERANKER_MODELS,
   SiliconFlowReranker,
 )
-from rerank_budget_experiment import (
+from src.rerank_budget_experiment import (
   count_star_candidates,
   load_json,
   score_summary,

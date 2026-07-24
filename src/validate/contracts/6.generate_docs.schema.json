@@ -1,9 +1,14 @@
 {
   "step_id": "6.generate_docs",
+  "_producer": "src/6.generate_docs.py — emits archive/${RUN_DATE}/logs/daily_report.json (see _write_daily_report), plus markdown under docs/papers.",
+  "_producer_notes": "daily_report.json shape: {date, mode, generated_at, recommend_path, recommend_exists, deep_count, quick_count, total_count, docs_dir, day_readme}. Counts are exposed as flat scalars (deep_count / quick_count / total_count); there is no 'written_papers' array on the report. min_count on the existing scalar fields would be a 'min_count' kind which targets a list field, so we tighten it with schema_valid to require all canonical count scalars are present.",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
-    { "kind": "min_count", "field": "written_papers", "value": 0 }
+    { "kind": "schema_valid", "field": "date", "required_keys": [] },
+    { "kind": "schema_valid", "field": "total_count", "required_keys": [] },
+    { "kind": "schema_valid", "field": "deep_count", "required_keys": [] },
+    { "kind": "schema_valid", "field": "quick_count", "required_keys": [] }
   ],
   "rubric_enabled": false,
   "on_fail": "mark_needs_review"

@@ -1,10 +1,13 @@
 {
   "step_id": "3.rank",
+  "_producer": "src/3.rank_papers.py (process_file -> save_json, mutates the BM25/embedding JSON in place and adds global_candidate_ids + per-query 'ranked' arrays under each query)",
+  "_producer_notes": "Output path is archive/${RUN_DATE}/rank/arxiv_papers_${RUN_DATE}.json. The top-level JSON still wraps the producer's input (top_k / generated_at / papers / queries). New keys added: global_candidate_ids, global_pool_lane_top_k, global_pool_limit, global_pool_guaranteed_per_lane, global_pool_effective_size, reranked_at. Under each queries[i] a 'ranked' array is appended with entries {paper_id, score, star_rating}. 'papers' is {id, source, title, abstract, authors, ...} without a per-paper 'global_score' (score is per-query, kept inside queries[].ranked).",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
     { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/rank/arxiv_papers_${RUN_DATE}.json" },
-    { "kind": "schema_valid", "field": "papers", "required_keys": ["paper_id", "global_score"] },
+    { "kind": "schema_valid", "field": "papers", "required_keys": ["id", "title"] },
+    { "kind": "schema_valid", "field": "queries", "required_keys": ["ranked"] },
     { "kind": "min_count", "field": "papers", "value": 1 }
   ],
   "rubric_enabled": false,

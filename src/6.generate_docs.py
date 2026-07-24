@@ -19,12 +19,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import fitz  # PyMuPDF
 import requests
-from llm import ClientFactory, LLMClient
+from src.llm import ClientFactory, LLMClient
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
 
 from src._utils import normalize_arxiv_id
 from src.paper_figures import ensure_paper_media

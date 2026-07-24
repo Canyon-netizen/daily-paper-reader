@@ -1,11 +1,14 @@
 {
   "step_id": "2.1.retrieval.bm25",
+  "_producer": "src/2.1.retrieval_papers_bm25.py (save_tagged_results in module)",
+  "_producer_notes": "Writes a top-level dict to archive/${RUN_DATE}/retrieval/bm25/${RUN_DATE}.json with keys: top_k, generated_at, papers, queries. 'papers' is an array of {id, source, title, abstract, authors, primary_category, categories, published, link, tags}; 'queries' is an array of {type, tag, paper_tag, query_text, sim_scores: {paper_id: {score, rank}}}. Note: there is NO 'bm25_results' / 'retrieval_metric' field on the producer output.",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
     { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/retrieval/bm25/${RUN_DATE}.json" },
-    { "kind": "schema_valid", "field": "bm25_results", "required_keys": ["retrieval_metric", "ranked_papers", "score"] },
-    { "kind": "metric", "name": "ranked_papers", "op": ">=", "value": 0 }
+    { "kind": "schema_valid", "field": "papers", "required_keys": ["id", "title"] },
+    { "kind": "schema_valid", "field": "queries", "required_keys": ["query_text", "sim_scores"] },
+    { "kind": "min_count", "field": "queries", "value": 0 }
   ],
   "rubric_enabled": false,
   "on_fail": "mark_needs_review"

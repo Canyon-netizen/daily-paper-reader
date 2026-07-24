@@ -10,8 +10,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List
 
-from llm import ClientFactory, LLMClient
-from subscription_plan import build_pipeline_inputs
+from src.llm import ClientFactory, LLMClient
+from src.subscription_plan import build_pipeline_inputs
 from src._utils import log, group_start, group_end
 
 SCRIPT_DIR = os.path.dirname(__file__)

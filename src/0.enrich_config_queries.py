@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 
 import yaml  # type: ignore
 
-from llm import ClientFactory
+from src.llm import ClientFactory
 from src._utils import log, group_start, group_end
 
 SCRIPT_DIR = os.path.dirname(__file__)

@@ -28,9 +28,8 @@ import sys
 import tempfile
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-sys.path.insert(0, os.path.join(ROOT, "src"))
 
-from paper_figures import fetch_arxiv_source_figures  # noqa: E402
+from src.paper_figures import fetch_arxiv_source_figures  # noqa: E402
 
 
 def main() -> int:

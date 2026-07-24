@@ -1,10 +1,12 @@
 {
   "step_id": "1.1.fetch.raw",
+  "_producer": "src/maintain/fetchers/fetch_arxiv.py (also delegates to src/supabase_source.fetch_papers_by_date_range when Supabase read is enabled)",
+  "_producer_notes": "Writes a JSON array of paper dicts to archive/${RUN_DATE}/raw/arxiv_papers_${RUN_DATE}.json. Each paper dict is shaped as {id, source, title, abstract, authors, primary_category, categories, published, link}. The schema 'field=papers' check inspects the first element of that array, so required_keys must match the producer's actual keys (paper_id/pdf_url are legacy aliases that do not appear in current output).",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
     { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/raw/arxiv_papers_${RUN_DATE}.json" },
-    { "kind": "schema_valid", "field": "papers", "required_keys": ["paper_id", "title", "abstract", "pdf_url"] },
+    { "kind": "schema_valid", "field": "papers", "required_keys": ["id", "title", "abstract", "link"] },
     { "kind": "min_count", "field": "papers", "value": 1 }
   ],
   "rubric_enabled": false,

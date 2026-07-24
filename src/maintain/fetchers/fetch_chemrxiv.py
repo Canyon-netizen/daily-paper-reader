@@ -15,10 +15,6 @@ from typing import Any, Dict, List
 import requests
 from bs4 import BeautifulSoup
 
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
-
 from src.source_config import load_config_with_source_migration
 from src.maintain.common import (
     load_last_crawl_at as _load_last_crawl_at_path,

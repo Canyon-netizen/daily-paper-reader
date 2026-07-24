@@ -1,10 +1,12 @@
 {
   "step_id": "5.select",
+  "_producer": "src/5.select_papers.py (per-mode output written to archive/recommend/arxiv_papers_${RUN_DATE}.${mode}.json)",
+  "_producer_notes": "Each per-mode JSON wraps {mode, generated_at, stats, deep_dive, quick_skim, ...}. Items inside deep_dive / quick_skim carry {id, paper_id?, title, abstract, link, tags, llm_score, ...} — the canonical id field is 'id', not 'arxiv_id'. 'reason' is not a guaranteed field on each entry (only certain carryover paths include it); we only require the minimum shape the producer always emits.",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
-    { "kind": "schema_valid", "field": "deep_dive", "required_keys": ["arxiv_id", "reason"] },
-    { "kind": "schema_valid", "field": "quick_skim", "required_keys": ["arxiv_id", "reason"] }
+    { "kind": "schema_valid", "field": "deep_dive", "required_keys": ["id"] },
+    { "kind": "schema_valid", "field": "quick_skim", "required_keys": ["id"] }
   ],
   "rubric_enabled": false,
   "on_fail": "clamp"

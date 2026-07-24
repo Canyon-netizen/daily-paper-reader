@@ -1,9 +1,11 @@
 {
   "step_id": "0.enrich_config_queries",
+  "_producer": "src/0.enrich_config_queries.py",
+  "_producer_notes": "Side-effect-only step: reads config.yaml from path resolvable via CONFIG_FILE (defaults to repo root/config.yaml) and writes enriched subscriptions.keywords[*].{related,rewrite} / subscriptions.llm_queries[*].rewrite fields back to disk. No JSON artifact is emitted to archive/. The 'config' schema check below describes the in-memory YAML structure that the script mutates, NOT an output file. required_keys here document the field shape that must be present after enrichment.",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
-    { "kind": "schema_valid", "field": "config", "required_keys": ["query_text", "prefixed_text"] }
+    { "kind": "schema_valid", "field": "config", "required_keys": ["subscriptions"] }
   ],
   "rubric_enabled": false,
   "on_fail": "mark_needs_review"

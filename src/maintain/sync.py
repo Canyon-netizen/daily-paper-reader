@@ -7,7 +7,6 @@ import argparse
 from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import json
 import os
-import sys
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Tuple
@@ -16,10 +15,6 @@ try:
     import torch
 except Exception:  # pragma: no cover
     torch = None
-
-SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
 
 from src.model_loader import load_sentence_transformer
 from src.source_config import get_source_backend

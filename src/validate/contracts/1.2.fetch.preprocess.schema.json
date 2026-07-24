@@ -1,10 +1,12 @@
 {
   "step_id": "1.2.fetch.preprocess",
+  "_producer": "src/maintain/fetchers/fetch_arxiv.py + src/supabase_source.fetch_papers_by_date_range",
+  "_producer_notes": "After fetch+preprocess, the same JSON shape as 1.1 is preserved at archive/${RUN_DATE}/raw/arxiv_papers_${RUN_DATE}.json. Each entry contains {id, source, title, abstract, authors, primary_category, categories, published, link}. 'published' is populated from arXiv r.published / Supabase published column, so it is safe to require.",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
     { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/raw/arxiv_papers_${RUN_DATE}.json" },
-    { "kind": "schema_valid", "field": "papers", "required_keys": ["paper_id", "title", "abstract", "pdf_url", "published"] },
+    { "kind": "schema_valid", "field": "papers", "required_keys": ["id", "title", "abstract", "link", "published"] },
     { "kind": "min_count", "field": "papers", "value": 1 }
   ],
   "rubric_enabled": false,

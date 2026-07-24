@@ -107,8 +107,6 @@ def load_generate_docs_module():
         return _GENERATE_DOCS_MODULE
 
     src_dir = ROOT_DIR / "src"
-    if str(src_dir) not in sys.path:
-        sys.path.insert(0, str(src_dir))
     module_path = src_dir / "6.generate_docs.py"
     spec = importlib.util.spec_from_file_location("dpr_generate_docs_for_conference", module_path)
     if spec is None or spec.loader is None:

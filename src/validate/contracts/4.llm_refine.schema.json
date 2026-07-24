@@ -1,11 +1,14 @@
 {
   "step_id": "4.llm_refine",
+  "_producer": "src/4.llm_refine_papers.py (process_file -> save_json; data is mutated to add data['llm_ranked'] = sorted per-paper reviews)",
+  "_producer_notes": "Output path is archive/${RUN_DATE}/rank/arxiv_papers_${RUN_DATE}.llm.json. Top-level JSON retains prior keys (papers / queries / global_* / reranked_at) and adds 'llm_ranked' (an array of per-paper review dicts with keys paper_id, score, reasoning, requirement_index, requirement_label, requirement_score, matched_tags, etc.) plus 'llm_ranked_at'. There is NO top-level 'papers[].llm_score' attribute — the per-paper score lives on the llm_ranked entry that maps back to paper_id. Schema checks the existence of the containers the producer actually writes.",
   "checks": [
     { "kind": "no_error" },
     { "kind": "exit_code", "value": 0 },
     { "kind": "artifact_exists", "key": "archive/${RUN_DATE}/rank/arxiv_papers_${RUN_DATE}.llm.json" },
-    { "kind": "schema_valid", "field": "papers", "required_keys": ["paper_id", "llm_score", "reasoning"] },
-    { "kind": "metric", "name": "papers", "op": ">=", "value": 0 }
+    { "kind": "schema_valid", "field": "papers", "required_keys": ["id", "title"] },
+    { "kind": "schema_valid", "field": "llm_ranked", "required_keys": ["paper_id", "score", "reasoning"] },
+    { "kind": "min_count", "field": "papers", "value": 0 }
   ],
   "rubric_enabled": false,
   "on_fail": "mark_needs_review"

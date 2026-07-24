@@ -8,7 +8,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
-from subscription_plan import count_subscription_tags
+from src.subscription_plan import count_subscription_tags
 from src._utils import log, group_start, group_end
 
 SCRIPT_DIR = os.path.dirname(__file__)
