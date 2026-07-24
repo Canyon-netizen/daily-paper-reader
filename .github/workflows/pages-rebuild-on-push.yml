@@ -1,0 +1,50 @@
+name: pages-rebuild-on-push
+
+# 给"纯改代码、不动 docs/ 数据"的 push 提供 Cloudflare Pages rebuild。
+#
+# 背景:Cloudflare Pages rebuild 历来只由 3 个 workflow 末尾的 deploy hook
+# 触发(daily-paper-reader / maintain-version-refresh / save-paper)。这些
+# workflow 都伴随 docs/archive 数据更新,正常 cadence 下没问题。
+#
+# 但只要 push 到 main 的 commit **不触发**那 3 个 workflow(例如:
+#   - refactor/PR 改 src/*.py / astro-src/* 但 docs/ 无变化
+#   - README/docs/audit/ 文档类改动
+#   - CI 配置改动 (.github/workflows/*.yml)
+# ),Cloudflare Pages 就不会收到 deploy hook,首页 stats 卡片会停留在上次
+# 数据 commit 时的状态,看起来像"代码没生效"。
+#
+# 这个 workflow 专门 cover 这种情况:任何 push 到 main 都打一次 deploy hook,
+# 让站点立刻 rebuild。代码类 commit 不需要等下一个 daily run 才看到效果。
+#
+# 注意:
+# - 不与那 3 个 workflow 重复触发:它们各自 ping 后,这次也会再 ping 一次,
+#   Cloudflare Pages 收到重复 deploy hook 会去重/合并 build,不会真起 2 个 build。
+#   (Pages deploy hook 的语义是"请求最新一次构建",连续 POST 会被合并。)
+# - 不 checkout 代码:这是个纯 HTTP POST,无需任何源码。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping-deploy-hook:
+    name: Ping Cloudflare Pages deploy hook
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Cloudflare Pages rebuild
+        if: always()
+        continue-on-error: true
+        env:
+          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
+            echo "CF_DEPLOY_HOOK_URL not set, skipping deploy hook"
+            exit 0
+          fi
+          echo "Pinging Cloudflare Pages deploy hook..."
+          curl -X POST "$CF_DEPLOY_HOOK_URL" -f
+          echo "Cloudflare Pages rebuild queued"
