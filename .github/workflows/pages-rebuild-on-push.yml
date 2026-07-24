@@ -21,6 +21,16 @@ name: pages-rebuild-on-push
 #   Cloudflare Pages 收到重复 deploy hook 会去重/合并 build,不会真起 2 个 build。
 #   (Pages deploy hook 的语义是"请求最新一次构建",连续 POST 会被合并。)
 # - 不 checkout 代码:这是个纯 HTTP POST,无需任何源码。
+#
+# 关键设计 (revised 2026-07-24):原版的 `if: always() / continue-on-error: true`
+# + `if [ -z "$URL" ] exit 0` 让 secret 缺失时 step 仍标 success,导致
+# deploy hook 真没配时 GitHub Actions UI 全绿、首页 stats 不更新,却无从排查。
+# 改成两个 step:
+#   1. validate-secret: 缺失就 hard fail,GitHub Actions UI 红 ❌ 立刻可见
+#   2. ping-hook: 仅在 secret 非空时跑;curl -f 让 HTTP 非 2xx 显式失败
+# 此 workflow 还需配套把同模式应用到 daily-paper-reader.yml / maintain-version-refresh.yml
+# / save-paper.yml 的"Trigger Cloudflare Pages rebuild" step(本次未改,
+# 留给后续 PR,以免一次改动跨太多文件难 review)。
 
 on:
   push:
@@ -35,16 +45,23 @@ jobs:
     name: Ping Cloudflare Pages deploy hook
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Cloudflare Pages rebuild
-        if: always()
-        continue-on-error: true
+      - name: Validate CF_DEPLOY_HOOK_URL secret is set
         env:
           CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
         run: |
           if [ -z "$CF_DEPLOY_HOOK_URL" ]; then
-            echo "CF_DEPLOY_HOOK_URL not set, skipping deploy hook"
-            exit 0
+            echo "::error title=CF_DEPLOY_HOOK_URL secret missing::Deploy hook URL 未配置,Cloudflare Pages rebuild 不会发生。请到 GitHub repo Settings > Secrets and variables > Actions 添加 CF_DEPLOY_HOOK_URL(Cloudflare Pages 项目 Settings > Builds > Deploy hooks > Add hook 拿 URL)。"
+            exit 1
           fi
+          # 仅展示前缀长度,不暴露内容(GH 也会 mask 整个 env var)
+          prefix_len=${#CF_DEPLOY_HOOK_URL}
+          echo "CF_DEPLOY_HOOK_URL 已配置 (长度: ${prefix_len} 字符,内容已 mask)"
+
+      - name: Ping Cloudflare Pages rebuild
+        if: success()
+        env:
+          CF_DEPLOY_HOOK_URL: ${{ secrets.CF_DEPLOY_HOOK_URL }}
+        run: |
           echo "Pinging Cloudflare Pages deploy hook..."
-          curl -X POST "$CF_DEPLOY_HOOK_URL" -f
-          echo "Cloudflare Pages rebuild queued"
+          curl -X POST "$CF_DEPLOY_HOOK_URL" -f -s -o /dev/null -w "HTTP %{http_code} | total %{time_total}s\n"
+          echo "Cloudflare Pages rebuild queued (若 HTTP 不是 2xx,step 会失败)"
