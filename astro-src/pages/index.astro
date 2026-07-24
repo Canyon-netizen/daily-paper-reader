@@ -7,6 +7,7 @@
 // 5) How it works:3 步工作流介绍
 // 数据为空时仍能展示 hero/stats/empty-state,避免 Vercel 首次部署"全空"观感
 import { listPapers, resolveTaskKey } from '../lib/paper';
+import { getLastUpdatedDate } from '../lib/lastUpdated';
 import { paperPlainTitle } from '../lib/title';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Navbar from '../components/Navbar.astro';
@@ -27,86 +28,9 @@ const topPapers = await listPapers({ sortBy: 'score', limit: 6, sinceDays: 7, ba
 //   旧实现 listAllPaperIds().length 含全部版本数,跟论文库不同步。
 const totalPapers = (await listPapers({ dedup: true })).length;
 const sources = ['arXiv', 'bioRxiv', 'medRxiv', 'ChemRxiv', 'OpenReview']; // pipeline 支持的来源
-// 最近更新:拉 GitHub Actions API 找 daily-paper-reader workflow 最近一次
-// conclusion=success 的 run,用 run.updated_at 作为口径(成功完成后才会
-// commit + push,Vercel/Cloudflare 才会重建)。失败 / 进行中不算。
-//
-// 没 GH token 时:dev 本地 build 也会无 token,跳过 API → 退回"最新论文 date"
-// (与原来行为一致,避免 build 报错)。生产环境需要在 Vercel/Cloudflare 配
-// GH_TOKEN (PAT, scope: public_repo 或 repo) 作为构建环境变量。
-// GH_TOKEN 由 astro.config.mjs 顶层从 .env 的 token= 行载入并写到
-// process.env.GH_TOKEN。注意读 process.env.GH_TOKEN 而不是
-// import.meta.env.GH_TOKEN —— import.meta.env 是 Astro 在启动时冻结的快照,
-// 此时 astro.config.mjs 顶层还没跑完;读 process.env 才是当下 Node 进程的
-// 真实值(Astro SSR frontmatter 和 Node 进程共享 process.env)。
-// 环境变量大小写不敏感查找:某些部署平台 (Cloudflare Pages UI) 会把环境
-// 变量名转成小写,这里同时认 'GH_TOKEN' / 'gh_token' / 'Gh_Token'。
-// 标准名仍是 GH_TOKEN (README/官方文档统一口径),只在大写找不到时回退
-// 扫一遍 process.env。返回值永远是 process.env.GH_TOKEN (标准名) 或 ''。
-function readGhToken(): string {
-  if (process.env.GH_TOKEN) return process.env.GH_TOKEN;
-  for (const [k, v] of Object.entries(process.env)) {
-    if (k && k.toUpperCase() === 'GH_TOKEN' && v) {
-      process.env.GH_TOKEN = v; // 补回标准名,后续其它读 path 直接拿到
-      return v;
-    }
-  }
-  return '';
-}
-const ghToken = readGhToken();
-const ghRepoOwner = process.env.GH_REPO_OWNER || 'Canyon-netizen';
-const ghRepoName = process.env.GH_REPO_NAME || 'daily-paper-reader';
-const ghWorkflowFile = process.env.GH_WORKFLOW_FILE || 'daily-paper-reader.yml';
-
-// 最近更新:优先用 GitHub Actions 最近一次成功 run.updated_at,失败/无
-// token 时回退到"最新论文 date" —— 这个回退值和真实"今天"差几天是
-// 正常的(论文 date 早于实际 Pipeline 收尾 + 平台 rebuild 时间),
-// 因此加 build-time warn 提醒,免得线上"看似精确却滞后"。
-async function fetchLastSuccessRunDate(): Promise<string | null> {
-  const url = `https://api.github.com/repos/${ghRepoOwner}/${ghRepoName}/actions/workflows/${ghWorkflowFile}/runs?per_page=20&status=success`;
-  if (!ghToken) {
-    console.warn(
-      '[home] GH_TOKEN 未配置 — "最近更新"将回退到"最新论文 date",' +
-      '与实际 Pipeline 收尾时间可能差几天。在 Pages → Environment variables ' +
-      '(Production) 加 GH_TOKEN (PAT, scope Actions: Read-only) 即可修正。'
-    );
-    return null;
-  }
-  try {
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${ghToken}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    });
-    if (!res.ok) {
-      const hint = res.status === 401 || res.status === 403
-        ? 'token 可能过期或 scope 不足 (需要 Actions: Read-only)'
-        : `HTTP ${res.status}`;
-      console.warn(`[home] GitHub Actions API 失败 (${hint}),回退"最新论文 date"。`);
-      return null;
-    }
-    const data = await res.json();
-    const runs = Array.isArray(data.workflow_runs) ? data.workflow_runs : [];
-    // 过滤 conclusion=success,取 updated_at 最新的一条(run 已 completed 时等于完成时间)
-    for (const r of runs) {
-      if (r && r.conclusion === 'success' && r.updated_at) return r.updated_at;
-    }
-    console.warn('[home] 未找到 conclusion=success 的 Actions run,回退"最新论文 date"。');
-    return null;
-  } catch (e) {
-    console.warn(`[home] fetch Actions API 异常 (${(e as Error).message}),回退"最新论文 date"。`);
-    return null;
-  }
-}
-
-const runUpdatedAt = await fetchLastSuccessRunDate();
-const fallbackDate = runUpdatedAt ? null : (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date ?? null;
-const isFallback = !runUpdatedAt && !!fallbackDate;
-const latestDateLabel = (runUpdatedAt ?? fallbackDate)
-  ? new Date(runUpdatedAt ?? fallbackDate as string).toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
-  : '等待首次抓取';
+// 最近更新:GitHub Actions 成功 run 口径 + GH_TOKEN 大小写兜底 + 失败回退
+// "最新论文 date",全部逻辑在 lib/lastUpdated.ts 内。
+const lastUpdated = await getLastUpdatedDate();
 
 // 日历视图数据:按 date desc + dedup(取每个 arxiv id 最新 v# 的 date)。
 // task 字段给 DailyCalendar 客户端做主题筛选;p.categories 一并塞进去
@@ -196,8 +120,8 @@ const topicCount = topicKeys.size;
           <div class="stat-label">数据来源</div>
         </div>
         <div class="stat">
-          <div class="stat-value stat-value-sm">{latestDateLabel}</div>
-          <div class="stat-label">最近更新{isFallback ? ' · 数据截止' : ''}</div>
+          <div class="stat-value stat-value-sm">{lastUpdated.label}</div>
+          <div class="stat-label">最近更新{lastUpdated.isFallback ? ' · 数据截止' : ''}</div>
         </div>
       </div>
     </section>
