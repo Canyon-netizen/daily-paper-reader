@@ -100,11 +100,14 @@ jobs:
 
       - name: Run conference init
         env:
-          SUPABASE_SERVICE_KEY: ${{ env.SUPABASE_SERVICE_KEY }}
-          OPENREVIEW_USERNAME: ${{ env.OPENREVIEW_USERNAME }}
-          OPENREVIEW_PASSWORD: ${{ env.OPENREVIEW_PASSWORD }}
-          DPR_EMBED_API_URL: ${{ env.DPR_EMBED_API_URL }}
-          DPR_EMBED_API_KEY: ${{ env.DPR_EMBED_API_KEY }}
+          # 直接读 GitHub repo Secrets(与 maintain-biorxiv/chemrxiv/medrxiv/supabase
+          # 保持一致的写法)。Gist 注入路径在 fork/自部署场景下容易因 Gist 内容
+          # 漂移而静默失败 → 这次 4 个会议源改走 repo secret,失败时 ::error 立刻可见。
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          OPENREVIEW_USERNAME: ${{ secrets.OPENREVIEW_USERNAME }}
+          OPENREVIEW_PASSWORD: ${{ secrets.OPENREVIEW_PASSWORD }}
+          DPR_EMBED_API_URL: ${{ secrets.DPR_EMBED_API_URL }}
+          DPR_EMBED_API_KEY: ${{ secrets.DPR_EMBED_API_KEY }}
           HF_HOME: ${{ github.workspace }}/hf_cache
           HUGGINGFACE_HUB_CACHE: ${{ github.workspace }}/hf_cache
           HF_HUB_DISABLE_SYMLINKS: "1"
@@ -112,7 +115,7 @@ jobs:
           set -euo pipefail
 
           if [ -z "${SUPABASE_SERVICE_KEY:-}" ]; then
-            echo "::error::缺少 SUPABASE_SERVICE_KEY（应由 Gist 注入）。请检查 DPR_GIST_ID / DPR_GIST_TOKEN 与 Gist 内容。"
+            echo "::error::缺少 SUPABASE_SERVICE_KEY。请到 GitHub repo Settings > Secrets and variables > Actions 添加 SUPABASE_SERVICE_KEY(Supabase Project Settings > API > service_role key)。"
             exit 1
           fi
 
@@ -166,7 +169,7 @@ jobs:
             # 避免走完 Python import+argparse 后在 fetch_openreview 才崩(从 log 看像"无征兆 0s 退出")。
             if needs_openreview_creds "$key" && [ "${SKIP_FETCH}" != "true" ]; then
               if [ -z "${OPENREVIEW_USERNAME:-}" ] || [ -z "${OPENREVIEW_PASSWORD:-}" ]; then
-                echo "::error::会议 ${conf} 需要 OpenReview 凭证:请在 Gist 配置 OPENREVIEW_USERNAME / OPENREVIEW_PASSWORD(没有可在 https://openreview.net 注册),或在会议页勾选「跳过 fetch」。"
+                echo "::error::会议 ${conf} 需要 OpenReview 凭证:请到 GitHub repo Settings > Secrets and variables > Actions 添加 OPENREVIEW_USERNAME / OPENREVIEW_PASSWORD(没有可在 https://openreview.net 注册),或在会议页勾选「跳过 fetch」。"
                 exit 1
               fi
             fi
