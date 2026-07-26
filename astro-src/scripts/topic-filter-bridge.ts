@@ -1,5 +1,5 @@
-// 主题筛选桥 — index.astro(每行"只在日历看"按钮)与 DailyCalendar.astro
-// (头部 chip)共用单一事件通道,避免双向 dispatch 循环。
+// 主题筛选桥 — index.astro(每行"只在日历看"按钮)与 DailyCalendar.astro(头部 chip)
+// 共用单一事件通道,避免双向 dispatch 循环。
 //
 // 用法:
 //   import { setTopicFilter, onTopicFilterChange } from './topic-filter-bridge';
@@ -10,8 +10,18 @@
 //   onTopicFilterChange((key) => { ... });    // 订阅
 //
 // Hash 格式:同现有 #day=YYYY-MM-DD 共存('#topic=rl&day=2026-07-13')。
+//
+// 实现层完全走 lib/events/ 强类型总线:
+/* eslint-disable */
+//   - emit: emitDprTopicFilterChange(document, { topic: key }) — helper 同时 fire
+//     新名 (DPR_TOPIC_FILTER_CHANGE) + legacy alias,所以外部使用裸字面量的旧
+//     listener 也能继续收到通知;
+//   - subscribe: onDprTopicFilterChange — TS 联合类型 detail,detail 一定非空。
 
-export const TOPIC_FILTER_EVENT = 'dpr-topic-filter-change';
+import {
+  emitDprTopicFilterChange,
+  onDprTopicFilterChange,
+} from '../lib/events';
 
 export type TopicFilterHandler = (key: string | null) => void;
 
@@ -51,7 +61,7 @@ function writeHash(topic: string | null, day: string | null): void {
 /**
  * 设置主题筛选。默认会:
  *   1) 写 hash(保留既有 #day=)
- *   2) dispatch TOPIC_FILTER_EVENT,detail = { topic }
+ *   2) dispatch DPR_TOPIC_FILTER_CHANGE,detail = { topic }
  */
 export function setTopicFilter(
   key: string | null,
@@ -61,9 +71,7 @@ export function setTopicFilter(
   const nextDay = cur.day;
   if (!opts.noHash) writeHash(key, nextDay);
   if (opts.silent) return;
-  document.dispatchEvent(
-    new CustomEvent(TOPIC_FILTER_EVENT, { detail: { topic: key } }),
-  );
+  emitDprTopicFilterChange(document, { topic: key });
 }
 
 /** 与 setTopicFilter 同义,但 same key = toggle 关闭。 */
@@ -72,14 +80,11 @@ export function toggleTopicFilter(key: string, opts: SetOptions = {}): void {
   setTopicFilter(cur === key ? null : key, opts);
 }
 
-/** 订阅事件,返回取消订阅函数。 */
+/** 订阅事件,返回取消订阅函数。
+ *  onDprTopicFilterChange 已经返回 unsubscribe,这里包一层只暴露 detail 主字段,
+ *  保持 bridge 的对外签名稳定(老 caller 不需要改动)。 */
 export function onTopicFilterChange(handler: TopicFilterHandler): () => void {
-  const wrapped: EventListener = (e) => {
-    const ev = e as CustomEvent<{ topic: string | null }>;
-    handler(ev.detail?.topic ?? null);
-  };
-  document.addEventListener(TOPIC_FILTER_EVENT, wrapped);
-  return () => document.removeEventListener(TOPIC_FILTER_EVENT, wrapped);
+  return onDprTopicFilterChange(document, (detail) => handler(detail.topic));
 }
 
 /** 读当前 hash 中的 topic 段(只读,不 dispatch)。 */

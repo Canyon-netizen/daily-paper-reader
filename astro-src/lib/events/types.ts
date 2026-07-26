@@ -6,8 +6,12 @@
 //   emitDprThemeChange(document, { theme: 'dark' });
 //   onDprThemeChange(document, ({ theme }) => { ... });
 
+// Theme enum 列出实际应用支持的所有 theme name。
+// scripts/theme.ts 用的是 'light' | 'dark' | 'contrast' 循环。
+export type DprThemeName = 'light' | 'dark' | 'contrast' | 'auto';
+
 export interface DprThemeChangeDetail {
-  theme: 'light' | 'dark' | 'auto';
+  theme: DprThemeName;
 }
 
 export interface DprTopicFilterChangeDetail {

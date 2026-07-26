@@ -23,6 +23,9 @@ import type { GitHubRepoConfig } from './settings/storage';
 export { STORAGE_KEYS, GITHUB_REPO_DEFAULT } from './settings/storage';
 export type { GitHubRepoConfig } from './settings/storage';
 
+// 客户端事件总线 — selection 写入时通知其它模块(topic 页等)
+import { emitPaperSelectionChange } from '../lib/events';
+
 export function loadGitHubToken(): string {
   try {
     // 优先用新 key,旧 key 也能读出来(用户从老版本升级时不丢 token)
@@ -340,13 +343,12 @@ export function clearSelection(): void {
 }
 
 // 在 selection 任何写操作后触发。topic 页等消费者监听这个事件刷新 UI 计数/banner。
-// 自定义事件跟 paper-selection.ts 的 'paper-selection-change' 保持同名 —
-// 两个模块对同一份 selection 写入都要触发同一个事件,所有监听者都受益。
-// 仅在浏览器/dispatchEvent 可用时触发(SSR / 非浏览器环境跳过)。
+// 走 lib/events/ 强类型总线(PAPER_SELECTION_CHANGE 常量),跟 paper-selection.ts emit
+// 统一,所有监听者都受益。仅在浏览器/dispatchEvent 可用时触发(SSR / 非浏览器环境跳过)。
 function emitSelectionChange(): void {
   try {
     if (typeof document !== 'undefined' && typeof CustomEvent !== 'undefined') {
-      document.dispatchEvent(new CustomEvent('paper-selection-change'));
+      emitPaperSelectionChange(document);
     }
   } catch {
     /* 静默 — selection 只在浏览器使用,events 失败不影响主逻辑 */

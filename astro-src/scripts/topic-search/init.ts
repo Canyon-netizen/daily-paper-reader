@@ -5,6 +5,7 @@
 
 import { loadSettings } from '../settings';
 import { $, escapeHtml } from '../../lib/dom-utils';
+import { onPaperSelectionChange } from '../../lib/events';
 import { setStatus, clearStatus, renderBanner } from './status';
 import { renderAll } from './render';
 import {
@@ -112,7 +113,8 @@ export function init(): void {
     void submitAddSeedsUrl(e.currentTarget as HTMLFormElement);
   });
   setupAddSeedsSearch();
-  document.addEventListener('paper-selection-change', () => {
+  // 监听 paper-selection-change — 走 lib/events/ 强类型总线
+  onPaperSelectionChange(document, () => {
     updateSeedsCounter();
     if (modalOpen) renderAddSeedsModalList();
   });

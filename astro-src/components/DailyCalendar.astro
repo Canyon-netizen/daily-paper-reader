@@ -397,6 +397,15 @@ const topicChips = Array.from(taskCounts.entries())
 // Client-side logic — runs only in browser. Astro bundles & hashes it.
 // 数据全部来自 <script id="daily-data"> JSON,无 fetch。
 
+import {
+  DPR_TOPIC_FILTER_CHANGE,
+  DPR_TOPIC_FILTER_CHANGE_LEGACY,
+  DPR_DAILY_DAY_OPENED,
+  DPR_DAILY_DAY_OPENED_LEGACY,
+  emitDprTopicFilterChange,
+  emitDprDailyDayOpened,
+} from '../lib/events/index';
+
 type Paper = {
   date: string;
   slug: string;
@@ -430,11 +439,9 @@ if (!dataEl) {
   const closeBtn = $<HTMLButtonElement>('#daily-detail-close');
 
   // ---- 主题过滤 state ----
-  // topicKey 为 null = 不筛选。过滤由 #topic=<key> 与 'dpr-topic-filter-change' 事件双向同步。
-  // 客户端不 import 桥文件,直接 dispatch / addEventListener — 因为本页 <script> 与
-  // index.astro 的 <script> 共享同一页面 ESM graph,import 还是会拉桥模块。
+  // topicKey 为 null = 不筛选。过滤由 #topic=<key> 与 DPR_TOPIC_FILTER_CHANGE 事件双向同步。
+  // 走 lib/events/ 强类型总线(DPR_TOPIC_FILTER_CHANGE_LEGACY 同步 fire 兼容旧 listener)。
   let topicKey: string | null = null;
-  const TOPIC_FILTER_EVENT = 'dpr-topic-filter-change';
 
   function getDayPapers(date: string): Paper[] {
     const all = dayMap.get(date) || [];
@@ -581,8 +588,8 @@ if (!dataEl) {
 
     if (detailEl) {
       detailEl.hidden = false;
-      // 通知其它模块(全局过滤/收藏)有新内容
-      window.dispatchEvent(new CustomEvent('daily-day-opened', { detail: { date } }));
+      // 通知其它模块(全局过滤/收藏)有新内容 — 走 lib/events 强类型总线
+      emitDprDailyDayOpened(window, { date });
     }
 
     // hash + scroll — 与主题过滤 hash 共存格式('#day=' 而非旧 '#day-')
@@ -825,10 +832,8 @@ if (!dataEl) {
       if (window.location.hash !== nextHash) {
         try { history.replaceState(null, '', target); } catch (_) { /* ignore */ }
       }
-      // 广播(其它脚本 / tag-jump 按钮反向同步 UI)
-      document.dispatchEvent(
-        new CustomEvent(TOPIC_FILTER_EVENT, { detail: { topic: key } }),
-      );
+      // 广播(其它脚本 / tag-jump 按钮反向同步 UI) — 走 lib/events 强类型总线
+      emitDprTopicFilterChange(document, { topic: key });
     }
   }
 
@@ -850,13 +855,23 @@ if (!dataEl) {
     statusClearBtn.addEventListener('click', () => setTopic(null));
   }
 
-  // 监听 index.astro 的 tag-jump 按钮(以及其它可能的 emit)
-  document.addEventListener(TOPIC_FILTER_EVENT, (e) => {
+  // 监听 index.astro 的 tag-jump 按钮 — 走 lib/events 强类型总线。
+  // emit helper 同时 fire 新名 + DPR_TOPIC_FILTER_CHANGE_LEGACY;
+  // 旧 external listener 仍能收到(本文件已经全用新名,无需再挂 legacy)。
+  document.addEventListener(DPR_TOPIC_FILTER_CHANGE, (e) => {
     const ev = e as CustomEvent<{ topic: string | null }>;
     const next = ev.detail?.topic ?? null;
     if (next === topicKey) return; // 已同步
     setTopic(next, { silent: true });
   });
+  // 兼容旧 bridge 文件 / 其它 sub-page 的 dpr-topic-filter-change listener
+  // 用 DPR_TOPIC_FILTER_CHANGE_LEGACY 常量引用,跟 emits helper 的双发对齐。
+  document.addEventListener(DPR_TOPIC_FILTER_CHANGE_LEGACY, ((e: Event): void => {
+    const ev = e as CustomEvent<{ topic: string | null }>;
+    const next = ev.detail?.topic ?? null;
+    if (next === topicKey) return; // 幂等保护:双发只生效一次
+    setTopic(next, { silent: true });
+  }) as EventListener);
 
   // ---- 月份切换:全局「年 + 月」联动下拉 ----
   // 年/月下拉现在物理挂在「当前显示月份卡」的标题栏里(.cal-month-jump-slot),

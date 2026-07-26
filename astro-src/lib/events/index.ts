@@ -24,6 +24,7 @@ export {
 } from './names';
 
 export type {
+  DprThemeName,
   DprThemeChangeDetail,
   DprTopicFilterChangeDetail,
   DprDailyDayOpenedDetail,
