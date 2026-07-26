@@ -1,7 +1,7 @@
 // /lib/paper-repository/types.ts — PaperRepository 公开 DTO。
 //
 // 设计目标:为 page frontmatter 阶段(audit / settings / 未来 feature)提供一个
-// 有进/出策略 + 可观察缓存的统一入口,而不是每个 caller 自己
+// 有进/出策略 + 可观察缓存 + 订阅通知的统一入口,而不是每个 caller 自己
 // `await listPapers(...)` 重扫一遍磁盘。
 //
 // 与现有 lib/paper 的关系:
@@ -11,6 +11,10 @@
 
 import type { PaperListItem, Paper } from '../paper';
 import type { ListOptions } from '../paper';
+import type {
+  RepositoryChangeReason,
+  Subscriber,
+} from './subscription';
 
 /** 仓库一次"会话"内可观察的统计。 */
 export interface RepositoryStats {
@@ -22,6 +26,10 @@ export interface RepositoryStats {
   cacheHits: number;
   /** 本会话内穿透(走真实 I/O)的 listPapers 调用次数 */
   cacheMisses: number;
+  /** 本会话内已广播的 notifyChange 次数 */
+  notifyFires: number;
+  /** 当前活跃订阅数 */
+  subscriberCount: number;
 }
 
 /** 仓库构造参数。 */
@@ -42,11 +50,14 @@ export interface PaperRepositoryOptions {
 /** Repository 公开 method 签名集合。
  *
  *  - list(opts):等同于 lib/paper.listPapers() 但带缓存
- *  - listAll():等同于 listPapers() 全量全集(等价 listAllPaperIds + readPaper + dedup + no filter)
- *  - read(id):等同于 lib/paper.readPaper(),但同一进程内命中仓库缓存
- *  - groupByTask():按 task 维度桶分,统一首页 / papers 库主题视图的桶定义
- *  - stats():观察仓库本身的性能指标(debug 用)
- *  - invalidate():强制下一次 list() 重读盘 */
+ *  - listAll():等同于 listPapers() 全量全集
+ *  - read(id):等同于 lib/paper.readPaper() 但带缓存
+ *  - groupByTask():按 task 维度桶分
+ *  - stats():观察仓库本身的性能指标
+ *  - invalidate():强制下一次 list() 重读盘
+ *  - subscribe(reason, handler):订阅一个 reason(Phase H)
+ *  - notifyChange(reason):广播 reason + invalidate cache(Phase H)
+ */
 export interface PaperRepository {
   list(opts?: ListOptions): Promise<PaperListItem[]>;
   listAll(): Promise<PaperListItem[]>;
@@ -54,6 +65,8 @@ export interface PaperRepository {
   groupByTask(): Promise<Map<string, PaperListItem[]>>;
   stats(): RepositoryStats;
   invalidate(): void;
+  subscribe(handler: Subscriber): () => void;
+  notifyChange(reason: RepositoryChangeReason): void;
 }
 
 /** 缓存条目:key = JSON.stringify(options),value = 命中时刻 + 结果。 */

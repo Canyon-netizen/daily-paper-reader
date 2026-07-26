@@ -6,6 +6,7 @@
 //   - 缓存 key 算法来自 ./cache,业务逻辑来自 ./stats。
 //   - 不在内部直接 import 其它 lib/*(避免循环),只 type-import 需要的数据形状。
 //   - 公开工厂 `createPaperRepository(opts?)` 让 caller 决定要不要开缓存。
+//   - Phase H:暴露 subscribe / notifyChange 让 cache 失效广播与 UI 同步。
 //
 // 不动 lib/paper:这是新增路径,不是替换。老 caller 不受影响。
 
@@ -23,6 +24,11 @@ import type {
   RepositoryStats,
 } from './types';
 import { TtlCache, hashOptions } from './cache';
+import {
+  SubscriberRegistry,
+  type RepositoryChangeReason,
+  type Subscriber,
+} from './subscription';
 
 const DEFAULT_TTL_MS = 60_000;
 
@@ -38,11 +44,14 @@ export function createPaperRepository(
 
   const listCache = new TtlCache<PaperListItem[]>(ttlMs);
   const readCache = new TtlCache<Paper | null>(ttlMs);
+  const subscribers = new SubscriberRegistry();
   const stats: RepositoryStats = {
     scannedPapers: 0,
     dedupPasses: 0,
     cacheHits: 0,
     cacheMisses: 0,
+    notifyFires: 0,
+    subscriberCount: 0,
   };
 
   /** 合并 list options:repoBase 当默认 base。 */
@@ -104,12 +113,26 @@ export function createPaperRepository(
   }
 
   function getStats(): RepositoryStats {
-    return { ...stats };
+    return { ...stats, subscriberCount: subscribers.size() };
   }
 
   function invalidate(): void {
     listCache.clear();
     readCache.clear();
+  }
+
+  /** Phase H:订阅一个变更通知;handler 在 notifyChange() 时被调用。 */
+  function subscribe(handler: Subscriber): () => void {
+    return subscribers.add(handler);
+  }
+
+  /** Phase H:广播一个变更 reason + 顺手 invalidate 缓存。
+   *  - 缓存被 invalidate → 下一次 list() 必穿透重读;
+   *  - 注册的 subscriber 通过 fire() 收到 reason(可按 reason 决定要不要重拉、要不要 reload UI)。 */
+  function notifyChange(reason: RepositoryChangeReason): void {
+    stats.notifyFires += 1;
+    invalidate();
+    subscribers.fire(reason);
   }
 
   return {
@@ -119,6 +142,8 @@ export function createPaperRepository(
     groupByTask,
     stats: getStats,
     invalidate,
+    subscribe,
+    notifyChange,
   };
 }
 
@@ -128,6 +153,11 @@ export const defaultPaperRepository: PaperRepositoryI = createPaperRepository();
 
 /** 让外部 caller 在已经有 instance 的场景下,可以用 `fromCacheKey(...)` 检查命中率。 */
 export { TtlCache, hashOptions } from './cache';
+export { SubscriberRegistry } from './subscription';
+export type {
+  RepositoryChangeReason,
+  Subscriber,
+} from './subscription';
 export type {
   PaperRepository,
   PaperRepositoryOptions,
