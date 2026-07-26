@@ -11,12 +11,20 @@
 // 需要读盘的逻辑全部走 `./paper-disk.mjs`(动态 import)。
 // 见 astro.config.mjs:diskExternalForClientOnly plugin 把 disk.mjs 只在
 // client 端 externalize,SSR 端会被 Vite 编进 chunk,运行时自包含。
+//
+// Phase I 拆分:本文件只剩 orchestrator(readPaper / listPapers)+ 类型定义 + 部分
+// 纯函数(flattenCategories / figureUrlToAbsolute 等)。frontmatter 解析纯函数
+// 已下沉到 lib/paper-frontmatter/。
 
-import yaml from 'js-yaml';
 import { buildCategories, type Categories } from './taxonomies';
 import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
 import { applyPaperFilters } from './paper-filter';
+import {
+  parseFrontmatter,
+  parseFigureList,
+  loadFiguresFromAssetMeta,
+} from './paper-frontmatter';
 
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
 const PREFIX_SKIP_DIR = '_';
@@ -74,110 +82,9 @@ export interface FigureEntry {
   extractor?: string;
 }
 
-function parseFigureList(raw: unknown): FigureEntry[] {
-  if (!raw) return [];
-  let arr: unknown = raw;
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (!s) return [];
-    try {
-      arr = JSON.parse(s);
-    } catch {
-      try {
-        arr = JSON.parse(s.replace(/\\"/g, '"'));
-      } catch {
-        return [];
-      }
-    }
-  }
-  if (!Array.isArray(arr)) return [];
-  return arr.map((item, i) => normalizeFigureEntry(item, i)).filter((e): e is FigureEntry => e !== null);
-}
-
-function normalizeFigureEntry(item: unknown, fallbackIndex: number): FigureEntry | null {
-  if (!item || typeof item !== 'object') return null;
-  const obj = item as Record<string, unknown>;
-  const url = typeof obj.url === 'string' ? obj.url.trim() : '';
-  if (!url) return null;
-  return {
-    url,
-    caption: typeof obj.caption === 'string' ? obj.caption : '',
-    page: typeof obj.page === 'number' ? obj.page : 0,
-    index: typeof obj.index === 'number' ? obj.index : fallbackIndex + 1,
-    width: typeof obj.width === 'number' ? obj.width : 0,
-    height: typeof obj.height === 'number' ? obj.height : 0,
-    extractor: typeof obj.extractor === 'string' ? obj.extractor : '',
-  };
-}
-
-/**
- * 兜底:frontmatter `figures_json` 缺失或为空时,从
- * `docs/assets/figures/arxiv/<arxivId>/meta.json` 读 figures 列表。
- * 主要防 backfill 漏写 + 跨版本 frontmatter 漂移;disk miss 时返回 undefined。
- */
-async function loadFiguresFromAssetMeta(arxivId: string): Promise<FigureEntry[] | undefined> {
-  if (!arxivId) return undefined;
-  const disk = await import('./paper-disk.mjs');
-  const metaPath = disk.joinPath(disk.DOCS_DIR, 'assets', 'figures', 'arxiv', arxivId, 'meta.json');
-  let text: string;
-  try {
-    text = await disk.readTextFile(metaPath);
-  } catch {
-    return undefined;
-  }
-  try {
-    const meta = JSON.parse(text) as { figures?: unknown };
-    if (!Array.isArray(meta.figures)) return undefined;
-    const out: FigureEntry[] = [];
-    meta.figures.forEach((item, i) => {
-      const entry = normalizeFigureEntry(item, i);
-      if (entry) out.push(entry);
-    });
-    return out.length > 0 ? out : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeDate(v: unknown): string | undefined {
-  if (v === undefined || v === null) return undefined;
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  if (typeof v === 'number') {
-    const s = String(v).padStart(8, '0');
-    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(4 + 2, 4 + 4)}`;
-  }
-  if (typeof v === 'string') return v;
-  return undefined;
-}
-
-function normalizeCategories(raw: unknown): Categories {
-  if (!raw || typeof raw !== 'object') {
-    return buildCategories({});
-  }
-  const obj = raw as Record<string, unknown>;
-  return buildCategories({
-    venue: Array.isArray(obj.venue) ? (obj.venue as unknown[]) : undefined,
-    task: Array.isArray(obj.task) ? (obj.task as unknown[]) : undefined,
-    method: Array.isArray(obj.method) ? (obj.method as unknown[]) : undefined,
-    type: Array.isArray(obj.type) ? (obj.type as unknown[]) : undefined,
-  });
-}
-
-function parseFrontmatter(text: string): { data: PaperFrontmatter; body: string } | { error: string } {
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/);
-  if (!m) return { error: 'no frontmatter' };
-  try {
-    const raw = (yaml.load(m[1]) as PaperFrontmatter) || {};
-    const data: PaperFrontmatter = {
-      ...raw,
-      date: normalizeDate(raw.date),
-      categories: normalizeCategories(raw.categories),
-    };
-    return { data, body: m[2] };
-  } catch (e) {
-    return { error: (e as Error).message.slice(0, 100) };
-  }
-}
+// frontmatter 解析纯函数(parseFigureList / normalizeFigureEntry / normalizeDate /
+// normalizeCategories / parseFrontmatter / loadFiguresFromAssetMeta)已抽到
+// lib/paper-frontmatter/,本文件顶部已 import 它们。
 
 export async function readPaper(id: string): Promise<Paper | null> {
   const disk = await import('./paper-disk.mjs');
