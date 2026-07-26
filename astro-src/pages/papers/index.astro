@@ -1,11 +1,12 @@
 ---
 // /papers/ 论文库 + 节点网络
-// 1) SSR 期:listPapers({dedup:true, sortBy:'date'}) 拿全量论文
+// 1) SSR 期:PaperRepository 拿全量论文(走 lib/paper-repository/ 缓存层)
 // 2) 顶部 hero + 统计(总篇数 / 今日新增 / 唯一标签数)
 // 3) 把数据序列化到 <script id="papers-data" type="application/json"> 给客户端
 // 4) 挂载 <PaperLibrary /> — 客户端脚本接管分屏布局、cytoscape 节点网络、抽屉编辑
 import type { GetStaticPaths } from 'astro';
-import { listPapers, flattenCategories, listAllPapersByTag } from '../../lib/paper';
+import { flattenCategories } from '../../lib/paper';
+import { defaultPaperRepository } from '../../lib/paper-repository';
 import { paperPlainTitle } from '../../lib/title';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
@@ -18,18 +19,18 @@ import '../../styles/toast.css';
 export const getStaticPaths: GetStaticPaths = async () => [{ params: {} }];
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+const repo = defaultPaperRepository;
 
 // 全量论文(去重 + 按日期倒序)
-const papers = await listPapers({ dedup: true, sortBy: 'date', base });
+const papers = await repo.list({ dedup: true, sortBy: 'date', base });
 
 // 今日新增(按 YYYY-MM-DD)
 const today = new Date().toISOString().slice(0, 10);
 const todayCount = papers.filter((p) => p.date === today).length;
 
-// 主题分类数:复用 listAllPapersByTag(),
-// 其内部按每篇 flattenCategories 的首个 token 分桶,byTag.size 即主题分类数。
+// 主题分类数:走仓库 groupByTask() 统一桶定义,与首页 / 日历主题 select 对齐。
 // 不要在此处按 4 维全 token 去重,那会得到 venue/task/method/type 总和(8)。
-const byTag = await listAllPapersByTag();
+const byTag = await repo.groupByTask();
 const uniqueTagCount = byTag.size;
 
 // 客户端载荷:把 categories 拍平为 'dim:label' tokens,与 B4 paper-selection 一致
