@@ -16,6 +16,7 @@ import yaml from 'js-yaml';
 import { buildCategories, type Categories } from './taxonomies';
 import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
+import { applyPaperFilters } from './paper-filter';
 
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
 const PREFIX_SKIP_DIR = '_';
@@ -331,26 +332,8 @@ export interface ListOptions {
   base?: string;
 }
 
-function dedupByCanonicalArxivId(items: PaperListItem[]): PaperListItem[] {
-  const byKey = new Map<string, PaperListItem>();
-  const ARXIV_RE = /^(\d{4}\.\d{4,5})v(\d+)$/;
-  const keyOf = (p: PaperListItem): string => {
-    const m = ARXIV_RE.exec(p.arxivId || '');
-    return m ? `arxiv:${m[1]}` : `id:${p.id}`;
-  };
-  const verOf = (p: PaperListItem): number => {
-    const m = ARXIV_RE.exec(p.arxivId || '');
-    return m ? parseInt(m[2], 10) : 0;
-  };
-  for (const p of items) {
-    const k = keyOf(p);
-    const existing = byKey.get(k);
-    if (!existing || verOf(p) > verOf(existing)) {
-      byKey.set(k, p);
-    }
-  }
-  return Array.from(byKey.values());
-}
+// dedup 逻辑已抽到 ./arxiv,过滤/排序/限条已抽到 ./paper-filter。
+// listPapers 只负责"读盘 + 拼 PaperListItem + 调用 pipeline"。
 
 /** 把 categories 拍平为 'dim:label' 字符串数组,供列表过滤 / Jaccard 图 / UI 共用。
  *  与历史 `tags: ["query:rl"]` 的区别是每个 token 都带 dim 前缀,不再混用 `query:`。 */
@@ -402,61 +385,16 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       figures: p.figures,
     });
   }
-  let filtered = items;
-  if (opts.tag) {
-    filtered = filtered.filter((p) => flattenCategories(p.categories).some(
-      (t) => t === opts.tag || t.endsWith(`:${opts.tag}`),
-    ));
-  }
-  if (opts.search) {
-    const q = opts.search.toLowerCase();
-    filtered = filtered.filter((p) =>
-      (p.title || '').toLowerCase().includes(q) ||
-      (p.title_zh || '').toLowerCase().includes(q) ||
-      (p.tldr || '').toLowerCase().includes(q),
-    );
-  }
-  if (typeof opts.sinceDays === 'number' && opts.sinceDays > 0) {
-    const cutoff = Date.now() - opts.sinceDays * 24 * 60 * 60 * 1000;
-    filtered = filtered.filter((p) => {
-      if (!p.date) return false;
-      const t = new Date(p.date).getTime();
-      return Number.isFinite(t) && t >= cutoff;
-    });
-  }
-  if (opts.dedup !== false) {
-    filtered = dedupByCanonicalArxivId(filtered);
-  }
-  const sortBy = opts.sortBy || 'date';
-  const sortOrder = opts.sortOrder || 'desc';
-  const sortItems = (src: PaperListItem[]): PaperListItem[] => {
-    const copy = src.slice();
-    copy.sort((a, b) => {
-      let av: number = 0, bv: number = 0;
-      if (sortBy === 'date') {
-        av = a.date ? new Date(a.date).getTime() : 0;
-        bv = b.date ? new Date(b.date).getTime() : 0;
-      } else if (sortBy === 'score') {
-        av = a.score || 0;
-        bv = b.score || 0;
-      }
-      return sortOrder === 'asc' ? av - bv : bv - av;
-    });
-    return opts.limit ? copy.slice(0, opts.limit) : copy;
-  };
-  const sorted = sortItems(filtered);
-  if (
-    typeof opts.sinceDays === 'number'
-    && opts.sinceDays > 0
-    && opts.limit
-    && sorted.length < opts.limit
-  ) {
-    const fallback = opts.dedup !== false
-      ? dedupByCanonicalArxivId(items)
-      : items;
-    return sortItems(fallback);
-  }
-  return sorted;
+  // 过滤+排序+限条 + dedup 全部委托给 paper-filter(纯数据 pipeline)
+  return applyPaperFilters(items, {
+    tag: opts.tag,
+    search: opts.search,
+    sinceDays: opts.sinceDays,
+    dedup: opts.dedup,
+    sortBy: opts.sortBy,
+    sortOrder: opts.sortOrder,
+    limit: opts.limit,
+  });
 }
 
 /** 老格式 paper 的 tag 前缀(`tags: ["query:rl"]` → 主题 key = "rl")。
@@ -499,3 +437,6 @@ export async function listAllPapersByTag(): Promise<Map<string, PaperListItem[]>
 
 export { renderMarkdownBody } from './markdown';
 export type { RenderOptions } from './markdown';
+// Re-export arxiv dedup for callers that previously imported from paper.ts.
+// 内部 listPapers 已经间接使用,但保留向后兼容以免打破 scripts/* 等外部 import。
+export { dedupByCanonicalArxivId } from './arxiv';
