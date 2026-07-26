@@ -5,7 +5,7 @@
 // 正常的(论文 date 早于实际 Pipeline 收尾 + 平台 rebuild 时间),因此
 // 每类失败都 build-time console.warn 并把 hint 一并返回,免得线上
 // "看似精确却滞后"而无从排查。
-import { listPapers } from './paper';
+import { defaultPaperRepository } from './paper-repository';
 
 export interface LastUpdated {
   /** 展示用日期文案(zh-CN 长日期,或 '等待首次抓取') */
@@ -100,7 +100,7 @@ export async function getLastUpdatedDate(): Promise<LastUpdated> {
   const { date: runUpdatedAt, hint } = await fetchLastSuccessRunDate();
   const fallbackDate = runUpdatedAt
     ? null
-    : (await listPapers({ sortBy: 'date', limit: 1 }))[0]?.date ?? null;
+    : (await defaultPaperRepository.list({ sortBy: 'date', limit: 1 }))[0]?.date ?? null;
   const isFallback = !runUpdatedAt && !!fallbackDate;
   const raw = runUpdatedAt ?? fallbackDate;
   const label = raw
