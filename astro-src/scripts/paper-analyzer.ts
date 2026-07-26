@@ -2020,7 +2020,10 @@ async function saveDeepDiveToGitHub(
   const needsFigures = existingFigs === 0 ? 'true' : 'false';
 
   setStatus(`正在拼装完整 .md (frontmatter + 速读 + 精读)...`);
-  const md = buildCombinedNote(r, entry, deepDive);
+  // Phase F:r 是 AnalysisResult,NoteAnalysisInput 是它的 shape 子集 ——
+  // 这里用 explicit narrow(TS 联合类型对齐的局部规则会保留 union,
+  // 而 NoteAnalysisInput 只取必需字段,信息丢失可控)。
+  const md = buildCombinedNote(r as unknown as Parameters<typeof buildCombinedNote>[0], entry, deepDive);
 
   setStatus(`正在触发 GitHub Action (mode=combined, needs_figures=${needsFigures})...`);
 
@@ -2130,225 +2133,36 @@ async function pollWorkflowConclusion(
   throw new Error(`workflow ${runInfo.conclusion || '失败'} ${tail} — 查看: ${url}`);
 }
 
-// 极简 markdown 渲染(只处理精读用得到的子集:标题、粗体、代码、列表、LaTeX、引用)
-// 不引第三方库,避免精读功能引入额外依赖。
-function renderDeepDiveMarkdown(md: string): string {
-  const lines = md.split('\n');
-  const out: string[] = [];
-  let inList = false;
-  let listType: 'ul' | 'ol' | null = null;
-
-  const closeList = () => {
-    if (inList) {
-      out.push(listType === 'ol' ? '</ol>' : '</ul>');
-      inList = false;
-      listType = null;
-    }
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    // 空行
-    if (!trimmed) {
-      closeList();
-      out.push('');
-      continue;
-    }
-
-    // 图片 markdown: ![alt](src) —— 独立成行,渲染成 <img>。src/alt 均过 escapeHtml 防注入。
-    const img = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)\)\s*$/);
-    if (img) {
-      closeList();
-      out.push(
-        `<p class="analyzer-figure"><img src="${escapeHtml(img[2])}" alt="${escapeHtml(img[1])}" loading="lazy" decoding="async" class="analyzer-figure-img" /></p>`,
-      );
-      continue;
-    }
-
-    // 三级及以上标题
-    const h3 = trimmed.match(/^###\s+(.+)$/);
-    if (h3) {
-      closeList();
-      out.push(`<h4>${inlineMd(h3[1])}</h4>`);
-      continue;
-    }
-    const h2 = trimmed.match(/^##\s+(.+)$/);
-    if (h2) {
-      closeList();
-      out.push(`<h3>${inlineMd(h2[1])}</h3>`);
-      continue;
-    }
-    const h1 = trimmed.match(/^#\s+(.+)$/);
-    if (h1) {
-      closeList();
-      out.push(`<h2>${inlineMd(h1[1])}</h2>`);
-      continue;
-    }
-
-    // 引用
-    if (trimmed.startsWith('> ')) {
-      closeList();
-      out.push(`<blockquote>${inlineMd(trimmed.slice(2))}</blockquote>`);
-      continue;
-    }
-
-    // 有序列表
-    const ol = trimmed.match(/^(\d+)\.\s+(.+)$/);
-    if (ol) {
-      if (!inList || listType !== 'ol') {
-        closeList();
-        out.push('<ol>');
-        inList = true;
-        listType = 'ol';
-      }
-      out.push(`<li>${inlineMd(ol[2])}</li>`);
-      continue;
-    }
-
-    // 无序列表
-    const ul = trimmed.match(/^[-*]\s+(.+)$/);
-    if (ul) {
-      if (!inList || listType !== 'ul') {
-        closeList();
-        out.push('<ul>');
-        inList = true;
-        listType = 'ul';
-      }
-      out.push(`<li>${inlineMd(ul[1])}</li>`);
-      continue;
-    }
-
-    // 普通段落
-    closeList();
-    out.push(`<p>${inlineMd(trimmed)}</p>`);
-  }
-  closeList();
-  return out.join('\n');
-
-  // 行内 markdown 渲染:粗体、代码、$LaTeX$
-  function inlineMd(s: string): string {
-    return escapeHtml(s)
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      // $...$ 行内 LaTeX → KaTeX 客户端渲染;失败兜底到 <code>
-      .replace(/\$([^$\n]+?)\$/g, (_m, expr) => {
-        try {
-          return katex.renderToString(expr, { throwOnError: false, output: 'html' });
-        } catch {
-          return `<code class="analyzer-latex">$${expr}$</code>`;
-        }
-      });
-  }
-}
-
 // ============================================================================
-// 把 AnalysisResult + arxiv 元数据生成完整 .md 文件(对齐后台 docs 格式)
+// .md note 拼装 / 渲染 — 已抽到 lib/paper-note/(Phase F)
+//   - 行内 markdown + LaTeX:lib/paper-note/render.ts (renderDeepDiveMarkdown)
+//   - frontmatter 拼装:lib/paper-note/frontmatter.ts (buildFrontmatter / slugifyTitle)
+//   - body 段(速读 / 精读 / combined note):lib/paper-note/body.ts (buildSpeedReadBody /
+//     buildDeepDiveBanner / buildMarkdownNote / buildCombinedNote)
+//
+// 仍在本文件:AnalysisResult / TopicTags 等 DTO、UI 绑定、LLM 流式分发、GitHub 推送。
 // ============================================================================
-function slugifyTitle(title: string, arxivId: string): string {
-  // arxivId 已经含版本号 + 短 hash,适合作为 slug 主干
-  // 如果需要更"人类可读"的标题 slug,可以再附加 title 的 ascii 化短串
-  const ascii = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
-  if (ascii) return ascii;
-  // fallback:纯 ascii kebab-case,只保留 [a-z0-9],把 "." 和 "v" 都替换成 "-"
-  // (yml 校验 ^[a-z0-9-]{1,80}$ 不允许 ".",而 arxivId 形如 2606.30015v1 含点和 v)
-  return arxivId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'paper';
-}
 
-// frontmatter 字段集中处,glance 与 combined 共用。修一处字段,两边一起跟着走。
-// 字段顺序与 docs/20260625-20260704/*.md 保持一致(参见 sample 2606.26474v1)。
-function buildFrontmatter(r: AnalysisResult, entry: ArxivEntry | null, now: string): string[] {
-  const arxivId = entry?.arxivId || '';
-  const pdfUrl = entry?.pdfUrl || (arxivId ? `https://arxiv.org/pdf/${arxivId}` : '');
-  // categories 组装规则(对齐 src/6.generate_docs.py:build_categories_dict / Python 端):
-  //   - 从 r.categories 读 4-dim 对象;
-  //   - 流式写出:categories: {venue: [...], task: [...], method: [...], type: [...]};
-  //     与 Python `categories_to_yaml_inline` / 手写 `_parse_front_matter` 同 shape,
-  //     避免一处写多行块状 YAML 时手写解析器的崩溃。
-  //   - venue 维度由前端 paper.ts 在 readPaper 时从 source 重推,这里 LLM 输出忽略
-  //     (LLM 推断会议不可靠,论文发表会议以 source 为唯一真源)。
-  //   - 4-dim 全空时回退占位策略:留空 categories 块(B5 backfill 之后会从 venue 重推 + LLM 回填 task/method/type)。
-  const cats: Categories = (r.categories && !Array.isArray(r.categories))
-    ? (r.categories as Categories)
-    : buildCategories({});
-  // 标题/作者等含特殊字符(: , # 等)时统一加双引号,避免 YAML 解析失败。
-  const yamlStr = (s: string): string => `"${(s || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
-  const titleEn = r.title_en || r.title || '(untitled)';
-  const titlePlain = stripTitleMarkup(titleEn);
-  return [
-    '---',
-    `title: ${yamlStr(titleEn)}`,
-    // 纯文本标题:用于浏览器 <title>/列表卡片/搜索索引/a11y。仅当与原值不同时 emit。
-    titlePlain && titlePlain !== titleEn ? `title_plain: ${yamlStr(titlePlain)}` : null,
-    r.authors ? `authors: ${yamlStr(r.authors)}` : null,
-    arxivId ? `date: ${(entry?.published || now).slice(0, 10)}` : null,
-    `generated_at: ${yamlStr(now)}`,
-    pdfUrl ? `pdf: ${yamlStr(pdfUrl)}` : null,
-    `categories: ${renderCategoriesYamlInline(cats)}`,
-    `score: 7.0`,
-    r.motivation ? `evidence: ${yamlStr(r.motivation.slice(0, 60))}` : null,
-    r.tldr ? `tldr: ${yamlStr(r.tldr)}` : null,
-    'source: arxiv',
-    'selection_source: web_analyzer',
-    r.motivation ? `motivation: ${yamlStr(r.motivation)}` : null,
-    r.method ? `method: ${yamlStr(r.method)}` : null,
-    r.result ? `result: ${yamlStr(r.result)}` : null,
-    r.conclusion ? `conclusion: ${yamlStr(r.conclusion)}` : null,
-    r.context ? `context: ${yamlStr(r.context)}` : null,
-    '---',
-  ].filter((l): l is string => l !== null);
-}
+import {
+  renderDeepDiveMarkdown,
+  buildFrontmatter,
+  slugifyTitle,
+  buildSpeedReadBody,
+  buildDeepDiveBanner,
+  buildMarkdownNote,
+  buildCombinedNote,
+} from '../lib/paper-note';
 
-// 速读正文块(TLDR / Abstract / 动机/方法/结果/结论/主题语境),与旧 buildMarkdownNote 行为一致。
-function buildSpeedReadBody(r: AnalysisResult, entry: ArxivEntry | null): string {
-  const bodyParts: string[] = [];
-  if (r.tldr) bodyParts.push(`## TLDR\n${r.tldr}`);
-  if (entry?.summary) bodyParts.push(`## Abstract\n${entry.summary}`);
-  if (r.motivation) bodyParts.push(`## 动机\n${r.motivation}`);
-  if (r.method) bodyParts.push(`## 方法\n${r.method}`);
-  if (r.result) bodyParts.push(`## 结果\n${r.result}`);
-  if (r.conclusion) bodyParts.push(`## 结论\n${r.conclusion}`);
-  if (r.context) bodyParts.push(`## 主题语境\n${r.context}`);
-  return bodyParts.length ? '\n' + bodyParts.join('\n\n') + '\n' : '';
-}
-
-// 精读元信息行(显示在 ## 深度精读 标题正下方,告诉读者这篇精读是哪个 model 生成的、
-// 是否截断过 PDF)。跟 save-paper.yml:286-292 旧版的格式对齐,方便以后 backend
-// 写出的 .md 和 web 写出的 .md 在文档结构上一致。
-function buildDeepDiveBanner(d: DeepDiveResult): string {
-  // truncated 时给个"前 N%"提示;N 是按 model context window 算出的可用字符占 PDF 总字符的比例
-  // —— 跟 save-paper.yml 拼 deep_block 时的 truncate_note 公式保持一致。
-  let truncateNote = '全文';
-  if (d.truncated) {
-    const availableChars = Math.min(800_000, d.contextTokens * 3 - 16_000 * 3);
-    const pct = d.pdfChars > 0 ? Math.round((availableChars / d.pdfChars) * 100) : 0;
-    truncateNote = `前 ${pct}%`;
-  }
-  const modelLine = d.usedModel ? ' · 模型: ' + d.usedModel : '';
-  return `> 基于 PDF 全文生成${modelLine} · ${truncateNote}\n\n`;
-}
-
-function buildMarkdownNote(r: AnalysisResult, entry: ArxivEntry | null): string {
-  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const fm = buildFrontmatter(r, entry, now);
-  const body = buildSpeedReadBody(r, entry);
-  return fm.join('\n') + '\n' + body + '\n';
-}
-
-// combined .md:frontmatter + 速读四段 + Abstract + 精读全文。
-// 跟旧 "📤 save 速读" 路径对比:不依赖仓库里是否已有 .md,适合"我搜到就要精读"用户。
-// 跟旧 "📥 save 精读" 路径对比:不再依赖"先点过 📤" — 一次完成。
-function buildCombinedNote(r: AnalysisResult, entry: ArxivEntry, deepDive: DeepDiveResult): string {
-  const now = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const fm = buildFrontmatter(r, entry, now);
-  const speedRead = buildSpeedReadBody(r, entry).trimEnd();
-  // 精读章节用 `---` 分隔,跟旧 save-paper.yml 写入时的格式一致(append-deepdive 步骤里
-  // 拼的是 '\n\n---\n\n## 深度精读\n\n' + banner + deep)。
-  const banner = buildDeepDiveBanner(deepDive);
-  const deepSection = `\n\n---\n\n## 深度精读\n\n${banner}${deepDive.markdown}\n`;
-  return fm.join('\n') + '\n' + speedRead + deepSection;
-}
+// 类型 + 函数 re-export 保持向后兼容(老 caller `import { ... } from './paper-analyzer'` 不破)
+export {
+  renderDeepDiveMarkdown,
+  buildFrontmatter,
+  slugifyTitle,
+  buildSpeedReadBody,
+  buildDeepDiveBanner,
+  buildMarkdownNote,
+  buildCombinedNote,
+};
 
 async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promise<void> {
   const { loadGitHubToken, loadGitHubRepo } = await import('./settings');
@@ -2360,7 +2174,7 @@ async function saveToGitHub(r: AnalysisResult, entry: ArxivEntry | null): Promis
   if (!entry || !entry.arxivId) {
     throw new Error('当前结果没有 arxiv 元数据(只支持 arxiv 论文保存;PDF 上传暂不支持)');
   }
-  const md = buildMarkdownNote(r, entry);
+  const md = buildMarkdownNote(r as unknown as Parameters<typeof buildMarkdownNote>[0], entry);
   const slug = slugifyTitle(r.title || r.title_en || entry.title, entry.arxivId);
 
   const url = `https://api.github.com/repos/${repo.owner}/${repo.repo}/actions/workflows/${repo.workflow}/dispatches`;
