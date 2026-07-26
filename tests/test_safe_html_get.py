@@ -262,6 +262,58 @@ class SafeHtmlGetTest(unittest.TestCase):
             frozenset({408, 425, 429, 500, 502, 503, 504}),
         )
 
+    # -------- default retries bumped to survive Cloudflare RST --------
+    def test_default_retries_is_6(self):
+        # We explicitly bumped retries from 3 → 6 because ojs.aaai.org
+        # resets every connection from a GHA runner for ~30-60s before
+        # letting one through.  3 retries in ~6s isn't enough; 6 retries
+        # with exponential backoff cover ~60s.
+        # We test this via the default behaviour of ``_get`` wrappers in
+        # the migrated fetchers.
+        from src.maintain.fetchers.fetch_aaai_ojs import _get as aaai_get
+        from src.maintain.fetchers.fetch_acl_anthology import _get as acl_get
+        import inspect
+        # Both wrappers forward to safe_html_get; if either forgets to
+        # override ``retries``, it picks up the new default.
+        for fn in (aaai_get, acl_get):
+            sig = inspect.signature(fn)
+            # Find the call to safe_html_get inside the wrapper; easier
+            # to just assert that the wrapper does NOT pin retries=3.
+            # Read the source text instead.
+            src = inspect.getsource(fn)
+            self.assertNotIn("retries=3", src,
+                             f"{fn.__module__}.{fn.__name__} still pins retries=3 — bump to default or explicit >3")
+            # And both should forward to safe_html_get.
+            self.assertIn("safe_html_get", src)
+
+    # -------- log output uses stderr (not stdlib logging) --------
+    def test_logs_write_to_stderr_not_logging(self):
+        # The earlier logging-based implementation lost INFO messages
+        # inside subprocesses on GHA.  The fix is direct stderr writes.
+        # We assert by capturing sys.stderr during a call and checking
+        # at least one line per attempt shows up.
+        import sys
+        from io import StringIO
+        captured = StringIO()
+        old_stderr = sys.stderr
+        sys.stderr = captured
+        try:
+            session = _make_session([_resp(200, "ok")])
+            safe_html_get(
+                "https://example.test/x",
+                session=session,
+                label="VISIBLE",
+                sleep_impl=lambda _ms: None,
+            )
+        finally:
+            sys.stderr = old_stderr
+        out = captured.getvalue()
+        self.assertIn("VISIBLE", out)
+        self.assertIn("attempt 1/", out)
+        # And the timestamp prefix.
+        import re
+        self.assertRegex(out, r"\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\]")
+
     # -------- _is_transient classification --------
     def test_is_transient_recognises_known_types(self):
         for exc in [

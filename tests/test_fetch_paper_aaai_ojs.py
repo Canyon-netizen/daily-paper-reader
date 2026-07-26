@@ -2,6 +2,7 @@ import importlib.util
 import pathlib
 import sys
 import unittest
+import unittest.mock
 
 
 def _load_module(module_name: str, path: pathlib.Path):
@@ -44,6 +45,75 @@ class FetchPaperAAAIOJSTest(unittest.TestCase):
 
     def test_build_source_label(self):
         self.assertEqual(self.mod.build_source_label(2025), "AAAI-2025-Accepted")
+
+
+class FetchPaperAAAISkipOnFailureTest(unittest.TestCase):
+    """Per-issue soft-fail so one bad page doesn't kill the whole init."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        src_dir = root / "src"
+        if str(src_dir) not in sys.path:
+            sys.path.insert(0, str(src_dir))
+        cls.mod = _load_module(
+            "fetch_aaai_ojs_mod",
+            src_dir / "maintain" / "fetchers" / "fetch_aaai_ojs.py",
+        )
+
+    def test_collect_target_issue_urls_survives_archive_failure(self):
+        """If the archive page fetch exhausts retries, return empty list
+        instead of raising — better to skip today than fail the whole
+        conference-init run."""
+        import requests
+
+        # Patch the module's _get so it raises the same exception real
+        # ojs.aaai.org was returning in the GHA failure.
+        def boom(url, **kw):
+            raise requests.exceptions.ConnectionError(
+                "Connection aborted.",
+            )
+
+        with unittest.mock.patch.object(self.mod, "_get", side_effect=boom):
+            issues = self.mod.collect_target_issue_urls([2023, 2024, 2025])
+        self.assertEqual(issues, [])
+
+    def test_collect_issue_article_summaries_returns_empty_on_failure(self):
+        """Single-issue failure shouldn't propagate; the issue is just skipped."""
+        import requests
+
+        issue = {
+            "title": "AAAI-25 Technical Tracks 7",
+            "url": "https://example.test/issue/7",
+            "year": 2025,
+        }
+
+        def boom(url, **kw):
+            raise requests.exceptions.ConnectionError("RST")
+
+        with unittest.mock.patch.object(self.mod, "_get", side_effect=boom):
+            out = self.mod.collect_issue_article_summaries(issue)
+        self.assertEqual(out, [])
+
+    def test_fetch_article_detail_returns_none_on_failure(self):
+        import requests
+
+        summary = {
+            "article_id": "9999",
+            "article_url": "https://example.test/article/9999",
+            "issue_title": "AAAI-25 Technical Tracks 7",
+            "year": 2025,
+            "title": "Some Paper",
+            "authors": [],
+            "pdf_url": "",
+        }
+
+        def boom(url, **kw):
+            raise requests.exceptions.ConnectionError("RST")
+
+        with unittest.mock.patch.object(self.mod, "_get", side_effect=boom):
+            out = self.mod.fetch_article_detail(summary)
+        self.assertIsNone(out)
 
 
 if __name__ == "__main__":

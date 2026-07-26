@@ -40,7 +40,7 @@ def _norm(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _get(url: str, timeout: int = 60, retries: int = 3) -> str:
+def _get(url: str, timeout: int = 60, retries: int = 6) -> str:
     """Thin wrapper around ``safe_html_get``.
 
     All call sites (``_fetch_volume``, ``_fetch_paper_page``) already pass
@@ -49,6 +49,10 @@ def _get(url: str, timeout: int = 60, retries: int = 3) -> str:
     headers, and exponential-backoff retry-with-classification live in
     ``src.maintain.fetchers._common.safe_html_get`` (see that module's
     docstring for the why).
+
+    ``retries`` default is 6 (matches ``safe_html_get``'s own default;
+    Anthology is friendlier than OJS but we keep parity so behaviour is
+    predictable across conferences).
     """
     return safe_html_get(url, timeout=timeout, retries=retries, label="Anthology")
 

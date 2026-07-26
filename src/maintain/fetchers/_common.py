@@ -81,9 +81,10 @@ the last transient error.
 """
 from __future__ import annotations
 
-import logging
 import random
+import sys
 import time
+from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional
 
 import requests
@@ -92,10 +93,19 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 
-_LOGGER = logging.getLogger("dpr.fetchers.safe_html_get")
-if not _LOGGER.handlers:
-    _LOGGER.addHandler(logging.StreamHandler())
-    _LOGGER.setLevel(logging.INFO)
+def _log(level: str, msg: str) -> None:
+    """Write a log line directly to stderr, bypassing ``logging``.
+
+    We deliberately avoid the stdlib ``logging`` module here: in a
+    subprocess (e.g. ``fetch_aaai_ojs.py`` invoked by ``conference-init``)
+    the root logger often isn't configured, so INFO messages silently
+    disappear and the user sees only the final stack trace.  Writing to
+    stderr with a millisecond timestamp guarantees each attempt shows up
+    in the GitHub Actions log panel.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    sys.stderr.write(f"[{ts}] [{level}] {msg}\n")
+    sys.stderr.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +244,7 @@ def safe_html_get(
     url: str,
     *,
     timeout: int = 30,
-    retries: int = 3,
+    retries: int = 6,
     label: str = "html",
     session: Optional[requests.Session] = None,
     extra_headers: Optional[Mapping[str, str]] = None,
@@ -249,6 +259,10 @@ def safe_html_get(
       timeout: per-request timeout in seconds.  Forced >= 1.
       retries: total attempts (>=1).  After exhausting, raises the last
         transient error encountered.  Set to 1 to disable retry.
+        **Default is 6** (not 3) because Cloudflare-fronted OJS sites
+        like ``ojs.aaai.org`` RST every request from a single runner IP
+        for ~30-60 s before letting one through.  3 attempts in 6 s is
+        not enough; 6 attempts with exponential backoff cover ~60 s.
       label: short tag for log lines (e.g. ``"[AAAI]"``).
       session: optional shared ``requests.Session`` (see ``make_session()``).
         Useful when a caller issues many GETs and wants one TCP pool.
@@ -266,7 +280,9 @@ def safe_html_get(
       ``RemoteDisconnected``, ``Timeout``, ...) once retries exhausted.
 
     Side effects:
-      Logs each attempt at INFO; transient failures at WARNING.
+      Writes one line per attempt to **stderr** (NOT to the stdlib
+      ``logging`` module — see ``_log()`` docstring for why).  Each line
+      shows up in GitHub Actions logs even when called from a subprocess.
     """
     if retries < 1:
         retries = 1
@@ -282,12 +298,7 @@ def safe_html_get(
             headers.update(dict(extra_headers))
 
         try:
-            _LOGGER.info(
-                "[%s] GET attempt %d/%d url=%s ua=%s",
-                label, attempt, retries, url,
-                # don't log the *full* UA — already in headers; just version-ish tail
-                headers["User-Agent"].rsplit(" ", 1)[-1],
-            )
+            _log("INFO", f"[{label}] GET attempt {attempt}/{retries} url={url}")
             resp = sess.get(url, headers=headers, timeout=safe_timeout)
             # 4xx/5xx → HTTPError. Decide retry vs raise.
             if resp.status_code in RETRYABLE_HTTP_STATUSES:
@@ -296,16 +307,12 @@ def safe_html_get(
                     response=resp,
                 )
             resp.raise_for_status()
+            _log("INFO", f"[{label}] GET {url} → {resp.status_code} (attempt {attempt}/{retries})")
             return resp.text
         except requests.exceptions.HTTPError as exc:
-            # raise_for_status already attached response; non-retryable HTTPError
-            # bubbles up immediately so callers see 403/404 right away.
             last_error = exc
             if exc.response is not None and exc.response.status_code in RETRYABLE_HTTP_STATUSES:
-                _LOGGER.warning(
-                    "[%s] HTTP %d on %s — will retry (attempt %d/%d)",
-                    label, exc.response.status_code, url, attempt, retries,
-                )
+                _log("WARNING", f"[{label}] HTTP {exc.response.status_code} on {url} — will retry (attempt {attempt}/{retries})")
                 if attempt < retries:
                     sleep_impl(_backoff_seconds(attempt))
                     continue
@@ -313,15 +320,9 @@ def safe_html_get(
         except Exception as exc:  # noqa: BLE001 — we want the broad net here
             last_error = exc
             if not _is_transient(exc):
-                _LOGGER.warning(
-                    "[%s] non-transient %s on %s — failing fast: %s",
-                    label, type(exc).__name__, url, exc,
-                )
+                _log("WARNING", f"[{label}] non-transient {type(exc).__name__} on {url} — failing fast: {exc}")
                 raise
-            _LOGGER.warning(
-                "[%s] transient %s on %s (attempt %d/%d): %s",
-                label, type(exc).__name__, url, attempt, retries, exc,
-            )
+            _log("WARNING", f"[{label}] transient {type(exc).__name__} on {url} (attempt {attempt}/{retries}): {exc}")
             if attempt >= retries:
                 break
             sleep_impl(_backoff_seconds(attempt))
@@ -331,6 +332,7 @@ def safe_html_get(
     if own_session:
         sess.close()
     assert last_error is not None  # loop body sets it on every path
+    _log("ERROR", f"[{label}] exhausted {retries} retries on {url}: {type(last_error).__name__}: {last_error}")
     raise last_error
 
 

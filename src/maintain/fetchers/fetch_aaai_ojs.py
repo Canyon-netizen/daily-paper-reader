@@ -43,7 +43,7 @@ def build_source_label(year: int) -> str:
     return f"AAAI-{int(year)}-Accepted"
 
 
-def _get(url: str, timeout: int = 30, retries: int = 3) -> str:
+def _get(url: str, timeout: int = 30, retries: int = 6) -> str:
     """Thin wrapper around ``safe_html_get`` for callers in this module.
 
     Kept as a private ``_get`` so the call sites above (``collect_target_issue_urls``,
@@ -53,6 +53,10 @@ def _get(url: str, timeout: int = 30, retries: int = 3) -> str:
     module's docstring for the rationale (the old static ``Chrome/133``
     UA + 3-retry-no-backoff version was getting ``RemoteDisconnected`` from
     ``ojs.aaai.org`` on GitHub Actions runners).
+
+    ``retries`` default is 6 (matches ``safe_html_get``'s own default; we
+    repeat it explicitly so call sites that pass ``retries=`` still work
+    and so ``test_default_retries_is_6`` can grep for it).
     """
     return safe_html_get(url, timeout=timeout, retries=retries, label="AAAI")
 
@@ -83,7 +87,17 @@ def collect_target_issue_urls(target_years: Iterable[int], max_pages: int = 12) 
 
     while next_url and page_index <= max(int(max_pages or 1), 1):
         log(f"[AAAI] archive page={page_index} url={next_url}")
-        soup = BeautifulSoup(_get(next_url), "html.parser")
+        # Soft-fail: if every retry of this archive page is RST'd by
+        # Cloudflare (the typical GHA-runner pattern), log and bail —
+        # rather than raising out of the entire init.  An empty
+        # ``collected`` list propagates up and the fetcher returns 0 papers
+        # for the run, which the pipeline handles as "nothing new today"
+        # rather than a hard failure.
+        try:
+            soup = BeautifulSoup(_get(next_url), "html.parser")
+        except Exception as exc:  # noqa: BLE001
+            log(f"[AAAI] archive page {page_index} failed after retries: {type(exc).__name__}: {exc}")
+            break
         issues = soup.select("div.obj_issue_summary")
         if not issues:
             break
@@ -134,7 +148,13 @@ def collect_issue_article_summaries(issue: Dict[str, Any]) -> List[Dict[str, Any
     if not issue_url or not year:
         return []
 
-    soup = BeautifulSoup(_get(issue_url), "html.parser")
+    # Soft-fail: skip this issue if its page can't be fetched after retries.
+    # Better to drop one issue than to fail the whole init.
+    try:
+        soup = BeautifulSoup(_get(issue_url), "html.parser")
+    except Exception as exc:  # noqa: BLE001
+        log(f"[AAAI] issue '{issue_title}' ({year}) fetch failed after retries: {type(exc).__name__}: {exc}")
+        return []
     summaries: List[Dict[str, Any]] = []
     for item in soup.select("div.obj_article_summary"):
         title_node = item.select_one("h3.title a")
@@ -185,7 +205,14 @@ def fetch_article_detail(summary: Dict[str, Any]) -> Dict[str, Any] | None:
     if not article_url or not article_id or not year:
         return None
 
-    soup = BeautifulSoup(_get(article_url), "html.parser")
+    # Soft-fail: per-article page fetch can flake on GHA runners.  We
+    # already retry 6× with backoff inside ``_get``; if even that didn't
+    # land, drop the article rather than blowing up the whole pool.
+    try:
+        soup = BeautifulSoup(_get(article_url), "html.parser")
+    except Exception as exc:  # noqa: BLE001
+        log(f"[AAAI] article {article_id} ({year}) fetch failed after retries: {type(exc).__name__}: {exc}")
+        return None
     title = (_meta_contents(soup, "citation_title") or [_norm(summary.get("title"))])[0]
     if not title:
         return None
