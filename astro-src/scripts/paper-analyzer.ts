@@ -39,6 +39,7 @@ import {
 } from './settings';
 import { debounce, canonicalArxivId, escapeHtml } from '../lib/dom-utils';
 import { resolveRoute } from '../lib/llm';
+import { extractBalancedJson } from '../lib/llm-clean';
 import {
   injectIntoPromptSync,
   type PromptTarget,
@@ -114,16 +115,14 @@ export interface TopicTags {
 // schemas.ts re-export 名(同义类型)。
 export type Categories = PaperCategories;
 
-export interface ArxivEntry {
-  id: string;            // 完整 arXiv URL
-  arxivId: string;       // 简短 ID 如 1706.03762v7
-  title: string;
-  authors: string[];
-  summary: string;
-  published: string;     // arXiv <published>: 永远是 v1 首发的日期,选"最新版本"不能拿它比
-  updated: string;       // arXiv <updated>:   随版本号 vN 升级才变,选"最新版本"用这个
-  pdfUrl: string;        // arxiv.org/pdf/<id>
-}
+// ArxivEntry + parseArxivEntry 已抽到 lib/arxiv-entry/(纯函数,无副作用,易单测)
+// 这里既有 re-export(让老 `import { ArxivEntry } from './paper-analyzer'` 仍然可用)
+// 也有本地 `import type`(让本文件内部消费的标识符在 type 命名空间里可见)。
+// 后面 verbatimModuleSyntax 严格要求分开 type / runtime re-export。
+import type { ArxivEntry as ArxivEntryType } from '../lib/arxiv-entry';
+import { parseArxivEntry } from '../lib/arxiv-entry';
+export type { ArxivEntry } from '../lib/arxiv-entry';
+type ArxivEntry = ArxivEntryType;
 
 // ============================================================================
 // 常量 / DOM 引用
@@ -373,34 +372,9 @@ function docsPathToUrl(p: string): string {
 }
 
 // 从字符串里提取第一个配对的 { ... } JSON 块(跳过字符串里的 `{` `}`)。
-// 避免 \{[\s\S]*\} 这种贪婪正则把多个对象吞成一个,或者把 reasoning 文本吞进去。
-export function extractBalancedJson(s: string): string | null {
-  let start = -1;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < s.length; i++) {
-    const ch = s[i];
-    if (escape) { escape = false; continue; }
-    if (inString) {
-      if (ch === '\\') escape = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') { inString = true; continue; }
-    if (ch === '{') {
-      if (start === -1) start = i;
-      depth++;
-    } else if (ch === '}') {
-      if (depth === 0) continue;
-      depth--;
-      if (depth === 0 && start !== -1) {
-        return s.slice(start, i + 1);
-      }
-    }
-  }
-  return null;
-}
+// 真实实现已迁到 lib/llm-clean/balanced-json.ts —— 这里只 re-export 保持向后兼容。
+// 老的 scripts 内部 caller 走本地 import name,行为完全等价(无 dep on DOM / 全局状态)。
+export { extractBalancedJson };
 
 let savedHintTimer: ReturnType<typeof setTimeout> | null = null;
 function flashSavedHint(): void {
@@ -1036,25 +1010,8 @@ export async function searchArxivById(arxivId: string): Promise<ArxivEntry[]> {
   return parsed;
 }
 
-export function parseArxivEntry(e: Element): ArxivEntry | null {
-  const idFull = e.querySelector('id')?.textContent?.trim() ?? '';
-  // idFull 形如 http://arxiv.org/abs/1706.03762v7
-  const arxivId = idFull.split('/abs/').pop() ?? '';
-  const title = (e.querySelector('title')?.textContent ?? '').replace(/\s+/g, ' ').trim();
-  // 跳过 arXiv 的占位 entry(title 是 "Error" 或空,作者为 0)
-  if (!title || title.toLowerCase() === 'error' || title.length < 3) return null;
-  const summary = (e.querySelector('summary')?.textContent ?? '').replace(/\s+/g, ' ').trim();
-  const authorNodes = Array.from(e.querySelectorAll('author name'));
-  const authors = authorNodes.map((n) => n.textContent?.trim() ?? '').filter(Boolean);
-  const published = e.querySelector('published')?.textContent?.trim() ?? '';
-  const updated = e.querySelector('updated')?.textContent?.trim() ?? '';
-  // PDF 链接:优先取 entry 里 rel=related 或 title=pdf 的 link
-  const pdfLink = Array.from(e.querySelectorAll('link')).find((l) =>
-    l.getAttribute('title') === 'pdf' || l.getAttribute('rel') === 'related'
-  );
-  const pdfUrl = pdfLink?.getAttribute('href') ?? `https://arxiv.org/pdf/${arxivId}`;
-  return { id: idFull, arxivId, title, authors, summary, published, updated, pdfUrl };
-}
+// parseArxivEntry 已抽到 lib/arxiv-entry/parse.ts — 这里只 re-export 见上方 import。
+// 不要在本文件重新实现,以免 paper-analyzer 偏离 lib 单一事实。
 
 export async function fetchArxivPdf(pdfUrl: string, statusCb?: (msg: string) => void): Promise<ArrayBuffer> {
   (statusCb ?? (() => {}))('下载 arXiv PDF...');

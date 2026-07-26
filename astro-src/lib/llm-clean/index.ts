@@ -21,3 +21,7 @@ export {
   buildRegenSubQ,
   buildFacet,
 } from './builders';
+
+export {
+  extractBalancedJson,
+} from './balanced-json';
