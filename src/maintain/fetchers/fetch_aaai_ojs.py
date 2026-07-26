@@ -13,11 +13,12 @@ from typing import Any, Dict, Iterable, List, Optional
 import requests
 from bs4 import BeautifulSoup
 
+from src.maintain.fetchers._common import safe_html_get
+
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 TODAY_STR = datetime.now(timezone.utc).strftime("%Y%m%d")
 ARCHIVE_URL = "https://ojs.aaai.org/index.php/AAAI/issue/archive"
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0 Safari/537.36"
 ISSUE_TITLE_RE = re.compile(r"\bAAAI-(\d{2})\b", re.IGNORECASE)
 ARTICLE_ID_RE = re.compile(r"/article/view/(\d+)")
 
@@ -43,20 +44,17 @@ def build_source_label(year: int) -> str:
 
 
 def _get(url: str, timeout: int = 30, retries: int = 3) -> str:
-    last_error: Exception | None = None
-    for attempt in range(1, max(int(retries or 1), 1) + 1):
-        try:
-            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=max(int(timeout or 1), 1))
-            resp.raise_for_status()
-            return resp.text
-        except Exception as exc:
-            last_error = exc
-            if attempt >= max(int(retries or 1), 1):
-                break
-            log(f"[AAAI] request retry {attempt}/{retries} url={url} error={exc}")
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError(f"request failed without explicit error: {url}")
+    """Thin wrapper around ``safe_html_get`` for callers in this module.
+
+    Kept as a private ``_get`` so the call sites above (``collect_target_issue_urls``,
+    ``collect_issue_article_summaries``, ``fetch_article_detail``) don't need to
+    change.  All UA rotation, header injection, and retry-with-backoff logic
+    lives in ``src.maintain.fetchers._common.safe_html_get`` — see that
+    module's docstring for the rationale (the old static ``Chrome/133``
+    UA + 3-retry-no-backoff version was getting ``RemoteDisconnected`` from
+    ``ojs.aaai.org`` on GitHub Actions runners).
+    """
+    return safe_html_get(url, timeout=timeout, retries=retries, label="AAAI")
 
 
 def extract_issue_year(title: str) -> Optional[int]:

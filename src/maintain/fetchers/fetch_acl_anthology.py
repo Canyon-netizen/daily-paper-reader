@@ -7,17 +7,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import re
-import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-import requests
 from bs4 import BeautifulSoup
+
+from src.maintain.fetchers._common import safe_html_get
 
 SCRIPT_DIR = os.path.dirname(__file__)
 ROOT_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 TODAY_STR = datetime.now(timezone.utc).strftime("%Y%m%d")
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0 Safari/537.36"
 
 
 ACL_VOLUME_SPECS: Sequence[Tuple[str, str]] = (
@@ -42,21 +41,16 @@ def _norm(value: Any) -> str:
 
 
 def _get(url: str, timeout: int = 60, retries: int = 3) -> str:
-    last_error: Exception | None = None
-    for attempt in range(1, max(int(retries or 1), 1) + 1):
-        try:
-            resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=max(int(timeout or 1), 1))
-            resp.raise_for_status()
-            return resp.text
-        except Exception as exc:
-            last_error = exc
-            if attempt >= max(int(retries or 1), 1):
-                break
-            log(f"[Anthology] retry {attempt}/{retries} url={url} error={exc}")
-            time.sleep(float(attempt))
-    if last_error is not None:
-        raise last_error
-    raise RuntimeError(f"request failed without explicit error: {url}")
+    """Thin wrapper around ``safe_html_get``.
+
+    All call sites (``_fetch_volume``, ``_fetch_paper_page``) already pass
+    ``url`` as a single string and expect ``str`` back, so keeping this
+    3-arg shim means zero call-site changes.  UA rotation, browser-like
+    headers, and exponential-backoff retry-with-classification live in
+    ``src.maintain.fetchers._common.safe_html_get`` (see that module's
+    docstring for the why).
+    """
+    return safe_html_get(url, timeout=timeout, retries=retries, label="Anthology")
 
 
 def _meta_contents(soup: BeautifulSoup, name: str) -> List[str]:
