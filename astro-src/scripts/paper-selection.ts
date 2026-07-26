@@ -27,8 +27,8 @@ import {
   SELECTION_SOFT_CAP,
   type SelectionItem,
 } from './settings';
+import { emitPaperSelectionChange } from '../lib/events';
 
-const CUSTOM_EVENT = 'paper-selection-change';
 const SOFT_CAP = SELECTION_SOFT_CAP;
 
 // ----------------------------------------------------------------------------
@@ -59,7 +59,7 @@ function readItemFromDataset(el: HTMLElement): SelectionItem | null {
 // 工具:dispatch 自定义事件,让 topic 页等其它脚本能监听
 // ----------------------------------------------------------------------------
 function emitChange(): void {
-  document.dispatchEvent(new CustomEvent(CUSTOM_EVENT));
+  emitPaperSelectionChange();
 }
 
 // ----------------------------------------------------------------------------
@@ -289,7 +289,7 @@ try {
 }
 
 // 暴露给其它脚本 / topic 页用
-export { repaintActionBar, CUSTOM_EVENT };
+export { PAPER_SELECTION_CHANGE } from '../lib/events';
 export function getSelectionSnapshot() {
   return loadSelection();
 }
