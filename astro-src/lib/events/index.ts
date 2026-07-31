@@ -21,6 +21,8 @@ export {
   DPR_DAILY_DAY_OPENED,
   DPR_DAILY_DAY_OPENED_LEGACY,
   PAPER_SELECTION_CHANGE,
+  DPR_USER_LIBRARY_CHANGE,
+  DPR_USER_LIBRARY_CHANGE_LEGACY,
 } from './names';
 
 export type {
@@ -29,6 +31,8 @@ export type {
   DprTopicFilterChangeDetail,
   DprDailyDayOpenedDetail,
   PaperSelectionChangeDetail,
+  DprUserLibraryChangeDetail,
+  DprUserLibraryChangeReason,
 } from './types';
 
 export {
@@ -40,4 +44,6 @@ export {
   onDprDailyDayOpened,
   emitPaperSelectionChange,
   onPaperSelectionChange,
+  emitDprUserLibraryChange,
+  onDprUserLibraryChange,
 } from './bus';

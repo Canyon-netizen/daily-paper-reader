@@ -37,3 +37,16 @@ export const DPR_DAILY_DAY_OPENED_LEGACY = 'daily-day-opened';
  *   - scripts/settings.ts:349 (设置变更后清空旧选择)
  *  同一个事件名两源触发,原 settings.ts const 重构(见 feedback_settings_selection_must_emit)。 */
 export const PAPER_SELECTION_CHANGE = 'paper-selection-change';
+
+/** 用户图书馆状态变化(星标 / 阅读状态 / 笔记 / 回收站)—
+ *  detail: DprUserLibraryChangeDetail { ids, reason }
+ *
+ *  **单一 emit 源**:只有 lib/user-library/store.ts 的私有写入漏斗会发这个事件。
+ *  这是刻意的 —— feedback_settings_selection_must_emit 记录过的 bug 就是"两条写入
+ *  路径不共享事件源",导致 UI 计数不刷新。任何新增的用户态写入都必须走那个漏斗。
+ *
+ *  detail 里带 ids 是为了让 listener 能只重绘受影响的行(610 行全量重绘太贵);
+ *  但 listener 仍应把 detail 当**提示**而非真值,状态真值始终从 store 读。 */
+export const DPR_USER_LIBRARY_CHANGE = 'dpr:user-library-change';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名(与本文件其它事件同构)。 */
+export const DPR_USER_LIBRARY_CHANGE_LEGACY = 'dpr-user-library-change';

@@ -26,3 +26,22 @@ export interface DprDailyDayOpenedDetail {
 /** paper-selection-change 的 detail 为空 —— selection 状态由 listener
  *  直接读 storage 拿,而不是塞进 event detail。 */
 export type PaperSelectionChangeDetail = void;
+
+/** 用户态写入的原因标签。listener 可以据此决定重绘粒度
+ *  (例如 'note' 只需刷新笔记指示点,'bulk' 需要整表重排)。 */
+export type DprUserLibraryChangeReason =
+  | 'star'
+  | 'status'
+  | 'note'
+  | 'trash'
+  | 'restore'
+  | 'purge'
+  | 'bulk'
+  | 'sync'
+  | 'reset';
+
+export interface DprUserLibraryChangeDetail {
+  /** 受影响的 canonical arXiv id。'sync' / 'reset' 可能很多条。 */
+  ids: string[];
+  reason: DprUserLibraryChangeReason;
+}

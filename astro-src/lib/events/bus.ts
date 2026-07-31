@@ -27,11 +27,14 @@ import {
   DPR_DAILY_DAY_OPENED,
   DPR_DAILY_DAY_OPENED_LEGACY,
   PAPER_SELECTION_CHANGE,
+  DPR_USER_LIBRARY_CHANGE,
+  DPR_USER_LIBRARY_CHANGE_LEGACY,
 } from './names';
 import type {
   DprThemeChangeDetail,
   DprTopicFilterChangeDetail,
   DprDailyDayOpenedDetail,
+  DprUserLibraryChangeDetail,
 } from './types';
 
 /** 通用 emit helper。target 默认 document。
@@ -130,4 +133,29 @@ export function onPaperSelectionChange(
   handler: () => void,
 ): () => void {
   return on(target, PAPER_SELECTION_CHANGE, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:user-library-change (legacy alias: dpr-user-library-change)
+//
+// 唯一合法 emit 方是 lib/user-library/store.ts 的私有写入漏斗。
+// 其它模块只应该 on(...) 订阅 —— 见 names.ts 里关于单一 emit 源的说明。
+// ---------------------------------------------------------------------------
+export function emitDprUserLibraryChange(
+  target: EventTarget = document,
+  detail: DprUserLibraryChangeDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_USER_LIBRARY_CHANGE,
+    detail,
+    DPR_USER_LIBRARY_CHANGE_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprUserLibraryChange(
+  target: EventTarget = document,
+  handler: (detail: DprUserLibraryChangeDetail) => void,
+): () => void {
+  return on(target, DPR_USER_LIBRARY_CHANGE, handler);
 }

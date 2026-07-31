@@ -42,6 +42,16 @@ export const STORAGE_KEYS = {
   // docs/papers/。需要 GitHub PAT(同 saveToGitHub 路径),未配 PAT 时静默跳过。
   // 默认关:用户显式开启才动用户仓库,避免误推。
   autoSaveAnalyzerToGitHub: 'dpr_analyzer_auto_save_v1',
+  // 用户图书馆 — 星标 / 阅读状态 / 笔记 / 回收站元数据(Stage 1)。
+  // 实现在 lib/user-library/,不在 settings.ts —— 因为 lib/search 和 SSR 侧都要读它,
+  // 放 scripts/ 会造成 lib → scripts 的反向依赖。这里只登记 key 名,保证
+  // 全站 localStorage key 仍然只有这一个字典。
+  userLibrary: 'dpr_user_library_v1',
+  // 用户图书馆的 Gist id(Stage 2)。**必须与 gistId 分开**:
+  // .github/scripts/load_gist.py:150 取的是 gist 里"第一个 .json 文件",
+  // 不是按文件名找 dpr-config.json。把图书馆数据塞进同一个 gist,
+  // 每日 pipeline 有可能读到错误的配置源。
+  libraryGistId: 'dpr_library_gist_id_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 

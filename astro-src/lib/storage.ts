@@ -34,6 +34,11 @@ export {
   clearAllUserTags,
   pullUserTagsFromGist,
   pushUserTagsToGist,
+  // 隐藏论文 — lib/user-library/snapshot.ts 需要读它来组装快照。
+  // 真值仍归 scripts/settings.ts 所有,这里只开一个 lib 侧的读取通道。
+  loadHiddenPapers,
+  addHiddenPaper,
+  removeHiddenPaper,
 } from '../scripts/settings';
 
 export type { LLMConfig, GitHubRepoConfig, UserTag, UserTagMap, GistUserTagsResult } from '../scripts/settings';
