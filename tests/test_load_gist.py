@@ -175,3 +175,29 @@ class TestFilterPayloadForEnv:
         load_gist.filter_payload_for_env(payload)
         assert "hiddenPapers" not in payload
         assert payload["LLM_MODEL"] == "m"
+
+    def test_strips_user_library_doc(self):
+        """Stage 2 纵深防御:即使 userLibrary doc 路径跑进了 dpr-config.json,
+        字段(pop 后)也不应进 env。"""
+        user_lib_doc = {
+            "schemaVersion": 1,
+            "papers": {
+                "2607.00001": {"updatedAt": 100, "note": "very long note"},
+                "2607.00002": {"updatedAt": 200, "starred": True},
+            },
+        }
+        payload = {
+            "LLM_MODEL": "m",
+            "userLibrary": user_lib_doc,
+            "schemaVersion": 1,
+        }
+        load_gist.filter_payload_for_env(payload)
+        assert "userLibrary" not in payload
+        assert "schemaVersion" not in payload
+        assert payload["LLM_MODEL"] == "m"
+
+    def test_no_user_library_is_noop(self):
+        """空 payload 不应该被破坏。"""
+        payload = {"LLM_MODEL": "m"}
+        load_gist.filter_payload_for_env(payload)
+        assert payload == {"LLM_MODEL": "m"}

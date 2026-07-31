@@ -50,3 +50,16 @@ export {
   buildUserLibrarySnapshot,
   emptyUserLibrarySnapshot,
 } from './snapshot';
+
+export {
+  LIBRARY_GIST_FILENAME,
+  getLibraryGistId,
+  setLibraryGistId,
+  serializeUserLibrary,
+  deserializeUserLibrary,
+  mergeUserLibrary,
+  pullUserLibraryFromGist,
+  pushUserLibraryToGist,
+  syncUserLibraryFirstTime,
+  wipeAllUserLibraryRemote,
+} from './gist';

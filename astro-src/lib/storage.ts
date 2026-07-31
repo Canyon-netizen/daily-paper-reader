@@ -39,6 +39,8 @@ export {
   loadHiddenPapers,
   addHiddenPaper,
   removeHiddenPaper,
+  // Stage 2:用户图书馆 Gist 同步需要 GitHub token。
+  // 同 loadHiddenPapers 一致,只读 channel,不走 scripts → lib 反向。
 } from '../scripts/settings';
 
 export type { LLMConfig, GitHubRepoConfig, UserTag, UserTagMap, GistUserTagsResult } from '../scripts/settings';

@@ -74,7 +74,12 @@ def flatten_legacy_llm_section(payload: dict[str, Any]) -> None:
 # 注意与 flatten_legacy_llm_section 的区别:那段是 *展开* 嵌套对象,
 # 这段是 *丢弃* 字段(浏览器独占)。
 def filter_payload_for_env(payload: dict[str, Any]) -> None:
+    """Stage 2 纵深防御:即使将来用户图书馆误用了同一个 gist(dpr-config.json),
+    也不让浏览器侧的用户态数据(笔记 / 星标 / 阅读状态)被当成 config 写进
+    $GITHUB_ENV。这层是兜底,主防御是 lib/user-library/gist.ts 用独立 gist id。"""
     payload.pop("hiddenPapers", None)
+    payload.pop("userLibrary", None)
+    payload.pop("schemaVersion", None)  # 防止 userLibrary doc 整体作为 config 被写入
 
 
 # Keys we treat as secrets — their VALUES must never reach stdout or the env

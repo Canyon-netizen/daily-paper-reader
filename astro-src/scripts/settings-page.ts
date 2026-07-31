@@ -423,6 +423,21 @@ function init(): void {
   $<HTMLInputElement>('cfg-gist-id').addEventListener('input', debouncedGistId);
   $<HTMLButtonElement>('gist-sync-btn').addEventListener('click', syncToGist);
 
+  // --- 3.5 Library Gist 同步(Stage 2) ---
+  import('./user-library-bridge').then((m) => {
+    $<HTMLInputElement>('cfg-library-gist-id').value = m.getLibraryGistId();
+    $<HTMLButtonElement>('library-gist-push-btn').addEventListener('click', () => {
+      void m.syncLibraryPush($<HTMLInputElement>('library-gist-hint'), () => {
+        $<HTMLInputElement>('cfg-library-gist-id').value = m.getLibraryGistId();
+      });
+    });
+    $<HTMLButtonElement>('library-gist-pull-btn').addEventListener('click', () => {
+      void m.syncLibraryPull($<HTMLInputElement>('library-gist-hint'));
+    });
+  }).catch((e) => {
+    console.warn('[settings] library bridge failed to load', e);
+  });
+
   // --- 4. 主题 ---
   try { $<HTMLTextAreaElement>('cfg-topics').value = getTopicsText(); } catch { $<HTMLTextAreaElement>('cfg-topics').value = DEFAULT_TOPICS_TEXT; }
   refreshTopicsStatus();
