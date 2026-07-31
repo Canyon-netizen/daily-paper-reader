@@ -15,8 +15,19 @@
     pushUserTagsToGist,
     type UserTag,
   } from '../lib/user-tags';
+  import {
+    getUserPaperState,
+    hasUserNote,
+    isStarred,
+    toggleStar,
+    setReadingStatus,
+  } from '../lib/user-library';
+  import { onDprUserLibraryChange } from '../lib/events';
+  import { canonicalArxivId } from '../lib/arxiv';
   import { getGistToken, getGistId } from '../scripts/settings';
   import { showToast } from '../scripts/toast';
+  import { searchLibrary, renderModePill, renderDegradeBanner } from '../scripts/library-search';
+  import type { SearchResult } from '../lib/search/types';
 
   // ---------- 类型 ----------
   interface PaperListItemLite {
@@ -29,6 +40,7 @@
     tags?: string[];
     arxivId: string;
     slug: string;
+    canonicalArxivId?: string;
     // 可选:SSR 嵌入的轻量 tldr(若空,drawer 打开时再单独请求)
     tldr?: string;
     // 可选:缩略图 URL(已拼 base);给抽屉展示 first figure 用
@@ -82,6 +94,9 @@
     private drawerPaperId: string | null = null;
     private drawerUserTags: UserTag[] = [];
     private rowHeights = new Map<number, number>(); // index -> measured height
+    private notesEnabled = false;
+    private lastSearchResult: SearchResult | null = null;
+    private refreshSeq = 0;  // 串行化:旧 refresh 跑完才认新的,避免 out-of-order
 
     constructor(host: HTMLElement) {
       this.host = host;
@@ -96,7 +111,22 @@
       this.byId = new Map(this.papers.map((p) => [p.id, p]));
       this.buildTagFilter();
       this.bindUI();
-      this.refreshFilter();
+      void this.refreshFilter();
+      // 阅读态事件订阅 — rAF 合并多次写入,避免连续点击 star 时每条事件都触发 querySelectorAll。
+      let pending: ReadonlyArray<string> | null = null;
+      let rafId: number | null = null;
+      const flush = (): void => {
+        rafId = null;
+        if (pending) {
+          const ids = pending;
+          pending = null;
+          this.applyStateChange(ids);
+        }
+      };
+      onDprUserLibraryChange((detail) => {
+        pending = pending && pending.length ? [...pending, ...detail.ids] : detail.ids;
+        if (rafId === null) rafId = window.requestAnimationFrame(flush);
+      });
       // 启动时尝试从 Gist 拉一次用户标签(若 token + gistId 都配齐);
       // 远端合并到本地 union 去重 — 失败静默,本地状态不变。
       this.maybePullTagsFromGist();
@@ -182,7 +212,7 @@
         const t = btn.dataset.tag || '';
         btn.classList.toggle('is-active', t === tag);
       }
-      this.refreshFilter();
+      void this.refreshFilter();
     }
 
     // ---------- 搜索 + 过滤 ----------
@@ -193,7 +223,7 @@
         window.clearTimeout(timer);
         timer = window.setTimeout(() => {
           this.filterText = search.value.trim().toLowerCase();
-          this.refreshFilter();
+          void this.refreshFilter();
         }, 100);
       });
       // 抽屉关闭
@@ -213,30 +243,59 @@
       // 列表 viewport 滚动 → 触发虚拟滚动重算
       const viewport = this.qs<HTMLDivElement>('[data-papers-viewport]');
       viewport.addEventListener('scroll', () => this.renderVisibleRows());
+      // 「搜索我的笔记」开关(Stage 6):复选 toggle → 改 notesEnabled 然后 refreshFilter。
+      const notesToggle = this.host.querySelector<HTMLInputElement>(
+        '[data-papers-search-notes-toggle]',
+      );
+      if (notesToggle) {
+        notesToggle.checked = this.notesEnabled;
+        notesToggle.addEventListener('change', () => {
+          this.notesEnabled = notesToggle.checked;
+          if (this.filterText) void this.refreshFilter();
+        });
+      }
     }
 
-    private refreshFilter(): void {
+    private async refreshFilter(): Promise<void> {
       const q = this.filterText;
       const tag = this.filterTag;
-      this.filtered = this.papers.filter((p) => {
-        if (tag) {
-          const tags = p.tags || [];
-          if (!tags.includes(tag)) return false;
-        }
-        if (q) {
-          const hay = [
-            p.title || '',
-            p.title_zh || '',
-            p.tldr || '',
-          ].join(' ').toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      });
-      const meta = this.qs<HTMLDivElement>('[data-papers-toolbar-meta]');
-      const today = todayString();
-      const todayCount = this.filtered.filter((p) => p.date === today).length;
-      meta.textContent = `共 ${this.filtered.length} / ${this.papers.length} 篇 · 今日 ${todayCount}`;
+      const seq = ++this.refreshSeq;
+      // 1) tag 过滤先做(命中行确定)
+      let prefiltered = this.papers;
+      if (tag) prefiltered = prefiltered.filter((p) => (p.tags || []).includes(tag));
+
+      if (q) {
+        // Stage 5/6:跑 BM25 / substring
+        const notesSnapshot = this.notesEnabled ? this.collectNotesSnapshot() : undefined;
+        const result = await searchLibrary(q, { notesSnapshot });
+        if (seq !== this.refreshSeq) return;
+        this.lastSearchResult = result;
+        const orderedByRank = orderedByRankedIds(prefiltered, result, q);
+        this.filtered = orderedByRank;
+        // toolbar ui
+        const pill = this.host.querySelector<HTMLElement>('[data-papers-search-mode]');
+        if (pill) renderModePill(pill, result);
+        const banner = this.host.querySelector<HTMLElement>('[data-papers-search-degrade]');
+        if (banner) renderDegradeBanner(banner, result);
+      } else {
+        this.lastSearchResult = null;
+        // 无 query — 按 date desc 兜底排
+        this.filtered = prefiltered.slice().sort((a, b) => {
+          const av = a.date ? new Date(a.date).getTime() : 0;
+          const bv = b.date ? new Date(b.date).getTime() : 0;
+          return bv - av;
+        });
+        const emptyResult: SearchResult = {
+          hits: [],
+          mode: 'empty',
+          stats: { tookMs: 0, totalHits: 0, noteHits: 0, indexedDocs: 0, notesSearched: false },
+        };
+        const pill = this.host.querySelector<HTMLElement>('[data-papers-search-mode]');
+        if (pill) renderModePill(pill, emptyResult);
+        const banner = this.host.querySelector<HTMLElement>('[data-papers-search-degrade]');
+        if (banner) renderDegradeBanner(banner, emptyResult);
+      }
+      this.updateMetaLine();
       // 重置虚拟滚动
       this.rowHeights.clear();
       const spacer = this.qs<HTMLDivElement>('[data-papers-spacer]');
@@ -246,6 +305,37 @@
       const empty = this.qs<HTMLDivElement>('[data-papers-list-empty]');
       empty.hidden = this.filtered.length > 0;
       this.renderVisibleRows();
+    }
+
+    private collectNotesSnapshot(): ReadonlyMap<string, string> | undefined {
+      try {
+        // 动态 import 避免在 init 阶段阻塞 SSR 渲染。listWithNotes 只放 length>0 的。
+        // 内联实现一份 simplify 版,避免再深引 user-library snapshot 触发 SSR 路径。
+        const raw = localStorage.getItem('dpr_user_library_v1');
+        if (!raw) return undefined;
+        const doc = JSON.parse(raw);
+        const papers = doc?.papers;
+        if (!papers || typeof papers !== 'object') return undefined;
+        const out = new Map<string, string>();
+        for (const [cx, st] of Object.entries(papers)) {
+          const note = (st && (st as { note?: string }).note) || '';
+          if (note.trim()) out.set(cx, note);
+        }
+        return out.size ? out : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+
+    private updateMetaLine(): void {
+      const meta = this.qs<HTMLDivElement>('[data-papers-toolbar-meta]');
+      const today = todayString();
+      const todayCount = this.filtered.filter((p) => p.date === today).length;
+      const stats = this.lastSearchResult?.stats;
+      const noteBit = stats?.notesSearched
+        ? ` · 笔记+${this.lastSearchResult?.stats.noteHits || 0}`
+        : '';
+      meta.textContent = `共 ${this.filtered.length} / ${this.papers.length} 篇 · 今日 ${todayCount}${noteBit}`;
     }
 
     // ---------- 虚拟滚动 ----------
@@ -300,6 +390,11 @@
         node.style.top = `${offsets[i]}px`;
         node.style.height = `${this.rowHeights.get(i) ?? ROW_ESTIMATE}px`;
         node.dataset.paperId = p.id;
+        node.dataset.arxivId = p.arxivId || ' ';
+
+        // 阅读态控件行:星标 + 状态胶囊 + 笔记指示(行内 inline-flex,绝对不换行)
+        const stateRow = this.buildStateRow(p);
+        node.appendChild(stateRow);
 
         const title = document.createElement('div');
         title.className = 'papers-list-item-title';
@@ -329,13 +424,119 @@
 
         node.addEventListener('mouseenter', () => this.highlightListItem(p.id, true));
         node.addEventListener('mouseleave', () => this.highlightListItem(p.id, false));
-        node.addEventListener('click', () => this.openDrawer(p.id));
+        node.addEventListener('click', (ev) => {
+          // 点击星标 / 状态胶囊时不打开抽屉
+          const tgt = ev.target as HTMLElement;
+          if (tgt.closest('[data-list-state-btn]')) return;
+          this.openDrawer(p.id);
+        });
         spacer.appendChild(node);
 
         // 测量实际高度用于下一次渲染
         const measured = node.offsetHeight;
         if (measured > 0 && Math.abs(measured - (this.rowHeights.get(i) ?? ROW_ESTIMATE)) > 4) {
           this.rowHeights.set(i, measured);
+        }
+      }
+    }
+
+    /** 行内阅读态控件:⭐ + 状态胶囊 + 📝 笔记指示。事件走 user-library 漏斗,
+     *  监听 DPR_USER_LIBRARY_CHANGE 后只更新单行,不全表重绘。 */
+    private buildStateRow(p: PaperListItemLite): HTMLDivElement {
+      const row = document.createElement('div');
+      row.className = 'papers-list-item-state';
+
+      // 星标按钮
+      const star = document.createElement('button');
+      star.type = 'button';
+      star.className = 'papers-list-star';
+      star.dataset.listStateBtn = 'star';
+      star.dataset.arxivId = p.arxivId || ' ';
+      star.title = '星标这篇论文';
+      this.applyStarState(star, p.arxivId || '');
+      star.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (!p.arxivId) return;
+        const res = toggleStar(p.arxivId);
+        if (!res.ok) {
+          showToast(res.reason === 'quota' ? '本地存储已满,星标失败' : '星标失败', 'error');
+        }
+      });
+      row.appendChild(star);
+
+      // 状态胶囊 ○/◐/●
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'papers-list-status-chip';
+      chip.dataset.listStateBtn = 'status';
+      chip.dataset.arxivId = p.arxivId || ' ';
+      chip.title = '点击切换阅读状态(未读 → 在读 → 已读)';
+      this.applyStatusState(chip, p.arxivId || '');
+      chip.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (!p.arxivId) return;
+        const cur = getUserPaperState(p.arxivId)?.readingStatus ?? 'unread';
+        const next = cur === 'unread' ? 'reading' : cur === 'reading' ? 'read' : 'unread';
+        const res = setReadingStatus(p.arxivId, next);
+        if (!res.ok) {
+          showToast(res.reason === 'quota' ? '本地存储已满,状态保存失败' : '状态保存失败', 'error');
+        }
+      });
+      row.appendChild(chip);
+
+      // 笔记指示点(纯展示,无 click —— 笔记编辑在抽屉/详情页)
+      const note = document.createElement('span');
+      note.className = 'papers-list-note-dot';
+      note.dataset.listStateBtn = 'note';
+      note.title = '已写笔记';
+      note.textContent = '📝';
+      this.applyNoteState(note, p.arxivId || '');
+      row.appendChild(note);
+
+      return row;
+    }
+
+    private applyStarState(btn: HTMLButtonElement, rawId: string): void {
+      const on = rawId ? isStarred(rawId) : false;
+      btn.textContent = on ? '⭐' : '☆';
+      btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-pressed', String(on));
+    }
+
+    private applyStatusState(btn: HTMLButtonElement, rawId: string): void {
+      const s = rawId ? (getUserPaperState(rawId)?.readingStatus ?? 'unread') : 'unread';
+      const label = s === 'read' ? '●' : s === 'reading' ? '◐' : '○';
+      btn.textContent = label;
+      btn.classList.remove('is-unread', 'is-reading', 'is-read');
+      btn.classList.add(`is-${s}`);
+      btn.setAttribute('aria-label', `阅读状态:${s}`);
+    }
+
+    private applyNoteState(el: HTMLElement, rawId: string): void {
+      const on = rawId ? hasUserNote(rawId) : false;
+      el.classList.toggle('is-on', on);
+      el.hidden = !on;
+    }
+
+    /** 事件回调:对受影响的 paperId 列表,只重绘对应行(不全表重绘)。
+     *  通过 id → paper → row 的两步定位实现。 */
+    private applyStateChange(ids: ReadonlyArray<string>): void {
+      const affected = new Set(ids);
+      for (const id of affected) {
+        // events 传的是 canonicalArxivId;列表行 dataset.arxivId 是原始(带版本)id。
+        // 用 canonicalArxivId() 双向归一化。
+        const canonical = canonicalArxivId(id);
+        for (const node of this.qsa<HTMLDivElement>('.papers-list-item')) {
+          const rowCanon = canonicalArxivId(node.dataset.arxivId || '');
+          if (rowCanon && rowCanon === canonical) {
+            const arxivId = node.dataset.arxivId || '';
+            const star = node.querySelector<HTMLButtonElement>('[data-list-state-btn="star"]');
+            const chip = node.querySelector<HTMLButtonElement>('[data-list-state-btn="status"]');
+            const note = node.querySelector<HTMLSpanElement>('[data-list-state-btn="note"]');
+            if (star) this.applyStarState(star, arxivId);
+            if (chip) this.applyStatusState(chip, arxivId);
+            if (note) this.applyNoteState(note, arxivId);
+          }
         }
       }
     }
@@ -507,4 +708,57 @@
     document.addEventListener('DOMContentLoaded', bootstrap);
   } else {
     bootstrap();
+  }
+
+  // ---------- free helpers ----------
+  /** 按 hits 顺序排命中项;未命中项按 date desc 兜底排到末尾。
+   *  hits 为空时回退纯 substring filter(plan 兼容设计:语料拉不到时 UI 不要变空)。 */
+  function orderedByRankedIds<T extends { canonicalArxivId?: string; arxivId: string; date?: string; title?: string; title_zh?: string; tldr?: string }>(
+    prefiltered: T[],
+    result: SearchResult,
+    query: string,
+  ): T[] {
+    if (!result.hits.length) {
+      // 0 命中 — substring fallback
+      const q = (query || '').toLowerCase();
+      if (!q) return prefiltered.slice().sort((a, b) => {
+        const av = a.date ? new Date(a.date).getTime() : 0;
+        const bv = b.date ? new Date(b.date).getTime() : 0;
+        return bv - av;
+      });
+      return prefiltered
+        .filter((p) =>
+          ((p.title || '') + ' ' + (p.title_zh || '') + ' ' + (p.tldr || ''))
+            .toLowerCase()
+            .includes(q),
+        )
+        .sort((a, b) => {
+          const av = a.date ? new Date(a.date).getTime() : 0;
+          const bv = b.date ? new Date(b.date).getTime() : 0;
+          return bv - av;
+        });
+    }
+    const hitSet = new Set<T>();
+    const ordered: T[] = [];
+    for (const h of result.hits) {
+      const p = prefiltered.find(
+        (x) =>
+          (x.canonicalArxivId && x.canonicalArxivId === h.canonicalId) ||
+          canonicalArxivId(x.arxivId) === h.canonicalId,
+      );
+      if (p && !hitSet.has(p)) {
+        ordered.push(p);
+        hitSet.add(p);
+      }
+    }
+    const rest = prefiltered
+      .filter((p) => !hitSet.has(p))
+      .slice()
+      .sort((a, b) => {
+        const av = a.date ? new Date(a.date).getTime() : 0;
+        const bv = b.date ? new Date(b.date).getTime() : 0;
+        return bv - av;
+      });
+    ordered.push(...rest);
+    return ordered;
   }

@@ -52,6 +52,9 @@ export const STORAGE_KEYS = {
   // 不是按文件名找 dpr-config.json。把图书馆数据塞进同一个 gist,
   // 每日 pipeline 有可能读到错误的配置源。
   libraryGistId: 'dpr_library_gist_id_v1',
+  // 搜索偏好(Stage 5):笔记通道开关、degrade 接受过的 flag 等。
+  // 浏览器 localStorage,不上 Gist。
+  searchPrefs: 'dpr_search_prefs_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 

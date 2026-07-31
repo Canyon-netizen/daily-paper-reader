@@ -2,6 +2,7 @@
 // PaperLibrary - 左列表 + 右抽屉编辑标签。
 // 数据从 script#papers-data 注入(SSR 时序列化),客户端渲染。
 // 用户标签:localStorage 优先(key 'dpr_user_tags_v1'),Gist 同步由 user-tags.ts 内部处理。
+// Stage 5/6:toolbar 加搜索模式胶囊 + 「搜索我的笔记」开关 + 降级横幅。
 ---
 
 <div class="papers-library-host" data-papers-library>
@@ -11,13 +12,33 @@
       <input
         type="search"
         class="papers-search"
-        placeholder="搜索标题 / 中文标题 / TLDR..."
+        placeholder="搜索标题 / 中文标题 / TLDR / 笔记..."
         data-papers-search
         autocomplete="off"
         spellcheck="false"
       />
       <div class="papers-tag-filter" data-papers-tag-filter role="group" aria-label="按标签筛选"></div>
+      <div class="papers-search-controls">
+        <label class="papers-search-notes-toggle">
+          <input type="checkbox" data-papers-search-notes-toggle />
+          <span>搜索我的笔记</span>
+        </label>
+        <span
+          class="papers-search-mode mode-empty"
+          data-papers-search-mode
+          data-mode="empty"
+          data-degraded="0"
+          aria-live="polite"
+        >未搜索</span>
+      </div>
+      <div
+        class="papers-search-degrade"
+        data-papers-search-degrade
+        data-degrade-reason=" "
+        hidden
+      ></div>
       <div class="papers-toolbar-meta" data-papers-toolbar-meta></div>
+      <div class="papers-toolbar-export" data-papers-toolbar-export></div>
     </div>
     <div class="papers-list-viewport" data-papers-viewport>
       <div class="papers-list-spacer" data-papers-spacer>
