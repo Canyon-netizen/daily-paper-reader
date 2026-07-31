@@ -27,15 +27,14 @@ export function debounce<T extends (...args: any[]) => void>(fn: T, ms: number):
  * Strip the trailing `vN` version suffix from an arXiv ID, returning a
  * canonical (version-less) identifier used for de-duplication.
  *
- * Two name variants existed in the wild — `canonicalArxivId` in
- * `scripts/paper-analyzer.ts:2153` and `canonicalId` in
- * `scripts/topic-search.ts:221`. Both share the same body; this is the
- * single canonical version. Call sites in this PR update the import name
- * to `canonicalArxivId` for consistency with the rest of the codebase.
+ * Stage 0: the body moved to `lib/arxiv.ts` — that module is now the SINGLE
+ * canonical implementation, because user-library storage keys depend on it and
+ * three near-identical copies (here, `scripts/paper-fulltext.ts:170`, and
+ * `canonicalId` in `scripts/topic-search.ts`) made "canonical" implementation-
+ * defined. This re-export keeps every existing `import { canonicalArxivId }
+ * from '../lib/dom-utils'` call site working unchanged.
  */
-export function canonicalArxivId(id: string): string {
-  return id.replace(/v\d+$/i, '');
-}
+export { canonicalArxivId } from './arxiv';
 
 /**
  * HTML-escape a string for safe injection into innerHTML / template

@@ -20,6 +20,7 @@ import { buildCategories, type Categories } from './taxonomies';
 import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
 import { applyPaperFilters } from './paper-filter';
+import { canonicalArxivId } from './arxiv';
 import {
   parseFrontmatter,
   parseFigureList,
@@ -28,6 +29,21 @@ import {
 
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
 const PREFIX_SKIP_DIR = '_';
+
+/** 从论文 id / 文件名里提取 arXiv id。
+ *
+ *  Stage 0 修复:旧正则是 `/(\d{4}\.\d{4,5}v\d+)/` —— **要求** `vN` 后缀,导致
+ *  文件名不带版本号的论文(实测 5 篇,如 `2305.16291-voyager.md`)`arxivId`
+ *  变成空串。空串会连带触发两个下游问题:
+ *    1. 这些论文无法被收藏 / 记笔记(用户态以 arxivId 为键);
+ *    2. `data-arxiv-id=""` 在 Astro 里渲染成无值 boolean 属性
+ *       (见记忆 feedback_astro_empty_data_attr)。
+ *  现在版本号是可选捕获组,两种文件名都能正确提取。 */
+function extractArxivIdFromPaperId(id: string): string {
+  const m = id.match(/(\d{4}\.\d{4,5})(v\d+)?/);
+  if (!m) return '';
+  return m[2] ? `${m[1]}${m[2]}` : m[1];
+}
 
 export interface PaperFrontmatter {
   title?: string;
@@ -64,7 +80,12 @@ export interface Paper extends PaperFrontmatter {
   slug: string;
   yearMonth: string;
   day: string;
+  /** arXiv id,**带**版本号(若文件名里有),如 `2607.00483v2`。用于展示 / 拉 PDF。 */
   arxivId: string;
+  /** arXiv id,**永不带**版本号,如 `2607.00483`。
+   *  这是用户态(星标/阅读状态/笔记/回收站)的唯一 storage key —— 见 lib/arxiv.ts
+   *  的 canonicalArxivId 注释里的不变式说明。 */
+  canonicalArxivId: string;
   body: string;
   isBroken: boolean;
   brokenReason?: string;
@@ -97,21 +118,20 @@ export async function readPaper(id: string): Promise<Paper | null> {
   }
   const parsed = parseFrontmatter(text);
   if ('error' in parsed) {
-    const arxivMatch = id.match(/(\d{4}\.\d{4,5}v\d+)/);
-    const arxivId = arxivMatch ? arxivMatch[1] : '';
+    const arxivId = extractArxivIdFromPaperId(id);
     return {
       id,
       slug: id.split('/').pop() || '',
       yearMonth: arxivId ? arxivId.split('.')[0] : '',
       day: '',
       arxivId,
+      canonicalArxivId: canonicalArxivId(arxivId),
       body: '',
       isBroken: true,
       brokenReason: parsed.error,
     };
   }
-  const arxivMatch = id.match(/(\d{4}\.\d{4,5}v\d+)/);
-  const arxivId = arxivMatch ? arxivMatch[1] : '';
+  const arxivId = extractArxivIdFromPaperId(id);
   const yearMonth = arxivId ? arxivId.split('.')[0] : '';
   const day = parsed.data.date && typeof parsed.data.date === 'string'
     ? parsed.data.date.slice(8, 10)
@@ -130,6 +150,7 @@ export async function readPaper(id: string): Promise<Paper | null> {
     yearMonth,
     day,
     arxivId,
+    canonicalArxivId: canonicalArxivId(arxivId),
     venue,
     accepted,
     categories,
@@ -170,7 +191,10 @@ export interface PaperListItem {
   slug: string;
   yearMonth: string;
   day: string;
+  /** 带版本号(若有),用于展示 / PDF 链接。 */
   arxivId: string;
+  /** 永不带版本号 —— 用户态 storage key。见 lib/arxiv.ts:canonicalArxivId。 */
+  canonicalArxivId: string;
   source?: string;
   venue?: string;
   accepted?: boolean;
@@ -284,6 +308,7 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       yearMonth: p.yearMonth,
       day: p.day,
       arxivId: p.arxivId,
+      canonicalArxivId: p.canonicalArxivId,
       source: p.source,
       venue: p.venue,
       accepted: p.accepted,
@@ -346,4 +371,4 @@ export { renderMarkdownBody } from './markdown';
 export type { RenderOptions } from './markdown';
 // Re-export arxiv dedup for callers that previously imported from paper.ts.
 // 内部 listPapers 已经间接使用,但保留向后兼容以免打破 scripts/* 等外部 import。
-export { dedupByCanonicalArxivId } from './arxiv';
+export { dedupByCanonicalArxivId, canonicalArxivId } from './arxiv';

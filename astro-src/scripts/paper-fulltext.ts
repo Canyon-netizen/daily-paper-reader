@@ -167,9 +167,11 @@ function isCacheValid(rec: CacheRecord, currentVersion: string): boolean {
 // arXiv id 处理 — 版本号剥离 + 提取
 // ============================================================================
 
-export function canonicalArxivId(id: string): string {
-  return id.replace(/v\d+$/i, '').trim();
-}
+/** Stage 0: 实现下沉到 lib/arxiv.ts(全站唯一),这里 re-export 保持
+ *  既有 `import { canonicalArxivId } from './paper-fulltext'` 调用方不变。
+ *  旧本地实现带 `.trim()`,新实现同样 trim,行为等价。 */
+export { canonicalArxivId } from '../lib/arxiv';
+import { canonicalArxivId } from '../lib/arxiv';
 
 export function arxivIdVersion(id: string): string {
   const m = id.match(/v(\d+)$/i);

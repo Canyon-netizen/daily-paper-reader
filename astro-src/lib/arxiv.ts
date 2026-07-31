@@ -14,6 +14,25 @@ export function getCanonicalArxivId(arxivId: string): string {
 }
 
 /**
+ * canonical arXiv id —— **全站唯一实现**(Stage 0)。
+ *
+ * 不变式:用户态(星标 / 阅读状态 / 笔记 / 回收站)一律以本函数的输出为键,
+ * 永不含 `vN`。理由:`maintain-version-refresh` 会把论文从 v1 刷到 v2,若以带
+ * 版本的 id 为键,用户笔记会在刷新后全部孤立(Polaris 用 dedup_key 解决同一问题)。
+ *
+ * 与 getCanonicalArxivId 的区别:后者要求整串严格匹配 `YYMM.NNNNN vN`,不匹配
+ * 就原样返回;本函数只做"剥掉尾部版本号"这一件事,对 `2305.16291`(本来就无
+ * 版本号)和 `2607.00483v2` 都给出正确结果,因此适合当 storage key 的归一器。
+ *
+ * 历史:曾有三份近似副本 —— `lib/dom-utils.ts:36`、`scripts/paper-fulltext.ts:170`
+ * (带 .trim())、`scripts/topic-search.ts` 的 `canonicalId`。三份副本会让
+ * "canonical" 变成实现定义,那两处现已改为 re-export 本函数。
+ */
+export function canonicalArxivId(id: string): string {
+  return String(id || '').trim().replace(/v\d+$/i, '');
+}
+
+/**
  * 从 arXiv ID 中提取版本号
  * 例如: "2607.00483v2" → 2
  * 非标准格式返回 0
