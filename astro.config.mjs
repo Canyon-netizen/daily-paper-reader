@@ -49,7 +49,9 @@ if (process.env.NODE_ENV !== 'production' && !process.env.GH_TOKEN) {
  */
 function diskExternalForClientOnly() {
   const matcher = (id) =>
-    /paper-disk\.mjs$/.test(id) || /taxonomies-disk\.mjs$/.test(id);
+    /paper-disk\.mjs$/.test(id)
+    || /taxonomies-disk\.mjs$/.test(id)
+    || /concept-disk\.mjs$/.test(id);
   return {
     name: 'disk-external-client-only',
     config(config, { isSsrBuild }) {

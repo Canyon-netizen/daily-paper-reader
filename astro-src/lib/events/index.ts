@@ -23,6 +23,8 @@ export {
   PAPER_SELECTION_CHANGE,
   DPR_USER_LIBRARY_CHANGE,
   DPR_USER_LIBRARY_CHANGE_LEGACY,
+  DPR_BULK_SELECTION_CHANGE,
+  DPR_BULK_SELECTION_CHANGE_LEGACY,
 } from './names';
 
 export type {
@@ -33,6 +35,7 @@ export type {
   PaperSelectionChangeDetail,
   DprUserLibraryChangeDetail,
   DprUserLibraryChangeReason,
+  DprBulkSelectionChangeDetail,
 } from './types';
 
 export {
@@ -46,4 +49,6 @@ export {
   onPaperSelectionChange,
   emitDprUserLibraryChange,
   onDprUserLibraryChange,
+  emitDprBulkSelectionChange,
+  onDprBulkSelectionChange,
 } from './bus';

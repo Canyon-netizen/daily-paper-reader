@@ -34,6 +34,12 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
   let inList = false;
   let listItems: string[] = [];
 
+  // 行内选项(wikilink resolver)。每行 renderInline 都拿到同一个对象,
+  // chat 模式不传 wikilink resolver → 原文里 `[[name]]` 字面量保留。
+  const inlineOpts = isChat
+    ? {}
+    : { wikilinkResolver: opts.wikilinkResolver };
+
   const flushList = (): void => {
     if (listItems.length) {
       out.push(`<ul>${listItems.map((li) => `<li>${li}</li>`).join('')}</ul>`);
@@ -50,19 +56,19 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
     if (line.startsWith('### ')) {
       flushList();
       const tag = isChat ? 'h5' : 'h3';
-      out.push(`<${tag}>${renderInline(line.slice(4))}</${tag}>`);
+      out.push(`<${tag}>${renderInline(line.slice(4), inlineOpts)}</${tag}>`);
       continue;
     }
     if (line.startsWith('## ')) {
       flushList();
       const tag = isChat ? 'h4' : 'h2';
-      out.push(`<${tag}>${renderInline(line.slice(3))}</${tag}>`);
+      out.push(`<${tag}>${renderInline(line.slice(3), inlineOpts)}</${tag}>`);
       continue;
     }
     if (line.startsWith('# ')) {
       flushList();
       const tag = isChat ? 'h3' : 'h1';
-      out.push(`<${tag}>${renderInline(line.slice(2))}</${tag}>`);
+      out.push(`<${tag}>${renderInline(line.slice(2), inlineOpts)}</${tag}>`);
       continue;
     }
 
@@ -127,7 +133,7 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
     const listMatch = line.match(/^\s*[-*]\s+(.*)$/);
     if (listMatch) {
       inList = true;
-      listItems.push(renderInline(listMatch[1]));
+      listItems.push(renderInline(listMatch[1], inlineOpts));
       continue;
     }
 
@@ -139,7 +145,7 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
 
     // 普通段落行
     flushList();
-    out.push(`<p>${renderInline(line)}</p>`);
+    out.push(`<p>${renderInline(line, inlineOpts)}</p>`);
   }
 
   flushList();

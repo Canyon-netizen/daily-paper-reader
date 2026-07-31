@@ -50,3 +50,18 @@ export const PAPER_SELECTION_CHANGE = 'paper-selection-change';
 export const DPR_USER_LIBRARY_CHANGE = 'dpr:user-library-change';
 /** @deprecated 兼容风格一致性而提供的 legacy 别名(与本文件其它事件同构)。 */
 export const DPR_USER_LIBRARY_CHANGE_LEGACY = 'dpr-user-library-change';
+
+/** 工作台批量选择(Stage 10) — detail: DprBulkSelectionChangeDetail { ids }
+ *
+ *  与 scripts/paper-selection.ts 的 PAPER_SELECTION_CHANGE(dpr_paper_selection_v1,
+ *  软上限 8,**落盘**)刻意分开:
+ *   - 这是工作台的批量操作(批量隐藏 / 批量加标签 / 批量导出),单页面会话内
+ *     有效,**不**走 topic 种子,刷新即丢;硬上限 100 防误操作。
+ *   - topic 种子上限 8 是为 LLM 上下文设计,批量 100 是为 UI 列表设计,
+ *     混用会把 /topic/?from=selection 的拼 context 路径撞爆。
+ *
+ *  **单一 emit 源**:只有 scripts/paper-bulk.ts 会发。listener 直接调
+ *  getBulkSelection() 读真值,不要从 detail.ids 还原。 */
+export const DPR_BULK_SELECTION_CHANGE = 'dpr:bulk-selection-change';
+/** @deprecated 兼容旧 listener,新代码用 DPR_BULK_SELECTION_CHANGE。 */
+export const DPR_BULK_SELECTION_CHANGE_LEGACY = 'dpr-bulk-selection-change';

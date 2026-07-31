@@ -45,3 +45,10 @@ export interface DprUserLibraryChangeDetail {
   ids: string[];
   reason: DprUserLibraryChangeReason;
 }
+
+/** 工作台批量选择的 detail。**只放 id 集合** —— listener 自己调
+ *  getBulkSelection() 读真值;detail 是"有变化"的提示,不是状态源。 */
+export interface DprBulkSelectionChangeDetail {
+  /** 当前批量选择中的 canonical arXiv id 集合(顺序=加入顺序)。 */
+  ids: string[];
+}

@@ -21,6 +21,7 @@ import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
 import { applyPaperFilters } from './paper-filter';
 import { canonicalArxivId } from './arxiv';
+import type { ConceptRef } from './types/concept';
 import {
   parseFrontmatter,
   parseFigureList,
@@ -72,6 +73,8 @@ export interface PaperFrontmatter {
   method?: string;
   result?: string;
   conclusion?: string;
+  /** Stage 9 概念层 — 从 frontmatter `concepts:` 段解析,概念页 / chips / wikilink 三处共用的真值来源。 */
+  concepts?: ConceptRef[];
   [key: string]: unknown;
 }
 

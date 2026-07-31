@@ -1,44 +1,35 @@
 ---
+// pages/wiki/concepts/[slug].astro
+// 概念详情页 — 真值来自 docs/papers/ frontmatter 的 concepts 段。
+//
+// 关键设计(plan §阶段 9):
+//   - 真数据源是 git-tracked 的 docs/papers/*.md frontmatter,不依赖 gitignored 的 wiki/concepts/
+//   - SSR-only:getStaticPaths 直接走 buildConceptIndex(),不走 _index.json / _graph.json
+//   - 一个 slug 一页,含 display_name / category / paper_count / 引用论文列表 / 共现相关概念
+//   - 渲染走纯 HTML,无客户端脚本
+
 import BaseLayout from '../../../layouts/BaseLayout.astro';
 import Navbar from '../../../components/Navbar.astro';
 import Footer from '../../../components/Footer.astro';
+import {
+  getAllConceptSlugs,
+  getConceptDetail,
+} from '../../../lib/concept-detail';
 import '../../../styles/page.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
 export async function getStaticPaths() {
-  // v1 简化：构建期从 public/wiki/concepts/_index.json 读取(若不存在 → 仅 slug 占位)。
-  // 真实生产用法由 build script 跑前生成 _index.json。
-  const fs = await import('node:fs/promises');
-  const path = await import('node:path');
-  const indexPath = path.join(process.cwd(), 'public', 'wiki', 'concepts', '_index.json');
-  try {
-    const raw = await fs.readFile(indexPath, 'utf-8');
-    const data = JSON.parse(raw);
-    const list = Array.isArray(data) ? data : (data?.concepts || []);
-    return list
-      .filter((c: any) => c && c.slug)
-      .map((c: any) => ({ params: { slug: String(c.slug) } }));
-  } catch {
-    return [];
-  }
+  const slugs = await getAllConceptSlugs();
+  return slugs.map((slug) => ({ params: { slug } }));
 }
 
 const { slug } = Astro.params;
 const slugStr = String(slug || '').trim();
-
-let meta: any = null;
-try {
-  const fs = await import('node:fs/promises');
-  const path = await import('node:path');
-  const indexPath = path.join(process.cwd(), 'public', 'wiki', 'concepts', '_index.json');
-  const raw = await fs.readFile(indexPath, 'utf-8');
-  const data = JSON.parse(raw);
-  const list: any[] = Array.isArray(data) ? data : data?.concepts || [];
-  meta = list.find((c) => c.slug === slugStr) || null;
-} catch {
-  meta = null;
-}
+const detail = slugStr ? await getConceptDetail(slugStr) : null;
+const meta = detail?.entry || null;
+const related = detail?.related || [];
+const citingPapers = detail?.citingPapers || [];
 ---
 
 <BaseLayout
@@ -57,27 +48,174 @@ try {
           <div class="concept-detail-meta">
             <span class="concept-cat">{meta.category}</span>
             <span class="concept-count">{meta.paper_count} 篇论文</span>
+            {meta.novelty > 0 && (
+              <span class="concept-stat">novelty {meta.novelty.toFixed(2)}</span>
+            )}
+            {meta.centrality > 0 && (
+              <span class="concept-stat">centrality {meta.centrality.toFixed(2)}</span>
+            )}
           </div>
+          <p class="concept-detail-slug">
+            slug: <code>{meta.slug}</code>
+          </p>
         </header>
+
         <section class="concept-detail-body">
-          <p class="concept-detail-empty">
-            详细"出处 / 反向链接 / 邻近概念"段落由 <code>wiki/concepts/{slugStr}.md</code> 渲染。
-            在 Obsidian / VSCode 直接打开该 md 即可看到自动生成的反向链接段。
-          </p>
-          <p class="concept-detail-empty">
-            当前 Astro 站点未做 md → HTML 实时渲染;开启 <code>concepts.enabled</code> 后,
-            <code>wiki/concepts/{slugStr}.md</code> 会被 <code>src/concept_index.py rebuild()</code> 创建。
-          </p>
+          {citingPapers.length > 0 && (
+            <article class="concept-detail-section">
+              <h2>引用本概念的论文({citingPapers.length})</h2>
+              <ul class="concept-paper-list">
+                {citingPapers.map((p) => (
+                  <li class="concept-paper-item">
+                    <a class="concept-paper-link" href={base + '/papers/' + p.id.split('/').pop()}>
+                      {p.title_zh || p.title || p.id}
+                    </a>
+                    {p.title_zh && p.title && (
+                      <span class="concept-paper-en">{p.title}</span>
+                    )}
+                    {p.canonicalArxivId && (
+                      <span class="concept-paper-arxiv">arXiv {p.canonicalArxivId}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </article>
+          )}
+
+          {related.length > 0 && (
+            <article class="concept-detail-section">
+              <h2>共现相关概念</h2>
+              <p class="concept-detail-empty">
+                在引用本概念的论文中,与下列概念同时出现的次数(降序)。
+              </p>
+              <div class="concept-related-chips">
+                {related.slice(0, 30).map((r) => (
+                  <a class="concept-related-chip" href={base + '/wiki/concepts/' + r.slug}>
+                    <span class="concept-related-name">{r.display_name}</span>
+                    <span class="concept-related-meta">
+                      {r.category} · 共现 {r.co_count}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            </article>
+          )}
+
+          {citingPapers.length === 0 && related.length === 0 && (
+            <p class="concept-detail-empty">
+              该概念暂无引用论文或共现概念。检查 frontmatter <code>concepts</code> 段是否正确填入。
+            </p>
+          )}
         </section>
       </>
     ) : (
       <section class="concept-detail-empty">
         <h1>概念「{slugStr}」暂未收录</h1>
-        <p>该 slug 不在 <code>_index.json</code> 中。检查 <code>wiki/concepts/{slugStr}.md</code> 是否存在,
-          或在 <code>config.yaml</code> 启用 <code>concepts.enabled</code> 后重跑 Step 6 + <code>concept_index.rebuild()</code>。</p>
+        <p>该 slug 不在 <code>docs/papers/</code> frontmatter 的 <code>concepts</code> 段中。
+          新增论文或修正 slug 后,重跑 <code>bun run build</code> 即可。</p>
       </section>
     )}
   </main>
 
   <Footer />
 </BaseLayout>
+
+<style>
+  .concept-detail-head h1 {
+    font-size: 2rem;
+    margin: 0.5rem 0 0.25rem;
+  }
+  .concept-detail-meta {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+  }
+  .concept-cat,
+  .concept-count,
+  .concept-stat {
+    font-size: 0.85rem;
+    padding: 0.2em 0.6em;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--fg-muted);
+  }
+  .concept-stat {
+    font-family: var(--font-mono);
+    color: var(--accent);
+  }
+  .concept-detail-slug {
+    margin-top: 0.5rem;
+    color: var(--fg-subtle);
+    font-size: 0.85rem;
+  }
+  .concept-detail-slug code {
+    font-family: var(--font-mono);
+    background: var(--code-bg);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+  }
+  .concept-detail-section {
+    margin: 2rem 0;
+  }
+  .concept-detail-section h2 {
+    font-size: 1.25rem;
+    margin: 0 0 0.75rem;
+    color: var(--fg);
+  }
+  .concept-paper-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .concept-paper-item {
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .concept-paper-link {
+    color: var(--accent);
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .concept-paper-link:hover { text-decoration: underline; }
+  .concept-paper-en {
+    color: var(--fg-muted);
+    font-size: 0.85rem;
+    font-style: italic;
+  }
+  .concept-paper-arxiv {
+    color: var(--fg-subtle);
+    font-size: 0.75rem;
+    font-family: var(--font-mono);
+  }
+  .concept-related-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .concept-related-chip {
+    display: inline-flex;
+    flex-direction: column;
+    padding: 0.45rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    text-decoration: none;
+    color: var(--fg);
+    transition: border-color 150ms, background 150ms;
+  }
+  .concept-related-chip:hover {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .concept-related-name { font-weight: 500; }
+  .concept-related-meta {
+    font-size: 0.7rem;
+    color: var(--fg-subtle);
+    font-family: var(--font-mono);
+  }
+</style>

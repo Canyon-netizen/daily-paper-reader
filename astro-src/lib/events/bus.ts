@@ -29,12 +29,15 @@ import {
   PAPER_SELECTION_CHANGE,
   DPR_USER_LIBRARY_CHANGE,
   DPR_USER_LIBRARY_CHANGE_LEGACY,
+  DPR_BULK_SELECTION_CHANGE,
+  DPR_BULK_SELECTION_CHANGE_LEGACY,
 } from './names';
 import type {
   DprThemeChangeDetail,
   DprTopicFilterChangeDetail,
   DprDailyDayOpenedDetail,
   DprUserLibraryChangeDetail,
+  DprBulkSelectionChangeDetail,
 } from './types';
 
 /** 通用 emit helper。target 默认 document。
@@ -158,4 +161,29 @@ export function onDprUserLibraryChange(
   handler: (detail: DprUserLibraryChangeDetail) => void,
 ): () => void {
   return on(target, DPR_USER_LIBRARY_CHANGE, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:bulk-selection-change (legacy alias: dpr-bulk-selection-change)
+//
+// 唯一合法 emit 方是 scripts/paper-bulk.ts。与 user-library 同模式:
+// 写入漏斗单点,其它模块只 on(...)。
+// ---------------------------------------------------------------------------
+export function emitDprBulkSelectionChange(
+  target: EventTarget = document,
+  detail: DprBulkSelectionChangeDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_BULK_SELECTION_CHANGE,
+    detail,
+    DPR_BULK_SELECTION_CHANGE_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprBulkSelectionChange(
+  target: EventTarget = document,
+  handler: (detail: DprBulkSelectionChangeDetail) => void,
+): () => void {
+  return on(target, DPR_BULK_SELECTION_CHANGE, handler);
 }

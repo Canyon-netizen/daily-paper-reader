@@ -12,6 +12,8 @@
 
 import yaml from 'js-yaml';
 import { buildCategories, type Categories } from '../taxonomies';
+import type { ConceptRef } from '../types/concept';
+import { normalizeConceptList } from '../concepts-index';
 import type { PaperFrontmatter, FigureEntry } from '../paper';
 
 /** 把 figures_json 字符串(JSON-encoded 或 inline 数组)规范化成 FigureEntry[]。 */
@@ -97,6 +99,7 @@ export function parseFrontmatter(
       ...raw,
       date: normalizeDate(raw.date),
       categories: normalizeCategories(raw.categories),
+      concepts: normalizeConceptList(raw.concepts),
     };
     return { data, body: m[2] };
   } catch (e) {

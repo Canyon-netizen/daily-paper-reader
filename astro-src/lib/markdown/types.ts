@@ -2,6 +2,8 @@
 // 图 entries 在 lib/paper 里也有同名 FigureEntry 类型(完整 8 字段),
 // 这里收窄到 markdown 真正用到的字段,避免 markdown 反向依赖 lib/paper。
 
+import type { WikilinkTarget } from './inline';
+
 export interface FigureEntry {
   url: string;
   caption?: string;
@@ -21,4 +23,7 @@ export interface RenderOptions {
   base?: string;
   /** 聊天模式:跳过 figures 区块、标题整体下移两级。论文页面调用时不要设。 */
   chat?: boolean;
+  /** wikilink resolver:Map<name|alias|slug, target>。无 → 不渲染 wikilink。
+   *  paper-chat 的 {chat:true} 路径**不传**,无法保证 index 可用 → 原文里 `[[name]]` 字面量保留。 */
+  wikilinkResolver?: Map<string, WikilinkTarget>;
 }

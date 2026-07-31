@@ -10,6 +10,7 @@ import Navbar from '../../components/Navbar.astro';
 import { readPaper, listAllPaperIds, flattenCategories } from '../../lib/paper';
 import { renderMarkdownBody, renderTitleHtml } from '../../lib/markdown';
 import { paperPlainTitle } from '../../lib/title';
+import { buildConceptIndex, buildWikilinkResolver } from '../../lib/concepts-index';
 import '../../styles/paper-chat.css';
 import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
@@ -107,6 +108,22 @@ const tabTitle = plainZh || plainEn || id;
                 </div>
                 {!paper.isBroken && (
                   <div class="paper-header-actions">
+                    <button
+                      type="button"
+                      id="paper-star-btn"
+                      class="paper-star-btn"
+                      hidden
+                      aria-label="星标这篇论文"
+                      data-arxiv-id={paper.canonicalArxivId || ' '}
+                    >☆</button>
+                    <button
+                      type="button"
+                      id="paper-status-btn"
+                      class="paper-status-btn"
+                      hidden
+                      aria-label="切换阅读状态"
+                      data-arxiv-id={paper.canonicalArxivId || ' '}
+                    >○</button>
                     <button
                       type="button"
                       id="paper-select-btn"
@@ -230,6 +247,35 @@ const tabTitle = plainZh || plainEn || id;
               </div>
             </section>
           )}
+
+          {/* 我的笔记 — 失焦防抖保存,本地 + Gist 同步。
+              broken 论文 / 404 不挂(notes editor 内部 null-safe 退出)。 */}
+          {paper && !paper.isBroken && (
+            <section class="paper-notes" id="paper-notes-section" aria-label="我的笔记">
+              <div class="container">
+                <div class="paper-notes-header">
+                  <h3>📓 我的笔记</h3>
+                  <div class="paper-notes-toolbar">
+                    <button
+                      type="button"
+                      id="paper-notes-toggle"
+                      class="paper-notes-toggle"
+                      aria-label="切换预览/编辑"
+                    >👁 预览</button>
+                    <span class="paper-notes-saved" id="paper-notes-saved" hidden>已保存 ✓</span>
+                  </div>
+                </div>
+                <textarea
+                  id="paper-notes-textarea"
+                  class="paper-notes-textarea"
+                  placeholder="在这里记录你的想法 / 关键句 / 实验思路…(失焦或停顿 1s 后自动保存)"
+                  spellcheck="true"
+                  rows="8"
+                ></textarea>
+                <div id="paper-notes-preview" class="paper-notes-preview markdown" hidden></div>
+              </div>
+            </section>
+          )}
         </article>
       )
     ) : (
@@ -259,6 +305,7 @@ const tabTitle = plainZh || plainEn || id;
         data-conclusion={paper.conclusion || ''}
         data-tags={flattenCategories(paper.categories).join(',')}
         data-arxiv-id={paper.arxivId || ' '}
+        data-canonical-arxiv-id={paper.canonicalArxivId || ' '}
         data-fulltext={fulltextInline || ' '}
         data-txt-name={`${arxiv}.txt`}
       ></section>
@@ -271,6 +318,7 @@ const tabTitle = plainZh || plainEn || id;
         id="paper-hide"
         aria-hidden="true"
         data-arxiv-id={paper.arxivId || ' '}
+        data-canonical-arxiv-id={paper.canonicalArxivId || ' '}
       ></section>
     )}
 
@@ -281,6 +329,7 @@ const tabTitle = plainZh || plainEn || id;
         id="paper-select"
         aria-hidden="true"
         data-arxiv-id={paper.arxivId || ' '}
+        data-canonical-arxiv-id={paper.canonicalArxivId || ' '}
         data-title={plainEn || paper.title || ''}
         data-title-zh={plainZh || paper.title_zh || ''}
         data-tldr={paper.tldr || ''}
@@ -291,6 +340,16 @@ const tabTitle = plainZh || plainEn || id;
         data-tags={flattenCategories(paper.categories).join(',')}
       ></section>
     )}
+
+    {/* 阅读态(星标 / 状态)按钮数据载体 — 同 section-as-data-carrier 模式。
+        script 在 .paper-header-actions 里找按钮,与数据载体解耦。 */}
+    {paper && !paper.isBroken && (
+      <section
+        id="paper-library-state"
+        aria-hidden="true"
+        data-canonical-arxiv-id={paper.canonicalArxivId || ' '}
+      ></section>
+    )}
   </main>
 
   <script>
@@ -298,6 +357,8 @@ const tabTitle = plainZh || plainEn || id;
     import '../../scripts/paper-figures.ts';
     import '../../scripts/paper-hide.ts';
     import '../../scripts/paper-selection.ts';
+    import '../../scripts/paper-notes-editor.ts';
+    import '../../scripts/paper-library-detail.ts';
 
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
     // 如果当前 mode 是 fulltext,paper-chat.ts 内部会触发 loadFulltextSkeleton。
@@ -403,6 +464,105 @@ const tabTitle = plainZh || plainEn || id;
     margin-right: 0.3em;
   }
   .pdf-link { color: var(--accent); font-family: var(--font-mono); font-size: 0.9rem; }
+
+  /* 阅读态(星标 / 状态)按钮 — 沿用 .paper-hide-btn 的视觉权重 */
+  .paper-star-btn,
+  .paper-status-btn {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition: all 150ms;
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+  }
+  .paper-star-btn:hover,
+  .paper-status-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--fg);
+    border-color: var(--accent);
+  }
+  .paper-star-btn.is-on {
+    color: #f59e0b;
+    border-color: #f59e0b;
+    background: color-mix(in srgb, #f59e0b 8%, var(--bg));
+  }
+  .paper-status-btn.is-reading {
+    color: #1d4ed8;
+    border-color: #93c5fd;
+  }
+  .paper-status-btn.is-read {
+    color: #15803d;
+    border-color: #86efac;
+  }
+
+  /* 论文笔记区 */
+  .paper-notes {
+    padding: 1.5rem 0 3rem;
+    border-top: 1px solid var(--border);
+  }
+  .paper-notes h3 { margin-top: 0; color: var(--fg); }
+  .paper-notes-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 0.5rem;
+  }
+  .paper-notes-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .paper-notes-toggle {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition: all 150ms;
+  }
+  .paper-notes-toggle:hover { border-color: var(--accent); color: var(--accent); }
+  .paper-notes-toggle.is-preview { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .paper-notes-saved {
+    font-size: 0.78rem;
+    color: #15803d;
+    font-family: var(--font-mono);
+  }
+  .paper-notes-textarea {
+    width: 100%;
+    min-height: 180px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+    font-family: var(--font-sans);
+    font-size: 0.95rem;
+    line-height: 1.55;
+    background: var(--bg);
+    color: var(--fg);
+    resize: vertical;
+    box-sizing: border-box;
+    transition: border-color 150ms;
+  }
+  .paper-notes-textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .paper-notes-preview {
+    min-height: 180px;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg);
+  }
+  .paper-notes-preview p { margin: 0 0 0.8em; line-height: 1.6; }
+  .paper-notes-preview code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 3px; }
 
   /* categories 4-dim — 每组有自己的调色板 */
   .meta-row--categories { flex-wrap: wrap; row-gap: 0.4rem; }
