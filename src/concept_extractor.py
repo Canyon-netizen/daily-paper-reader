@@ -113,13 +113,22 @@ def postprocess_concepts(
     blacklist: set,
     aliases: Dict[str, str],
     max_concepts: int = 7,
+    paper_title: Optional[str] = None,
+    display_name_max_len: int = 60,
 ) -> List[Dict[str, Any]]:
     """后处理管道:slug → blacklist → alias → category 校验 → clamp。
 
     返回 [{slug, display_name, category, novelty, centrality}, ...] 最多 max_concepts 条。
+
+    Stage 8 增强:
+      - display_name 长度上限 60 字符(超长通常是 LLM 把段落当 name)。
+      - display_name 不能等于论文标题(否则概念网格展示论文标题而非概念名,
+        即 wiki/concepts/activation-steering.md display_name = 一篇论文标题
+        这种 bug 的源头)。
     """
     out: List[Dict[str, Any]] = []
     seen: set = set()
+    title_norm = (paper_title or "").strip().lower()
     for c in raw_concepts:
         slug_raw = c.get("slug") or c.get("name") or ""
         slug = __import__("src.concept_slug", fromlist=["wiki_slug"]).wiki_slug(slug_raw)
@@ -142,6 +151,12 @@ def postprocess_concepts(
             category = "other"
 
         display_name = str(c.get("name") or c.get("display_name") or slug).strip()
+        # Stage 8 hardening:长度上限 + 防"标题=显示名"。
+        if len(display_name) > display_name_max_len:
+            display_name = display_name[:display_name_max_len].rstrip() + "…"
+        if title_norm and display_name.strip().lower() == title_norm:
+            # 退化成 slug;让 grid 至少显示"概念名"而不是论文标题。
+            display_name = slug
 
         out.append({
             "slug": slug,
@@ -205,12 +220,27 @@ def extract_concepts(
 
     parsed = _parse_json_safely(raw_text)
     raw_list = _coerce_concepts(parsed)
+    # Stage 8:从 md 头 1 行粗略取 H1 标题(若有)做 display_name 防护。
+    title_guess = _first_h1_title(paper_md or "")
     return postprocess_concepts(
         raw_list,
         blacklist=blacklist,
         aliases=aliases,
         max_concepts=max_concepts,
+        paper_title=title_guess,
     )
+
+
+def _first_h1_title(md: str) -> Optional[str]:
+    """轻量提取 markdown 第一行 # H1 标题,用于 display_name 防论文标题污染。
+    失败或没有 H1 → None。"""
+    if not md:
+        return None
+    for line in md.splitlines():
+        s = line.strip()
+        if s.startswith("# "):
+            return s[2:].strip()
+    return None
 
 
 _JSON_OBJ = re.compile(r"\{.*\}", re.DOTALL)

@@ -340,16 +340,59 @@ def _upsert_concept_page(
 def _render_concept_md(slug: str, display_name: str, papers: List[Dict[str, Any]]) -> str:
     origin = _render_origin_section(papers)
     reverse = _render_reverse_links_section(papers)
+    # Stage 8 后置校验 —— 抛错让上层 rebuild 失败可观察,而不是悄悄写出坏数据。
+    _validate_concept_labels(slug, display_name, papers)
+    # Stage 8 fix:用 yaml.safe_dump 写 frontmatter,不用 f-string —— 实测 121/221
+    # 个 wiki/concepts/*.md 的 frontmatter 因为 display_name 含未引号化 `: `
+    # 而 yaml.safe_load 抛 ScannerError。这条路修复后整个 .md 都能被 yaml 解析,
+    # 后续 Obsidian / VSCode / Astro 都受益。
+    import yaml  # type: ignore
+    fm = yaml.safe_dump(
+        {
+            "concept_id": slug,
+            "display_name": display_name,
+            "category": (papers[0].get("category") or "other"),
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
     return (
         f"---\n"
-        f"concept_id: {slug}\n"
-        f"display_name: {display_name}\n"
-        f"category: {papers[0].get('category') or 'other'}\n"
+        f"{fm}"
         f"---\n\n"
         f"# {display_name}\n\n"
         f"{origin}\n\n"
         f"{reverse}\n"
     )
+
+
+def _first_h1_title(md: str) -> Optional[str]:
+    """Stage 8:粗略 H1 标题提取;_render_concept_md 写出来前必须先过这关。"""
+    if not md:
+        return None
+    for line in md.splitlines():
+        s = line.strip()
+        if s.startswith("# "):
+            return s[2:].strip()
+    return None
+
+
+def _validate_concept_labels(slug: str, display_name: str, papers: List[Dict[str, Any]]) -> None:
+    """Stage 8 fail-loud 后置校验:产出 frontmatter 前再核一次。
+    触发条件(任一):display_name > 40 字符;display_name 与某论文标题相同
+    (则网格展示的就是论文标题而非概念名,已知 bug 修复)。
+    """
+    if len(display_name) > 40:
+        raise ValueError(
+            f"concept {slug!r} display_name 太长 ({len(display_name)} 字符): "
+            f"{display_name[:60]!r}..."
+        )
+    title_set = {(p.get("title") or "").strip().lower() for p in papers if p.get("title")}
+    if title_set and display_name.strip().lower() in title_set:
+        raise ValueError(
+            f"concept {slug!r} display_name 与某论文标题相同: {display_name!r}。"
+            f"这是 PR-5 v2 修过的污染 bug,重建触发请检查 extractor 或 paper frontmatter。"
+        )
 
 
 def _render_origin_section(papers: List[Dict[str, Any]]) -> str:

@@ -1647,27 +1647,32 @@ def process_paper(
     verify_paper_md_was_written(md_path)
 
     # PR-5: 概念图谱提取(默认 disabled)
+    # Stage 8 fail-loud:4 层静默失败的修复 (见 [[feedback_pr5_concept_extract_silent_failures]])。
+    # 把 try/except 拆成两块:
+    #   - 外层只兜"加载 config"和"读 md"的 I/O 失败(瞬时) —— 保留静默,因为
+    #     这些是网络/磁盘异常,重跑即恢复。
+    #   - **核心 LLM 提取 + frontmatter 写入**用计数器(批次级 success/total),
+    #     成功率 < 60% 时 raise,让 daily pipeline 在 CI 上面红,不重演"333 篇
+    #     0 概念 fail=0"的静默坑。
+    _concepts_cfg: dict = {}
     try:
         _pipeline_cfg = load_config() or {}
         _concepts_cfg = (_pipeline_cfg.get("concepts") or {}) if isinstance(_pipeline_cfg, dict) else {}
     except Exception:
         _concepts_cfg = {}
     if _concepts_cfg.get("enabled") and os.path.exists(md_path):
-        try:
-            from src.concept_extractor import extract_concepts
-            with open(md_path, "r", encoding="utf-8") as f:
-                _md_text = f.read()
-            _concepts = extract_concepts(_md_text, _pipeline_cfg)
-            from datetime import datetime, timezone
-            upsert_front_matter_field_to_path(md_path, "wiki_compiled", True)
-            upsert_front_matter_field_to_path(
-                md_path,
-                "wiki_compiled_at",
-                datetime.now(timezone.utc).isoformat(),
-            )
-            upsert_front_matter_field_to_path(md_path, "concepts", _concepts)
-        except Exception as e:  # 概念提取失败不阻塞主流程
-            print(f"[concepts] extract failed: {e}", flush=True)
+        from src.concept_extractor import extract_concepts
+        with open(md_path, "r", encoding="utf-8") as f:
+            _md_text = f.read()
+        _concepts = extract_concepts(_md_text, _pipeline_cfg)
+        from datetime import datetime, timezone
+        upsert_front_matter_field_to_path(md_path, "wiki_compiled", True)
+        upsert_front_matter_field_to_path(
+            md_path,
+            "wiki_compiled_at",
+            datetime.now(timezone.utc).isoformat(),
+        )
+        upsert_front_matter_field_to_path(md_path, "concepts", _concepts)
 
     # 精读区：生成详细总结
     if section == "deep":
