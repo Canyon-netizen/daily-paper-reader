@@ -6,6 +6,64 @@
  */
 
 /* =====================================================================
+ * Stage 7 —— "内容相似论文"卡(论文详情页)。
+ * 标题 + meta + 列表,简洁布局;不抢主内容。
+ * ===================================================================== */
+.paper-related-card {
+  margin: 2rem 0;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+}
+.paper-related-card .paper-related-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.paper-related-card .paper-related-meta {
+  margin: 0 0 0.85rem;
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+}
+.paper-related-card .paper-related-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.paper-related-card .paper-related-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px dashed var(--border);
+}
+.paper-related-card .paper-related-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.paper-related-card .paper-related-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+  word-break: break-word;
+}
+.paper-related-card .paper-related-link:hover {
+  text-decoration: underline;
+}
+.paper-related-card .paper-related-meta-item {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* =====================================================================
  * 页面容器 — 全屏高度,navbar 之下占满
  * ===================================================================== */
 .papers-page {

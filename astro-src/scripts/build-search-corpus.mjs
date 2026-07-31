@@ -1,5 +1,5 @@
 // astro-src/scripts/build-search-corpus.mjs
-// Build public/search-corpus.json — browser BM25 source-of-truth.
+// Build public/search-corpus.json + public/paper-relations.json.
 //
 // 设计要点:
 //   - 跟 scripts/build-arxiv-index.mjs 风格同构 —— 用 ID_RE 过滤天然跳过
@@ -13,15 +13,19 @@
 // 走法:  node astro-src/scripts/build-search-corpus.mjs
 //     或: bun astro-src/scripts/build-search-corpus.mjs
 //
-// 输出: public/search-corpus.json (Stage 5 验收 ≤ 600 KB gz)
+// 输出:
+//   public/search-corpus.json   (Stage 5;浏览器 BM25 源)
+//   public/paper-relations.json (Stage 7;论文详情页"内容相似"卡的源)
 
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import matter from 'gray-matter';
 
 const ROOT = process.cwd();
 const DOCS_DIR = join(ROOT, 'docs');
 const OUT_CORPUS = join(ROOT, 'public', 'search-corpus.json');
+const OUT_RELATIONS = join(ROOT, 'public', 'paper-relations.json');
 
 // 与 build-arxiv-index.mjs 同步 —— 不能两份正则在版本约定上漂。
 const ID_RE = /^(\d{4}\.\d{4,5}(?:v\d+)?)(?:[.-]|$)/;
@@ -114,7 +118,7 @@ function conceptsToNames(d) {
   return out;
 }
 
-function main() {
+async function main() {
   const startedAt = Date.now();
   const files = walk(DOCS_DIR);
   if (!files.length) {
@@ -200,6 +204,32 @@ function main() {
   if (rows.length && rows.length < 5) {
     console.log(`  sample cx: ${rows.slice(0, 5).map((r) => r.cx).join(', ')}`);
   }
+
+  // Stage 7 —— 同一份 walk 多产出 paper-relations.json。
+  // 数学下沉到 astro-src/lib/paper-relations/core.mjs,这里动态 import
+  // (避免 Vite 把它拖进客户端 chunk)。
+  await writePaperRelations(rows, startedAt);
+}
+
+async function writePaperRelations(rows, startedAt) {
+  const core = await import(pathToFileURL(join(ROOT, 'astro-src', 'lib', 'paper-relations', 'core.mjs')).href);
+  // 构造 relations 算法输入:{ id, g, t, z, l }。
+  const relRows = rows.map((r) => ({ id: r.i, g: r.g, t: r.t, z: r.z, l: r.l }));
+  const rel = core.computeRelations(relRows, { topK: 8, minWeight: 0 });
+  const artifact = {
+    v: 1,
+    algorithm: 'hybrid',
+    generatedAt: new Date().toISOString(),
+    ids: rel.ids,
+    edges: rel.edges,
+  };
+  writeFileSync(OUT_RELATIONS, JSON.stringify(artifact));
+  let edgeCount = 0;
+  for (const arr of Object.values(rel.edges)) edgeCount += arr.length;
+  console.log(
+    `[paper-relations] ids=${rel.ids.length} edges=${edgeCount} ` +
+    `topK=8 -> public/paper-relations.json`,
+  );
 }
 
 main();

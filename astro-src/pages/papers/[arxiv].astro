@@ -14,6 +14,7 @@ import { buildConceptIndex, buildWikilinkResolver } from '../../lib/concepts-ind
 import '../../styles/paper-chat.css';
 import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
+import '../../styles/papers.css';
 
 // 全文 inline 上限。超过这个大小(原始 utf-8 字节计)就不内联,让客户端走 fetch /papers/{id}.txt。
 // 200KB 原文 base64 后 ~270KB 进 HTML,论文单页就这样大了;能覆盖绝大多数 arXiv 短文(< 30 页),
@@ -350,6 +351,22 @@ const tabTitle = plainZh || plainEn || id;
         data-canonical-arxiv-id={paper.canonicalArxivId || ' '}
       ></section>
     )}
+
+    {/* Stage 7 —— "内容相似论文"卡。客户端 paper-related.ts 拉 paper-relations.json,
+        按 data-arxiv-id 命中,渲染 ≤8 条。inline ~30 行渲染,不另开脚本文件。 */}
+    {paper && !paper.isBroken && (
+      <section
+        id="paper-related"
+        class="paper-related-card"
+        data-canonical-arxiv-id={paper.canonicalArxivId || ' '}
+        data-relations-url="/paper-relations.json"
+        hidden
+      >
+        <h3 class="paper-related-title">内容相似论文</h3>
+        <p class="paper-related-meta">基于分类 jaccard + 标题/摘要 tf-idf · 仅按文本相似,非引用关系</p>
+        <ul class="paper-related-list" data-paper-related-list></ul>
+      </section>
+    )}
   </main>
 
   <script>
@@ -359,6 +376,7 @@ const tabTitle = plainZh || plainEn || id;
     import '../../scripts/paper-selection.ts';
     import '../../scripts/paper-notes-editor.ts';
     import '../../scripts/paper-library-detail.ts';
+    import '../../scripts/paper-related.ts';
 
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
     // 如果当前 mode 是 fulltext,paper-chat.ts 内部会触发 loadFulltextSkeleton。
