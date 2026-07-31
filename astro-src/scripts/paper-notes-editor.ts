@@ -18,6 +18,7 @@ import {
   getUserNote,
   setUserNote,
 } from '../lib/user-library';
+import { onDprUserLibraryChange } from '../lib/events';
 import { showToast } from './toast';
 
 function init(): void {
@@ -96,6 +97,17 @@ function init(): void {
       saved.hidden = true;
     }, 1500);
   }
+
+  // 跨 tab / Gist pull 同步后刷新 textarea。如果当前正在编辑,不要打断用户;
+  // 为了简单,只在 textarea 没聚焦时同步值。
+  const off = onDprUserLibraryChange(window, (detail) => {
+    if (!detail.ids.includes(canonicalId)) return;
+    if (document.activeElement === textarea) return;
+    const cur = getUserNote(canonicalId);
+    if (textarea.value !== cur) textarea.value = cur;
+  });
+  // 不主动 off —— 页面卸载时 GC 回收。
+  void off;
 }
 
 try {

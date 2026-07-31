@@ -18,6 +18,7 @@ import {
   toggleStar,
   setReadingStatus,
 } from '../lib/user-library';
+import { onDprUserLibraryChange } from '../lib/events';
 import { showToast } from './toast';
 
 function applyStar(btn: HTMLButtonElement, canonicalId: string): void {
@@ -72,15 +73,21 @@ function init(): void {
     }
   });
 
-  // 跨 tab / Gist pull 同步后刷新按钮状态 —— 通过 StorageEvent 兜底,
-  // 主路径由 store.ts 里的 DPR_USER_LIBRARY_CHANGE 事件承担。bus.ts 已经双发 legacy alias,
-  // 这里只 listen legacy 名就够(避免重复订阅)。
+  // 跨 tab / Gist pull 同步:主路径由 DPR_USER_LIBRARY_CHANGE 事件承担,
+  // bus.ts 已经双发 legacy alias。storage 事件作为兜底(防止某些浏览器
+  // 自定义事件未被捕获)。
+  const off = onDprUserLibraryChange(window, (detail) => {
+    if (!detail.ids.includes(canonicalId)) return;
+    applyStar(starBtn, canonicalId);
+    applyStatus(statusBtn, canonicalId);
+  });
   window.addEventListener('storage', (ev) => {
     if (!ev.key || ev.key === 'dpr_user_library_v1') {
       applyStar(starBtn, canonicalId);
       applyStatus(statusBtn, canonicalId);
     }
   });
+  void off;
 }
 
 try {
