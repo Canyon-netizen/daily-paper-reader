@@ -1,0 +1,58 @@
+---
+// PaperWorkbenchTabs.astro — /papers/ 工作台顶部 tab 导航(Stage 10)。
+//
+// 设计:
+//   - 三个 tab:论文(默认 / 当前 /papers/ 列表) | 概念(/concepts/) | 回收站(纯客户端列表)
+//   - "回收站"tab 的内容由 PaperWorkbenchTrash 子组件客户端渲染;
+//     SSR 不读 localStorage,所以只挂容器 + 数据交给 client script。
+//   - 当前 tab 由 hash 决定('#wb=trash'),刷新保 tab;
+//
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '') || '';
+const papersHref = base + '/papers/';
+const conceptsHref = base + '/concepts/';
+---
+
+<nav class="papers-workbench-tabs" data-papers-workbench-tabs aria-label="工作台标签">
+  <a
+    class="papers-workbench-tab"
+    data-wb-tab="papers"
+    href={papersHref}
+    aria-current="page"
+  >📚 论文</a>
+  <a
+    class="papers-workbench-tab"
+    data-wb-tab="concepts"
+    href={conceptsHref}
+  >🧠 概念</a>
+  <button
+    type="button"
+    class="papers-workbench-tab"
+    data-wb-tab="trash"
+    data-wb-trash-toggle
+    aria-pressed="false"
+  >🗑 回收站</button>
+</nav>
+
+<!-- 回收站面板:挂在 tabs 之下,默认 hidden;客户端脚本按 hash / 按钮 toggle -->
+<section
+  class="papers-workbench-trash"
+  data-papers-workbench-trash
+  hidden
+  aria-label="回收站"
+>
+  <header class="papers-workbench-trash-header">
+    <h3 class="papers-workbench-trash-title">回收站</h3>
+    <p class="papers-workbench-trash-hint">
+      已隐藏的论文(<code>softDelete</code>)在这里可恢复 / 彻底删除。
+      回收站状态独立于本地 <code>dpr_hidden_papers_v1</code> 兼容层。
+    </p>
+  </header>
+  <div class="papers-workbench-trash-list" data-papers-workbench-trash-list></div>
+  <p class="papers-workbench-trash-empty" data-papers-workbench-trash-empty hidden>
+    回收站为空。
+  </p>
+</section>
+
+<script>
+  import '../scripts/paper-workbench-tabs';
+</script>

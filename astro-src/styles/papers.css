@@ -240,6 +240,45 @@
   background: var(--tag-bg);
   color: var(--tag-fg);
 }
+
+/* 行内阅读态控件 — ⭐ / ○◐● / 📝,与 title 同行的紧凑横向 strip */
+.papers-list-item-state {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+.papers-list-star,
+.papers-list-status-chip {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 0.2rem;
+  font-size: 0.95rem;
+  line-height: 1;
+  color: var(--fg-subtle);
+  transition: transform 120ms, color 120ms;
+}
+.papers-list-star:hover,
+.papers-list-status-chip:hover { transform: scale(1.15); }
+.papers-list-star.is-on { color: #f59e0b; }
+.papers-list-status-chip.is-unread { color: var(--fg-subtle); }
+.papers-list-status-chip.is-reading { color: #1d4ed8; }
+.papers-list-status-chip.is-read { color: #15803d; }
+.papers-list-note-dot {
+  font-size: 0.82rem;
+  margin-left: 0.1rem;
+  opacity: 0.85;
+  cursor: help;
+}
+.papers-list-note-dot[hidden] { display: none; }
+
+/* 工具栏导出 dropdown 容器(Stage 11 挂载位) */
+.papers-toolbar-export {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
 .papers-list-empty {
   padding: 2rem 1rem;
   text-align: center;

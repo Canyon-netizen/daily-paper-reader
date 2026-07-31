@@ -1,0 +1,112 @@
+---
+// PaperWorkbenchFilter.astro — /papers/ 工作台筛选面板(Stage 10)。
+//
+// 七个字段:作者 / 会议 / 年份范围 / 星标 / 阅读状态 / 有笔记 / 用户标签。
+// 全部由 paper-library-filter-bridge.ts 编码进 #f=... hash,刷新复原。
+// SSR 不计算具体可用值(venue 列表 / kind 列表 / year 范围需要客户端 paper 集),
+// 这些下拉由 client script 在 mount 时根据 #papers-data 动态填充。
+---
+<aside class="papers-workbench-filter" data-papers-workbench-filter aria-label="筛选">
+  <header class="papers-workbench-filter-header">
+    <h4 class="papers-workbench-filter-title">筛选</h4>
+    <button
+      type="button"
+      class="papers-workbench-filter-clear"
+      data-wb-filter-clear
+      hidden
+      aria-label="清空所有筛选"
+    >清空</button>
+  </header>
+
+  <label class="papers-workbench-filter-row">
+    <span class="papers-workbench-filter-label">作者</span>
+    <input
+      type="search"
+      class="papers-workbench-filter-input"
+      data-wb-filter="author"
+      placeholder="作者名子串..."
+      autocomplete="off"
+      spellcheck="false"
+    />
+  </label>
+
+  <label class="papers-workbench-filter-row">
+    <span class="papers-workbench-filter-label">会议 / Venue</span>
+    <select class="papers-workbench-filter-input" data-wb-filter="venue">
+      <option value="">全部</option>
+      <!-- 由 client script 从 #papers-data 注入 -->
+    </select>
+  </label>
+
+  <fieldset class="papers-workbench-filter-row papers-workbench-filter-range">
+    <legend class="papers-workbench-filter-label">年份</legend>
+    <input
+      type="number"
+      class="papers-workbench-filter-input papers-workbench-filter-input--num"
+      data-wb-filter="yearFrom"
+      placeholder="起始"
+      min="1990"
+      max="2100"
+      step="1"
+    />
+    <span class="papers-workbench-filter-range-sep">–</span>
+    <input
+      type="number"
+      class="papers-workbench-filter-input papers-workbench-filter-input--num"
+      data-wb-filter="yearTo"
+      placeholder="结束"
+      min="1990"
+      max="2100"
+      step="1"
+    />
+  </fieldset>
+
+  <label class="papers-workbench-filter-row papers-workbench-filter-checkbox">
+    <input type="checkbox" data-wb-filter="starred" />
+    <span>只看星标</span>
+  </label>
+
+  <label class="papers-workbench-filter-row papers-workbench-filter-checkbox">
+    <input type="checkbox" data-wb-filter="hasNote" />
+    <span>有笔记</span>
+  </label>
+
+  <label class="papers-workbench-filter-row">
+    <span class="papers-workbench-filter-label">阅读状态</span>
+    <select class="papers-workbench-filter-input" data-wb-filter="readingStatus">
+      <option value="">全部</option>
+      <option value="unread">未读</option>
+      <option value="reading">在读</option>
+      <option value="read">已读</option>
+    </select>
+  </label>
+
+  <fieldset class="papers-workbench-filter-row">
+    <legend class="papers-workbench-filter-label">用户标签</legend>
+    <select class="papers-workbench-filter-input" data-wb-filter="userTagKind">
+      <option value="">不限 kind</option>
+    </select>
+    <input
+      type="text"
+      class="papers-workbench-filter-input"
+      data-wb-filter="userTagLabel"
+      placeholder="label 子串..."
+      autocomplete="off"
+      spellcheck="false"
+    />
+  </fieldset>
+
+  <div class="papers-workbench-filter-share" data-wb-filter-share hidden>
+    <button
+      type="button"
+      class="papers-workbench-filter-share-btn"
+      data-wb-filter-share-btn
+      aria-label="复制当前筛选链接"
+    >📎 复制筛选链接</button>
+    <span class="papers-workbench-filter-share-toast" data-wb-filter-share-toast hidden>已复制</span>
+  </div>
+</aside>
+
+<script>
+  import '../scripts/paper-workbench-filter';
+</script>

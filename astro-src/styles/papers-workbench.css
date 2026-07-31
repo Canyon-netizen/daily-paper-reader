@@ -1,0 +1,389 @@
+/* papers-workbench.css — /papers/ 工作台(Stage 10)
+ * - tab 导航:论文 | 概念 | 回收站
+ * - 筛选面板:7 维(作者 / venue / 年份 / 星标 / 阅读状态 / 有笔记 / 用户标签)
+ * - 回收站面板:列表 + 恢复 / 彻底删除按钮
+ * - 视觉密度对齐 memory feedback_topic_report_density:维度内层 elevated 底色,
+ *   正文段落用低对比底色,避免大块瓷砖感。
+ */
+
+/* ==========================================================================
+ * 工作台 body — 横向 flex 容纳筛选面板 + 论文列表
+ * ========================================================================== */
+.papers-workbench-body {
+  display: flex;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.papers-workbench-body > .papers-library-host {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ==========================================================================
+ * Tabs
+ * ========================================================================== */
+.papers-workbench-tabs {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.4rem 1rem 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.papers-workbench-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-md, 8px) var(--radius-md, 8px) 0 0;
+  cursor: pointer;
+  text-decoration: none;
+  transition: color 0.15s, background 0.15s;
+}
+
+.papers-workbench-tab:hover {
+  color: var(--fg);
+  background: var(--bg-muted);
+}
+
+.papers-workbench-tab[aria-current='page'],
+.papers-workbench-tab[aria-pressed='true'] {
+  color: var(--fg);
+  background: var(--bg);
+  border-color: var(--border);
+  position: relative;
+  z-index: 1;
+}
+
+.papers-workbench-tab[aria-current='page']::after,
+.papers-workbench-tab[aria-pressed='true']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent, #3b82f6);
+}
+
+/* ==========================================================================
+ * Filter panel
+ * ========================================================================== */
+.papers-workbench-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.85rem 0.9rem;
+  border-right: 1px solid var(--border);
+  background: var(--bg-muted);
+  width: 240px;
+  min-width: 240px;
+  flex: 0 0 240px;
+  align-self: stretch;
+  overflow-y: auto;
+}
+
+.papers-workbench-filter-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.papers-workbench-filter-title {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+
+.papers-workbench-filter-clear {
+  font-size: 0.78rem;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg);
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.papers-workbench-filter-clear:hover {
+  color: var(--fg);
+}
+
+.papers-workbench-filter-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.papers-workbench-filter-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--fg-subtle);
+  padding: 0;
+}
+
+.papers-workbench-filter-input {
+  width: 100%;
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.32rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+.papers-workbench-filter-input:focus {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: -1px;
+}
+
+.papers-workbench-filter-input--num {
+  width: 4.5rem;
+  flex: 0 0 4.5rem;
+}
+
+.papers-workbench-filter-range {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.papers-workbench-filter-range-sep {
+  color: var(--fg-subtle);
+  font-weight: 700;
+}
+
+.papers-workbench-filter-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--fg);
+}
+
+.papers-workbench-filter-checkbox input {
+  margin: 0;
+}
+
+.papers-workbench-filter-share {
+  margin-top: 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.papers-workbench-filter-share-btn {
+  font-size: 0.78rem;
+  padding: 0.32rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.papers-workbench-filter-share-btn:hover {
+  background: var(--bg-muted);
+}
+
+.papers-workbench-filter-share-toast {
+  font-size: 0.75rem;
+  color: var(--accent, #3b82f6);
+}
+
+/* ==========================================================================
+ * Trash panel
+ * ========================================================================== */
+.papers-workbench-trash {
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  padding: 0.9rem 1.1rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.papers-workbench-trash-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.papers-workbench-trash-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.papers-workbench-trash-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+}
+
+.papers-workbench-trash-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0.5rem;
+}
+
+.papers-workbench-trash-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg-muted);
+  font-size: 0.85rem;
+}
+
+.papers-workbench-trash-row-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.papers-workbench-trash-row-meta {
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+}
+
+.papers-workbench-trash-row-actions {
+  display: flex;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
+
+.papers-workbench-trash-row-btn {
+  font-size: 0.78rem;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.papers-workbench-trash-row-btn--danger {
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+
+.papers-workbench-trash-row-btn:hover {
+  background: var(--bg-elevated);
+}
+
+.papers-workbench-trash-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+
+/* ==========================================================================
+ * Bulk action bar(列表底部) — 与 paper-selection-bar 风格保持接近但独立 id,
+ * 避免样式互相污染。Stage 10 引入。
+ * ========================================================================== */
+.papers-bulk-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  z-index: 50;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 8px);
+  padding: 0.55rem 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.15);
+  font-size: 0.85rem;
+}
+
+.papers-bulk-bar-count {
+  font-weight: 700;
+}
+
+.papers-bulk-bar-btn {
+  font-size: 0.82rem;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md, 6px);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.papers-bulk-bar-btn:hover {
+  background: var(--bg-muted);
+}
+
+.papers-bulk-bar-btn--danger {
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+
+.papers-bulk-bar-warn {
+  font-size: 0.75rem;
+  color: #b45309;
+}
+
+[data-wb-list-bulk-mode] .papers-list-item {
+  padding-left: 2rem;
+  position: relative;
+}
+
+[data-wb-list-bulk-mode] .papers-list-item::before {
+  content: '';
+  position: absolute;
+  left: 0.55rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+}
+
+[data-wb-list-bulk-mode] .papers-list-item[data-bulk-selected='true']::before {
+  background: var(--accent, #3b82f6);
+  border-color: var(--accent, #3b82f6);
+}
+
+/* ==========================================================================
+ * 响应式:<900px 折叠筛选面板为顶部 drawer
+ * ========================================================================== */
+@media (max-width: 900px) {
+  .papers-workbench-filter {
+    width: 100%;
+    min-width: 0;
+    flex: 0 0 auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
