@@ -438,6 +438,13 @@ function init(): void {
     console.warn('[settings] library bridge failed to load', e);
   });
 
+  // --- 3.6 导出(Stage 11) ---
+  import('./export-bridge').then((m) => {
+    m.initExportButtons();
+  }).catch((e) => {
+    console.warn('[settings] export bridge failed to load', e);
+  });
+
   // --- 4. 主题 ---
   try { $<HTMLTextAreaElement>('cfg-topics').value = getTopicsText(); } catch { $<HTMLTextAreaElement>('cfg-topics').value = DEFAULT_TOPICS_TEXT; }
   refreshTopicsStatus();
