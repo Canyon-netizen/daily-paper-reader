@@ -64,6 +64,61 @@
 }
 
 /* =====================================================================
+ * Stage 12 —— 全文高亮(段落级 mark + 浮动按钮 + 顶部 bar)
+ * 极简 v1:无颜色 / 无 page,等 PDF reader 接入时再扩字段
+ * ===================================================================== */
+.paper-hl {
+  background: linear-gradient(transparent 60%, rgba(255, 235, 130, 0.55) 60%);
+  cursor: pointer;
+  padding: 0 1px;
+  border-radius: 0;
+}
+.paper-hl:hover {
+  background: linear-gradient(transparent 60%, rgba(255, 220, 100, 0.75) 60%);
+}
+.paper-hl-pick {
+  background: var(--accent);
+  color: white;
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 0.82rem;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.paper-hl-pick:hover {
+  background: var(--accent-hover);
+}
+.paper-hl-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.85rem;
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.paper-hl-bar .paper-hl-count {
+  font-family: var(--font-mono);
+}
+.paper-hl-bar .paper-hl-clear {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.paper-hl-bar .paper-hl-clear:hover {
+  color: var(--accent);
+}
+
+/* =====================================================================
  * 页面容器 — 全屏高度,navbar 之下占满
  * ===================================================================== */
 .papers-page {
