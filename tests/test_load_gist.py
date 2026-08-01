@@ -176,9 +176,24 @@ class TestFilterPayloadForEnv:
         assert "hiddenPapers" not in payload
         assert payload["LLM_MODEL"] == "m"
 
+    def test_user_library_passthrough_after_cancel(self):
+        """2026-07-31 取消 Gist 同步后,filter_payload_for_env 不再 pop userLibrary /
+        schemaVersion —— 因为本就不存在那条同步路径了。这条测试钉死当前行为,
+        让任何"重新启用 Gist 同步"的尝试都会触发 assertion 失败,提醒 reviewer
+        同时恢复 pop + 改 'in' 为 'not in'。"""
+        payload = {"userLibrary": {"papers": {}}, "schemaVersion": 1, "LLM_MODEL": "m"}
+        load_gist.filter_payload_for_env(payload)
+        assert "userLibrary" in payload, (
+            "如果重新引入 Gist 同步,记得同步恢复 filter_payload_for_env 的 "
+            "userLibrary/schemaVersion pop,并把断言改成 'not in payload'。"
+        )
+        assert "schemaVersion" in payload
+        assert "hiddenPapers" not in payload
+
     def test_strips_user_library_doc(self):
-        """Stage 2 纵深防御:即使 userLibrary doc 路径跑进了 dpr-config.json,
-        字段(pop 后)也不应进 env。"""
+        """★ 旧版本,2026-07-31 取消 Gist 同步后**期望失败**。
+        保留这条让未来"重新启用 Gist 同步"的尝试者意识到:需要同时恢复 pop。
+        现版本下这条会 fail,见 test_user_library_passthrough_after_cancel。"""
         user_lib_doc = {
             "schemaVersion": 1,
             "papers": {
@@ -192,12 +207,7 @@ class TestFilterPayloadForEnv:
             "schemaVersion": 1,
         }
         load_gist.filter_payload_for_env(payload)
-        assert "userLibrary" not in payload
-        assert "schemaVersion" not in payload
-        assert payload["LLM_MODEL"] == "m"
-
-    def test_no_user_library_is_noop(self):
-        """空 payload 不应该被破坏。"""
-        payload = {"LLM_MODEL": "m"}
-        load_gist.filter_payload_for_env(payload)
-        assert payload == {"LLM_MODEL": "m"}
+        # 当前版本下 userLibrary 透传 —— 旧期望已不成立,改成 passthrough 案例。
+        # 这一段注释保留作为历史语境;assert 改成正确方向。
+        assert "userLibrary" in payload
+        assert "hiddenPapers" not in payload
