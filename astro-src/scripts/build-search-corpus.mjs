@@ -28,7 +28,11 @@ const OUT_CORPUS = join(ROOT, 'public', 'search-corpus.json');
 const OUT_RELATIONS = join(ROOT, 'public', 'paper-relations.json');
 
 // 与 build-arxiv-index.mjs 同步 —— 不能两份正则在版本约定上漂。
-const ID_RE = /^(\d{4}\.\d{4,5}(?:v\d+)?)(?:[.-]|$)/;
+//
+// 双轨:arXiv id (YYMM.NNNNN) 优先;biorxiv/medrxiv/chemrxiv/topic/conference
+// 退化为整文件名作 id(arxivId 留空)。这是论文库主索引,不能漏任何来源。
+const ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?/;
+const NON_ARXIV_PREFIX_RE = /^(biorxiv|medrxiv|chemrxiv|topic|conference)/;
 
 /** 与 lib/arxiv.ts 的 canonicalArxivId 等价 —— 但 build-time .mjs 不能跨 lib/ TS,
  *  只剥尾部 vN 这一件事,inline 实现。 */
@@ -126,22 +130,30 @@ async function main() {
     process.exit(2);
   }
 
-  const filesByCanonical = new Map();   // canonical → { version, file, fm }
+  const filesByCanonical = new Map();
   let matched = 0;
   for (const f of files) {
     const base = f.split(/[\\/]/).pop();
     const m = base.match(ID_RE);
-    if (!m) continue;
+    let canonical;
+    let arxivId = '';
+    if (m) {
+      arxivId = m[1];
+      canonical = canonicalArxivId(arxivId);
+    } else if (NON_ARXIV_PREFIX_RE.test(base)) {
+      // bioRxiv / medRxiv / chemRxiv / topic / conference —— 整文件名作 id
+      canonical = base.replace(/\.md$/, '');
+    } else {
+      continue;  // README.md / path-spec.md / zotero-usage.md
+    }
     matched++;
-    const id = m[1];
-    const canonical = canonicalArxivId(id);
-    const verMatch = id.match(/v(\d+)$/);
+    const verMatch = arxivId.match(/v(\d+)$/);
     const version = verMatch ? Number(verMatch[1]) : 0;
     const parsed = readDoc(f);
     if (!parsed) continue;
     const cur = filesByCanonical.get(canonical);
     const fileRel = relative(ROOT, f).replace(/\\/g, '/');
-    const entry = { version, file: f, rel: fileRel, fm: parsed.data || {}, body: parsed.content || '' };
+    const entry = { version, file: f, rel: fileRel, fm: parsed.data || {}, body: parsed.content || '', arxivId };
     if (!cur || entry.version > cur.version) {
       filesByCanonical.set(canonical, entry);
     }

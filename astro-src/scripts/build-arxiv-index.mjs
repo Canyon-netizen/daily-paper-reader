@@ -25,10 +25,16 @@ const ROOT = process.cwd();
 const DOCS_DIR = join(ROOT, 'docs');
 const OUT = join(ROOT, 'public', 'arxiv-index.json');
 
-// 文件名: <arxivId>-<slug>.md
-// arXiv ID: YYMM.NNNNN(可选 vN 尾巴),版本号 'v' 前必须有数字 + '.'
-// 例: 2606.26474v1, 1706.03762, 2401.01234v3
-const ID_RE = /^(\d{4}\.\d{4,5}(?:v\d+)?)(?:[.-]|$)/;
+// ⚠ 必须兼容 arXiv 之外的来源文件:bioRxiv / medRxiv / chemRxiv / conferences
+// / topic-seeds —— 这些文件名都不带 arXiv id,不能被单轨正则匹配。
+// 由于这是论文库主索引(唯一真值),它必须收录**所有**论文,不能漏。
+//
+// 双轨抽取:
+//   1) 文件名匹配 arXiv id 形如 YYMM.NNNNNvN → 抽 canonical + arxivId
+//   2) 文件名以 biorxiv/medrxiv/chemrxiv/topic/conference 开头 → 整个文件名
+//      作为合成 id(arxivId 留空),这样下游 papers/<id>.html 路径唯一。
+const ARXIV_ID_RE = /^(\d{4}\.\d{4,5})(?:v\d+)?/;
+const NON_ARXIV_PREFIX_RE = /^(biorxiv|medrxiv|chemrxiv|topic|conference)/;
 
 // 从带版本 id 拆出 canonical id 与版本号(无版本按 v0 处理,让任意带版本 id 胜出)。
 function splitVersion(id) {
@@ -64,6 +70,26 @@ function readTitle(absPath) {
   }
 }
 
+/** 双轨文件名校准:从 base 文件名抽 { canonical, arxivId }。
+ *  返回 null = 既不是 arXiv 文件也不是已知前缀,跳过(例如 README.md / path-spec.md)。 */
+function extractIdFromFilename(base) {
+  const m = base.match(ARXIV_ID_RE);
+  if (m) {
+    const arxivId = m[1];
+    return {
+      canonical: arxivId.replace(/v\d+$/i, ''),
+      arxivId,
+    };
+  }
+  if (NON_ARXIV_PREFIX_RE.test(base)) {
+    return {
+      canonical: base.replace(/\.md$/, ''),
+      arxivId: '',
+    };
+  }
+  return null;
+}
+
 function walk(dir) {
   const out = [];
   if (!existsSync(dir)) return out;
@@ -82,23 +108,26 @@ function main() {
   let matched = 0;
   for (const f of files) {
     const base = f.split(/[\\/]/).pop();
-    const m = base.match(ID_RE);
-    if (!m) continue;
-    const id = m[1];
+    const id = extractIdFromFilename(base);
+    if (!id) continue;
     const rel = relative(ROOT, f).replace(/\\/g, '/');
-    const { canonical, version } = splitVersion(id);
+    // 非 arXiv 文件没有版本号概念(version 恒为 0),靠 rel.length 兜底。
+    const { version } = splitVersion(id.arxivId || base);
     matched++;
-    const prev = best[canonical];
+    const prev = best[id.canonical];
     if (!prev) {
-      best[canonical] = { version, rel, seenIds: new Set([id]), title: readTitle(f) };
+      best[id.canonical] = {
+        version, rel, seenIds: new Set([id.canonical]), arxivId: id.arxivId, title: readTitle(f),
+      };
       continue;
     }
-    prev.seenIds.add(id);
+    prev.seenIds.add(id.canonical);
     // 版本更高胜出;版本相同则取更短 path(稳定兜底)
     // —— title 只在 prev.title 为 null 时才补读,避免最高版本的 title 被旧版本覆盖。
     if (version > prev.version || (version === prev.version && rel.length < prev.rel.length)) {
       prev.version = version;
       prev.rel = rel;
+      if (id.arxivId) prev.arxivId = id.arxivId;
       if (!prev.title) prev.title = readTitle(f);
     }
   }
@@ -118,7 +147,7 @@ function main() {
 
   const ids = Object.keys(sorted);
   // eslint-disable-next-line no-console
-  console.log(`[arxiv-index] scanned ${files.length} md files, matched ${matched}, indexed ${ids.length} arxiv ids (含版本别名) -> public/arxiv-index.json`);
+  console.log(`[arxiv-index] scanned ${files.length} md files, matched ${matched}, indexed ${ids.length} entries -> public/arxiv-index.json`);
   if (ids.length && ids.length < 5) {
     // eslint-disable-next-line no-console
     console.log(`  sample: ${ids.slice(0, 5).join(', ')}`);
