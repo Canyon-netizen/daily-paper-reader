@@ -1,25 +1,31 @@
-/* /libraries/<id>/ — 单库工作台
+/* /libraries/<id>/ — 单库工作台(3 tab 版,对照 Polaris WikiWorkbench)
  *
- * 对照 Polaris /libraries/:id(WikiWorkbench)的精简版:
- *   - 顶部 hero:库名 + 描述 + 成员数 + 导出按钮
- *   - 三段:论文列表 + 概念 + 导出
+ * 3 tab 全部用 URL hash 切换(#papers / #concepts / #notes),无 JS 也能切。
+ * 论文库 tab 是主 tab,左列表 + 右详情(Polaris PapersTab 同构):
+ *   - 左:view filter (全部 / 今日 / 编译过) + 搜索框 + 论文行
+ *   - 右:详情面板(默认选第一篇)
+ *   - 行内 chip:星标 / 阅读状态 / 笔记数 / 概念数
  *
- * 复用:
- *   - /papers/ 的 PaperLibrary 卡片 + 虚拟滚动
- *   - 概念来自 docs/papers frontmatter `concepts:`(Stage 9 已派生)
- *   - 导出走 astro-src/scripts/export/{bibtex,csl,obsidian}.ts
+ * 概念库 tab:Polaris ConceptsTab 同构,左 chip 行(全部 / method / ... /
+ *  library-only)+ 右 grid(带 hit count,去重)
  *
- * 不是把 PaperLibrary 整个嵌进来 —— 那个是「所有论文的搜索引擎」,
- * 这里要的是「这个库的论文」。所以重新渲染,客户端 chip / 抽屉 / 笔记
- * 都去掉,聚焦 list + export。
+ * 笔记 tab:Polaris NotesTab 同构,列出本人写过笔记的论文 + 笔记预览
+ *
+ * 视觉:复用 /libraries/ 卡片的 hue + 4px 左竖条;详情面板走 --bg-elevated。
+ * 全部用 CSS grid + flex,no framework。
  */
 
 .library-workbench {
   max-width: var(--shell-max-width, 1200px);
   margin: 0 auto;
   padding: var(--space-10, 2.5rem) var(--space-6, 1.5rem) var(--space-16, 5rem);
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: var(--space-6, 1.5rem);
+  min-height: calc(100vh - 8rem);
 }
 
+/* ===== Hero ===== */
 .library-wb-hero {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -73,18 +79,19 @@
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  min-width: 220px;
 }
 .library-wb-export .export-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.55rem 0.9rem;
+  padding: 0.5rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg);
   color: var(--fg);
   font-family: inherit;
-  font-size: 0.88rem;
+  font-size: 0.85rem;
   text-decoration: none;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
@@ -98,111 +105,403 @@
   color: #fff;
   border-color: var(--accent);
 }
-.library-wb-export .export-btn.primary:hover {
-  background: var(--accent-hover);
-}
 .library-wb-export .export-hint {
   font-size: 0.78rem;
   color: var(--fg-subtle);
   min-height: 1em;
+  font-family: var(--font-mono);
 }
 
-/* 论文列表:复用 papers.css 的 .papers-list 但简化(无 chip / 无 filter) */
-.library-wb-papers {
-  margin-top: var(--space-8, 2rem);
-}
-.library-wb-papers h2,
-.library-wb-concepts h2 {
-  font-size: 1.25rem;
-  margin: 0 0 var(--space-4, 1rem);
-  padding-bottom: 0.5rem;
+/* ===== Tab bar ===== */
+.library-wb-tabs {
+  display: flex;
+  gap: 0.4rem;
   border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
 }
-.library-wb-paper-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+.library-wb-tabs .lib-wb-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 0.88rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.library-wb-tabs .lib-wb-tab:hover {
+  background: var(--bg-elevated);
+  color: var(--fg);
+}
+.library-wb-tabs .lib-wb-tab.active {
+  background: var(--bg-elevated);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.library-wb-tabs .tab-count {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  background: var(--bg-muted);
+  padding: 0.05em 0.5em;
+  border-radius: 999px;
+}
+.library-wb-tabs .back {
+  margin-left: auto;
+  font-size: 0.82rem;
+  color: var(--fg-subtle);
+  text-decoration: none;
+}
+.library-wb-tabs .back:hover { color: var(--accent); }
+
+/* ===== Tab panel ===== */
+.library-wb-panel {
+  display: none;
+}
+.library-wb-panel.active {
+  display: block;
+}
+
+/* ===== 论文库 tab:左列表 + 右详情 ===== */
+.wb-papers {
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.6fr);
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 880px) {
+  .wb-papers { grid-template-columns: 1fr; }
+}
+
+.wb-papers-list {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
-.library-wb-paper-row {
+.wb-papers-filter {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.65rem 0.9rem;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+.wb-papers-filter .filter-pill {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.wb-papers-filter .filter-pill:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.wb-papers-filter .filter-pill.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.wb-paper-row {
+  display: block;
+  padding: 0.7rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-elevated);
   text-decoration: none;
   color: var(--fg);
-  transition: border-color 0.15s, transform 0.15s;
+  transition: border-color 0.15s, transform 0.12s;
 }
-.library-wb-paper-row:hover {
+.wb-paper-row:hover { border-color: var(--accent); transform: translateX(2px); }
+.wb-paper-row.is-selected {
   border-color: var(--accent);
-  transform: translateX(2px);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
 }
-.library-wb-paper-row .row-date {
-  font-family: var(--font-mono);
+.wb-paper-row .row-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+  font-family: var(--font-mono, ui-monospace);
   font-size: 0.78rem;
   color: var(--fg-subtle);
-  flex-shrink: 0;
-  width: 6.5em;
 }
-.library-wb-paper-row .row-titles {
-  flex: 1;
-  min-width: 0;
+.wb-paper-row .row-head .arx {
+  color: var(--fg-muted);
 }
-.library-wb-paper-row .row-title-zh {
-  font-size: 0.95rem;
-  font-weight: 600;
+.wb-paper-row .row-head .year {
+  margin-left: auto;
+}
+.wb-paper-row .row-head .star-on { color: var(--warn, #d97706); }
+.wb-paper-row .row-title {
   margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.35;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
-.library-wb-paper-row .row-title-en {
+.wb-paper-row .row-en {
+  margin: 0.2rem 0 0;
   font-size: 0.78rem;
   color: var(--fg-subtle);
-  margin: 0.15rem 0 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
 }
-.library-wb-paper-row .row-arxiv {
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
+.wb-paper-row .row-chips {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  flex-wrap: wrap;
+}
+.wb-paper-row .row-chip {
+  font-size: 0.72rem;
+  padding: 0.1em 0.5em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
   color: var(--fg-subtle);
-  flex-shrink: 0;
+  background: var(--bg);
 }
 
-/* 概念 chip 行 */
-.library-wb-concepts {
-  margin-top: var(--space-10, 2.5rem);
+/* ===== 详情面板 ===== */
+.wb-paper-detail {
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  position: sticky;
+  top: 1rem;
+  min-height: 360px;
 }
-.library-wb-concept-list {
+.wb-paper-detail.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-subtle);
+}
+.wb-paper-detail h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.wb-paper-detail .detail-meta {
+  display: flex;
+  gap: 0.5rem;
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  margin: 0.25rem 0 0.65rem;
+  flex-wrap: wrap;
+}
+.wb-paper-detail .detail-meta a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.wb-paper-detail .detail-meta a:hover { text-decoration: underline; }
+.wb-paper-detail .detail-en {
+  font-size: 0.85rem;
+  color: var(--fg-subtle);
+  margin: 0 0 0.5rem;
+}
+.wb-paper-detail .detail-zh {
+  font-size: 0.92rem;
+  color: var(--fg-muted);
+  margin: 0 0 0.6rem;
+  line-height: 1.55;
+}
+.wb-paper-detail .detail-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+.wb-paper-detail .detail-row .label {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono, ui-monospace);
+  min-width: 4.5em;
+}
+.wb-paper-detail .status-btn,
+.wb-paper-detail .star-btn {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.wb-paper-detail .status-btn.is-active,
+.wb-paper-detail .star-btn.is-active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.wb-paper-detail .star-btn.is-active { background: #d97706; border-color: #d97706; }
+.wb-paper-detail .concepts-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 0.35rem;
+  margin: 0.6rem 0 0;
 }
-.library-wb-concept {
-  display: inline-block;
-  padding: 0.35rem 0.7rem;
+.wb-paper-detail .concepts-chips .cc {
+  padding: 0.25em 0.6em;
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   color: var(--fg-muted);
+  background: var(--bg);
   text-decoration: none;
-  background: var(--bg-elevated);
-  transition: border-color 0.15s, color 0.15s;
 }
-.library-wb-concept:hover {
+.wb-paper-detail .concepts-chips .cc:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ===== 概念库 tab:左 chip + 右 grid ===== */
+.wb-concepts {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .wb-concepts { grid-template-columns: 1fr; }
+}
+.wb-concepts-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.wb-concepts-filter .filter-pill {
+  text-align: left;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.wb-concepts-filter .filter-pill:hover {
   border-color: var(--accent);
   color: var(--accent);
 }
-.library-wb-concept-count {
-  font-family: var(--font-mono);
+.wb-concepts-filter .filter-pill.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.wb-concepts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.5rem;
+}
+.wb-concepts-card {
+  display: block;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  text-decoration: none;
+  color: var(--fg);
+  transition: border-color 0.15s, transform 0.12s;
+}
+.wb-concepts-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.wb-concepts-card .cc-name {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+.wb-concepts-card .cc-meta {
+  margin: 0.25rem 0 0;
+  display: flex;
+  gap: 0.5rem;
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 0.74rem;
+  color: var(--fg-subtle);
+}
+.wb-concepts-card .cc-cat {
+  font-family: var(--font-mono, ui-monospace);
   font-size: 0.72rem;
   color: var(--fg-subtle);
-  margin-left: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+/* ===== 笔记 tab ===== */
+.wb-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.wb-note-row {
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+}
+.wb-note-row .note-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+}
+.wb-note-row .note-head a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.wb-note-row .note-head .updated {
+  margin-left: auto;
+}
+.wb-note-row .note-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.wb-note-row .note-body {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+.wb-notes .empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--fg-subtle);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
 }

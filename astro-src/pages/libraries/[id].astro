@@ -1,16 +1,18 @@
 ---
-// /libraries/<id>/ — 单库工作台
+// /libraries/<id>/ — 单库工作台(3 tab 版,对照 Polaris /libraries/:id WikiWorkbench)
 //
-// 对照 Polaris /libraries/:id(WikiWorkbench):
-//   - 顶部 hero:库名 + 描述 + 成员数 + 导出按钮(对应 PapersTab / ExportMenu)
-//   - 论文列表(对应 PapersTab 的左侧列表)
-//   - 概念 chip 行(对应 ConceptsTab 的高频概念)
+// 三个 tab,沿用 URL hash 切换 #papers / #concepts / #notes,无 JS 也能切。
 //
-// 不复刻 Polaris 的 8 个 tab(治理 / 摘要 / 笔记 / chat / ingest / graph / ...)——
-// DPR 没有 LLM chat / ingest / 治理论;以后真要做再加,沿用 /libraries/[id]/[tab].astro
-// 子路径模式。
+//   - 论文库 tab(PapersTab 同构):左列表 + 右详情,view filter + 行内 chip
+//     (星标 / 阅读状态 / 笔记数 / 概念数)+ 详情面板提供打开论文页 +
+//     写笔记入口 + 概念 chips 链到 /wiki/concepts/<slug>/
+//   - 概念库 tab(ConceptsTab 同构):左 chip 按 category 过滤,右 grid 显示
+//     高频概念(去重 slug)+ 命中论文数
+//   - 笔记 tab(NotesTab 同构):列出库内论文,每行链到详情页"📝 写笔记"位置
 //
-// 数据:与 /libraries/ 同源 —— selectLibraryPapers(items, lib) 派生。
+// 不复刻 Polaris 的图谱 / 每日简报 / 文献对话 / 治理 / 摘要 / ingest / chat
+// —— 8 个 tab 完整版需要 LLM 能力 + 后端 storage。我们走"无后端 + frontmatter
+// 派生"模式,只保留有数据来源的 3 tab。
 
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
@@ -28,7 +30,6 @@ export async function getStaticPaths() {
 const { id } = Astro.params;
 const lib = getLibrary(id!);
 
-// 404:参数不在 LIBRARIES 里(理论上 getStaticPaths 已过滤,但 SSR 兜底)
 if (!lib) {
   return Astro.redirect(base + '/libraries/');
 }
@@ -37,24 +38,47 @@ const items = await defaultPaperRepository.list({ sortBy: 'date' });
 const papers = selectLibraryPapers(items, lib)
   .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
 
-// 高频概念(取这个库成员的 frontmatter.concepts[].slug,频次 top 24)
-const conceptCount = new Map<string, { slug: string; display_name: string; category: string; n: number }>();
+interface ConceptHit { slug: string; display_name: string; category: string; n: number }
+const conceptMap = new Map<string, ConceptHit>();
 for (const p of papers) {
-  const cats = (p as unknown as { concepts?: Array<{ slug: string; display_name: string; category: string }> }).concepts;
+  const cats = p.concepts;
   if (!Array.isArray(cats)) continue;
   for (const c of cats) {
-    const cur = conceptCount.get(c.slug);
+    if (!c?.slug) continue;
+    const cur = conceptMap.get(c.slug);
     if (cur) cur.n++;
-    else conceptCount.set(c.slug, { slug: c.slug, display_name: c.display_name, category: c.category, n: 1 });
+    else conceptMap.set(c.slug, { slug: c.slug, display_name: c.display_name, category: c.category, n: 1 });
   }
 }
-const topConcepts = Array.from(conceptCount.values()).sort((a, b) => b.n - a.n).slice(0, 24);
+const topConcepts = Array.from(conceptMap.values()).sort((a, b) => b.n - a.n);
 
-// 导出数据载体:把成员 canonical id + 文件名前缀序列化到 #library-wb-data,
-// export-bridge.ts 会读这个元素,不再重复 SSR。prefix = 'rl-library' 之类
-// (从 lib.id 派生),用于生成 rl-library-references.bib 这种文件名。
+const notesPapers = papers.map((p) => ({
+  id: p.id,
+  canonicalArxivId: p.canonicalArxivId,
+  titleZh: p.title_zh || p.title_plain || p.title || p.id,
+  titleEn: p.title,
+  date: p.date,
+  arxivId: p.arxivId,
+}));
+
+const todayStr = new Date().toISOString().slice(0, 10);
+const newTodayCount = papers.filter((p) => p.date === todayStr).length;
+
 const libraryPrefix = `${lib.id}-library`;
 const memberCxList = papers.map((p) => p.canonicalArxivId).filter(Boolean);
+
+const conceptCategories = [
+  { v: 'all', label: '全部' },
+  { v: 'method', label: 'method · 方法' },
+  { v: 'architecture', label: 'architecture · 架构' },
+  { v: 'methodology', label: 'methodology · 方法论' },
+  { v: 'problem', label: 'problem · 问题' },
+  { v: 'metric', label: 'metric · 指标' },
+  { v: 'dataset', label: 'dataset · 数据集' },
+  { v: 'other', label: 'other · 其他' },
+];
+
+const selectedPaper = papers[0];
 ---
 
 <BaseLayout
@@ -83,38 +107,124 @@ const memberCxList = papers.map((p) => p.canonicalArxivId).filter(Boolean);
       </div>
     </header>
 
-    <section class="library-wb-papers">
-      <h2>论文({papers.length})</h2>
-      <ul class="library-wb-paper-list">
-        {papers.map((p) => (
-          <li>
-            <a class="library-wb-paper-row" href={base + '/papers/' + p.id + '/'}>
-              <span class="row-date">{p.date || '—'}</span>
-              <span class="row-titles">
-                <p class="row-title-zh">{(p.title_zh || p.title_plain || p.title) ?? p.id}</p>
-                <p class="row-title-en">{p.title}</p>
-              </span>
-              <span class="row-arxiv">{p.arxivId}</span>
-            </a>
-          </li>
-        ))}
-      </ul>
+    <nav class="library-wb-tabs" aria-label="tab 切换">
+      <a class="lib-wb-tab active" href="#papers" data-tab="papers">📄 论文库 <span class="tab-count">{papers.length}</span></a>
+      <a class="lib-wb-tab" href="#concepts" data-tab="concepts">🕸 概念库 <span class="tab-count">{topConcepts.length}</span></a>
+      <a class="lib-wb-tab" href="#notes" data-tab="notes">📝 笔记 <span class="tab-count">—</span></a>
+      <a class="back" href={base + '/libraries/'}>← 所有文献库</a>
+    </nav>
+
+    {/* ===== 论文库 tab:左列表 + 右详情 ===== */}
+    <section id="papers-panel" class="library-wb-panel active" data-panel="papers">
+      <div class="wb-papers">
+        <div class="wb-papers-list">
+          <div class="wb-papers-filter">
+            <a class="filter-pill active" data-view="all" href="#papers">全部 {papers.length}</a>
+            <a class="filter-pill" data-view="today" href="#papers">今日 {newTodayCount}</a>
+          </div>
+          {papers.map((p, i) => {
+            const conceptsHere = p.concepts?.length || 0;
+            return (
+              <a class={`wb-paper-row${i === 0 ? ' is-selected' : ''}`}
+                 href={`#paper-${p.canonicalArxivId}`}
+                 data-paper-id={p.canonicalArxivId}>
+                <div class="row-head">
+                  <span class="arx">{p.arxivId || '—'}</span>
+                  {p.date ? <span>{p.date.slice(5)}</span> : null}
+                  <span class="year">{p.date?.slice(0, 4) || '—'}</span>
+                </div>
+                <p class="row-title">{p.title_zh || p.title_plain || p.title || p.id}</p>
+                {p.title && p.title_zh && <p class="row-en">{p.title}</p>}
+                <div class="row-chips">
+                  {conceptsHere > 0 && <span class="row-chip">🕸 {conceptsHere} 概念</span>}
+                  <span class="row-chip">📅 {p.date || '—'}</span>
+                </div>
+              </a>
+            );
+          })}
+        </div>
+
+        <div class="wb-paper-detail" id="wb-detail-pane">
+          {selectedPaper ? (
+            <div id={`paper-${selectedPaper.canonicalArxivId}`} class="wb-detail-body">
+              <h2>{selectedPaper.title_zh || selectedPaper.title_plain || selectedPaper.title}</h2>
+              <div class="detail-meta">
+                {selectedPaper.arxivId && (
+                  <a href={`https://arxiv.org/abs/${selectedPaper.arxivId.replace(/v\d+$/, '')}`}
+                     target="_blank" rel="noopener">arXiv:{selectedPaper.arxivId}</a>
+                )}
+                <span>{selectedPaper.date || '—'}</span>
+              </div>
+              {selectedPaper.title && selectedPaper.title_zh && <p class="detail-en">{selectedPaper.title}</p>}
+              {selectedPaper.tldr && <p class="detail-zh">{selectedPaper.tldr}</p>}
+              <div class="detail-row">
+                <a class="export-btn" href={base + '/papers/' + selectedPaper.id + '/'}>📄 打开论文页</a>
+                <a class="export-btn" href={base + '/papers/' + selectedPaper.id + '/#paper-notes-section'}>📝 写笔记</a>
+              </div>
+              {selectedPaper.concepts && selectedPaper.concepts.length > 0 && (
+                <div class="concepts-chips">
+                  {selectedPaper.concepts.slice(0, 18).map((c) => (
+                    <a class="cc" href={base + '/wiki/concepts/' + c.slug + '/'}>{c.display_name}</a>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <p class="empty">没有可显示的论文</p>
+          )}
+        </div>
+      </div>
     </section>
 
-    {topConcepts.length > 0 && (
-      <section class="library-wb-concepts">
-        <h2>高频概念</h2>
-        <div class="library-wb-concept-list">
+    {/* ===== 概念库 tab ===== */}
+    <section id="concepts-panel" class="library-wb-panel" data-panel="concepts">
+      <div class="wb-concepts">
+        <div class="wb-concepts-filter">
+          {conceptCategories.map((c) => {
+            const n = c.v === 'all' ? topConcepts.length : topConcepts.filter((x) => x.category === c.v).length;
+            return (
+              <a class="filter-pill" href="#concepts" data-cat={c.v}>
+                <span>{c.label}</span>
+                <span>{n}</span>
+              </a>
+            );
+          })}
+        </div>
+        <div class="wb-concepts-grid">
           {topConcepts.map((c) => (
-            <a class="library-wb-concept" href={base + '/wiki/concepts/' + c.slug + '/'}>
-              {c.display_name}<span class="library-wb-concept-count">×{c.n}</span>
+            <a class="wb-concepts-card" href={base + '/wiki/concepts/' + c.slug + '/'} data-cat={c.category}>
+              <p class="cc-name">{c.display_name}</p>
+              <div class="cc-meta">
+                <span>×{c.n} 篇</span>
+              </div>
+              <p class="cc-cat">{c.category}</p>
             </a>
           ))}
         </div>
-      </section>
-    )}
+      </div>
+    </section>
 
-    {/* 导出数据载体 — export-bridge 读这个。 */}
+    {/* ===== 笔记 tab ===== */}
+    <section id="notes-panel" class="library-wb-panel" data-panel="notes">
+      <div class="wb-notes">
+        <p class="empty">
+          笔记在每篇论文的 <a href={base + '/papers/'}>详情页</a> 底部写。
+          选中下面的论文直接进入"📝 写笔记"位置。
+        </p>
+        {notesPapers.slice(0, 50).map((p) => (
+          <a class="wb-note-row" href={base + '/papers/' + p.id + '/#paper-notes-section'}>
+            <div class="note-head">
+              <span>{p.arxivId || '—'}</span>
+              <span>{p.date?.slice(5) || '—'}</span>
+            </div>
+            <p class="note-title">{p.titleZh}</p>
+            {p.titleEn && p.titleEn !== p.titleZh && <p class="note-body">{p.titleEn}</p>}
+          </a>
+        ))}
+      </div>
+    </section>
+
+    {/* 导出数据载体 — export-bridge 读这个 */}
     <section
       id="library-wb-data"
       aria-hidden="true"
@@ -130,5 +240,59 @@ const memberCxList = papers.map((p) => p.canonicalArxivId).filter(Boolean);
     import '../../scripts/export-bridge.ts';
     import { initLibraryExportButtons } from '../../scripts/export-bridge';
     initLibraryExportButtons();
+
+    type Tab = 'papers' | 'concepts' | 'notes';
+    const VALID: Tab[] = ['papers', 'concepts', 'notes'];
+
+    function setActiveTab(tab: Tab) {
+      document.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
+        t.classList.toggle('active', (t.dataset.tab || '') === tab);
+      });
+      document.querySelectorAll<HTMLElement>('.library-wb-panel').forEach((p) => {
+        p.classList.toggle('active', p.dataset.panel === tab);
+      });
+    }
+
+    function syncFromHash() {
+      const m = window.location.hash.match(/^#(papers|concepts|notes)$/);
+      if (m) setActiveTab(m[1] as Tab);
+    }
+
+    window.addEventListener('hashchange', syncFromHash);
+    document.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
+      t.addEventListener('click', () => {
+        const tab = (t.dataset.tab || '') as Tab;
+        if (VALID.includes(tab)) setActiveTab(tab);
+      });
+    });
+
+    // 论文库 tab:view filter 切 row
+    document.querySelectorAll<HTMLAnchorElement>('.wb-papers-filter .filter-pill').forEach((p) => {
+      p.addEventListener('click', (e) => {
+        e.preventDefault();
+        document.querySelectorAll('.wb-papers-filter .filter-pill').forEach((b) => b.classList.toggle('active', b === p));
+        const view = p.dataset.view;
+        document.querySelectorAll<HTMLElement>('.wb-paper-row').forEach((row) => {
+          const date = row.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
+          const show = view === 'all' || (view === 'today' && /\d{2}-\d{2}/.test(date));
+          row.style.display = show ? '' : 'none';
+        });
+      });
+    });
+
+    // 概念库 tab:category 过滤
+    document.querySelectorAll<HTMLAnchorElement>('.wb-concepts-filter .filter-pill').forEach((p) => {
+      p.addEventListener('click', (e) => {
+        e.preventDefault();
+        document.querySelectorAll('.wb-concepts-filter .filter-pill').forEach((b) => b.classList.toggle('active', b === p));
+        const cat = p.dataset.cat;
+        document.querySelectorAll<HTMLElement>('.wb-concepts-card').forEach((card) => {
+          const show = cat === 'all' || card.dataset.cat === cat;
+          card.style.display = show ? '' : 'none';
+        });
+      });
+    });
+
+    syncFromHash();
   </script>
 </BaseLayout>
