@@ -51,9 +51,45 @@
   font-size: 0.88rem;
   transition: color 0.15s, border-color 0.15s;
 }
-.libraries-shortcuts .shortcut:hover {
-  color: var(--accent);
+/* 顶部维度 pill 过滤(对齐 Polaris 顶栏 Segmented) */
+.libraries-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 var(--space-6, 1.5rem);
+  padding-bottom: var(--space-4, 1rem);
+  border-bottom: 1px solid var(--border);
+}
+.libraries-filter .filter-label {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  margin-right: 0.4rem;
+}
+.libraries-filter .filter-pill {
+  padding: 0.3rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.libraries-filter .filter-pill:hover {
   border-color: var(--accent);
+  color: var(--accent);
+}
+.libraries-filter .filter-pill.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.libraries-filter .filter-count {
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
 }
 
 /* 卡片网格 */
@@ -136,6 +172,22 @@
   gap: 0.5rem;
   font-size: 0.78rem;
   color: var(--fg-subtle);
+}
+/* 论文 / 概念 / 更新日期 —— 对齐 Polaris 卡片底部"X 篇论文 / Y 个概念 / 更新于 ..." */
+.library-card .lib-stats {
+  display: flex;
+  gap: 0.85rem;
+  margin-top: 0.65rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+}
+.library-card .lib-stats span strong {
+  color: var(--fg);
+  font-weight: 600;
+  font-family: var(--font-mono, ui-monospace);
+  margin-right: 0.2rem;
 }
 .library-card .lib-tags {
   display: flex;

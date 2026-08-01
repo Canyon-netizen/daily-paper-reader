@@ -46,6 +46,14 @@ const totalPapers = items.length;
       </p>
     </header>
 
+    <div class="libraries-filter" aria-label="维度过滤">
+      <span class="filter-label">维度:</span>
+      <button class="filter-pill active" data-dim="all" type="button">全部</button>
+      <button class="filter-pill" data-dim="task" type="button">任务</button>
+      <button class="filter-pill" data-dim="method" type="button">方法</button>
+      <span class="filter-count" id="lib-filter-count"></span>
+    </div>
+
     <nav class="libraries-shortcuts" aria-label="快捷入口">
       <a class="shortcut" href={base + '/papers/'}>📚 所有论文</a>
       <a class="shortcut" href={base + '/library/'}>⭐ 我的图书馆</a>
@@ -56,16 +64,23 @@ const totalPapers = items.length;
 
     <div class="libraries-grid">
       {digests.map((d) => (
-        <a class={`library-card hue-${d.library.hue}`} href={base + '/libraries/' + d.library.id + '/'}>
+        <a class={`library-card hue-${d.library.hue}`}
+           href={base + '/libraries/' + d.library.id + '/'}
+           data-dim={d.library.dimension}>
           <h2 class="lib-title">
             <span>{d.library.title}</span>
             <span class="lib-count">{d.paperCount} 篇</span>
           </h2>
           <p class="lib-title-zh">{d.library.titleZh}</p>
           <p class="lib-desc">{d.library.descriptionZh}</p>
+          <div class="lib-stats">
+            <span><strong>{d.paperCount}</strong> 篇论文</span>
+            <span><strong>{d.conceptCount}</strong> 个概念</span>
+            <span>更新于 {d.latestDate ? d.latestDate.slice(5) : '—'}</span>
+          </div>
           <div class="lib-meta">
             <div class="lib-tags">
-              {d.library.tags.map((t) => <span class="lib-tag">{t}</span>)}
+              {d.library.tags.slice(0, 2).map((t) => <span class="lib-tag">{t}</span>)}
             </div>
             <span>维护 · {d.library.curator}</span>
           </div>
@@ -75,4 +90,23 @@ const totalPapers = items.length;
   </main>
 
   <Footer />
+
+  <script>
+    // 维度 pill 过滤(同首页)。
+    document.querySelectorAll<HTMLButtonElement>('.filter-pill').forEach((p) => {
+      p.addEventListener('click', () => {
+        const dim = p.dataset.dim || 'all';
+        document.querySelectorAll('.filter-pill').forEach((b) => b.classList.toggle('active', b === p));
+        const cards = document.querySelectorAll<HTMLElement>('.library-card');
+        let visible = 0;
+        cards.forEach((c) => {
+          const show = dim === 'all' || c.dataset.dim === dim;
+          c.style.display = show ? '' : 'none';
+          if (show) visible++;
+        });
+        const counter = document.getElementById('lib-filter-count');
+        if (counter) counter.textContent = dim === 'all' ? '' : `${visible} / ${cards.length}`;
+      });
+    });
+  </script>
 </BaseLayout>

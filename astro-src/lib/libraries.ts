@@ -29,6 +29,8 @@ export interface Library {
   descriptionZh: string;
   /** 衍生自 frontmatter 哪一类(dim:label 形式) */
   tags: string[];
+  /** 主维度,用于顶部 pill 过滤('task' 或 'method',首条 tag 的 dim) */
+  dimension: 'task' | 'method';
   /** 谁维护 / 谁推荐(站点权威度) */
   curator: string;
   /** 卡片背景色(从预设 6 色挑一个,与 concepts / conferences 区分) */
@@ -52,6 +54,7 @@ export const LIBRARIES: Library[] = [
     description: 'RL theory, policy optimization, exploration, value functions. Multi-agent & offline RL included.',
     descriptionZh: '强化学习理论、策略优化、探索与利用、值函数。多智能体与离线 RL 也在内。',
     tags: ['task:rl'],
+    dimension: 'task',
     curator: 'DPR',
     hue: 'orange',
   },
@@ -62,6 +65,7 @@ export const LIBRARIES: Library[] = [
     description: 'Cooperative / competitive multi-agent, MARL, agent communication, emergent coordination.',
     descriptionZh: '合作 / 竞争多智能体、MARL、智能体通信、涌现协调。',
     tags: ['task:mas'],
+    dimension: 'task',
     curator: 'DPR',
     hue: 'cyan',
   },
@@ -72,6 +76,7 @@ export const LIBRARIES: Library[] = [
     description: 'Game-playing agents, online decision-making, opponent modeling, StarCraft / Honor of Kings / poker.',
     descriptionZh: '博弈代理、在线决策、对手建模,涵盖 StarCraft / 王者荣耀 / 扑克等场景。',
     tags: ['task:game-ai'],
+    dimension: 'task',
     curator: 'DPR',
     hue: 'purple',
   },
@@ -82,6 +87,7 @@ export const LIBRARIES: Library[] = [
     description: 'LLM-driven tool use, planning, code agents, GUI agents, multi-turn reasoning with feedback.',
     descriptionZh: 'LLM 工具调用、规划、代码代理、GUI 代理、多轮反馈推理。',
     tags: ['task:llm-agent', 'task:agent'],
+    dimension: 'task',
     curator: 'DPR',
     hue: 'emerald',
   },
@@ -92,6 +98,7 @@ export const LIBRARIES: Library[] = [
     description: 'Chain-of-thought, RLHF, sycophancy mitigation, mechanistic interpretability, activation steering.',
     descriptionZh: '思维链、RLHF、阿谀抑制、机制可解释性、激活引导。',
     tags: ['task:reasoning', 'method:rlhf'],
+    dimension: 'method',
     curator: 'DPR',
     hue: 'amber',
   },
@@ -102,6 +109,7 @@ export const LIBRARIES: Library[] = [
     description: 'Sim-to-real, locomotion, manipulation, world models, skill discovery, vision-language-action.',
     descriptionZh: '虚实迁移、运动控制、操作、世界模型、技能发现、视觉-语言-动作。',
     tags: ['task:robotics', 'task:manipulation', 'task:locomotion'],
+    dimension: 'task',
     curator: 'DPR',
     hue: 'rose',
   },
@@ -112,6 +120,7 @@ export const LIBRARIES: Library[] = [
     description: 'Recognition, generation, self-supervised representation, multimodal perception.',
     descriptionZh: '识别、生成、自监督表征、多模态感知。',
     tags: ['task:vision'],
+    dimension: 'task',
     curator: 'DPR',
     hue: 'sky',
   },
@@ -123,25 +132,45 @@ export function getLibrary(id: string): Library | null {
   return BY_ID.get(id) || null;
 }
 
-/** 给全部论文 + 文献库清单,产出"库 → 论文数"映射 + 库简报。
+/** 给全部论文 + 文献库清单,产出"库 → 论文数 / 概念数 / 最近更新 / 最近 3 篇"映射。
+ *
+ * 字段对齐 Polaris LibrariesPage 卡片的 4 个数字:
+ *   - paperCount  : "91 篇论文"
+ *   - conceptCount: "60 个概念"
+ *   - latestDate  : "更新于 08-01"
+ *   - recentIds   : (暂未在卡片显示,但供详情页用)
  *
  * 不带任何 IO(纯 listPapers 派生),SSR 安全。
  *
  * @param items 论文全集(从 listPapers({dedup:true}) 拉来的 PaperListItem[])
+ *             字段展开:title / title_zh / date / categories / concepts?(custom)
  */
-export function buildLibraryDigests(items: PaperListItem[]): Array<{
+export interface LibraryDigest {
   library: Library;
   paperCount: number;
-  recentIds: string[];   // 最近 3 篇,卡片显示用
-}> {
-  const out = [];
+  conceptCount: number;
+  latestDate: string;     // YYYY-MM-DD 或 ''
+  recentIds: string[];
+}
+
+export function buildLibraryDigests(items: PaperListItem[]): LibraryDigest[] {
+  const out: LibraryDigest[] = [];
   for (const lib of LIBRARIES) {
     const matched = items.filter((p) => flattenTags(p).some((t) => lib.tags.includes(t)));
     if (matched.length === 0) continue;  // 0 篇就跳过,不显示空卡
     const sorted = matched.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    // 概念去重计数:从 PaperListItem.concepts(Stage 9 派生)的 slug Set。
+    const conceptSlugs = new Set<string>();
+    for (const p of matched) {
+      const cs = p.concepts;
+      if (!Array.isArray(cs)) continue;
+      for (const c of cs) if (c?.slug) conceptSlugs.add(c.slug);
+    }
     out.push({
       library: lib,
       paperCount: matched.length,
+      conceptCount: conceptSlugs.size,
+      latestDate: sorted[0]?.date || '',
       recentIds: sorted.slice(0, 3).map((p) => p.id),
     });
   }

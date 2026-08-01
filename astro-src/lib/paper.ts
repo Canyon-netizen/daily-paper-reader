@@ -17,6 +17,7 @@
 // 已下沉到 lib/paper-frontmatter/。
 
 import { buildCategories, type Categories } from './taxonomies';
+import type { ConceptRef } from './types/concept';
 import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
 import { applyPaperFilters } from './paper-filter';
@@ -202,6 +203,9 @@ export interface PaperListItem {
   venue?: string;
   accepted?: boolean;
   tags?: string[];
+  /** 论文 frontmatter `concepts:` 段(Stage 9 派生,用于卡片/工作台统计与 chips)。
+   *  listPapers 不强制读 frontmatter,这里 optional —— 概念计数会跳过缺字段的论文。 */
+  concepts?: ConceptRef[];
   /** first figure url (已拼好 base),用于列表卡片缩略图。 */
   thumbnail?: string;
   /** 完整 figure 列表(未拼 base),供需要展示多图的场景(展开抽屉等)。 */
@@ -316,6 +320,9 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       venue: p.venue,
       accepted: p.accepted,
       tags: p.tags as string[] | undefined,
+      // 把 Paper 的 concepts 字段透出(Stage 9 派生),让 listPapers 走概念
+      // 计数 / chips / 工作台时不用再走 getPaperFull。
+      concepts: p.concepts,
       thumbnail: p.figures && p.figures.length > 0 ? figureUrlToAbsolute(p.figures[0].url, base) : undefined,
       figures: p.figures,
     });
