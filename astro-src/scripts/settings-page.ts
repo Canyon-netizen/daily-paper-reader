@@ -423,7 +423,22 @@ function init(): void {
   $<HTMLInputElement>('cfg-gist-id').addEventListener('input', debouncedGistId);
   $<HTMLButtonElement>('gist-sync-btn').addEventListener('click', syncToGist);
 
-  // --- 3.6 导出(Stage 11) — 纯本地 · 一个文件一个图书馆 ---
+  // --- 3.5 Library Gist 同步(Stage 2) ---
+  import('./user-library-bridge').then((m) => {
+    $<HTMLInputElement>('cfg-library-gist-id').value = m.getLibraryGistId();
+    $<HTMLButtonElement>('library-gist-push-btn').addEventListener('click', () => {
+      void m.syncLibraryPush($<HTMLInputElement>('library-gist-hint'), () => {
+        $<HTMLInputElement>('cfg-library-gist-id').value = m.getLibraryGistId();
+      });
+    });
+    $<HTMLButtonElement>('library-gist-pull-btn').addEventListener('click', () => {
+      void m.syncLibraryPull($<HTMLInputElement>('library-gist-hint'));
+    });
+  }).catch((e) => {
+    console.warn('[settings] library bridge failed to load', e);
+  });
+
+  // --- 3.6 导出(Stage 11) ---
   import('./export-bridge').then((m) => {
     m.initExportButtons();
   }).catch((e) => {

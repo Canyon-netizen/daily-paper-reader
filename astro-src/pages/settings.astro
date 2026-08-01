@@ -171,20 +171,41 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
       </div>
     </section>
 
-    <!-- ===== 导出「我的图书馆」(Stage 11 + 医正为「个人文献库」) =====
-        这是用户交献的**唯一**交出口。所有个人状态(星标 / 笔记 / 高亮 / 回收站)
-        严格存在 localStorage + IndexedDB,**不上传任何 GitHub / Gist**。
-        「我的图书馆」是一份个人档案,可下载为:
-          - references.bib  → Zotero / Mendeley 通用
-          - library.csl.json → Papers 3 / 通用 CSL 工具
-          - my-library.zip    → Obsidian vault 直接打开
-        一份 ZIP 一个图书馆,一个文件交给同事 / 老师 / 备份到网盘。 -->
+    <!-- ===== Library Gist 同步(Stage 2) =====
+        独立 gist id,绝不与 dpr-config.json 混同一个 gist。
+        .github/scripts/load_gist.py:150 取的是 gist 里第一个 .json 文件,
+        混用会让每日 pipeline 误读用户笔记当 config 灌进 $GITHUB_ENV。 -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">📚 我的图书馆 — 跨设备同步</h2>
+      <p class="settings-card-sub">
+        星标 / 阅读状态 / 笔记 / 回收站 用一个独立的 secret gist 同步,文件名
+        <code>dpr-library.json</code>。和上面的配置 gist 分开存,避免被 CI 误读。
+        首次点同步会自动创建 gist,把 library gist id 写到这里,无痕窗口粘上
+        同一 id 后点「拉取」就能从另一台设备恢复。
+      </p>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-library-gist-id">Library Gist ID(留空则首次同步时自动创建)</label>
+        <input id="cfg-library-gist-id" type="text" placeholder="32 位 hex,同步成功后会自动填回这里" />
+      </div>
+
+      <div class="settings-gist-actions">
+        <button type="button" id="library-gist-push-btn" class="settings-action-btn primary">📤 推送我的图书馆</button>
+        <button type="button" id="library-gist-pull-btn" class="settings-action-btn">📥 拉取我的图书馆</button>
+        <span id="library-gist-hint" class="settings-gist-hint"></span>
+      </div>
+    </section>
+
+    <!-- ===== 导出(Stage 11) =====
+        在浏览器里把星标的论文 + 笔记打包成 BibTeX / CSL-JSON / Obsidian ZIP。
+        走 fetch('/arxiv-index.json') 拿到所有论文 id,再 fetch 每篇 md 提取
+        frontmatter;然后调用 src/scripts/export/* 模块在浏览器里合成文件。 -->
     <section class="settings-card">
       <h2 class="settings-card-title">📦 导出我的图书馆</h2>
       <p class="settings-card-sub">
-        <strong>这是唯一交出口。</strong>你的星标 / 笔记 / 高亮 / 回收站全部存在本机,
-        不会上传任何云端。导出以一对一文件交换,BibTeX / CSL-JSON 给文献管理工具,
-        Obsidian ZIP 给个人笔记应用。迁移到新设备用「设置 → 导出 → 另一台设备导入」即可。
+        把当前星标 + 笔记打包成文献管理格式,全部在浏览器完成,纯前端。
+        包括 BibTeX (Zotero/Mendeley 通用)、CSL-JSON (Papers 3 等)
+        和 Obsidian ZIP (笔记 frontmatter + 自动归档布局)。
       </p>
 
       <div class="settings-gist-actions">

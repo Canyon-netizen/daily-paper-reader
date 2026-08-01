@@ -51,6 +51,15 @@ export {
   emptyUserLibrarySnapshot,
 } from './snapshot';
 
-// 导出模块(BibTeX / CSL / Obsidian ZIP)放在 astro-src/scripts/export/,
-// 由 astro-src/scripts/export-bridge.ts 桥接 setting 页 / 论文页。
-// 不要把 Gist sync 重新引入 —— 个人图书馆是本机的,导出即交给。
+export {
+  LIBRARY_GIST_FILENAME,
+  getLibraryGistId,
+  setLibraryGistId,
+  serializeUserLibrary,
+  deserializeUserLibrary,
+  mergeUserLibrary,
+  pullUserLibraryFromGist,
+  pushUserLibraryToGist,
+  syncUserLibraryFirstTime,
+  wipeAllUserLibraryRemote,
+} from './gist';

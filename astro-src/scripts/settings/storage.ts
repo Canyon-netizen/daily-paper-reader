@@ -46,12 +46,15 @@ export const STORAGE_KEYS = {
   // 实现在 lib/user-library/,不在 settings.ts —— 因为 lib/search 和 SSR 侧都要读它,
   // 放 scripts/ 会造成 lib → scripts 的反向依赖。这里只登记 key 名,保证
   // 全站 localStorage key 仍然只有这一个字典。
-  //
-  // **严格本机:Gist 同步已在 Stage 2 取消。** 用户的"我的图书馆"是个人
-  // 跨设备、强隐私的资产 —— Polaris 那种 "用户抽数据库 + 多端拉取" 模型
-  // 不适合生产,也不适合我们的零服务器架构。要迁移就导出 BibTeX /
-  // obsidian ZIP(见 astro-src/scripts/export/),一个文件一备人交献。
   userLibrary: 'dpr_user_library_v1',
+  // 用户图书馆的 Gist id(Stage 2)。**必须与 gistId 分开**:
+  // .github/scripts/load_gist.py:150 取的是 gist 里"第一个 .json 文件",
+  // 不是按文件名找 dpr-config.json。把图书馆数据塞进同一个 gist,
+  // 每日 pipeline 有可能读到错误的配置源。
+  libraryGistId: 'dpr_library_gist_id_v1',
+  // 搜索偏好(Stage 5):笔记通道开关、degrade 接受过的 flag 等。
+  // 浏览器 localStorage,不上 Gist。
+  searchPrefs: 'dpr_search_prefs_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 
