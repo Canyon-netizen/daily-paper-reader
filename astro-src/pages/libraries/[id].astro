@@ -49,6 +49,12 @@ for (const p of papers) {
   }
 }
 const topConcepts = Array.from(conceptCount.values()).sort((a, b) => b.n - a.n).slice(0, 24);
+
+// 导出数据载体:把成员 canonical id + 文件名前缀序列化到 #library-wb-data,
+// export-bridge.ts 会读这个元素,不再重复 SSR。prefix = 'rl-library' 之类
+// (从 lib.id 派生),用于生成 rl-library-references.bib 这种文件名。
+const libraryPrefix = `${lib.id}-library`;
+const memberCxList = papers.map((p) => p.canonicalArxivId).filter(Boolean);
 ---
 
 <BaseLayout
@@ -70,9 +76,9 @@ const topConcepts = Array.from(conceptCount.values()).sort((a, b) => b.n - a.n).
         </div>
       </div>
       <div class="library-wb-export">
-        <a class="export-btn" href={base + '/library/'} data-library-export-target="bibtex">📄 导出 references.bib</a>
-        <a class="export-btn" href={base + '/library/'} data-library-export-target="csl">📋 导出 library.csl.json</a>
-        <a class="export-btn primary" href={base + '/library/'} data-library-export-target="obsidian">📦 导出 my-library.zip</a>
+        <a class="export-btn" href="#" data-library-export-target="bibtex">📄 导出 references.bib</a>
+        <a class="export-btn" href="#" data-library-export-target="csl">📋 导出 library.csl.json</a>
+        <a class="export-btn primary" href="#" data-library-export-target="obsidian">📦 导出 my-library.zip</a>
         <span id="lib-export-hint" class="export-hint"></span>
       </div>
     </header>
@@ -107,24 +113,22 @@ const topConcepts = Array.from(conceptCount.values()).sort((a, b) => b.n - a.n).
         </div>
       </section>
     )}
+
+    {/* 导出数据载体 — export-bridge 读这个。 */}
+    <section
+      id="library-wb-data"
+      aria-hidden="true"
+      data-cx={JSON.stringify(memberCxList)}
+      data-prefix={libraryPrefix}
+      data-hint-id="lib-export-hint"
+    ></section>
   </main>
 
   <Footer />
 
   <script>
-    // 单库导出桥:复用 astro-src/scripts/export/ + 限制到当前文献库的成员
-    // 而不是全局星标。当前实现用 lib.exportBridge 的 'filter' 选项;
-    // 留 hook 让导出按钮触发,先弹个 toast 提示"开发中"以验证 wire-up。
-    import { showToast } from '../../scripts/toast';
-    document.querySelectorAll<HTMLAnchorElement>('[data-library-export-target]').forEach((a) => {
-      a.addEventListener('click', (e) => {
-        const target = a.dataset.libraryExportTarget;
-        e.preventDefault();
-        showToast(
-          `文献库导出(${target})开发中 — 等 Stage 11 导出函数接进 lib/libraries.ts 后打通`,
-          'info',
-        );
-      });
-    });
+    import '../../scripts/export-bridge.ts';
+    import { initLibraryExportButtons } from '../../scripts/export-bridge';
+    initLibraryExportButtons();
   </script>
 </BaseLayout>
