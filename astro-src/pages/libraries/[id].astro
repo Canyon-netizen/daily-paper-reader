@@ -1,0 +1,130 @@
+---
+// /libraries/<id>/ — 单库工作台
+//
+// 对照 Polaris /libraries/:id(WikiWorkbench):
+//   - 顶部 hero:库名 + 描述 + 成员数 + 导出按钮(对应 PapersTab / ExportMenu)
+//   - 论文列表(对应 PapersTab 的左侧列表)
+//   - 概念 chip 行(对应 ConceptsTab 的高频概念)
+//
+// 不复刻 Polaris 的 8 个 tab(治理 / 摘要 / 笔记 / chat / ingest / graph / ...)——
+// DPR 没有 LLM chat / ingest / 治理论;以后真要做再加,沿用 /libraries/[id]/[tab].astro
+// 子路径模式。
+//
+// 数据:与 /libraries/ 同源 —— selectLibraryPapers(items, lib) 派生。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { defaultPaperRepository } from '../../lib/paper-repository';
+import { getLibrary, LIBRARIES, selectLibraryPapers } from '../../lib/libraries';
+import '../../styles/library-workbench.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  return LIBRARIES.map((lib) => ({ params: { id: lib.id } }));
+}
+
+const { id } = Astro.params;
+const lib = getLibrary(id!);
+
+// 404:参数不在 LIBRARIES 里(理论上 getStaticPaths 已过滤,但 SSR 兜底)
+if (!lib) {
+  return Astro.redirect(base + '/libraries/');
+}
+
+const items = await defaultPaperRepository.list({ sortBy: 'date' });
+const papers = selectLibraryPapers(items, lib)
+  .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+// 高频概念(取这个库成员的 frontmatter.concepts[].slug,频次 top 24)
+const conceptCount = new Map<string, { slug: string; display_name: string; category: string; n: number }>();
+for (const p of papers) {
+  const cats = (p as unknown as { concepts?: Array<{ slug: string; display_name: string; category: string }> }).concepts;
+  if (!Array.isArray(cats)) continue;
+  for (const c of cats) {
+    const cur = conceptCount.get(c.slug);
+    if (cur) cur.n++;
+    else conceptCount.set(c.slug, { slug: c.slug, display_name: c.display_name, category: c.category, n: 1 });
+  }
+}
+const topConcepts = Array.from(conceptCount.values()).sort((a, b) => b.n - a.n).slice(0, 24);
+---
+
+<BaseLayout
+  title={`${lib.title} 文献库 · Daily Paper Reader`}
+  description={`${lib.descriptionZh} · 共 ${papers.length} 篇论文。`}
+>
+  <Navbar />
+
+  <main class={`library-workbench hue-${lib.hue}`}>
+    <header class="library-wb-hero">
+      <div>
+        <h1>{lib.title}</h1>
+        <p class="lib-wb-zh">{lib.titleZh}</p>
+        <p class="lib-wb-desc">{lib.description} — {lib.descriptionZh}</p>
+        <div class="library-wb-meta">
+          <span><span class="meta-num">{papers.length}</span> 篇论文</span>
+          <span><span class="meta-num">{topConcepts.length}</span> 个高频概念</span>
+          <span>维护 · {lib.curator}</span>
+        </div>
+      </div>
+      <div class="library-wb-export">
+        <a class="export-btn" href={base + '/library/'} data-library-export-target="bibtex">📄 导出 references.bib</a>
+        <a class="export-btn" href={base + '/library/'} data-library-export-target="csl">📋 导出 library.csl.json</a>
+        <a class="export-btn primary" href={base + '/library/'} data-library-export-target="obsidian">📦 导出 my-library.zip</a>
+        <span id="lib-export-hint" class="export-hint"></span>
+      </div>
+    </header>
+
+    <section class="library-wb-papers">
+      <h2>论文({papers.length})</h2>
+      <ul class="library-wb-paper-list">
+        {papers.map((p) => (
+          <li>
+            <a class="library-wb-paper-row" href={base + '/papers/' + p.id + '/'}>
+              <span class="row-date">{p.date || '—'}</span>
+              <span class="row-titles">
+                <p class="row-title-zh">{(p.title_zh || p.title_plain || p.title) ?? p.id}</p>
+                <p class="row-title-en">{p.title}</p>
+              </span>
+              <span class="row-arxiv">{p.arxivId}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    {topConcepts.length > 0 && (
+      <section class="library-wb-concepts">
+        <h2>高频概念</h2>
+        <div class="library-wb-concept-list">
+          {topConcepts.map((c) => (
+            <a class="library-wb-concept" href={base + '/wiki/concepts/' + c.slug + '/'}>
+              {c.display_name}<span class="library-wb-concept-count">×{c.n}</span>
+            </a>
+          ))}
+        </div>
+      </section>
+    )}
+  </main>
+
+  <Footer />
+
+  <script>
+    // 单库导出桥:复用 astro-src/scripts/export/ + 限制到当前文献库的成员
+    // 而不是全局星标。当前实现用 lib.exportBridge 的 'filter' 选项;
+    // 留 hook 让导出按钮触发,先弹个 toast 提示"开发中"以验证 wire-up。
+    import { showToast } from '../../scripts/toast';
+    document.querySelectorAll<HTMLAnchorElement>('[data-library-export-target]').forEach((a) => {
+      a.addEventListener('click', (e) => {
+        const target = a.dataset.libraryExportTarget;
+        e.preventDefault();
+        showToast(
+          `文献库导出(${target})开发中 — 等 Stage 11 导出函数接进 lib/libraries.ts 后打通`,
+          'info',
+        );
+      });
+    });
+  </script>
+</BaseLayout>

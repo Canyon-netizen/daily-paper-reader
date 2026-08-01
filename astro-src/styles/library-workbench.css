@@ -1,0 +1,208 @@
+/* /libraries/<id>/ — 单库工作台
+ *
+ * 对照 Polaris /libraries/:id(WikiWorkbench)的精简版:
+ *   - 顶部 hero:库名 + 描述 + 成员数 + 导出按钮
+ *   - 三段:论文列表 + 概念 + 导出
+ *
+ * 复用:
+ *   - /papers/ 的 PaperLibrary 卡片 + 虚拟滚动
+ *   - 概念来自 docs/papers frontmatter `concepts:`(Stage 9 已派生)
+ *   - 导出走 astro-src/scripts/export/{bibtex,csl,obsidian}.ts
+ *
+ * 不是把 PaperLibrary 整个嵌进来 —— 那个是「所有论文的搜索引擎」,
+ * 这里要的是「这个库的论文」。所以重新渲染,客户端 chip / 抽屉 / 笔记
+ * 都去掉,聚焦 list + export。
+ */
+
+.library-workbench {
+  max-width: var(--shell-max-width, 1200px);
+  margin: 0 auto;
+  padding: var(--space-10, 2.5rem) var(--space-6, 1.5rem) var(--space-16, 5rem);
+}
+
+.library-wb-hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1.5rem;
+  align-items: end;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  position: relative;
+  overflow: hidden;
+}
+.library-wb-hero::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 5px;
+  bottom: 0;
+  background: var(--hue-color, var(--accent));
+}
+.library-wb-hero h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  letter-spacing: -0.02em;
+  font-weight: 800;
+}
+.library-wb-hero .lib-wb-zh {
+  margin: 0.1rem 0 0;
+  font-size: 1.05rem;
+  color: var(--fg-muted);
+}
+.library-wb-hero .lib-wb-desc {
+  margin: 0.65rem 0 0;
+  font-size: 0.92rem;
+  color: var(--fg-subtle);
+  line-height: 1.6;
+}
+.library-wb-meta {
+  display: flex;
+  gap: 1.25rem;
+  margin-top: 0.85rem;
+  font-size: 0.85rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+}
+.library-wb-meta .meta-num {
+  color: var(--accent);
+  font-weight: 600;
+}
+.library-wb-export {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.library-wb-export .export-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.88rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.library-wb-export .export-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-elevated);
+}
+.library-wb-export .export-btn.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.library-wb-export .export-btn.primary:hover {
+  background: var(--accent-hover);
+}
+.library-wb-export .export-hint {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  min-height: 1em;
+}
+
+/* 论文列表:复用 papers.css 的 .papers-list 但简化(无 chip / 无 filter) */
+.library-wb-papers {
+  margin-top: var(--space-8, 2rem);
+}
+.library-wb-papers h2,
+.library-wb-concepts h2 {
+  font-size: 1.25rem;
+  margin: 0 0 var(--space-4, 1rem);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+.library-wb-paper-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.library-wb-paper-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  text-decoration: none;
+  color: var(--fg);
+  transition: border-color 0.15s, transform 0.15s;
+}
+.library-wb-paper-row:hover {
+  border-color: var(--accent);
+  transform: translateX(2px);
+}
+.library-wb-paper-row .row-date {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+  width: 6.5em;
+}
+.library-wb-paper-row .row-titles {
+  flex: 1;
+  min-width: 0;
+}
+.library-wb-paper-row .row-title-zh {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-wb-paper-row .row-title-en {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  margin: 0.15rem 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-wb-paper-row .row-arxiv {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--fg-subtle);
+  flex-shrink: 0;
+}
+
+/* 概念 chip 行 */
+.library-wb-concepts {
+  margin-top: var(--space-10, 2.5rem);
+}
+.library-wb-concept-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.library-wb-concept {
+  display: inline-block;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.82rem;
+  color: var(--fg-muted);
+  text-decoration: none;
+  background: var(--bg-elevated);
+  transition: border-color 0.15s, color 0.15s;
+}
+.library-wb-concept:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.library-wb-concept-count {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--fg-subtle);
+  margin-left: 0.35rem;
+}

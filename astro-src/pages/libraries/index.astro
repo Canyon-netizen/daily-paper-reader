@@ -1,0 +1,78 @@
+---
+// /libraries/ — 文献库列表(首页入口)
+//
+// 严格对照 Polaris /libraries(LibrariesPage):
+//   - 卡片流,每张卡 = 一个 DirectionLibrary 风格的公共文献库
+//   - 顶部 hero + 4 个快捷入口(论文分析 / 我的图书馆 / 主题探索 / 概念)
+//   - 卡片左竖条按 lib.hue 着色
+//   - 仅显示有成员(>0 论文)的库,buildLibraryDigests 自动过滤
+//
+// 设计要点:每个库不是"收藏夹",而是从 docs/papers/** frontmatter 派生的
+// 主题/任务集合 —— 与个人图书馆(走 user-library)的语义完全分开。
+//
+// 路径:
+//   /libraries/        本页(列表)
+//   /libraries/<id>/   单库工作台(papers + 概念 + 导出)
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { defaultPaperRepository } from '../../lib/paper-repository';
+import { buildLibraryDigests, LIBRARIES } from '../../lib/libraries';
+import '../../styles/libraries.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// 一次 list 拿全集,后面 buildLibraryDigests 自己分组。
+const items = await defaultPaperRepository.list({ sortBy: 'date' });
+const digests = buildLibraryDigests(items);
+const totalPapers = items.length;
+---
+
+<BaseLayout
+  title="文献库 · Daily Paper Reader"
+  description="按领域 / 主题 / 任务组织的论文集合:强化学习、多智能体、博弈 AI、大模型代理、推理与对齐、机器人、视觉等。"
+>
+  <Navbar />
+
+  <main class="libraries-page">
+    <header class="libraries-hero">
+      <h1>文献库</h1>
+      <p class="lead">
+        按 <strong>领域 / 主题 / 任务</strong>组织的论文集合 —— 每个库是从
+        <code>docs/papers/</code> 的 frontmatter 派生的论文群,不是用户收藏夹。
+        <strong>个人图书馆</strong>(星标 / 笔记 / 高亮)走 <a href={base + '/library/'}>/library/</a>。
+        共 <strong>{totalPapers}</strong> 篇论文,当前展示 <strong>{digests.length}</strong> 个非空库。
+      </p>
+    </header>
+
+    <nav class="libraries-shortcuts" aria-label="快捷入口">
+      <a class="shortcut" href={base + '/papers/'}>📚 所有论文</a>
+      <a class="shortcut" href={base + '/library/'}>⭐ 我的图书馆</a>
+      <a class="shortcut" href={base + '/topic/'}>🎯 主题探索</a>
+      <a class="shortcut" href={base + '/concepts/'}>🕸 概念图谱</a>
+      <a class="shortcut" href={base + '/conferences/'}>🎤 会议</a>
+    </nav>
+
+    <div class="libraries-grid">
+      {digests.map((d) => (
+        <a class={`library-card hue-${d.library.hue}`} href={base + '/libraries/' + d.library.id + '/'}>
+          <h2 class="lib-title">
+            <span>{d.library.title}</span>
+            <span class="lib-count">{d.paperCount} 篇</span>
+          </h2>
+          <p class="lib-title-zh">{d.library.titleZh}</p>
+          <p class="lib-desc">{d.library.descriptionZh}</p>
+          <div class="lib-meta">
+            <div class="lib-tags">
+              {d.library.tags.map((t) => <span class="lib-tag">{t}</span>)}
+            </div>
+            <span>维护 · {d.library.curator}</span>
+          </div>
+        </a>
+      ))}
+    </div>
+  </main>
+
+  <Footer />
+</BaseLayout>

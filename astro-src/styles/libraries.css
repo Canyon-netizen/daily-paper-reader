@@ -1,0 +1,162 @@
+/* /libraries/ — 文献库卡片流
+ *
+ * 设计原则:
+ *   - 卡片流:每张卡代表一个文献库
+ *   - 6 色 hue(orange / cyan / purple / emerald / amber / rose / sky)
+ *     用 4 px 左边竖条区分,卡片主体走 --bg-elevated 保持主题一致
+ *   - 不抢眼:文档站基调,不用 hero 大图
+ *   - 顶部一行快捷入口(论文库 / 我的图书馆 / 主题探索 / 概念)保留用户导航
+ */
+
+.libraries-page {
+  max-width: var(--shell-max-width, 1200px);
+  margin: 0 auto;
+  padding: var(--space-10, 2.5rem) var(--space-6, 1.5rem) var(--space-16, 5rem);
+}
+
+.libraries-hero {
+  margin-bottom: var(--space-10, 2.5rem);
+}
+.libraries-hero h1 {
+  margin: 0 0 var(--space-3, 0.75rem);
+  font-size: clamp(1.8rem, 3.5vw, 2.6rem);
+  letter-spacing: -0.02em;
+  font-weight: 800;
+}
+.libraries-hero .lead {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--fg-muted);
+  line-height: 1.7;
+  max-width: 720px;
+}
+
+/* 快捷入口 — 文档站导航补充 */
+.libraries-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: var(--space-6, 1.5rem) 0 var(--space-8, 2rem);
+}
+.libraries-shortcuts .shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg-muted);
+  text-decoration: none;
+  font-size: 0.88rem;
+  transition: color 0.15s, border-color 0.15s;
+}
+.libraries-shortcuts .shortcut:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 卡片网格 */
+.libraries-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+@media (max-width: 720px) {
+  .libraries-grid { grid-template-columns: 1fr; }
+}
+
+/* 单卡 */
+.library-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.1rem 1.25rem 1rem 1.4rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  text-decoration: none;
+  color: var(--fg);
+  overflow: hidden;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.library-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  bottom: 0;
+  background: var(--hue-color, var(--accent));
+  opacity: 0.85;
+}
+.library-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--hue-color, var(--accent));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+.library-card .lib-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.library-card .lib-title-zh {
+  margin: 0.1rem 0 0;
+  font-size: 0.86rem;
+  color: var(--fg-subtle);
+}
+.library-card .lib-count {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.18em 0.55em;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+.library-card .lib-desc {
+  margin: 0.25rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--fg-muted);
+}
+.library-card .lib-meta {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+}
+.library-card .lib-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.library-card .lib-tag {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  padding: 0.1em 0.45em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg-subtle);
+}
+
+/* 6 色 hue(与 concepts / conferences 区分)*/
+.hue-orange  { --hue-color: #d97706; }
+.hue-cyan    { --hue-color: #0891b2; }
+.hue-purple  { --hue-color: #7c3aed; }
+.hue-emerald { --hue-color: #059669; }
+.hue-amber   { --hue-color: #ca8a04; }
+.hue-rose    { --hue-color: #e11d48; }
+.hue-sky     { --hue-color: #0284c7; }

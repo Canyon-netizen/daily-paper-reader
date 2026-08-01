@@ -1,295 +1,88 @@
 ---
-// 首页
-// 1) 顶部 hero:品牌口号 + 两枚 CTA
-// 2) 数据 stat row:收录论文、主题数量、来源数、最新更新
-// 3) 编辑精选:近 7 天内按 LLM 评分排序的 Top 6 论文卡片
-// 4) 日历视图:按发布日期排布 + 主题 chip 过滤(原 #by-topic 折叠列表已下线)
-// 5) How it works:3 步工作流介绍
-// 数据为空时仍能展示 hero/stats/empty-state,避免 Vercel 首次部署"全空"观感
-import { resolveTaskKey } from '../lib/paper';
+// 首页(2026-08-01 重构:文献库作为主入口)
+//
+// 之前:今日推荐 + 编辑精选 + 主题日历(以"每日推送"为中心)
+// 现在:文献库卡片流(以"按主题查阅"为中心) + 顶部一行快捷入口 +
+//      "今日新增"与"维护方"两枚状态 chip
+//
+// 对照 Polaris:Polaris 的 /libraries 是首页主体,DPR 也走同一抽象。
+// 用户看首页 → 选一个文献库 → 进工作台。这是科研阅读场景的主路径。
+//
+// 数据:
+//   - buildLibraryDigests(items): 派生"库 → 论文数 + 最近 3 篇"
+//   - 统计:论文总数、库数、今日新增
+//   - 不再做编辑精选 Top 6 —— 移到 /libraries/<热门 id>/ 看更精准
+
 import { defaultPaperRepository } from '../lib/paper-repository';
 import { getLastUpdatedDate } from '../lib/lastUpdated';
-import { paperPlainTitle } from '../lib/title';
+import { buildLibraryDigests } from '../lib/libraries';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
-import DailyCalendar from '../components/DailyCalendar.astro';
 import '../styles/home.css';
-import '../styles/daily-calendar.css';
+import '../styles/libraries.css';
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const repo = defaultPaperRepository;
 
-// 编辑精选:近 7 天内按 LLM 评分排序的 Top 6(库内不足 6 时自动回退到不限时间的同排序)。
-// base 传给 listPapers 用于拼缩略图 URL(部署子路径兼容)。
-const topPapers = await repo.list({ sortBy: 'score', limit: 6, sinceDays: 7, base });
-
-// 统计
-// totalPapers 用 listPapers({dedup:true}) 与 /papers/ 论文库对齐:
-//   同 arxiv id 多版本 (v1/v2/...) 只算一篇,避免首页显示 220 而论文库显示 205。
-//   旧实现 listAllPaperIds().length 含全部版本数,跟论文库不同步。
-const totalPapers = (await repo.list({ dedup: true })).length;
-const sources = ['arXiv', 'bioRxiv', 'medRxiv', 'ChemRxiv', 'OpenReview']; // pipeline 支持的来源
-// 最近更新:GitHub Actions 成功 run 口径 + GH_TOKEN 大小写兜底 + 失败回退
-// "最新论文 date",全部逻辑在 lib/lastUpdated.ts 内。
+const items = await repo.list({ sortBy: 'date', dedup: true, base });
+const digests = buildLibraryDigests(items);
+const totalPapers = items.length;
+const libraryCount = digests.length;
 const lastUpdated = await getLastUpdatedDate();
 
-// 日历视图数据:按 date desc + dedup(取每个 arxiv id 最新 v# 的 date)。
-// task 字段给 DailyCalendar 客户端做主题筛选;p.categories 一并塞进去
-// 是为了让 backfill 的 md(没有 tags: frontmatter,只用 categories:)也能
-// 被客户端识别到 task key,与 listAllPapersByTag 口径一致。
-// thumbnail 给 DailyCalendar 客户端展开卡片渲染缩略图(已用 base 拼过的 URL)。
-const dailyPapersAll = await repo.list({ sortBy: 'date', dedup: true, base });
-const dailyLean = dailyPapersAll
-  .filter((p) => p.date)
-  .map((p) => ({
-    date: p.date!,
-    slug: p.slug,
-    arxivId: p.arxivId,
-    title: paperPlainTitle(p.title, p.title_plain),
-    title_zh: paperPlainTitle(p.title_zh, p.title_zh_plain),
-    score: p.score,
-    venue: p.venue,
-    accepted: p.accepted,
-    tags: p.tags,
-    task: resolveTaskKey(p),
-    categories: p.categories,
-    thumbnail: p.thumbnail,
-  }));
-
-// 主题数量:库内出现过的 categories.task[0] 集合大小,与日历
-// #cal-topic-count 软标签口径一致。剔除 resolveTaskKey 的 '其他' fallback
-// (它代表"无明确 task 的论文",不是真实的主题分类,UI 不对用户暴露),
-// 让 stats 卡 "主题数量" 与日历 select 选项数严格一致。
-// 直接基于 dailyLean.task 聚合,不重复扫盘。
-const topicKeys = new Set<string>();
-for (const p of dailyLean) {
-  const key = p.task;
-  if (key && key !== '其他') topicKeys.add(key);
-}
-const topicCount = topicKeys.size;
+// 今日新增(按 date 匹配今天 UTC,简单起见用昨日更新兜底)
+const today = new Date().toISOString().slice(0, 10);
+const newToday = items.filter((p) => p.date === today).length;
 ---
 
 <BaseLayout
-  title="Daily Paper Reader · 每日 arXiv 论文阅读"
-  description="每日自动抓取 arXiv 等多源 AI 论文,按兴趣 query tag 分类,提供 LLM 中文摘要、TLDR 与 Zotero 一键保存。"
+  title="文献库 · Daily Paper Reader"
+  description="按领域 / 主题 / 任务组织的论文集合:强化学习、多智能体、博弈 AI、大模型代理、推理与对齐、机器人、视觉等。"
 >
   <Navbar />
 
-  <main class="home">
-    <!-- ============ Hero ============ -->
-    <section class="hero dpr-fade-in">
-      <div class="hero-bg" aria-hidden="true"></div>
-      <div class="hero-inner">
-        <div class="hero-eyebrow">
-          <span class="hero-dot"></span>
-          每日自动更新 · arXiv / bioRxiv / OpenReview
-        </div>
-        <h1 class="hero-title">
-          让 <span class="hero-accent">AI 论文阅读</span><br />
-          变得<span class="hero-underline">更轻、更准、更有节奏</span>
-        </h1>
-        <p class="hero-subtitle">
-          抓取、摘要、分类、收藏一站完成。<br class="hero-br-mobile" />
-          按你关心的 query tag 自动筛选,每天 5 分钟看完重点。
-        </p>
-        <div class="hero-cta">
-          <a href={base + '/tutorial/'} class="cta-primary">📖 使用教程</a>
-          <a href={base + '/zotero-usage/'} class="cta-secondary">🔖 Zotero 集成</a>
-          <a
-            href="https://github.com/Canyon-netizen/daily-paper-reader"
-            target="_blank"
-            rel="noopener"
-            class="cta-ghost"
-          >⭐ Star on GitHub</a>
-        </div>
+  <main class="libraries-page">
+    <header class="libraries-hero">
+      <h1>文献库</h1>
+      <p class="lead">
+        按 <strong>领域 / 主题 / 任务</strong>组织的论文集合。共收录
+        <strong>{totalPapers}</strong> 篇,展示 <strong>{libraryCount}</strong> 个非空库。
+        <strong>个人图书馆</strong>(星标 / 笔记 / 高亮)走 <a href={base + '/library/'}>这里</a>。
+      </p>
+      <div class="libraries-shortcuts" aria-label="状态">
+        <span class="shortcut">📅 今日新增 <strong>{newToday}</strong></span>
+        <span class="shortcut">🕒 最近更新 {lastUpdated || '—'}</span>
+        <a class="shortcut" href={base + '/library/'}>⭐ 我的图书馆</a>
+        <a class="shortcut" href={base + '/topic/'}>🎯 主题探索</a>
       </div>
-    </section>
+    </header>
 
-    <!-- ============ Stats ============ -->
-    <section class="stats-wrap">
-      <div class="stats">
-        <a class="stat stat-link" href="#top-picks">
-          <div class="stat-value">{totalPapers.toLocaleString()}</div>
-          <div class="stat-label">收录论文</div>
-        </a>
-        <div class="stat">
-          <div class="stat-value">{topicCount}</div>
-          <div class="stat-label">主题数量</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value">{sources.length}</div>
-          <div class="stat-label">数据来源</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value stat-value-sm">{lastUpdated.label}</div>
-          <div class="stat-label">最近更新{lastUpdated.isFallback ? ' · 数据截止' : ''}</div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============ 日历视图 ============ -->
-    <DailyCalendar base={base} papers={dailyLean} />
-
-    <!-- ============ 编辑精选 ============ -->
-    <section id="top-picks" class="section">
-      <div class="section-header">
-        <div>
-          <h2>🏆 编辑精选</h2>
-          <p class="section-sub">近 7 天内按 LLM 评分排序的 Top {topPapers.length || 0} 篇</p>
-        </div>
-        {topPapers.length > 0 && (
-          <span class="section-tag">评分优先</span>
-        )}
-      </div>
-
-      {topPapers.length > 0 ? (
-        <ul class="paper-grid dpr-stagger" style="--dpr-stagger-step: 70ms; --dpr-stagger-base: 100ms;">
-          {topPapers.map((p, i) => {
-            const href = `${base}/papers/${p.slug}/`;
-            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : null;
-            return (
-              <li class="paper-card"
-                  data-rank={i + 1}
-                  data-arxiv-id={p.arxivId}
-                  style={`--dpr-stagger-i: ${i}`}>
-                <a href={href} class="paper-card-link">
-                  <div class="paper-card-topline" aria-hidden="true"></div>
-                  {p.thumbnail && (
-                    <div class="paper-card-thumb-wrap">
-                      <img class="paper-card-thumb" src={p.thumbnail} alt="" loading="lazy" decoding="async" />
-                    </div>
-                  )}
-                  <div class="paper-card-head">
-                    <div class="paper-rank-block">
-                      <span class="paper-rank-num">{String(i + 1).padStart(2, '0')}</span>
-                      <span class="paper-rank-label">{medal ? `${medal} 编辑精选` : '编辑精选'}</span>
-                    </div>
-                    {typeof p.score === 'number' && Number.isFinite(p.score) && (
-                      <div class="paper-score" title="LLM 评分">
-                        <span class="paper-score-star" aria-hidden="true">★</span>
-                        <span class="paper-score-value">{p.score.toFixed(1)}</span>
-                      </div>
-                    )}
-                  </div>
-                  {p.venue && (
-                    <div class="paper-meta-row">
-                      <span class={p.accepted ? 'venue-chip venue-chip--accepted' : 'venue-chip'} title={p.accepted ? '会议接收论文' : '会议论文'}>
-                        {p.venue}{p.accepted ? ' ✓' : ''}
-                      </span>
-                      {p.date && (
-                        <span class="paper-date">{new Date(p.date).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}</span>
-                      )}
-                    </div>
-                  )}
-                  <h3 class="paper-title">{paperPlainTitle(p.title_zh, p.title_zh_plain) || paperPlainTitle(p.title, p.title_plain)}</h3>
-                  {p.title_zh && p.title && p.title !== p.title_zh && (
-                    <p class="paper-title-en">{paperPlainTitle(p.title, p.title_plain)}</p>
-                  )}
-                  {p.evidence && (
-                    <blockquote class="paper-evidence">
-                      <span class="evidence-label">EVIDENCE</span>
-                      <span class="evidence-text">{p.evidence}</span>
-                    </blockquote>
-                  )}
-                  <div class="paper-card-foot">
-                    {(() => {
-                      // 卡片底部标签:从 categories 拍平后展示前 2 个 task/method/type
-                      // 标签(venue 已经在上面的 venue-chip 展示了,这里跳过)。
-                      const cardTags: string[] = [];
-                      const cats = p.categories;
-                      if (cats) {
-                        for (const dim of ['task', 'method', 'type'] as const) {
-                          for (const label of cats[dim] || []) {
-                            if (cardTags.length < 2) cardTags.push(label);
-                          }
-                        }
-                      }
-                      return cardTags.length > 0 ? (
-                        <div class="paper-tags">
-                          {cardTags.map((label: string) => (
-                            <span class="tag">{label}</span>
-                          ))}
-                        </div>
-                      ) : <span />;
-                    })()}
-                    <span class="paper-cta">
-                      阅读
-                      <svg class="paper-cta-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <path d="M5 12h14M13 5l7 7-7 7" />
-                      </svg>
-                    </span>
-                  </div>
-                </a>
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <div class="empty-card">
-          <div class="empty-icon">📭</div>
-          <h3>今日还没有论文入库</h3>
-          <p>
-            数据通过 GitHub Actions 每日 UTC 00:00 抓取,首次部署完成后约 1 小时内会有内容。
-            也可以在 GitHub 仓库上手动触发 <code>daily-paper-reader</code> workflow。
-          </p>
-          <div class="empty-actions">
-            <a
-              href="https://github.com/Canyon-netizen/daily-paper-reader/actions"
-              target="_blank" rel="noopener"
-              class="cta-primary"
-            >查看 Actions</a>
-            <a
-              href="https://github.com/Canyon-netizen/daily-paper-reader/blob/main/README.md"
-              target="_blank" rel="noopener"
-              class="cta-ghost"
-            >了解数据流</a>
+    <div class="libraries-grid">
+      {digests.map((d) => (
+        <a class={`library-card hue-${d.library.hue}`} href={base + '/libraries/' + d.library.id + '/'}>
+          <h2 class="lib-title">
+            <span>{d.library.title}</span>
+            <span class="lib-count">{d.paperCount} 篇</span>
+          </h2>
+          <p class="lib-title-zh">{d.library.titleZh}</p>
+          <p class="lib-desc">{d.library.descriptionZh}</p>
+          <div class="lib-meta">
+            <div class="lib-tags">
+              {d.library.tags.slice(0, 2).map((t) => <span class="lib-tag">{t}</span>)}
+            </div>
+            <span>维护 · {d.library.curator}</span>
           </div>
-        </div>
-      )}
-    </section>
+        </a>
+      ))}
+    </div>
 
-    <!-- ============ How it works ============ -->
-    <section class="section">
-      <div class="section-header">
-        <div>
-          <h2>⚙️ 工作流</h2>
-          <p class="section-sub">一条 pipeline 把 arXiv 抓取到你眼前</p>
-        </div>
-      </div>
-      <ol class="how dpr-stagger" style="--dpr-stagger-step: 80ms;">
-        <li class="how-step" style="--dpr-stagger-i: 0;">
-          <div class="how-num">01</div>
-          <h3>多源抓取</h3>
-          <p>
-            GitHub Actions 每日定时从 arXiv / bioRxiv / medRxiv / ChemRxiv / OpenReview
-            抓取最近 7 天新论文。
-          </p>
-        </li>
-        <li class="how-step" style="--dpr-stagger-i: 1;">
-          <div class="how-num">02</div>
-          <h3>Embedding + 评分</h3>
-          <p>
-            通过 embedding + query tag 召回候选,LLM 二次评分,Top 论文带 LLM 中文摘要与 TLDR。
-          </p>
-        </li>
-        <li class="how-step" style="--dpr-stagger-i: 2;">
-          <div class="how-num">03</div>
-          <h3>静态站呈现</h3>
-          <p>
-            论文元数据写入 <code>docs/</code>,本 Astro 站每次 push 自动重新构建并部署到 Vercel。
-          </p>
-        </li>
-      </ol>
-    </section>
+    <div style="margin-top: 2rem; text-align: center;">
+      <a href={base + '/libraries/'} style="color: var(--accent); text-decoration: none; font-weight: 500;">
+        → 完整文献库列表 + 各库独立导出
+      </a>
+    </div>
   </main>
 
   <Footer />
-
-  <script>
-    import '../scripts/theme.ts';
-    import '../scripts/index-filter.ts';
-    import '../scripts/paper-selection.ts';
-    import '../styles/paper-selection.css';
-  </script>
 </BaseLayout>
