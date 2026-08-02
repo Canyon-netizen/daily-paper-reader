@@ -156,34 +156,104 @@ const selectedPaper = papers[0];
             papers.map((p, i) => (
               <div id={`paper-${p.canonicalArxivId}`}
                    class={`wb-detail-body${i === 0 ? ' wb-detail-default' : ''}`}>
-                <h2>{p.title_zh || p.title_plain || p.title || p.id}</h2>
-                <div class="detail-meta">
-                  {p.arxivId && (
-                    <a href={`https://arxiv.org/abs/${p.arxivId.replace(/v\d+$/, '')}`}
-                       target="_blank" rel="noopener">arXiv:{p.arxivId}</a>
+                {/* ===== 1. 元数据头:pills + 标题 + 作者 + 评分环 ===== */}
+                <div class="detail-head">
+                  <div class="detail-head-text">
+                    <div class="detail-pills">
+                      <span class="pill pill-status">已纳入</span>
+                      {p.tldr && <span class="pill pill-wiki">✨ wiki</span>}
+                      {p.pdf && <span class="pill pill-pdf">📄 PDF</span>}
+                      {p.venue && <span class="pill pill-venue">{p.venue}</span>}
+                    </div>
+                    <h2>{p.title_zh || p.title_plain || p.title || p.id}</h2>
+                    {p.title && p.title_zh && <p class="detail-en">{p.title}</p>}
+                    {p.authors && <p class="detail-authors">{p.authors}</p>}
+                    <div class="detail-meta">
+                      {p.arxivId && (
+                        <a href={`https://arxiv.org/abs/${p.arxivId.replace(/v\d+$/, '')}`}
+                           target="_blank" rel="noopener">arXiv:{p.arxivId}</a>
+                      )}
+                      <span>{p.date || '—'}</span>
+                    </div>
+                  </div>
+                  {typeof p.score === 'number' && p.score > 0 && (
+                    <div class="score-ring" aria-label={`相关度 ${p.score.toFixed(2)}`}>
+                      <svg viewBox="0 0 64 64" width="64" height="64">
+                        <circle cx="32" cy="32" r="28" fill="none" stroke="var(--bg-muted)" stroke-width="4" />
+                        <circle cx="32" cy="32" r="28" fill="none" stroke="var(--accent)" stroke-width="4"
+                                stroke-dasharray={`${(p.score * 175.93).toFixed(1)} 175.93`}
+                                stroke-linecap="round" transform="rotate(-90 32 32)" />
+                      </svg>
+                      <span class="score-ring-label">{p.score.toFixed(2)}</span>
+                      <span class="score-ring-sub">相关度</span>
+                    </div>
                   )}
-                  <span>{p.date || '—'}</span>
-                  {p.venue && <span class="venue-chip">{p.venue}</span>}
                 </div>
-                {p.title && p.title_zh && <p class="detail-en">{p.title}</p>}
-                {p.authors && (
-                  <p class="detail-authors">{p.authors}</p>
-                )}
-                {p.tldr && <p class="detail-zh">{p.tldr}</p>}
-                <div class="detail-row">
-                  <a class="export-btn" href={base + '/papers/' + p.id + '/'}>📄 打开论文页</a>
+
+                {/* ===== 2. 操作按钮 ===== */}
+                <div class="detail-row detail-actions">
+                  <a class="export-btn primary" href={base + '/papers/' + p.id + '/'}>📖 阅读原文</a>
                   <a class="export-btn" href={base + '/papers/' + p.id + '/#paper-notes-section'}>📝 写笔记</a>
                   {p.pdf && (
-                    <a class="export-btn" href={p.pdf} target="_blank" rel="noopener">🔗 PDF</a>
+                    <a class="export-btn" href={p.pdf} target="_blank" rel="noopener">🔗 arXiv PDF</a>
                   )}
+                  <a class="export-btn" href={base + '/library/'}>⭐ 我的图书馆</a>
                 </div>
-                {p.concepts && p.concepts.length > 0 && (
-                  <div class="concepts-chips">
-                    {p.concepts.slice(0, 18).map((c) => (
-                      <a class="cc" href={base + '/wiki/concepts/' + c.slug + '/'}>{c.display_name}</a>
-                    ))}
+
+                {/* ===== 3. TL;DR 卡片 ===== */}
+                {p.tldr && (
+                  <div class="tldr-card">
+                    <span class="tldr-label">TL;DR</span>
+                    <p>{p.tldr}</p>
                   </div>
                 )}
+
+                {/* ===== 4. 概念 chips(过多时折叠) ===== */}
+                {p.concepts && p.concepts.length > 0 && (() => {
+                  const limit = 12;
+                  const overflow = p.concepts.length > limit;
+                  return (
+                    <details class="detail-section" open={p.concepts.length <= limit}>
+                      <summary>概念 · {p.concepts.length} 个</summary>
+                      <div class="concepts-chips">
+                        {(overflow ? p.concepts.slice(0, limit) : p.concepts).map((c) => (
+                          <a class="cc" href={base + '/wiki/concepts/' + c.slug + '/'}>{c.display_name}</a>
+                        ))}
+                        {overflow && <span class="cc cc-overflow">+{p.concepts.length - limit} 个</span>}
+                      </div>
+                    </details>
+                  );
+                })()}
+
+                {/* ===== 5. 摘要 + meta 折叠区 ===== */}
+                <details class="detail-section">
+                  <summary>摘要</summary>
+                  {p.evidence ? (
+                    <p class="detail-abstract">{p.evidence}</p>
+                  ) : (
+                    <p class="empty muted">这篇还没有摘要。</p>
+                  )}
+                </details>
+
+                {/* ===== 6. 我的笔记(SSR 不可见,只占位) ===== */}
+                <details class="detail-section">
+                  <summary>我的笔记</summary>
+                  <p class="empty muted">
+                    笔记存在浏览器 localStorage,SSR 无法读取。<br />
+                    <a href={base + '/papers/' + p.id + '/#paper-notes-section'}>→ 去论文页底部写笔记 / 读笔记</a>
+                  </p>
+                </details>
+
+                {/* ===== 7. 元信息折叠区 ===== */}
+                <details class="detail-section">
+                  <summary>元信息</summary>
+                  <dl class="detail-meta-table">
+                    {p.arxivId && <><dt>arXiv</dt><dd class="mono">{p.arxivId}</dd></>}
+                    {p.date && <><dt>发布日期</dt><dd class="mono">{p.date}</dd></>}
+                    {p.pdf && <><dt>PDF</dt><dd><a href={p.pdf} target="_blank" rel="noopener" class="mono">{p.pdf}</a></dd></>}
+                    {typeof p.score === 'number' && <><dt>相关度</dt><dd class="mono">{p.score.toFixed(3)}</dd></>}
+                  </dl>
+                </details>
               </div>
             ))
           )}
