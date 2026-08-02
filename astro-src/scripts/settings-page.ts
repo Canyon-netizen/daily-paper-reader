@@ -445,6 +445,9 @@ function init(): void {
     console.warn('[settings] export bridge failed to load', e);
   });
 
+  // --- 3.7 新增文献库 — 生成 LIBRARIES entry(纯浏览器,不依赖任何 API) ---
+  initLibraryGenerator();
+
   // --- 4. 主题 ---
   try { $<HTMLTextAreaElement>('cfg-topics').value = getTopicsText(); } catch { $<HTMLTextAreaElement>('cfg-topics').value = DEFAULT_TOPICS_TEXT; }
   refreshTopicsStatus();
@@ -589,6 +592,118 @@ async function refreshHiddenTitles(): Promise<void> {
       el.classList.add('settings-hidden-title--missing');
     }
   }
+}
+
+/**
+ * 文献库 entry 代码生成器(2026-08-01)。
+ * 表单 → 一键生成 LIBRARIES 配置表的新条目源代码,你复制贴到
+ * astro-src/lib/libraries.ts 后 commit + push 即生效。
+ *
+ * 不引入 GitHub API 复杂性 —— 因为单用户 + Cloudflare Pages rebuild 的工作流
+ * 简单,UI 生成代码 → 用户手动 commit 比自动 PR 更稳定(没有 token / 权限问题)。
+ */
+function initLibraryGenerator(): void {
+  const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`#${id} not found`);
+    return el as T;
+  };
+  const $v = (id: string): string => ($<HTMLInputElement>(id).value || '').trim();
+
+  const ALLOWED_DIM = new Set(['task', 'method', 'type', 'venue']);
+  const ALLOWED_HUE = new Set(['orange', 'cyan', 'purple', 'emerald', 'amber', 'rose', 'sky']);
+
+  function setGenHint(msg: string, kind: 'info' | 'ok' | 'error' = 'info'): void {
+    const el = document.getElementById('lib-generate-hint');
+    if (!el) return;
+    el.textContent = msg;
+    el.dataset.kind = kind;
+  }
+
+  /** 把 tags 字符串 (如 "task:rlhf, method:safety") 转成合法 ['task:rlhf', 'method:safety'] */
+  function parseTags(s: string): string[] | null {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of s.split(/[,\s]+/)) {
+      const t = raw.trim();
+      if (!t) continue;
+      const m = t.match(/^([a-z]+):(.+)$/i);
+      if (!m || !ALLOWED_DIM.has(m[1].toLowerCase())) {
+        return null;
+      }
+      const tag = m[1].toLowerCase() + ':' + m[2].trim();
+      if (seen.has(tag)) continue;
+      seen.add(tag);
+      out.push(tag);
+    }
+    return out;
+  }
+
+  function buildEntry(): string | null {
+    const id = $v('cfg-lib-id').toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    if (!id || !/^[a-z][a-z0-9-]*$/.test(id)) {
+      setGenHint('✗ id 必须是 kebab-case(小写字母开头,允许字母/数字/连字符)', 'error');
+      return null;
+    }
+    const title = $v('cfg-lib-title');
+    const titleZh = $v('cfg-lib-title-zh');
+    const desc = $v('cfg-lib-desc');
+    const descZh = $v('cfg-lib-desc-zh');
+    const tagsRaw = $v('cfg-lib-tags');
+    const tags = parseTags(tagsRaw);
+    if (!tags || tags.length === 0) {
+      setGenHint('✗ tags 至少 1 个,格式:task:rlhf, method:safety', 'error');
+      return null;
+    }
+    const hue = $v('cfg-lib-hue').toLowerCase() || 'emerald';
+    if (!ALLOWED_HUE.has(hue)) {
+      setGenHint('✗ hue 必须是 ' + Array.from(ALLOWED_HUE).join(' / ') + ' 之一', 'error');
+      return null;
+    }
+    const dimension = tags[0].split(':', 1)[0];
+
+    const esc = (s: string): string => JSON.stringify(s).slice(1, -1);
+
+    const lines: string[] = [];
+    lines.push('  {');
+    lines.push(`    id: '${esc(id)}',`);
+    lines.push(`    title: '${esc(title)}',`);
+    lines.push(`    titleZh: '${esc(titleZh)}',`);
+    lines.push(`    description: '${esc(desc)}',`);
+    lines.push(`    descriptionZh: '${esc(descZh)}',`);
+    lines.push(`    tags: [${tags.map((t) => `'${esc(t)}'`).join(', ')}],`);
+    lines.push(`    dimension: '${esc(dimension)}',`);
+    lines.push(`    curator: 'DPR',`);
+    lines.push(`    hue: '${esc(hue)}',`);
+    lines.push('  },');
+    return lines.join('\n');
+  }
+
+  $<HTMLButtonElement>('lib-generate-btn').addEventListener('click', () => {
+    const entry = buildEntry();
+    if (!entry) return;
+    const pre = document.getElementById('lib-generated');
+    if (pre) {
+      pre.textContent = entry;
+      pre.hidden = false;
+    }
+    setGenHint('✓ 已生成。复制 → 贴到 astro-src/lib/libraries.ts → git commit → push', 'ok');
+  });
+
+  $<HTMLButtonElement>('lib-copy-btn').addEventListener('click', async () => {
+    const pre = document.getElementById('lib-generated');
+    const text = pre?.textContent || '';
+    if (!text) {
+      setGenHint('✗ 先点"生成 entry"', 'error');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      setGenHint('✓ 已复制到剪贴板', 'ok');
+    } catch {
+      setGenHint('✗ 浏览器拒绝剪贴板权限;请手动 ⌘+C 复制下方代码块', 'error');
+    }
+  });
 }
 
 function initHiddenPanel(): void {

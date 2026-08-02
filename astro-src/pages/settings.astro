@@ -216,6 +216,60 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
       </div>
     </section>
 
+    <!-- ===== 新增文献库(2026-08-01)
+         在浏览器里填表 → 一键生成 LIBRARIES 配置表的新条目源代码(完整
+         TypeScript object literal)。你复制这段代码粘到
+         astro-src/lib/libraries.ts 里的 LIBRARIES 数组,git commit + push
+         走 Cloudflare Pages rebuild。
+         不引入 GitHub API 复杂性,不需要任何 token,纯浏览器生成。 -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">➕ 新增文献库(生成代码)</h2>
+      <p class="settings-card-sub">
+        填好下表 → 复制生成的 TypeScript object 粘到
+        <code>astro-src/lib/libraries.ts</code> 里的 <code>LIBRARIES</code> 数组,
+        提交 + push 触发 Cloudflare Pages rebuild。
+        成员关系由 frontmatter 标签派生(选 task / method / type / venue
+        哪个 dim 的哪个 label 集)。
+      </p>
+
+      <div class="settings-field">
+        <label for="cfg-lib-id">id (kebab-case,如 alignment)</label>
+        <input id="cfg-lib-id" type="text" placeholder="alignment" />
+      </div>
+      <div class="settings-field">
+        <label for="cfg-lib-title">English title</label>
+        <input id="cfg-lib-title" type="text" placeholder="Alignment" />
+      </div>
+      <div class="settings-field">
+        <label for="cfg-lib-title-zh">中文 title</label>
+        <input id="cfg-lib-title-zh" type="text" placeholder="对齐" />
+      </div>
+      <div class="settings-field">
+        <label for="cfg-lib-desc">English description</label>
+        <input id="cfg-lib-desc" type="text" placeholder="RLHF, sycophancy mitigation, safety." />
+      </div>
+      <div class="settings-field">
+        <label for="cfg-lib-desc-zh">中文 description</label>
+        <input id="cfg-lib-desc-zh" type="text" placeholder="RLHF、阿谀抑制、模型安全。" />
+      </div>
+      <div class="settings-field">
+        <label for="cfg-lib-tags">frontmatter tags(dim:label 用逗号分隔)</label>
+        <input id="cfg-lib-tags" type="text" placeholder="task:rlhf, method:safety" />
+      </div>
+      <div class="settings-field">
+        <label for="cfg-lib-hue">卡片左竖条颜色(orange / cyan / purple / emerald / amber / rose / sky)</label>
+        <input id="cfg-lib-hue" type="text" placeholder="emerald" value="emerald" />
+      </div>
+
+      <div class="settings-gist-actions">
+        <button type="button" id="lib-generate-btn" class="settings-action-btn primary">⚙️ 生成 entry</button>
+        <button type="button" id="lib-copy-btn" class="settings-action-btn">📋 复制到剪贴板</button>
+        <span id="lib-generate-hint" class="settings-gist-hint"></span>
+      </div>
+
+      <pre id="lib-generated" class="settings-pre" hidden></pre>
+    </section>
+
     <!-- ===== GitHub 保存论文(仓库配置) ===== -->
     <section class="settings-card">
       <h2 class="settings-card-title">GitHub 保存论文 — 仓库配置</h2>
