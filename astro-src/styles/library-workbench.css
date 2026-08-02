@@ -157,8 +157,13 @@
   font-size: 0.82rem;
   color: var(--fg-subtle);
   text-decoration: none;
+  flex-shrink: 0;
 }
 .library-wb-tabs .back:hover { color: var(--accent); }
+@media (max-width: 560px) {
+  .library-wb-tabs { gap: 0.25rem; }
+  .library-wb-tabs .lib-wb-tab { padding: 0.35rem 0.65rem; font-size: 0.8rem; }
+}
 
 /* ===== Tab panel ===== */
 .library-wb-panel {
@@ -174,6 +179,9 @@
   grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.6fr);
   gap: 1rem;
   align-items: start;
+}
+@media (max-width: 1024px) {
+  .wb-papers { grid-template-columns: 1fr; }
 }
 @media (max-width: 880px) {
   .wb-papers { grid-template-columns: 1fr; }
@@ -223,6 +231,9 @@
   transition: border-color 0.15s, transform 0.12s;
 }
 .wb-paper-row:hover { border-color: var(--accent); transform: translateX(2px); }
+@media (hover: none) {
+  .wb-paper-row:hover { transform: none; border-color: var(--border); }
+}
 .wb-paper-row.is-selected {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
@@ -504,4 +515,105 @@
   color: var(--fg-subtle);
   border: 1px dashed var(--border);
   border-radius: 8px;
+}
+/* ===== 响应式屏宽断点 ===== */
+.wb-papers-filter {
+  flex-wrap: wrap;
+}
+.library-wb-tabs {
+  flex-wrap: wrap;
+}
+.library-wb-meta {
+  flex-wrap: wrap;
+}
+.library-wb-hero {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.library-wb-export {
+  min-width: 0;
+}
+
+/* 中屏:hero 改竖排,导出按钮落到下面一整行 */
+@media (max-width: 760px) {
+  .library-wb-hero {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+  .library-wb-export {
+    flex-direction: row;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+  .library-wb-export .export-btn {
+    flex: 1 1 calc(50% - 0.5rem);
+    justify-content: center;
+  }
+  .wb-papers {
+    grid-template-columns: 1fr;
+  }
+  .wb-concepts {
+    grid-template-columns: 1fr;
+  }
+  .wb-concepts-filter {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .wb-concepts-filter .filter-pill {
+    flex: 1 1 calc(50% - 0.4rem);
+  }
+  .library-wb-paper-detail {
+    position: static;
+  }
+  .library-wb-tab-panel,
+  .library-wb-panel {
+    /* panels keep showing normally; only layout collapses */
+  }
+}
+
+/* 小屏:list row 紧凑,filter pill 单独一行 */
+@media (max-width: 480px) {
+  .library-wb-export .export-btn {
+    flex: 1 1 100%;
+  }
+  .wb-papers-filter .filter-pill {
+    flex: 1 1 100%;
+    text-align: center;
+  }
+  .wb-paper-row {
+    padding: 0.6rem 0.7rem;
+  }
+  .wb-paper-row .row-title {
+    font-size: 0.85rem;
+  }
+  .library-wb-tabs .lib-wb-tab {
+    padding: 0.35rem 0.7rem;
+    font-size: 0.82rem;
+  }
+  .library-wb-tabs .back {
+    margin-left: 0;
+    width: 100%;
+    text-align: right;
+  }
+  .wb-paper-detail {
+    padding: 1rem;
+  }
+  .wb-paper-detail h2 {
+    font-size: 1rem;
+  }
+  .wb-paper-detail .concepts-chips .cc {
+    font-size: 0.74rem;
+  }
+}
+
+/* 桌面 ≥ 1440px:hero 可以更宽,detail 面板更宽 */
+@media (min-width: 1440px) {
+  .library-wb-hero {
+    padding: 1.5rem 1.75rem;
+  }
+  .library-wb-hero h1 {
+    font-size: 2.4rem;
+  }
+  .wb-paper-detail {
+    padding: 1.5rem 1.75rem;
+  }
 }

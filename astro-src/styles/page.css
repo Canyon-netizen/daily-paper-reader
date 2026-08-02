@@ -158,6 +158,79 @@
   margin-bottom: var(--space-3);
 }
 
+@media (max-width: 720px) {
+  /* Tablet: reduce padding, tighten headings */
+  .page {
+    padding: var(--space-8) var(--space-4) var(--space-12);
+  }
+  .page h1 {
+    font-size: clamp(1.5rem, 4vw, 1.9rem);
+  }
+  .page h2 {
+    font-size: 1.2rem;
+    margin-top: var(--space-10);
+  }
+  .page h3 {
+    font-size: 1.05rem;
+  }
+  .page .lead {
+    font-size: 1rem;
+  }
+  /* Make code blocks scrollable */
+  .page pre {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 480px) {
+  /* Mobile: minimal padding, hide non-essentials */
+  .page {
+    padding: var(--space-6) var(--space-2) var(--space-10);
+  }
+  .page h1 {
+    font-size: clamp(1.3rem, 5vw, 1.6rem);
+  }
+  .page h2 {
+    font-size: 1.1rem;
+    margin-top: var(--space-8);
+  }
+  .page h3 {
+    font-size: 1rem;
+  }
+  .page .lead {
+    font-size: 0.95rem;
+  }
+  .page ul, .page ol {
+    padding-left: 1.1rem;
+  }
+  .page pre {
+    padding: var(--space-3) var(--space-3);
+    font-size: 0.85rem;
+  }
+  .page table {
+    font-size: 0.85rem;
+  }
+  .page th, .page td {
+    padding: var(--space-2) var(--space-2);
+  }
+  /* Hide article metadata on mobile if present */
+  .article-meta, .page-meta, .paper-meta {
+    display: none !important;
+  }
+  /* 404 adjustments */
+  .page-404 {
+    padding: var(--space-12) var(--space-3);
+  }
+}
+
+@media (min-width: 1280px) {
+  /* Desktop wide: slight increase for better use of space */
+  .page {
+    max-width: 900px;
+  }
+}
+
 @media (max-width: 560px) {
   .page { padding: var(--space-8) var(--space-3) var(--space-16); }
   .page h2 { margin-top: var(--space-8); }

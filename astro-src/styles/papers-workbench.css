@@ -387,3 +387,51 @@
     border-bottom: 1px solid var(--border);
   }
 }
+
+/* ==========================================================================
+ * 响应式:<600px 移动端筛选面板隐藏/抽屉化
+ * ========================================================================== */
+@media (max-width: 600px) {
+  .papers-workbench-filter {
+    display: none; /* 移动端默认隐藏,可由 JS 控制显示为 drawer */
+  }
+  .papers-workbench-tabs {
+    padding: 0.35rem 0.75rem 0;
+    gap: 0.25rem;
+  }
+  .papers-workbench-tab {
+    padding: 0.4rem 0.65rem;
+    font-size: 0.85rem;
+  }
+  .papers-bulk-bar {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    transform: none;
+    border-radius: 0;
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+/* ==========================================================================
+ * 触摸设备:禁用 hover 效果
+ * ========================================================================== */
+@media (hover: none) {
+  .papers-workbench-tab:hover {
+    background: transparent;
+    color: var(--fg-muted);
+  }
+  .papers-workbench-filter-clear:hover {
+    color: var(--fg-muted);
+  }
+  .papers-workbench-filter-share-btn:hover {
+    background: var(--bg);
+  }
+  .papers-workbench-trash-row-btn:hover {
+    background: var(--bg);
+  }
+  .papers-bulk-bar-btn:hover {
+    background: var(--bg);
+  }
+}

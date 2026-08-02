@@ -616,7 +616,29 @@
 }
 
 /* =====================================================================
- * 响应式:窄屏单栏
+ * 响应式:平板 (1024px)
+ * ===================================================================== */
+@media (max-width: 1024px) {
+  .papers-list-item {
+    padding: 0.55rem 0.7rem;
+  }
+  .papers-list-item-meta {
+    flex-wrap: wrap;
+  }
+  .papers-list-item-authors {
+    flex: 1 1 100%;
+    margin-bottom: 0.25rem;
+  }
+  .papers-drawer {
+    width: 380px;
+  }
+  .papers-hero {
+    padding: 1rem 1.2rem 0.75rem;
+  }
+}
+
+/* =====================================================================
+ * 响应式:窄屏单栏 (768px)
  * ===================================================================== */
 @media (max-width: 768px) {
   .papers-page {
@@ -645,5 +667,36 @@
   .papers-hero-stat {
     flex: 1 1 calc(50% - 0.3rem);
     min-width: 0;
+  }
+  .papers-list-item {
+    padding: 0.5rem 0.6rem;
+  }
+  .papers-drawer {
+    width: 100vw;
+    max-width: 100vw;
+  }
+}
+
+/* =====================================================================
+ * 论文详情页字体缩放 (用于 /papers/[arxiv].astro)
+ * ===================================================================== */
+.paper-detail-tldr,
+.paper-detail-abstract {
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+@media (max-width: 768px) {
+  .paper-detail-tldr,
+  .paper-detail-abstract {
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .paper-detail-tldr,
+  .paper-detail-abstract {
+    font-size: 0.85rem;
+    line-height: 1.55;
   }
 }

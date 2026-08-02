@@ -55,6 +55,7 @@
 .libraries-filter {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin: 0 0 var(--space-6, 1.5rem);
   padding-bottom: var(--space-4, 1rem);
@@ -91,6 +92,9 @@
   font-size: 0.8rem;
   color: var(--fg-subtle);
 }
+@media (max-width: 560px) {
+  .libraries-filter .filter-pill { font-size: 0.78rem; padding: 0.25rem 0.7rem; }
+}
 
 /* 卡片网格 */
 .libraries-grid {
@@ -98,8 +102,15 @@
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 1rem;
 }
+@media (max-width: 960px) {
+  .libraries-grid { grid-template-columns: repeat(2, 1fr); }
+}
 @media (max-width: 720px) {
   .libraries-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 560px) {
+  .libraries-grid { grid-template-columns: 1fr; }
+  .libraries-shortcuts { display: none; }
 }
 
 /* 单卡 */
@@ -131,6 +142,12 @@
   transform: translateY(-1px);
   border-color: var(--hue-color, var(--accent));
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06);
+}
+@media (hover: none) {
+  .library-card:hover { transform: none; }
+}
+@media (max-width: 560px) {
+  .library-card .lib-title { font-size: 0.95rem; }
 }
 .library-card .lib-title {
   margin: 0;
@@ -176,6 +193,7 @@
 /* 论文 / 概念 / 更新日期 —— 对齐 Polaris 卡片底部"X 篇论文 / Y 个概念 / 更新于 ..." */
 .library-card .lib-stats {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.85rem;
   margin-top: 0.65rem;
   padding-top: 0.6rem;
