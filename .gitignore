@@ -30,6 +30,11 @@ secret.private
 test.pdf
 tmp-*.pdf
 
+# 全部 tests/ —— 单元测试文件留在磁盘给本地跑,但不入库
+# (历史曾跟踪 70+ 个文件;2026-08-02 起整体 ignore,避免 git status 噪音 + 与
+#  本地临时调试脚本混在一起。需要回看可翻 git log / 本地工作树。)
+tests/
+
 # Tencent Cloud EdgeOne
 .edgeone/*
 !.edgeone/project.json
