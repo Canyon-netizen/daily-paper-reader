@@ -31,7 +31,7 @@ import type {
   WriteResult,
 } from './types';
 
-export const USER_LIBRARY_SCHEMA_VERSION = 1;
+export const USER_LIBRARY_SCHEMA_VERSION = 2;
 
 const KEY = STORAGE_KEYS.userLibrary;
 
@@ -110,6 +110,9 @@ function isEmptyState(s: UserPaperState): boolean {
     && !s.readingStatus
     && !(s.note && s.note.length > 0)
     && !s.trash
+    && typeof s.relevanceScore !== 'number'  // v2:有评分也算内容
+    && !(s.tldr && s.tldr.length > 0)
+    && !(s.concepts && s.concepts.length > 0)
   );
 }
 
@@ -226,6 +229,62 @@ export function setStarred(rawId: string, starred: boolean): WriteResult {
 
 export function toggleStar(rawId: string): WriteResult {
   return setStarred(rawId, !isStarred(rawId));
+}
+
+/**
+ * v2:把 LLM 评分结果(相关度 / TL;DR / 概念列表)合并进 entry。
+ * - relevanceScore: number
+ * - tldr: string
+ * - concepts: string[]
+ * 任意字段为 undefined 表示"不动该项";空字符串/空数组 = 删该字段(保持稀疏)。
+ * 不影响 starred / readingStatus / note / trash 这些已有字段。
+ */
+export function upsertPaperMeta(
+  rawId: string,
+  meta: {
+    relevanceScore?: number;
+    tldr?: string;
+    concepts?: string[];
+  },
+): WriteResult {
+  return commit(rawId, 'meta', (s) => {
+    let changed = false;
+    if (Object.prototype.hasOwnProperty.call(meta, 'relevanceScore')) {
+      const v = meta.relevanceScore;
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        const clamped = v < 0 ? 0 : v > 1 ? 1 : v;
+        if (s.relevanceScore !== clamped) {
+          s.relevanceScore = clamped;
+          changed = true;
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(meta, 'tldr')) {
+      const t = String(meta.tldr ?? '').trim();
+      if (t) {
+        if (s.tldr !== t) { s.tldr = t; changed = true; }
+      } else if (s.tldr) {
+        delete s.tldr;
+        changed = true;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(meta, 'concepts')) {
+      const arr = Array.isArray(meta.concepts)
+        ? meta.concepts.map((x) => String(x).trim()).filter((x) => x.length > 0)
+        : [];
+      if (arr.length > 0) {
+        const cur = s.concepts || [];
+        if (cur.length !== arr.length || cur.some((c, i) => c !== arr[i])) {
+          s.concepts = arr;
+          changed = true;
+        }
+      } else if (s.concepts) {
+        delete s.concepts;
+        changed = true;
+      }
+    }
+    return changed;
+  });
 }
 
 export function setReadingStatus(rawId: string, status: ReadingStatus): WriteResult {

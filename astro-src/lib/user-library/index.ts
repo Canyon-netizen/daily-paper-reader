@@ -39,6 +39,7 @@ export {
   toggleStar,
   setReadingStatus,
   setUserNote,
+  upsertPaperMeta,  // v2:LLM 评分写入(relevanceScore / tldr / concepts)
   softDelete,
   restoreFromTrash,
   purgeUserPaperState,

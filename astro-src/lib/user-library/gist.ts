@@ -138,7 +138,14 @@ export function serializeUserLibrary(doc: UserLibraryDoc): string {
   return JSON.stringify(doc, null, 2);
 }
 
-/** 远端 content 反序列化。失败一律返回 null,绝不抛。 */
+/** 远端 content 反序列化。失败一律返回 null,绝不抛。
+ *
+ *  v2 (2026-08-02 扩展):USER_LIBRARY_SCHEMA_VERSION 升到 2,新增 relevanceScore
+ *  / tldr / concepts 字段(均为可选)。deserialize 兼容 v1 与 v2:
+ *  - v1 旧文件:schemaVersion 字段不在,默认视为 v1
+ *  - v2 新文件:schemaVersion === 2
+ *  - 其它版本:返回 null(不抛)
+ */
 export function deserializeUserLibrary(content: string): UserLibraryDoc | null {
   let parsed: unknown;
   try {
@@ -148,10 +155,13 @@ export function deserializeUserLibrary(content: string): UserLibraryDoc | null {
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Partial<UserLibraryDoc>;
-  if (obj.schemaVersion !== 1) return null;
+  // 兼容 v1 (字段缺失) 与 v2 (显式 = 2)
+  if (obj.schemaVersion !== undefined && obj.schemaVersion !== 1 && obj.schemaVersion !== 2) {
+    return null;
+  }
   if (!obj.papers || typeof obj.papers !== 'object') return null;
   // libraries 字段可选;v1 旧文件可能没有。
-  return { schemaVersion: 1, papers: obj.papers as Record<string, UserPaperState> };
+  return { schemaVersion: 2, papers: obj.papers as Record<string, UserPaperState> };
 }
 
 // ---------------------------------------------------------------------------
@@ -229,7 +239,7 @@ export function mergeUserLibrary(
   }
 
   return {
-    merged: { schemaVersion: 1, papers: deduped },
+    merged: { schemaVersion: 2, papers: deduped },
     counters: {
       mergedPapers: Object.keys(deduped).length,
       writtenPapers,
@@ -266,7 +276,7 @@ export function serializeUserLibraryWithLibraries(): string {
     : emptySerializedLibraries();
   return JSON.stringify(
     {
-      schemaVersion: 1,
+      schemaVersion: 2,
       papers: lib.papers,
       libraries: librariesBlock,
     },
@@ -292,9 +302,12 @@ export function deserializeUserLibraryWithLibraries(content: string): ParsedLibr
   }
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Partial<UserLibraryDoc> & { libraries?: unknown };
-  if (obj.schemaVersion !== 1) return null;
+  // 兼容 v1 (字段缺失) 与 v2 (显式 = 2)
+  if (obj.schemaVersion !== undefined && obj.schemaVersion !== 1 && obj.schemaVersion !== 2) {
+    return null;
+  }
   if (!obj.papers || typeof obj.papers !== 'object') return null;
-  const papers: UserLibraryDoc = { schemaVersion: 1, papers: obj.papers as Record<string, UserPaperState> };
+  const papers: UserLibraryDoc = { schemaVersion: 2, papers: obj.papers as Record<string, UserPaperState> };
   const libraries = obj.libraries ? deserializeUserLibraries(obj.libraries) : emptyLibrariesDoc();
   return { papers, libraries };
 }

@@ -38,7 +38,8 @@ export type DprUserLibraryChangeReason =
   | 'purge'
   | 'bulk'
   | 'sync'
-  | 'reset';
+  | 'reset'
+  | 'meta';  // v2:LLM 评分结果写入(relevanceScore / tldr / concepts)
 
 export interface DprUserLibraryChangeDetail {
   /** 受影响的 canonical arXiv id。'sync' / 'reset' 可能很多条。 */

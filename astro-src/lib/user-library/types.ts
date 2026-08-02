@@ -28,6 +28,10 @@ export interface TrashMeta {
 /**
  * 单篇论文的用户态。所有业务字段都是可选的 —— 存储是**稀疏**的:
  * 只有用户真正操作过的论文才会有 entry,610 篇论文不会凭空占 610 个 key。
+ *
+ * 2026-08-02 扩展(schema v2):新增 relevanceScore / tldr / concepts 字段,
+ * 记录 Polaris library.relevance 打分结果,供 GraphTab 节点上色与排序复用。
+ * 字段全部可选,v1 老 doc 走空值起步。
  */
 export interface UserPaperState {
   starred?: boolean;
@@ -38,6 +42,13 @@ export interface UserPaperState {
   /** epoch ms。由 store 的私有写入漏斗统一盖章,调用方不需要也不应该自己填。
    *  Stage 2 的 Gist 合并按本字段做 last-write-wins。 */
   updatedAt: number;
+  // -- v2 新增 (PR 阶段 3:library.relevance 评分结果) --
+  /** 论文相对当前库方向的相关度,0-1 范围。用于 GraphTab 节点大小 / 排序。 */
+  relevanceScore?: number;
+  /** LLM 给出的一句话中文 TL;DR,可单独展示也可作为 cache 给编译环节复用。 */
+  tldr?: string;
+  /** 该论文涉及的概念标签(从 frontmatter 派生 + LLM 复判)。 */
+  concepts?: string[];
 }
 
 /** 整个 doc 的形状。schemaVersion 不匹配时 store 直接丢弃重建(见 store.ts 的
@@ -47,13 +58,13 @@ export interface UserPaperState {
  *  自建文献库列表)同存一份 dpr-library.json。v1 旧文件没有此字段,deserialize
  *  时按缺失处理,空块起步。 */
 export interface UserLibraryDoc {
-  schemaVersion: 1;
+  schemaVersion: 2;
   /** key = canonicalArxivId(...),**永不含 vN**。
    *  不变式见 lib/arxiv.ts:canonicalArxivId 的注释。 */
   papers: Record<string, UserPaperState>;
   /** 用户自建文献库(复数)列表。**可选**:v1 旧文件不带此字段,直接走空块。 */
   libraries?: {
-    schemaVersion: 1;
+    schemaVersion: 2;
     /** key = libraryId。UserLibrary 的完整定义见 lib/user-libraries/types.ts。
      *  这里只放 narrow shape(避免 lib/user-library 强依赖 lib/user-libraries 的 import
      *  链路,反过来同理 —— deserialize 完后由 gist.ts 的编排器转交)。 */
