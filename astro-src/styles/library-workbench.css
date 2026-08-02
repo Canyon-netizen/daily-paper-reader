@@ -289,6 +289,25 @@
   color: var(--fg-subtle);
   background: var(--bg);
 }
+/* row-score:显示相关度分数(Polar-style 评分 chip) */
+.wb-paper-row .row-score {
+  margin-left: auto;
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.15em 0.55em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+.wb-paper-row .row-score-empty {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono, ui-monospace);
+  opacity: 0.5;
+}
 
 /* ===== 详情面板 =====
  * 设计:SSR 渲染所有论文的 .wb-detail-body,但用 CSS :target 切换可见性。
@@ -839,4 +858,44 @@
   color: var(--fg-muted) !important;
   font-style: italic;
   pointer-events: none;
+}
+
+/* ===== 详情面板左侧小 pill(venue / source) ===== */
+.wb-paper-detail .pill-venue-sm,
+.wb-paper-detail .pill-source-sm {
+  display: inline-flex;
+  padding: 0.1em 0.55em;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+}
+
+/* ===== 详情面板 分类 chips ===== */
+.wb-paper-detail .detail-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.85rem 0 0;
+}
+.wb-paper-detail .detail-cat {
+  display: inline-flex;
+  padding: 0.2em 0.7em;
+  border-radius: 4px;
+  font-size: 0.78rem;
+  font-family: var(--font-mono, ui-monospace);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+.wb-paper-detail .detail-cat-venue { background: #fef2f2; color: #b31b1b; border-color: #fecaca; }
+.wb-paper-detail .detail-cat-task { background: color-mix(in srgb, var(--accent) 8%, var(--bg)); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 25%, var(--border)); }
+.wb-paper-detail .detail-cat-method { background: color-mix(in srgb, #059669 10%, var(--bg)); color: #059669; border-color: color-mix(in srgb, #059669 25%, var(--border)); }
+.wb-paper-detail .detail-cat-type { background: color-mix(in srgb, #d97706 10%, var(--bg)); color: #d97706; border-color: color-mix(in srgb, #d97706 25%, var(--border)); }
+.wb-paper-detail .detail-accepted {
+  margin: 0.7rem 0 0;
+  font-size: 0.82rem;
+  color: #059669;
+  font-weight: 600;
 }

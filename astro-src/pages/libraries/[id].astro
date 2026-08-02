@@ -140,6 +140,9 @@ const selectedPaper = papers[0];
                   <span class="arx">{p.arxivId || '—'}</span>
                   {p.date ? <span>{p.date.slice(5)}</span> : null}
                   <span class="year">{p.date?.slice(0, 4) || '—'}</span>
+                  {typeof p.score === 'number' && p.score > 0 && (
+                    <span class="row-score" data-score={p.score}>{p.score.toFixed(2)}</span>
+                  )}
                 </div>
                 <p class="row-title">{p.title_zh || p.title_plain || p.title || p.id}</p>
                 {p.title && p.title_zh && <p class="row-en">{p.title}</p>}
@@ -179,6 +182,8 @@ const selectedPaper = papers[0];
                            target="_blank" rel="noopener">arXiv:{p.arxivId}</a>
                       )}
                       <span>{p.date || '—'}</span>
+                      {p.venue && <span class="pill pill-venue-sm">{p.venue}</span>}
+                      {p.source && p.source !== 'arxiv' && <span class="pill pill-source-sm">{p.source}</span>}
                     </div>
                   </div>
                   {typeof p.score === 'number' && p.score > 0 && (
@@ -205,6 +210,26 @@ const selectedPaper = papers[0];
                   <a class="export-btn" href={base + '/libraries/'}>📂 所有文献库</a>
                 </div>
 
+
+                {/* ===== 2.5 分类块:venue / task / method / type chips ===== */}
+                {p.categories && (() => {
+                  const cats = p.categories as { venue?: string[]; task?: string[]; method?: string[]; type?: string[] };
+                  const all = [
+                    ...(cats.venue || []).map((x) => ({ dim: 'venue', label: x })),
+                    ...(cats.task || []).map((x) => ({ dim: 'task', label: x })),
+                    ...(cats.method || []).map((x) => ({ dim: 'method', label: x })),
+                    ...(cats.type || []).map((x) => ({ dim: 'type', label: x })),
+                  ];
+                  if (all.length === 0) return null;
+                  return (
+                    <div class="detail-categories">
+                      {all.map((c) => (
+                        <span class={`detail-cat detail-cat-${c.dim}`}>{c.label}</span>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {p.accepted && <p class="detail-accepted">✓ 已收录</p>}
                 {/* ===== 3. TL;DR 卡片 ===== */}
                 {p.tldr && (
                   <div class="tldr-card">
@@ -377,6 +402,33 @@ const selectedPaper = papers[0];
           const show = view === 'all' || (view === 'today' && /\d{2}-\d{2}/.test(date));
           row.style.display = show ? '' : 'none';
         });
+      });
+    });
+
+    // 排序按钮(按时间 / 按相关度)—— 真的重排 DOM。
+    // 用 data-score 字段读分数,没有视为 0;按分数降序;同分按 date 降序。
+    document.querySelectorAll<HTMLAnchorElement>('.wb-papers-sort .filter-pill').forEach((p) => {
+      p.addEventListener('click', (e) => {
+        e.preventDefault();
+        document.querySelectorAll('.wb-papers-sort .filter-pill').forEach((b) => b.classList.toggle('active', b === p));
+        const sort = p.dataset.sort;
+        const list = document.querySelector('.wb-papers-list');
+        if (!list) return;
+        const rows = Array.from(list.querySelectorAll<HTMLElement>('.wb-paper-row'));
+        rows.sort((a, b) => {
+          if (sort === 'score') {
+            const sa = parseFloat(a.querySelector<HTMLElement>('.row-score')?.dataset.score || '0');
+            const sb = parseFloat(b.querySelector<HTMLElement>('.row-score')?.dataset.score || '0');
+            if (sb !== sa) return sb - sa;
+          }
+          // 同分(或按时间):fallback 到 date 字段(第 2 个 span)
+          const da = a.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
+          const db = b.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
+          return db.localeCompare(da);
+        });
+        const frag = document.createDocumentFragment();
+        rows.forEach((r) => frag.appendChild(r));
+        list.appendChild(frag);
       });
     });
 
