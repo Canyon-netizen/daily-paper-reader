@@ -290,7 +290,13 @@
   background: var(--bg);
 }
 
-/* ===== 详情面板 ===== */
+/* ===== 详情面板 =====
+ * 设计:SSR 渲染所有论文的 .wb-detail-body,但用 CSS :target 切换可见性。
+ *   - 默认时:只有 .wb-detail-default 显示(SSR 选的"第一篇")
+ *   - 用户点行 → URL hash 变 #paper-<cx> → 对应 :target 显示,default 隐藏
+ *   - 刷新或前进/后退:hash 保留,显示对应论文。
+ *   - 零 JS 状态,任意点行都立刻响应。
+ */
 .wb-paper-detail {
   padding: 1.25rem 1.5rem;
   border: 1px solid var(--border);
@@ -300,17 +306,26 @@
   top: 1rem;
   min-height: 360px;
 }
-.wb-paper-detail.empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--fg-subtle);
+/* 默认:所有 body 隐藏,只有 .wb-detail-default 显示 */
+.wb-paper-detail .wb-detail-body {
+  display: none;
+}
+.wb-paper-detail .wb-detail-body.wb-detail-default {
+  display: block;
+}
+/* 当 URL hash 命中某个 id,该 id 元素显示;default 隐藏(去掉 css *) */
+.wb-paper-detail .wb-detail-body:target {
+  display: block;
+}
+.wb-paper-detail .wb-detail-body:target ~ .wb-detail-body.wb-detail-default {
+  display: none;
 }
 .wb-paper-detail h2 {
-  margin: 0 0 0.25rem;
-  font-size: 1.1rem;
+  margin: 0 0 0.4rem;
+  font-size: 1.35rem;
   font-weight: 700;
   line-height: 1.4;
+  letter-spacing: -0.005em;
 }
 .wb-paper-detail .detail-meta {
   display: flex;
@@ -318,30 +333,50 @@
   font-family: var(--font-mono, ui-monospace);
   font-size: 0.78rem;
   color: var(--fg-subtle);
-  margin: 0.25rem 0 0.65rem;
+  margin: 0.25rem 0 0.85rem;
   flex-wrap: wrap;
+  align-items: center;
 }
 .wb-paper-detail .detail-meta a {
   color: var(--accent);
   text-decoration: none;
 }
 .wb-paper-detail .detail-meta a:hover { text-decoration: underline; }
+.wb-paper-detail .detail-meta .venue-chip,
+.wb-paper-detail .detail-meta .status-chip {
+  display: inline-flex;
+  padding: 0.15em 0.55em;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--fg-muted);
+  font-size: 0.72rem;
+}
 .wb-paper-detail .detail-en {
   font-size: 0.85rem;
   color: var(--fg-subtle);
   margin: 0 0 0.5rem;
+  font-style: italic;
+}
+.wb-paper-detail .detail-authors {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  margin: 0 0 0.5rem;
+  line-height: 1.5;
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 0.78rem;
 }
 .wb-paper-detail .detail-zh {
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   color: var(--fg-muted);
-  margin: 0 0 0.6rem;
-  line-height: 1.55;
+  margin: 0 0 0.7rem;
+  line-height: 1.6;
 }
 .wb-paper-detail .detail-row {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  margin: 0.5rem 0;
+  margin: 0.6rem 0;
   flex-wrap: wrap;
 }
 .wb-paper-detail .detail-row .label {

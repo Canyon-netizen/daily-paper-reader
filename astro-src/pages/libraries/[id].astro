@@ -114,7 +114,10 @@ const selectedPaper = papers[0];
       <a class="back" href={base + '/libraries/'}>← 所有文献库</a>
     </nav>
 
-    {/* ===== 论文库 tab:左列表 + 右详情 ===== */}
+    {/* ===== 论文库 tab:左列表 + 右详情 =====
+        设计:SSR 渲染所有论文的详情面板,只用 CSS :target 切换可见性。
+        优点:零 JS,任意点行都立刻响应;用户在另一个 tab 切回论文库 tab,选中态
+        仍然是上一次点的(URL hash 持久)。 */}
     <section id="papers-panel" class="library-wb-panel active" data-panel="papers">
       <div class="wb-papers">
         <div class="wb-papers-list">
@@ -144,33 +147,45 @@ const selectedPaper = papers[0];
           })}
         </div>
 
+        {/* 详情面板:每个 paper 渲染一个隐藏 div,用 :target 显示。
+            第一个 (.wb-detail-default) 默认显示;之后用 #paper-<cx> 锚点切换。 */}
         <div class="wb-paper-detail" id="wb-detail-pane">
-          {selectedPaper ? (
-            <div id={`paper-${selectedPaper.canonicalArxivId}`} class="wb-detail-body">
-              <h2>{selectedPaper.title_zh || selectedPaper.title_plain || selectedPaper.title}</h2>
-              <div class="detail-meta">
-                {selectedPaper.arxivId && (
-                  <a href={`https://arxiv.org/abs/${selectedPaper.arxivId.replace(/v\d+$/, '')}`}
-                     target="_blank" rel="noopener">arXiv:{selectedPaper.arxivId}</a>
-                )}
-                <span>{selectedPaper.date || '—'}</span>
-              </div>
-              {selectedPaper.title && selectedPaper.title_zh && <p class="detail-en">{selectedPaper.title}</p>}
-              {selectedPaper.tldr && <p class="detail-zh">{selectedPaper.tldr}</p>}
-              <div class="detail-row">
-                <a class="export-btn" href={base + '/papers/' + selectedPaper.id + '/'}>📄 打开论文页</a>
-                <a class="export-btn" href={base + '/papers/' + selectedPaper.id + '/#paper-notes-section'}>📝 写笔记</a>
-              </div>
-              {selectedPaper.concepts && selectedPaper.concepts.length > 0 && (
-                <div class="concepts-chips">
-                  {selectedPaper.concepts.slice(0, 18).map((c) => (
-                    <a class="cc" href={base + '/wiki/concepts/' + c.slug + '/'}>{c.display_name}</a>
-                  ))}
-                </div>
-              )}
-            </div>
-          ) : (
+          {papers.length === 0 ? (
             <p class="empty">没有可显示的论文</p>
+          ) : (
+            papers.map((p, i) => (
+              <div id={`paper-${p.canonicalArxivId}`}
+                   class={`wb-detail-body${i === 0 ? ' wb-detail-default' : ''}`}>
+                <h2>{p.title_zh || p.title_plain || p.title || p.id}</h2>
+                <div class="detail-meta">
+                  {p.arxivId && (
+                    <a href={`https://arxiv.org/abs/${p.arxivId.replace(/v\d+$/, '')}`}
+                       target="_blank" rel="noopener">arXiv:{p.arxivId}</a>
+                  )}
+                  <span>{p.date || '—'}</span>
+                  {p.venue && <span class="venue-chip">{p.venue}</span>}
+                </div>
+                {p.title && p.title_zh && <p class="detail-en">{p.title}</p>}
+                {p.authors && (
+                  <p class="detail-authors">{p.authors}</p>
+                )}
+                {p.tldr && <p class="detail-zh">{p.tldr}</p>}
+                <div class="detail-row">
+                  <a class="export-btn" href={base + '/papers/' + p.id + '/'}>📄 打开论文页</a>
+                  <a class="export-btn" href={base + '/papers/' + p.id + '/#paper-notes-section'}>📝 写笔记</a>
+                  {p.pdf && (
+                    <a class="export-btn" href={p.pdf} target="_blank" rel="noopener">🔗 PDF</a>
+                  )}
+                </div>
+                {p.concepts && p.concepts.length > 0 && (
+                  <div class="concepts-chips">
+                    {p.concepts.slice(0, 18).map((c) => (
+                      <a class="cc" href={base + '/wiki/concepts/' + c.slug + '/'}>{c.display_name}</a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))
           )}
         </div>
       </div>
@@ -263,6 +278,16 @@ const selectedPaper = papers[0];
       t.addEventListener('click', () => {
         const tab = (t.dataset.tab || '') as Tab;
         if (VALID.includes(tab)) setActiveTab(tab);
+      });
+    });
+
+    // 论文库 tab:论文行点击 → 选中态切换。
+    // 详情面板用 CSS :target(纯 SSR):用户的锚点 #paper-<cx> 命中对应 panel 显示。
+    // 这里 JS 只负责高亮行(.is-selected)+ 滚动到详情(若需要)。
+    document.querySelectorAll<HTMLAnchorElement>('.wb-paper-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        document.querySelectorAll('.wb-paper-row').forEach((r) => r.classList.remove('is-selected'));
+        row.classList.add('is-selected');
       });
     });
 
