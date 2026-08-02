@@ -899,3 +899,229 @@
   color: #059669;
   font-weight: 600;
 }
+
+/* ============================================================
+   PR 阶段 2:8 Tab 视觉扩展(graph / digest / chat / govern / ingest)
+   ============================================================ */
+
+.library-wb-tabs {
+  flex-wrap: wrap;          /* 8 个 tab 超出宽度时自动换行 */
+  gap: 0.25rem;
+}
+
+.library-wb-tabs .lib-wb-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+  font-size: 0.92rem;
+  padding: 0.45rem 0.85rem;
+}
+
+/* 8 tab 视口自适应:窄屏(<=900px)时横向滚动而非换行导致 hero 跳动 */
+@media (max-width: 900px) {
+  .library-wb-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    padding-bottom: 0.25rem;
+  }
+}
+
+/* ----- graph 面板(阶段 2 占位) ----- */
+.wb-graph {
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem;
+  min-height: 320px;
+  display: grid;
+  gap: 1rem;
+  grid-template-rows: auto 1fr auto;
+}
+.wb-graph .empty {
+  margin: 0;
+  color: var(--text-muted, #6b7280);
+  font-size: 0.9rem;
+}
+.wb-graph-svg-wrap {
+  width: 100%;
+  min-height: 320px;
+  background:
+    radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0/16px 16px,
+    var(--bg, #fafafa);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted, #9ca3af);
+  font-size: 0.85rem;
+}
+.wb-graph-legend {
+  display: flex;
+  gap: 1.25rem;
+  font-size: 0.85rem;
+  color: var(--text-muted, #4b5563);
+  flex-wrap: wrap;
+}
+.legend-item { display: inline-flex; align-items: center; gap: 0.4rem; }
+.legend-item .dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent, #6366f1);
+}
+.legend-item .dot-con { background: var(--ok, #3f8f5f); }
+
+/* ----- digest / chat 占位 ----- */
+.wb-digest, .wb-chat {
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem 1.75rem;
+  min-height: 200px;
+}
+.digest-placeholder h3,
+.chat-placeholder h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1.05rem;
+  color: var(--text, #111827);
+}
+.digest-placeholder p, .chat-placeholder p {
+  margin: 0.4rem 0;
+  color: var(--text-muted, #4b5563);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+.digest-placeholder ul,
+.chat-placeholder ul {
+  margin: 0.5rem 0 0.5rem 1.25rem;
+  color: var(--text-muted, #4b5563);
+  font-size: 0.9rem;
+}
+.digest-placeholder code, .chat-placeholder code {
+  background: var(--bg-muted, #f3f4f6);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.digest-hint { font-size: 0.82rem; }
+
+/* ----- govern / ingest 面板 ----- */
+.wb-govern, .wb-ingest {
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem 1.75rem;
+  display: grid;
+  gap: 1rem;
+}
+.wb-govern h3, .wb-ingest h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.govern-dl {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 0.6rem 1.25rem;
+  margin: 0;
+}
+.govern-dl dt {
+  color: var(--text-muted, #6b7280);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.govern-dl dd {
+  margin: 0;
+  color: var(--text, #111827);
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.hue-chip {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--hue-color, var(--accent));
+  color: #fff;
+}
+.wb-ingest-actions {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.wb-ingest-status {
+  font-size: 0.85rem;
+  color: var(--text-muted, #6b7280);
+  margin-left: 0.5rem;
+}
+
+/* segmented control(papers tab 视图过滤 + 概念 category 过滤共用) */
+.segmented {
+  display: inline-flex;
+  background: var(--bg-muted, #f3f4f6);
+  border: 0.5px solid var(--border-2, #d1d5db);
+  border-radius: 9px;
+  padding: 3px;
+  gap: 2px;
+}
+.segmented button {
+  background: transparent;
+  border: 0;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text-muted, #4b5563);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.segmented button.is-active {
+  background: var(--bg-elevated, #fff);
+  color: var(--text, #111827);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+/* 通用 pill 升级(更紧凑、更可达;与 Polaris .pill.sm 视觉对齐) */
+.pill.sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: var(--accent-soft, #e0e7ff);
+  color: var(--accent-text, #312e81);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+/* skeleton loading:LLM 响应未到时的占位 */
+.skel {
+  background:
+    linear-gradient(90deg, var(--bg-muted, #f3f4f6) 0%, #e5e7eb 50%, var(--bg-muted, #f3f4f6) 100%);
+  background-size: 200% 100%;
+  animation: skel-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+  color: transparent !important;
+  user-select: none;
+}
+@keyframes skel-shimmer {
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
+/* hoverable card lift(为未来概念卡 / digest 卡复用) */
+.hoverable {
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.hoverable:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent, #6366f1);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+}

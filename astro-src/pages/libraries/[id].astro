@@ -110,7 +110,12 @@ const selectedPaper = papers[0];
     <nav class="library-wb-tabs" aria-label="tab 切换">
       <a class="lib-wb-tab active" href="#papers" data-tab="papers">📄 论文库 <span class="tab-count">{papers.length}</span></a>
       <a class="lib-wb-tab" href="#concepts" data-tab="concepts">🕸 概念库 <span class="tab-count">{topConcepts.length}</span></a>
+      <a class="lib-wb-tab" href="#graph" data-tab="graph">🔗 图谱 <span class="tab-count">—</span></a>
+      <a class="lib-wb-tab" href="#digest" data-tab="digest">📰 每日简报 <span class="tab-count">—</span></a>
+      <a class="lib-wb-tab" href="#chat" data-tab="chat">💬 文献对话 <span class="tab-count">—</span></a>
       <a class="lib-wb-tab" href="#notes" data-tab="notes">📝 笔记 <span class="tab-count">—</span></a>
+      <a class="lib-wb-tab" href="#govern" data-tab="govern">⚙️ 文献库配置</a>
+      <a class="lib-wb-tab" href="#ingest" data-tab="ingest">📥 建库与同步</a>
       <a class="back" href={base + '/libraries/'}>← 所有文献库</a>
     </nav>
 
@@ -319,6 +324,52 @@ const selectedPaper = papers[0];
       </div>
     </section>
 
+    {/* ===== 图谱 tab(GraphTab) =====
+        阶段 2:占位 + 客户端预热入口(JS 见 <script>)。
+        阶段 4:实装为 paper-relations → 轻量 SVG 节点-边图,无 LLM。 */}
+    <section id="graph-panel" class="library-wb-panel" data-panel="graph">
+      <div class="wb-graph">
+        <p class="empty">图谱基于本库论文之间的相似度关系(由 DPR paper-relations 模块 Jaccard / TFIDF / hybrid 算法计算,无 LLM)。</p>
+        <div id="wb-graph-svg-wrap" class="wb-graph-svg-wrap" aria-label="论文关系图"></div>
+        <div class="wb-graph-legend">
+          <span class="legend-item"><span class="dot dot-paper"></span> 论文(按相关度上色)</span>
+          <span class="legend-item"><span class="dot dot-con"></span> 概念(节点之间为共同概念边)</span>
+        </div>
+      </div>
+    </section>
+
+    {/* ===== 每日简报 tab(DailyDigestTab) =====
+        阶段 2:占位 + 配置提示(无后端定时任务,不实装 LLM 调用)。
+        阶段 4:保留占位;提示词 library.digest / library.digest_synth / library.trend
+        已就绪,供未来 GitHub Actions pipeline 调用。 */}
+    <section id="digest-panel" class="library-wb-panel" data-panel="digest">
+      <div class="wb-digest">
+        <div class="digest-placeholder">
+          <h3>每日简报占位</h3>
+          <p>DPR 是静态站点,没有 Polaris 那种后端定时任务。启用 GitHub Actions 工作流后,简报会出现在这里。</p>
+          <p>当前可用的 Polaris 提示词版本:</p>
+          <ul>
+            <li><code>library-digest:2026-08-02</code> — 逐篇看点(PAPER_INSIGHTS)</li>
+            <li><code>library-digest:2026-08-02</code> — 简报主编(DIGEST_SYNTHESIS)</li>
+            <li><code>library-digest:2026-08-02</code> — 滚动趋势(TREND)</li>
+          </ul>
+          <p class="digest-hint">详见 <a href={`${base}/docs/migration-polaris-absorption/`}>迁移文档</a> 与 <code>config/prompts/library-digest/2026-08-02/</code>。</p>
+        </div>
+      </div>
+    </section>
+
+    {/* ===== 文献对话 tab(LibraryChatTab) =====
+        阶段 2:占位;阶段 4 真正接 paper-chat + library.chat pack 注入。 */}
+    <section id="chat-panel" class="library-wb-panel" data-panel="chat">
+      <div class="wb-chat">
+        <div class="chat-placeholder">
+          <h3>文献对话(占位)</h3>
+          <p>本面板将基于 <code>library-chat:2026-08-02</code> 提示词,接管自 paper-chat 的浮窗能力,支持库级上下文 + 跨论文 RAG 引用。</p>
+          <p>阶段 4 启用后将接流式 LLM,引用规约 <code>[n]</code>、概念双链 <code>[[概念名]]</code>、图片 <code>![[fig:N]]</code>。</p>
+        </div>
+      </div>
+    </section>
+
     {/* ===== 笔记 tab ===== */}
     <section id="notes-panel" class="library-wb-panel" data-panel="notes">
       <div class="wb-notes">
@@ -339,6 +390,50 @@ const selectedPaper = papers[0];
       </div>
     </section>
 
+    {/* ===== 文献库配置 tab(GovernanceTab) =====
+        阶段 2:静态展示 name / description / hue / curator。
+        阶段 4:扩展 NewLibraryModal 把 statement / hue 写入用户库 schema。 */}
+    <section id="govern-panel" class="library-wb-panel" data-panel="govern">
+      <div class="wb-govern">
+        <h3>文献库基础信息</h3>
+        <dl class="govern-dl">
+          <dt>库名 (English)</dt>
+          <dd>{lib.title}</dd>
+          <dt>库名 (中文)</dt>
+          <dd>{lib.titleZh}</dd>
+          <dt>研究方向陈述</dt>
+          <dd>{lib.description}</dd>
+          <dt>研究方向陈述(中文)</dt>
+          <dd>{lib.descriptionZh}</dd>
+          <dt>维护者</dt>
+          <dd>{lib.curator}</dd>
+          <dt>卡片色调</dt>
+          <dd>
+            <span class={`hue-chip hue-${lib.hue}`}>{lib.hue}</span>
+          </dd>
+          <dt>入库方式</dt>
+          <dd>公共库(从 docs/papers/** frontmatter 派生,无写路径)</dd>
+        </dl>
+      </div>
+    </section>
+
+    {/* ===== 建库与同步 tab(IngestTab) =====
+        阶段 2:占位 + 同步入口(指向现有 Gist 同步逻辑)。
+        阶段 4:实装“同步到 Gist”按钮触发 user-libraries/gist.ts。 */}
+    <section id="ingest-panel" class="library-wb-panel" data-panel="ingest">
+      <div class="wb-ingest">
+        <h3>建库与同步</h3>
+        <p class="empty">公共库数据来自 <code>docs/papers/</code> frontmatter,在 pipeline 跑批时重建。本 Tab 只控制个人库。</p>
+        <p class="empty">个人库同步(若已配置 Gist token):</p>
+        <ul class="wb-ingest-actions">
+          <li><button type="button" class="export-btn" data-gist-action="pull">⬇️ 从 Gist 拉取</button></li>
+          <li><button type="button" class="export-btn primary" data-gist-action="push">⬆️ 推送到 Gist</button></li>
+          <li id="wb-ingest-status" class="wb-ingest-status"></li>
+        </ul>
+        <p class="empty">同步底层由 <code>astro-src/lib/user-libraries/gist.ts</code> 处理(零信任 R/W 合并,见 8f2a 提交)。</p>
+      </div>
+    </section>
+
     {/* 导出数据载体 — export-bridge 读这个 */}
     <section
       id="library-wb-data"
@@ -356,8 +451,15 @@ const selectedPaper = papers[0];
     import { initLibraryExportButtons } from '../../scripts/export-bridge';
     initLibraryExportButtons();
 
-    type Tab = 'papers' | 'concepts' | 'notes';
-    const VALID: Tab[] = ['papers', 'concepts', 'notes'];
+    // PR 阶段 2:8 tab 切换(PapersTab / ConceptsTab / Graph / Digest / Chat / Notes / Govern / Ingest)
+    // 注:hash 路由沿用 :target + JS 切 active class 模式,无 JS 也能切。
+    type Tab =
+      | 'papers' | 'concepts' | 'graph' | 'digest'
+      | 'chat' | 'notes' | 'govern' | 'ingest';
+    const VALID: Tab[] = [
+      'papers', 'concepts', 'graph', 'digest',
+      'chat', 'notes', 'govern', 'ingest',
+    ];
 
     function setActiveTab(tab: Tab) {
       document.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
@@ -366,10 +468,14 @@ const selectedPaper = papers[0];
       document.querySelectorAll<HTMLElement>('.library-wb-panel').forEach((p) => {
         p.classList.toggle('active', p.dataset.panel === tab);
       });
+      // 通知阶段 4 客户端:切到 graph 时可挂载 SVG,切到 chat 时挂载 panel 等
+      try {
+        document.dispatchEvent(new CustomEvent('dpr:library-tab', { detail: { tab } }));
+      } catch { /* ignore older browsers */ }
     }
 
     function syncFromHash() {
-      const m = window.location.hash.match(/^#(papers|concepts|notes)$/);
+      const m = window.location.hash.match(/^#(papers|concepts|graph|digest|chat|notes|govern|ingest)$/);
       if (m) setActiveTab(m[1] as Tab);
     }
 
@@ -442,6 +548,17 @@ const selectedPaper = papers[0];
           const show = cat === 'all' || card.dataset.cat === cat;
           card.style.display = show ? '' : 'none';
         });
+      });
+    });
+
+    // 建库与同步 tab:Gist 拉/推按钮(阶段 2 占位;阶段 4 接入 user-libraries/gist.ts)
+    document.querySelectorAll<HTMLButtonElement>('button[data-gist-action]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const status = document.getElementById('wb-ingest-status');
+        const action = btn.dataset.gistAction;
+        if (status) status.textContent = action === 'pull'
+          ? '拉取占位:阶段 4 接入 user-libraries/gist.ts'
+          : '推送占位:阶段 4 接入 user-libraries/gist.ts';
       });
     });
 
