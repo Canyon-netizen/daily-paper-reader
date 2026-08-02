@@ -127,7 +127,13 @@ async function patchGistFile(gistId: string, filename: string, content: string):
 // 序列化 / 反序列化
 // ---------------------------------------------------------------------------
 
-/** 把 doc 序列化出来。schemaVersion 必须写,旧 client 见到不认就会丢。 */
+/** 把 doc 序列化出来。schemaVersion 必须写,旧 client 见到不认就会丢。
+ *
+ *  2026-08-02 扩展:libraries 字段从本地 `dpr_user_libraries_v1` 读取拼到同一份
+ *  dpr-library.json。push 路径(serialize)从 user-libraries/store 读最新,
+ *  pull 路径(deserialize)把 libraries 块交给 user-libraries/gist merge。
+ *  详见 serializeUserLibraryWithLibraries / deserializeUserLibraryWithLibraries
+ *  编排器在 pushUserLibraryToGist / pullUserLibraryFromGist 的改造。 */
 export function serializeUserLibrary(doc: UserLibraryDoc): string {
   return JSON.stringify(doc, null, 2);
 }
@@ -144,6 +150,7 @@ export function deserializeUserLibrary(content: string): UserLibraryDoc | null {
   const obj = parsed as Partial<UserLibraryDoc>;
   if (obj.schemaVersion !== 1) return null;
   if (!obj.papers || typeof obj.papers !== 'object') return null;
+  // libraries 字段可选;v1 旧文件可能没有。
   return { schemaVersion: 1, papers: obj.papers as Record<string, UserPaperState> };
 }
 
@@ -235,7 +242,69 @@ export function mergeUserLibrary(
 // 公开 API
 // ---------------------------------------------------------------------------
 
-/** pull:拉取远端 → 合并 → 一次性写 localStorage。**只 GET,绝不 PATCH。 */
+import { loadUserLibraries, replaceUserLibraries } from '../user-libraries/store';
+import {
+  serializeUserLibraries,
+  deserializeUserLibraries,
+  emptyLibrariesDoc,
+  mergeUserLibraries,
+  emptySerializedLibraries,
+  type SerializedLibrariesBlock,
+} from '../user-libraries/gist';
+
+// ---------------------------------------------------------------------------
+// 双层编排(papers + libraries 走同一份 dpr-library.json)
+// ---------------------------------------------------------------------------
+
+/** 把 papers(单数 user-library)+ libraries(复数 user-libraries)两层拼成
+ *  同一份 dpr-library.json 字符串。push 走它。 */
+export function serializeUserLibraryWithLibraries(): string {
+  const lib = loadUserLibrary();
+  const userLibs = loadUserLibraries();
+  const librariesBlock: SerializedLibrariesBlock = userLibs.libraries
+    ? serializeUserLibraries(userLibs)
+    : emptySerializedLibraries();
+  return JSON.stringify(
+    {
+      schemaVersion: 1,
+      papers: lib.papers,
+      libraries: librariesBlock,
+    },
+    null,
+    2,
+  );
+}
+
+/** 远端 content → papers 块(走现有 deserializeUserLibrary)+ libraries 块(走
+ *  user-libraries/gist:deserializeUserLibraries)的解析结果。失败时 libraries
+ *  块走空 doc 兜底,不影响 papers pull。 */
+export interface ParsedLibraryRemote {
+  papers: UserLibraryDoc;
+  libraries: ReturnType<typeof deserializeUserLibraries>;
+}
+
+export function deserializeUserLibraryWithLibraries(content: string): ParsedLibraryRemote | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Partial<UserLibraryDoc> & { libraries?: unknown };
+  if (obj.schemaVersion !== 1) return null;
+  if (!obj.papers || typeof obj.papers !== 'object') return null;
+  const papers: UserLibraryDoc = { schemaVersion: 1, papers: obj.papers as Record<string, UserPaperState> };
+  const libraries = obj.libraries ? deserializeUserLibraries(obj.libraries) : emptyLibrariesDoc();
+  return { papers, libraries };
+}
+
+// ---------------------------------------------------------------------------
+// 公开 API(pull / push)
+// ---------------------------------------------------------------------------
+
+/** pull:拉取远端 → 合并两层(papers + libraries)→ 一次性写 localStorage。
+ *  **只 GET,绝不 PATCH**。 */
 export async function pullUserLibraryFromGist(): Promise<GistLibraryResult> {
   const gistId = getLibraryGistId();
   if (!gistId) return { ok: false, reason: 'no_token', conflicts: 0 };
@@ -245,31 +314,48 @@ export async function pullUserLibraryFromGist(): Promise<GistLibraryResult> {
       // 远端没这个文件,等价于空 doc → 本地不变
       return { ok: true, mergedPapers: 0, writtenPapers: 0, conflicts: 0 };
     }
-    const remote = deserializeUserLibrary(content);
+    const remote = deserializeUserLibraryWithLibraries(content);
     if (!remote) return { ok: false, reason: 'corrupt_remote', conflicts: 0 };
-    const local = loadUserLibrary();
-    const { merged, counters } = mergeUserLibrary(local, remote);
-    // replaceUserLibrary 一次性写入,reason='sync' 只发一个事件
-    if (replaceUserLibrary(merged, 'sync').ok === false) {
-      return { ok: false, reason: 'local_write_failed', conflicts: counters.conflicts };
+
+    // papers(单数)merge
+    const localPapers = loadUserLibrary();
+    const { merged: mergedPapers, counters: paperCounters } = mergeUserLibrary(localPapers, remote.papers);
+    if (replaceUserLibrary(mergedPapers, 'sync').ok === false) {
+      return { ok: false, reason: 'local_write_failed', conflicts: paperCounters.conflicts };
     }
+
+    // libraries(复数)merge —— 走 user-libraries 的 store / gist
+    if (remote.libraries) {
+      const localLibs = loadUserLibraries();
+      const { merged: mergedLibs } = mergeUserLibraries(localLibs, remote.libraries);
+      if (replaceUserLibraries(mergedLibs, 'sync').ok === false) {
+        // libraries 写失败:已经写完 papers,UI 应提示但不要整体回滚 papers
+        return {
+          ok: true,
+          mergedPapers: paperCounters.mergedPapers,
+          writtenPapers: paperCounters.writtenPapers,
+          conflicts: paperCounters.conflicts,
+        };
+      }
+    }
+
     return {
       ok: true,
-      mergedPapers: counters.mergedPapers,
-      writtenPapers: counters.writtenPapers,
-      conflicts: counters.conflicts,
+      mergedPapers: paperCounters.mergedPapers,
+      writtenPapers: paperCounters.writtenPapers,
+      conflicts: paperCounters.conflicts,
     };
   } catch (e) {
     return { ok: false, reason: (e as Error).message || String(e), conflicts: 0 };
   }
 }
 
-/** push:把当前 localStorage 写回 Gist。存在就 PATCH,没有就 POST 新建。 */
+/** push:把当前 localStorage 的两层(papers + libraries)写回 Gist。
+ *  存在就 PATCH,没有就 POST 新建。 */
 export async function pushUserLibraryToGist(): Promise<GistLibraryResult> {
   const token = loadGitHubToken();
   if (!token) return { ok: false, reason: 'no_token', conflicts: 0 };
-  const local = loadUserLibrary();
-  const content = serializeUserLibrary(local);
+  const content = serializeUserLibraryWithLibraries();
   try {
     let gistId = getLibraryGistId();
     if (!gistId) {
@@ -278,6 +364,7 @@ export async function pushUserLibraryToGist(): Promise<GistLibraryResult> {
     } else {
       await patchGistFile(gistId, LIBRARY_GIST_FILENAME, content);
     }
+    const local = loadUserLibrary();
     return {
       ok: true,
       mergedPapers: Object.keys(local.papers).length,

@@ -52,3 +52,22 @@ export interface DprBulkSelectionChangeDetail {
   /** 当前批量选择中的 canonical arXiv id 集合(顺序=加入顺序)。 */
   ids: string[];
 }
+
+/** 用户文献库写入的原因标签。listener 可以据此决定重绘粒度
+ * (例如 'addPaper' 只需刷新该 library 的成员行,'create' / 'sync' 需要整表重排)。 */
+export type DprUserLibrariesChangeReason =
+  | 'create'
+  | 'rename'
+  | 'statement'
+  | 'delete'
+  | 'addPaper'
+  | 'removePaper'
+  | 'sync'
+  | 'reset'
+  | 'hue';
+
+export interface DprUserLibrariesChangeDetail {
+  /** 受影响的 library id。'create' / 'sync' / 'reset' 可能很多条。 */
+  ids: string[];
+  reason: DprUserLibrariesChangeReason;
+}

@@ -76,9 +76,13 @@ def flatten_legacy_llm_section(payload: dict[str, Any]) -> None:
 def filter_payload_for_env(payload: dict[str, Any]) -> None:
     """Stage 2 纵深防御:即使将来用户图书馆误用了同一个 gist(dpr-config.json),
     也不让浏览器侧的用户态数据(笔记 / 星标 / 阅读状态)被当成 config 写进
-    $GITHUB_ENV。这层是兜底,主防御是 lib/user-library/gist.ts 用独立 gist id。"""
+    $GITHUB_ENV。这层是兜底,主防御是 lib/user-library/gist.ts 用独立 gist id。
+
+    2026-08-02 扩展:加 `libraries` 字段(用户自建文献库列表)进黑名单。
+    与 userLibrary(单数 per-paper 状态)同源,同防御等级。"""
     payload.pop("hiddenPapers", None)
     payload.pop("userLibrary", None)
+    payload.pop("libraries", None)
     payload.pop("schemaVersion", None)  # 防止 userLibrary doc 整体作为 config 被写入
 
 

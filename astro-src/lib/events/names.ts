@@ -65,3 +65,18 @@ export const DPR_USER_LIBRARY_CHANGE_LEGACY = 'dpr-user-library-change';
 export const DPR_BULK_SELECTION_CHANGE = 'dpr:bulk-selection-change';
 /** @deprecated 兼容旧 listener,新代码用 DPR_BULK_SELECTION_CHANGE。 */
 export const DPR_BULK_SELECTION_CHANGE_LEGACY = 'dpr-bulk-selection-change';
+
+/** 用户文献库(复数 libraries)状态变化(新建 / 重命名 / 改描述 / 删 /
+ *  加论文 / 移论文 / 改 hue / 同步)—
+ *  detail: DprUserLibrariesChangeDetail { ids, reason }
+ *
+ *  **与 DPR_USER_LIBRARY_CHANGE(单数 per-paper 状态)刻意分开**:
+ *   - 单数 user-library:每篇论文的状态(星标/笔记/...),key = canonicalArxivId;
+ *   - 复数 user-libraries:用户自建文献库列表,key = libraryId。
+ *   混用会让 listener 拿到的 reason/ids 语义混乱。
+ *
+ *  **单一 emit 源**:只有 lib/user-libraries/store.ts 的私有写入漏斗会发。
+ *  listener 直接调 listUserLibraries() 读真值,不要从 detail.ids 还原。 */
+export const DPR_USER_LIBRARIES_CHANGE = 'dpr:user-libraries-change';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名(与本文件其它事件同构)。 */
+export const DPR_USER_LIBRARIES_CHANGE_LEGACY = 'dpr-user-libraries-change';

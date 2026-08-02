@@ -31,6 +31,8 @@ import {
   DPR_USER_LIBRARY_CHANGE_LEGACY,
   DPR_BULK_SELECTION_CHANGE,
   DPR_BULK_SELECTION_CHANGE_LEGACY,
+  DPR_USER_LIBRARIES_CHANGE,
+  DPR_USER_LIBRARIES_CHANGE_LEGACY,
 } from './names';
 import type {
   DprThemeChangeDetail,
@@ -38,6 +40,7 @@ import type {
   DprDailyDayOpenedDetail,
   DprUserLibraryChangeDetail,
   DprBulkSelectionChangeDetail,
+  DprUserLibrariesChangeDetail,
 } from './types';
 
 /** 通用 emit helper。target 默认 document。
@@ -186,4 +189,30 @@ export function onDprBulkSelectionChange(
   handler: (detail: DprBulkSelectionChangeDetail) => void,
 ): () => void {
   return on(target, DPR_BULK_SELECTION_CHANGE, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:user-libraries-change (legacy alias: dpr-user-libraries-change)
+//
+// 与单数 DPR_USER_LIBRARY_CHANGE 同模式:唯一合法 emit 方是
+// lib/user-libraries/store.ts 的私有写入漏斗。其它模块只应该 on(...) 订阅。
+// 命名见 names.ts:82-87 的注释。
+// ---------------------------------------------------------------------------
+export function emitDprUserLibrariesChange(
+  target: EventTarget = document,
+  detail: DprUserLibrariesChangeDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_USER_LIBRARIES_CHANGE,
+    detail,
+    DPR_USER_LIBRARIES_CHANGE_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprUserLibrariesChange(
+  target: EventTarget = document,
+  handler: (detail: DprUserLibrariesChangeDetail) => void,
+): () => void {
+  return on(target, DPR_USER_LIBRARIES_CHANGE, handler);
 }

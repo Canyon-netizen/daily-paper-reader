@@ -1,0 +1,587 @@
+/* /user-libraries/ — 用户自建文献库样式
+ *
+ * 仿照 Polaris /libraries 的 type badge / status badge / is_mine 徽标 +
+ * 创建弹窗 + 「+ 加进文献库」弹层。
+ *
+ * 复用 libraries.css 的 .libraries-grid / .library-card.hue-* / --accent 变量;
+ * 新加:.lib-type-badge(Public 绿 / Personal 紫) / .lib-mine-badge(蓝) /
+ *   .new-library-modal / .add-to-library-popover / .lib-hue-picker
+ */
+
+:root {
+  /* 公共库绿(Polaris TypeBadge 公共) */
+  --lib-ok-bg: rgba(16, 185, 129, 0.12);
+  --lib-ok-tx: #047857;
+  /* 个人库紫(Polaris TypeBadge Personal) */
+  --lib-violet-bg: rgba(139, 92, 246, 0.12);
+  --lib-violet-tx: #6d28d9;
+  /* 我在用蓝(Polaris is_mine) */
+  --lib-mine-bg: rgba(59, 130, 246, 0.12);
+  --lib-mine-tx: #1d4ed8;
+}
+[data-theme="dark"] {
+  --lib-ok-bg: rgba(16, 185, 129, 0.18);
+  --lib-ok-tx: #6ee7b7;
+  --lib-violet-bg: rgba(139, 92, 246, 0.18);
+  --lib-violet-tx: #c4b5fd;
+  --lib-mine-bg: rgba(59, 130, 246, 0.18);
+  --lib-mine-tx: #93c5fd;
+}
+[data-theme="contrast"] {
+  --lib-ok-bg: #000;
+  --lib-ok-tx: #00ff7f;
+  --lib-violet-bg: #000;
+  --lib-violet-tx: #dda0dd;
+  --lib-mine-bg: #000;
+  --lib-mine-tx: #87ceeb;
+}
+
+/* --- 卡片 badge(与 Polaris TypeBadge / StatusBadge / is_mine 徽标对齐) --- */
+.lib-type-badge,
+.lib-mine-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.18em 0.55em;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  line-height: 1.4;
+}
+.lib-type-badge--public  { background: var(--lib-ok-bg);     color: var(--lib-ok-tx); }
+.lib-type-badge--personal { background: var(--lib-violet-bg); color: var(--lib-violet-tx); }
+.lib-mine-badge          { background: var(--lib-mine-bg);   color: var(--lib-mine-tx); }
+
+/* 标题行:badge 与 name 共存 */
+.library-card .lib-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.library-card .lib-title-row .lib-name {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.005em;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.library-card .lib-title-row .lib-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+.library-card .lib-action-btn {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  font-size: 0.95rem;
+  padding: 0;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.library-card .lib-action-btn:hover {
+  background: var(--bg-muted);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.library-card .lib-action-btn--danger:hover {
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+/* statement 描述(2 行 line-clamp,与 Polaris 卡片对齐) */
+.library-card .lib-statement {
+  margin: 0.15rem 0 0;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--fg-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.7em;
+}
+
+/* --- section title(公共主题库 / 我的文献库) --- */
+.libraries-section {
+  margin-top: var(--space-10, 2.5rem);
+}
+.libraries-section:first-of-type {
+  margin-top: 0;
+}
+.libraries-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 var(--space-2, 0.5rem);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.libraries-section-title .count {
+  font-family: var(--font-mono, ui-monospace);
+  font-size: 0.85rem;
+  color: var(--fg-subtle);
+  font-weight: 500;
+}
+.libraries-section-desc {
+  margin: 0 0 var(--space-5, 1.25rem);
+  font-size: 0.88rem;
+  color: var(--fg-muted);
+  max-width: 720px;
+}
+
+/* --- 空状态(空 section 还没创建任何库) --- */
+.libraries-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3, 0.75rem);
+  padding: var(--space-12, 3rem) var(--space-6, 1.5rem);
+  border: 1px dashed var(--border);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  text-align: center;
+}
+.libraries-empty-icon {
+  font-size: 2.4rem;
+  opacity: 0.7;
+}
+.libraries-empty-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.libraries-empty-desc {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+  max-width: 420px;
+  line-height: 1.5;
+}
+.libraries-empty .btn {
+  margin-top: var(--space-2, 0.5rem);
+}
+
+/* --- 按钮(对照 Polaris btn-primary / btn-soft) --- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.1s;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.btn:active { transform: scale(0.97); }
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+.btn-soft {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.btn-soft:hover {
+  background: var(--bg-muted);
+  border-color: var(--border-strong);
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--fg-muted);
+  border-color: transparent;
+}
+.btn-ghost:hover {
+  background: var(--bg-muted);
+  color: var(--fg);
+}
+.btn-danger {
+  background: #dc2626;
+  color: #fff;
+  border-color: #dc2626;
+}
+.btn-danger:hover {
+  background: #b91c1c;
+}
+.btn-sm {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+  border-radius: 6px;
+}
+
+/* --- 顶栏操作行(type filter + + 新建) --- */
+.libraries-actionbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0 0 var(--space-6, 1.5rem);
+}
+.libraries-actionbar .libraries-actionbar-spacer {
+  flex: 1 1 auto;
+}
+
+/* type 段控件(对齐 Polaris Segmented) */
+.lib-segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  padding: 2px;
+  gap: 2px;
+}
+.lib-segmented .lib-segment {
+  padding: 0.32rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, color 0.12s;
+}
+.lib-segmented .lib-segment:hover { color: var(--fg); }
+.lib-segmented .lib-segment.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* --- 新建文献库弹窗(对照 Polaris NewLibraryModal) --- */
+.dpr-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--space-4, 1rem);
+  animation: dpr-fadein 0.15s ease-out;
+}
+@keyframes dpr-fadein { from { opacity: 0; } to { opacity: 1; } }
+.dpr-modal {
+  width: 100%;
+  max-width: 560px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  max-height: 90vh;
+  overflow: hidden;
+  animation: dpr-pop 0.18s ease-out;
+}
+@keyframes dpr-pop { from { transform: scale(0.96); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.dpr-modal-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.dpr-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.dpr-modal-sub {
+  margin: 0.25rem 0 0;
+  font-size: 0.83rem;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+.dpr-modal-body {
+  padding: 1rem 1.25rem;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+.dpr-modal-footer {
+  padding: 0.85rem 1.25rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  background: var(--bg);
+}
+
+/* 表单字段(对照 Polaris FormField) */
+.lib-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: var(--space-4, 1rem);
+}
+.lib-field-label {
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.lib-field-hint {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  line-height: 1.5;
+  margin-top: 0.1rem;
+}
+.lib-input,
+.lib-textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.92rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  resize: vertical;
+  transition: border-color 0.12s;
+}
+.lib-input:focus,
+.lib-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.lib-textarea { min-height: 70px; line-height: 1.5; }
+.lib-input--error,
+.lib-textarea--error { border-color: #dc2626; }
+.lib-field-error {
+  font-size: 0.78rem;
+  color: #dc2626;
+  margin-top: 0.1rem;
+}
+
+/* hue 选择器(7 色 chip) */
+.lib-hue-picker {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.lib-hue-chip {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  background: var(--hue-color);
+  position: relative;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.lib-hue-chip:hover { transform: scale(1.08); }
+.lib-hue-chip.active {
+  border-color: var(--fg);
+  transform: scale(1.08);
+}
+.lib-hue-chip.active::after {
+  content: '✓';
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+/* --- 「+ 加进文献库」按钮 + 弹层(对照 Polaris LibraryPicker) --- */
+.add-to-library-wrap {
+  position: relative;
+  display: inline-block;
+}
+.add-to-library-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-size: 0.85rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.add-to-library-btn:hover {
+  background: var(--bg-muted);
+  border-color: var(--accent);
+}
+.add-to-library-btn--in {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.add-to-library-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 0.6rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.add-to-library-popover .atl-item {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  color: var(--fg);
+  transition: background 0.12s, border-color 0.12s;
+  width: 100%;
+}
+.add-to-library-popover .atl-item:hover { background: var(--bg-muted); }
+.add-to-library-popover .atl-item.on { border-color: var(--accent); background: var(--bg-muted); }
+.add-to-library-popover .atl-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1.5px solid var(--border-2, var(--border));
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.add-to-library-popover .atl-item.on .atl-check {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.add-to-library-popover .atl-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.add-to-library-popover .atl-statement {
+  font-size: 0.78rem;
+  color: var(--fg-muted);
+  line-height: 1.45;
+  margin-top: 0.15rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.add-to-library-popover .atl-meta {
+  font-size: 0.72rem;
+  color: var(--fg-subtle);
+  margin-top: 0.2rem;
+}
+.add-to-library-popover .atl-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.3rem 0;
+}
+.add-to-library-popover .atl-new {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.add-to-library-popover .atl-new:hover {
+  background: var(--bg-muted);
+  color: var(--fg);
+  border-color: var(--accent);
+}
+.add-to-library-popover .atl-empty {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  padding: 0.8rem 0.6rem;
+  text-align: center;
+  line-height: 1.5;
+}
+.add-to-library-popover .atl-actions {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.4rem 0.4rem 0;
+  border-top: 1px solid var(--border);
+  margin-top: 0.3rem;
+}
+.add-to-library-popover .atl-actions .btn {
+  flex: 1;
+  justify-content: center;
+}
+
+/* 论文详情页侧边栏:已加 N 个文献库(对齐 Polaris 「我在用」) */
+.in-libraries-count {
+  font-size: 0.78rem;
+  color: var(--lib-mine-tx);
+  font-weight: 600;
+  margin-left: 0.4rem;
+}
+
+/* --- 详情页按钮组(对照 Polaris WikiWorkbench 顶部) --- */
+.lib-detail-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: var(--space-3, 0.75rem);
+}
+
+/* --- 详情页(用户库)的 hero 标识 --- */
+.lib-user-owner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.lib-user-owner .lib-type-badge--personal {
+  font-size: 0.78rem;
+}

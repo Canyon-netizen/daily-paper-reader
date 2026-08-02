@@ -1,0 +1,81 @@
+---
+// /components/NewLibraryModal.astro — 新建文献库弹窗
+//
+// 对照 Polaris NewLibraryModal.tsx 的字段(name + statement + hue 三必填),
+// 但 DPR 没有 inclusion / anchor / rubric / AI 访谈生成 — 那些留作 follow-up。
+//
+// SSR 渲染空 modal 壳(display:none,JS 控制可见);客户端 user-libraries-ui.ts
+// 接管所有交互(打开/关闭/提交/校验/创建)。
+//
+// 引入方式:
+//   1. 在 BaseLayout 之前 import(不必要);2. 在 /libraries/ / 首页 footer 之前
+//   直接 <NewLibraryModal /> 一次(全局唯一实例)。点 [data-open-new-library]
+//   任意位置的按钮都会打开它。
+---
+
+<div
+  class="dpr-modal-backdrop"
+  data-new-library-modal
+  style="display: none;"
+  role="dialog"
+  aria-modal="true"
+  aria-labelledby="new-library-modal-title"
+>
+  <div class="dpr-modal">
+    <div class="dpr-modal-header">
+      <h3 class="dpr-modal-title" id="new-library-modal-title">新建文献库</h3>
+      <p class="dpr-modal-sub">
+        创建后是你的个人文献库,跨设备同步走 Gist。名称和方向描述都是必填 ——
+        「标题 + 一句话」让你以后翻找时一眼认出来。
+      </p>
+    </div>
+    <form>
+      <div class="dpr-modal-body">
+        <div class="lib-field">
+          <label class="lib-field-label" for="new-lib-name">名称 <span style="color:#dc2626;">*</span></label>
+          <input
+            id="new-lib-name"
+            class="lib-input"
+            type="text"
+            maxlength="32"
+            placeholder="如:稀疏注意力 / ICLR 2025 收藏 / 我的 RLHF 周更"
+            data-modal-name
+            required
+          />
+          <div class="lib-field-error" data-modal-name-err></div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label" for="new-lib-statement">方向描述 <span style="color:#dc2626;">*</span></label>
+          <textarea
+            id="new-lib-statement"
+            class="lib-textarea"
+            maxlength="200"
+            rows="3"
+            placeholder="研究什么问题、关注什么子问题、偏重哪类方法。写给未来的自己看 —— 越具体越好认。"
+            data-modal-statement
+            required
+          ></textarea>
+          <div class="lib-field-hint">1-200 字。这句话会显示在卡片上,让你以后翻找时一眼认出来。</div>
+          <div class="lib-field-error" data-modal-stmt-err></div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">卡片颜色</label>
+          <div class="lib-hue-picker" data-hue-picker>
+            <button type="button" class="lib-hue-chip hue-orange"  data-hue="orange"  aria-label="orange"></button>
+            <button type="button" class="lib-hue-chip hue-cyan"    data-hue="cyan"    aria-label="cyan"></button>
+            <button type="button" class="lib-hue-chip hue-purple"  data-hue="purple"  aria-label="purple"></button>
+            <button type="button" class="lib-hue-chip hue-emerald active" data-hue="emerald" aria-label="emerald"></button>
+            <button type="button" class="lib-hue-chip hue-amber"   data-hue="amber"   aria-label="amber"></button>
+            <button type="button" class="lib-hue-chip hue-rose"    data-hue="rose"    aria-label="rose"></button>
+            <button type="button" class="lib-hue-chip hue-sky"     data-hue="sky"     aria-label="sky"></button>
+          </div>
+          <input type="hidden" data-modal-hue value="emerald" />
+        </div>
+      </div>
+      <div class="dpr-modal-footer">
+        <button type="button" class="btn btn-ghost" data-modal-close>取消</button>
+        <button type="submit" class="btn btn-primary" data-modal-submit>创建个人文献库</button>
+      </div>
+    </form>
+  </div>
+</div>

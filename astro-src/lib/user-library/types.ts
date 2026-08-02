@@ -41,12 +41,32 @@ export interface UserPaperState {
 }
 
 /** 整个 doc 的形状。schemaVersion 不匹配时 store 直接丢弃重建(见 store.ts 的
- *  loadUserLibrary),避免旧结构的半残数据在新代码里引发难查的运行时错误。 */
+ *  loadUserLibrary),避免旧结构的半残数据在新代码里引发难查的运行时错误。
+ *
+ *  2026-08-02 扩展:**libraries 字段可选**——与 lib/user-libraries(复数,用户
+ *  自建文献库列表)同存一份 dpr-library.json。v1 旧文件没有此字段,deserialize
+ *  时按缺失处理,空块起步。 */
 export interface UserLibraryDoc {
   schemaVersion: 1;
   /** key = canonicalArxivId(...),**永不含 vN**。
    *  不变式见 lib/arxiv.ts:canonicalArxivId 的注释。 */
   papers: Record<string, UserPaperState>;
+  /** 用户自建文献库(复数)列表。**可选**:v1 旧文件不带此字段,直接走空块。 */
+  libraries?: {
+    schemaVersion: 1;
+    /** key = libraryId。UserLibrary 的完整定义见 lib/user-libraries/types.ts。
+     *  这里只放 narrow shape(避免 lib/user-library 强依赖 lib/user-libraries 的 import
+     *  链路,反过来同理 —— deserialize 完后由 gist.ts 的编排器转交)。 */
+    items: Record<string, {
+      id: string;
+      name: string;
+      statement: string;
+      hue: string;
+      paperIds: string[];
+      createdAt: number;
+      updatedAt: number;
+    }>;
+  };
 }
 
 /**

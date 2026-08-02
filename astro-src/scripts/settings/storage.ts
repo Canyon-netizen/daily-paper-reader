@@ -47,6 +47,12 @@ export const STORAGE_KEYS = {
   // 放 scripts/ 会造成 lib → scripts 的反向依赖。这里只登记 key 名,保证
   // 全站 localStorage key 仍然只有这一个字典。
   userLibrary: 'dpr_user_library_v1',
+  // 用户文献库(复数 libraries)—— 用户自建的论文收藏夹。对照 Polaris 的
+  // DirectionLibrary:每条 { id, name, statement, hue, paperIds[], createdAt, updatedAt }。
+  // 走 Gist 同步时与 userLibrary(单数 per-paper 状态)同存一份 dpr-library.json。
+  // 名字区分:单数 userLibrary(论文状态) vs 复数 userLibraries(文献库列表),
+  // 写代码时碰到 library(单)/ libraries(复)一定要分清,grep 容易撞名。
+  userLibraries: 'dpr_user_libraries_v1',
   // 用户图书馆的 Gist id(Stage 2)。**必须与 gistId 分开**:
   // .github/scripts/load_gist.py:150 取的是 gist 里"第一个 .json 文件",
   // 不是按文件名找 dpr-config.json。把图书馆数据塞进同一个 gist,

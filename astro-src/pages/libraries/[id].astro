@@ -125,6 +125,11 @@ const selectedPaper = papers[0];
             <a class="filter-pill active" data-view="all" href="#papers">全部 {papers.length}</a>
             <a class="filter-pill" data-view="today" href="#papers">今日 {newTodayCount}</a>
           </div>
+          <div class="wb-papers-sort">
+            <span class="sort-label">排序</span>
+            <a class="filter-pill active" data-sort="date" href="#papers">📅 按时间</a>
+            <a class="filter-pill" data-sort="score" href="#papers">⭐ 按相关度</a>
+          </div>
           {papers.map((p, i) => {
             const conceptsHere = p.concepts?.length || 0;
             return (
@@ -197,7 +202,7 @@ const selectedPaper = papers[0];
                   {p.pdf && (
                     <a class="export-btn" href={p.pdf} target="_blank" rel="noopener">🔗 arXiv PDF</a>
                   )}
-                  <a class="export-btn" href={base + '/library/'}>⭐ 我的图书馆</a>
+                  <a class="export-btn" href={base + '/libraries/'}>📂 所有文献库</a>
                 </div>
 
                 {/* ===== 3. TL;DR 卡片 ===== */}

@@ -25,6 +25,8 @@ export {
   DPR_USER_LIBRARY_CHANGE_LEGACY,
   DPR_BULK_SELECTION_CHANGE,
   DPR_BULK_SELECTION_CHANGE_LEGACY,
+  DPR_USER_LIBRARIES_CHANGE,
+  DPR_USER_LIBRARIES_CHANGE_LEGACY,
 } from './names';
 
 export type {
@@ -36,6 +38,8 @@ export type {
   DprUserLibraryChangeDetail,
   DprUserLibraryChangeReason,
   DprBulkSelectionChangeDetail,
+  DprUserLibrariesChangeDetail,
+  DprUserLibrariesChangeReason,
 } from './types';
 
 export {
@@ -51,4 +55,6 @@ export {
   onDprUserLibraryChange,
   emitDprBulkSelectionChange,
   onDprBulkSelectionChange,
+  emitDprUserLibrariesChange,
+  onDprUserLibrariesChange,
 } from './bus';

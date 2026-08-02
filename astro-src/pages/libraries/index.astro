@@ -1,112 +1,192 @@
 ---
-// /libraries/ — 文献库列表(首页入口)
+// /libraries/ — 文献库列表 + 用户库详情(2026-08-02 重构,仿照 Polaris LibrariesPage)
 //
-// 严格对照 Polaris /libraries(LibrariesPage):
-//   - 卡片流,每张卡 = 一个 DirectionLibrary 风格的公共文献库
-//   - 顶部 hero + 4 个快捷入口(论文分析 / 我的图书馆 / 主题探索 / 概念)
+// 严格对照 Polaris /libraries(LibrariesPage.tsx):
+//   - 公共库 + 个人库**同页展示**(type filter 段控件:全部 / 公共 / 个人)
+//   - 每张卡:Personal 紫色徽标(用户库) / Public 绿色徽标(公共库)+ 我在用蓝徽标
+//   - 顶部 hero + 「+ 新建文献库」按钮(Polaris 风格 .btn-primary)
 //   - 卡片左竖条按 lib.hue 着色
-//   - 仅显示有成员(>0 论文)的库,buildLibraryDigests 自动过滤
+//   - 仅显示有成员的公共库,buildLibraryDigests 自动过滤 0 篇;
 //
-// 设计要点:每个库不是"收藏夹",而是从 docs/papers/** frontmatter 派生的
-// 主题/任务集合 —— 与个人图书馆(走 user-library)的语义完全分开。
+// 详情模式:URL 带 `?id=<userLibId>` 时,SSR 渲染公共库详情的同一套结构
+// (3 tab: 论文 / 概念 / 笔记)。因为这是静态站,无法 prerender 运行时生成
+// 的 user library id,所以走 query-string 模式;客户端水合从 localStorage
+// 读 library 实体,从 SSR 拿到的 papers 全集中按 paperIds 过滤。
 //
 // 路径:
-//   /libraries/        本页(列表)
-//   /libraries/<id>/   单库工作台(papers + 概念 + 导出)
+//   /libraries/         列表(本路由)
+//   /libraries/?id=<u>  用户库详情(本路由,客户端水合)
+//   /libraries/<p>/     公共库详情(独立静态页面,见 [id].astro)
 
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
+import NewLibraryModal from '../../components/NewLibraryModal.astro';
 import { defaultPaperRepository } from '../../lib/paper-repository';
-import { buildLibraryDigests, LIBRARIES } from '../../lib/libraries';
+import { buildLibraryDigests } from '../../lib/libraries';
 import '../../styles/libraries.css';
+import '../../styles/user-libraries.css';
+import '../../styles/library-workbench.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
-// 一次 list 拿全集,后面 buildLibraryDigests 自己分组。
 const items = await defaultPaperRepository.list({ sortBy: 'date' });
 const digests = buildLibraryDigests(items);
 const totalPapers = items.length;
+
+// 详情模式 ?id=<userLibId> —— SSR 期拿不到 localStorage,所以这里只标
+// 「客户端会去查」,不展示具体内容。客户端 bootstrap 后,user-libraries-ui
+// 检测到 id param 就隐藏列表,渲染 detail 视图。
+const url = Astro.url;
+const detailId = url.searchParams.get('id') || '';
+const isDetail = !!detailId;
 ---
 
 <BaseLayout
-  title="文献库 · Daily Paper Reader"
-  description="按领域 / 主题 / 任务组织的论文集合:强化学习、多智能体、博弈 AI、大模型代理、推理与对齐、机器人、视觉等。"
+  title={isDetail ? "用户文献库 · Daily Paper Reader" : "文献库 · Daily Paper Reader"}
+  description={isDetail
+    ? "个人文献库详情 — 成员论文 + 概念 + 笔记。"
+    : "按领域 / 主题 / 任务组织的论文集合:强化学习、多智能体、博弈 AI、大模型代理、推理与对齐、机器人、视觉等。"}
 >
   <Navbar />
 
   <main class="libraries-page">
-    <header class="libraries-hero">
-      <h1>文献库</h1>
-      <p class="lead">
-        按 <strong>领域 / 主题 / 任务</strong>组织的论文集合 —— 每个库是从
-        <code>docs/papers/</code> 的 frontmatter 派生的论文群,不是用户收藏夹。
-        <strong>个人图书馆</strong>(星标 / 笔记 / 高亮)走 <a href={base + '/library/'}>/library/</a>。
-        共 <strong>{totalPapers}</strong> 篇论文,当前展示 <strong>{digests.length}</strong> 个非空库。
-      </p>
-    </header>
+    {!isDetail && (
+      <header class="libraries-hero">
+        <h1>文献库</h1>
+        <p class="lead">
+          按 <strong>领域 / 主题 / 任务</strong>组织的论文集合。共
+          <strong>{totalPapers}</strong> 篇,展示 <strong>{digests.length}</strong> 个非空公共主题库,
+          加上你在浏览器里自建的 <strong>个人文献库</strong>(跨设备同步走 Gist)。
+        </p>
+      </header>
+    )}
 
-    <div class="libraries-filter" aria-label="维度过滤">
-      <span class="filter-label">维度:</span>
-      <button class="filter-pill active" data-dim="all" type="button">全部</button>
-      <button class="filter-pill" data-dim="task" type="button">任务</button>
-      <button class="filter-pill" data-dim="method" type="button">方法</button>
-      <span class="filter-count" id="lib-filter-count"></span>
-    </div>
+    {!isDetail && (
+      <div class="libraries-actionbar">
+        <span class="lib-segmented" data-type-filter data-type-filter-target="#all-libraries">
+          <button class="lib-segment active" type="button" data-type-value="all">全部</button>
+          <button class="lib-segment" type="button" data-type-value="public">🌐 公共</button>
+          <button class="lib-segment" type="button" data-type-value="personal">⭐ 我的</button>
+        </span>
+        <span class="libraries-actionbar-spacer"></span>
+        <span data-type-filter-count style="font-size: 0.85rem; color: var(--fg-subtle);"></span>
+        <button type="button" class="btn btn-primary btn-sm" data-open-new-library>
+          ➕ 新建文献库
+        </button>
+      </div>
+    )}
 
-    <nav class="libraries-shortcuts" aria-label="快捷入口">
-      <a class="shortcut" href={base + '/papers/'}>📚 所有论文</a>
-      <a class="shortcut" href={base + '/library/'}>⭐ 我的图书馆</a>
-      <a class="shortcut" href={base + '/topic/'}>🎯 主题探索</a>
-      <a class="shortcut" href={base + '/concepts/'}>🕸 概念图谱</a>
-      <a class="shortcut" href={base + '/conferences/'}>🎤 会议</a>
-    </nav>
-
-    <div class="libraries-grid">
-      {digests.map((d) => (
-        <a class={`library-card hue-${d.library.hue}`}
-           href={base + '/libraries/' + d.library.id + '/'}
-           data-dim={d.library.dimension}>
-          <h2 class="lib-title">
-            <span>{d.library.title}</span>
-            <span class="lib-count">{d.paperCount} 篇</span>
+    {/* 列表模式 */}
+    {!isDetail && (
+      <div id="all-libraries">
+        <section class="libraries-section">
+          <h2 class="libraries-section-title">
+            🌐 公共主题库
+            <span class="count">{digests.length} 个</span>
           </h2>
-          <p class="lib-title-zh">{d.library.titleZh}</p>
-          <p class="lib-desc">{d.library.descriptionZh}</p>
-          <div class="lib-stats">
-            <span><strong>{d.paperCount}</strong> 篇论文</span>
-            <span><strong>{d.conceptCount}</strong> 个概念</span>
-            <span>更新于 {d.latestDate ? d.latestDate.slice(5) : '—'}</span>
+          <p class="libraries-section-desc">
+            由维护者从 <code>docs/papers/**</code> frontmatter 的 task / method 标签派生;
+            成员关系不需要手动维护,加论文 + 设标签即可。
+          </p>
+          <div class="libraries-grid">
+            {digests.map((d) => (
+              <a class={`library-card hue-${d.library.hue}`}
+                 href={base + '/libraries/' + d.library.id + '/'}
+                 data-dim={d.library.dimension}
+                 data-lib-type="public">
+                <h2 class="lib-title">
+                  <span class="lib-title-row">
+                    <span class="lib-name">{d.library.title}</span>
+                    <span class="lib-type-badge lib-type-badge--public">公共</span>
+                  </span>
+                  <span class="lib-count">{d.paperCount} 篇</span>
+                </h2>
+                <p class="lib-title-zh">{d.library.titleZh}</p>
+                <p class="lib-statement">{d.library.descriptionZh}</p>
+                <div class="lib-stats">
+                  <span><strong>{d.paperCount}</strong> 篇论文</span>
+                  <span><strong>{d.conceptCount}</strong> 个概念</span>
+                  <span>更新于 {d.latestDate ? d.latestDate.slice(5) : '—'}</span>
+                </div>
+                <div class="lib-meta">
+                  <div class="lib-tags">
+                    {d.library.tags.slice(0, 2).map((t) => <span class="lib-tag">{t}</span>)}
+                  </div>
+                  <span>维护 · {d.library.curator}</span>
+                </div>
+              </a>
+            ))}
           </div>
-          <div class="lib-meta">
-            <div class="lib-tags">
-              {d.library.tags.slice(0, 2).map((t) => <span class="lib-tag">{t}</span>)}
+        </section>
+
+        <section class="libraries-section" data-user-libraries-section>
+          <h2 class="libraries-section-title">
+            ⭐ 我的文献库
+            <span class="count" data-user-libraries-counter>0 个</span>
+          </h2>
+          <p class="libraries-section-desc">
+            存在浏览器 localStorage,跨设备同步走 Gist(<a href={base + '/settings/'}>设置页</a>)。
+          </p>
+          <div data-user-libraries-empty style="display: none;">
+            <div class="libraries-empty">
+              <div class="libraries-empty-icon">📂</div>
+              <h3 class="libraries-empty-title">还没有个人文献库</h3>
+              <p class="libraries-empty-desc">
+                点右上角「➕ 新建文献库」开始 ——
+                名字 + 一句话方向描述,30 秒搞定。
+              </p>
+              <button type="button" class="btn btn-primary btn-sm" data-open-new-library>➕ 新建文献库</button>
             </div>
-            <span>维护 · {d.library.curator}</span>
           </div>
-        </a>
-      ))}
-    </div>
+          <div class="libraries-grid" data-user-libraries-grid></div>
+        </section>
+      </div>
+    )}
+
+    {/* 用户库详情模式(SSR 空壳,客户端水合) */}
+    {isDetail && (
+      <div id="user-library-detail-root"
+           data-user-library-detail-id={detailId}
+           data-papers-json={JSON.stringify(
+             items.map((p) => ({
+               id: p.id,
+               canonicalArxivId: p.canonicalArxivId,
+               title: p.title,
+               title_zh: p.title_zh,
+               title_plain: p.title_plain,
+               arxivId: p.arxivId,
+               date: p.date,
+               pdf: p.pdf,
+               venue: p.venue,
+               authors: p.authors,
+               tldr: p.tldr,
+               evidence: p.evidence,
+               score: p.score,
+               concepts: p.concepts,
+             }))
+           )}>
+        {/* SSR 期间:这个 shell 仅在没有 JS 时显示,提示用户「需启用 JS」 */}
+        <noscript>
+          <p class="lead" style="margin-top: 1.5rem;">
+            个人文献库详情需要 JavaScript 渲染 ——
+            它存在浏览器 localStorage,SSR 无法读取。
+            <br />请启用 JavaScript 或在桌面浏览器中打开。
+          </p>
+        </noscript>
+        {/* 客户端渲染的 placeholder;真实 DOM 在 user-libraries-ui 里挂载 */}
+        <div id="user-library-detail-mount" data-user-library-detail-mount></div>
+        <div class="lib-detail-actions" style="margin-top: 1.5rem;">
+          <a class="btn btn-ghost" href={base + '/libraries/'} id="user-library-back-link">← 所有文献库</a>
+        </div>
+      </div>
+    )}
   </main>
 
   <Footer />
+  <NewLibraryModal />
 
   <script>
-    // 维度 pill 过滤(同首页)。
-    document.querySelectorAll<HTMLButtonElement>('.filter-pill').forEach((p) => {
-      p.addEventListener('click', () => {
-        const dim = p.dataset.dim || 'all';
-        document.querySelectorAll('.filter-pill').forEach((b) => b.classList.toggle('active', b === p));
-        const cards = document.querySelectorAll<HTMLElement>('.library-card');
-        let visible = 0;
-        cards.forEach((c) => {
-          const show = dim === 'all' || c.dataset.dim === dim;
-          c.style.display = show ? '' : 'none';
-          if (show) visible++;
-        });
-        const counter = document.getElementById('lib-filter-count');
-        if (counter) counter.textContent = dim === 'all' ? '' : `${visible} / ${cards.length}`;
-      });
-    });
+    import '../../scripts/user-libraries-ui';
   </script>
 </BaseLayout>
