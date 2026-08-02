@@ -588,3 +588,145 @@
 :root[data-theme='contrast'] .paper-chat-msg--user {
   border: 2px solid var(--accent);
 }
+/* =====================================================================
+ * Stage 11+ — 「编译论文」流式 LLM 翻译面板
+ * 仿 Polaris wiki intro 视觉,inline markdown 流式更新,图片由
+ * ![[fig:N]] 自动嵌位,结果存 localStorage。
+ * ===================================================================== */
+.paper-compile {
+  margin: 2rem 0;
+  padding: 0;
+}
+.paper-compile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.paper-compile-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.paper-compile-toolbar {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.paper-compile-btn {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.paper-compile-btn:hover {
+  border-color: var(--accent);
+  background: var(--bg-muted);
+}
+.paper-compile-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.paper-compile-btn-primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.paper-compile-btn-primary:hover {
+  background: var(--accent-hover);
+  color: #fff;
+}
+.paper-compile-status {
+  margin: 0 0 0.85rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--bg-muted);
+  color: var(--fg-subtle);
+  border: 1px solid var(--border);
+}
+.paper-compile-status[data-kind="live"] {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+.paper-compile-status[data-kind="ok"] {
+  background: color-mix(in srgb, #059669 14%, var(--bg-elevated));
+  color: #059669;
+  border-color: color-mix(in srgb, #059669 35%, var(--border));
+}
+.paper-compile-status[data-kind="error"] {
+  background: color-mix(in srgb, #e11d48 14%, var(--bg-elevated));
+  color: #e11d48;
+  border-color: color-mix(in srgb, #e11d48 35%, var(--border));
+}
+.paper-compile-output {
+  min-height: 80px;
+  padding: 0 0 1rem;
+}
+.paper-compile-output > p:first-child {
+  margin-top: 0;
+}
+.paper-compile-output h1,
+.paper-compile-output h2,
+.paper-compile-output h3 {
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+}
+.paper-compile-output h1 { font-size: 1.4rem; }
+.paper-compile-output h2 { font-size: 1.2rem; padding-bottom: 0.3em; border-bottom: 1px solid var(--border); }
+.paper-compile-output h3 { font-size: 1.05rem; color: var(--fg-muted); }
+.paper-compile-output p {
+  margin: 0 0 1em;
+  line-height: 1.7;
+  color: var(--fg);
+}
+.paper-compile-output .wikilink {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-elevated));
+  color: var(--accent);
+  padding: 0.05em 0.4em;
+  border-radius: 3px;
+  font-size: 0.92em;
+}
+.paper-compile-output .wikilink-missing {
+  background: color-mix(in srgb, #e11d48 12%, var(--bg-elevated));
+  color: #e11d48;
+  padding: 0.05em 0.4em;
+  border-radius: 3px;
+  font-size: 0.92em;
+  text-decoration: line-through;
+}
+.paper-compile-figure {
+  margin: 1.5rem 0;
+  text-align: center;
+}
+.paper-compile-figure img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.paper-compile-figure figcaption {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--fg-subtle);
+  font-style: italic;
+}
+.paper-compile-table-stub {
+  margin: 1rem 0;
+  padding: 0.7rem 0.95rem;
+  background: var(--bg-muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font-size: 0.88rem;
+  color: var(--fg-muted);
+}

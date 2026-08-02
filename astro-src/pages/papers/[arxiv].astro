@@ -257,6 +257,28 @@ const tabTitle = plainZh || plainEn || id;
             </section>
           )}
 
+          {/* 「编译论文」流式 LLM 翻译(Stage 11+ 主动要求)——
+              浏览器侧调 LLM 流式翻译成中文 markdown,! ！[[fig:N]]/[[table:N]]
+              自动嵌位,结果存 localStorage(下次访问免调 LLM)。
+              broken 论文 / 404 不挂。 */}
+          {paper && !paper.isBroken && (
+            <section class="paper-compile" id="paper-compile-section" aria-label="编译论文">
+              <div class="container">
+                <div class="paper-compile-header">
+                  <h3>✨ 编译论文</h3>
+                  <div class="paper-compile-toolbar">
+                    <button type="button" class="paper-compile-btn paper-compile-btn-primary" data-compile-start>✨ 编译</button>
+                    <button type="button" class="paper-compile-btn" data-compile-stop hidden>■ 停止</button>
+                    <button type="button" class="paper-compile-btn" data-compile-recompile hidden>🔄 重新编译</button>
+                    <button type="button" class="paper-compile-btn" data-compile-clear hidden>🗑 清除缓存</button>
+                  </div>
+                </div>
+                <p class="paper-compile-status" data-compile-status data-kind="info">点「✨ 编译」开始,LLM 会按 Polaris 风格翻译并把图片/表格嵌到对应位置。结果存到浏览器 localStorage,下次访问自动加载。</p>
+                <div class="paper-compile-output markdown" data-compile-output></div>
+              </div>
+            </section>
+          )}
+
           {/* 我的笔记 — 失焦防抖保存,本地 + Gist 同步。
               broken 论文 / 404 不挂(notes editor 内部 null-safe 退出)。 */}
           {paper && !paper.isBroken && (
@@ -360,6 +382,28 @@ const tabTitle = plainZh || plainEn || id;
       ></section>
     )}
 
+    {/* 「编译论文」数据载体(Stage 11+ 用户主动要求)—— 客户端 paper-compile-ui
+        读 figures/tables,流式调 LLM,渲染到 #paper-compile-output。
+        broken / 404 不挂(SSR 端 null 客户端直接退出)。 */}
+    {paper && !paper.isBroken && (
+      <section
+        id="paper-compile-data"
+        aria-hidden="true"
+        data-canonical-id={paper.canonicalArxivId || ' '}
+        data-title-zh={paper.title_zh || paper.title || ' '}
+        data-title-en={paper.title || ' '}
+        data-abstract={paper.tldr || paper.evidence || ' '}
+        data-fulltext=" "
+        data-figures={JSON.stringify(
+          (paper.figures || []).map((f) => ({
+            index: f.index, caption: f.caption, page: f.page,
+            url: (base + '/' + (f.url || '').replace(/^\.\//, '')),
+          }))
+        )}
+        data-tables={JSON.stringify([])}
+      ></section>
+    )}
+
     {/* Stage 7 —— "内容相似论文"卡。客户端 paper-related.ts 拉 paper-relations.json,
         按 data-arxiv-id 命中,渲染 ≤8 条。inline ~30 行渲染,不另开脚本文件。 */}
     {paper && !paper.isBroken && (
@@ -387,6 +431,7 @@ const tabTitle = plainZh || plainEn || id;
     import '../../scripts/paper-related.ts';
     import '../../scripts/paper-highlights.ts';
     import '../../scripts/user-libraries-ui.ts';
+    import '../../scripts/paper-compile-ui.ts';
 
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
     // 如果当前 mode 是 fulltext,paper-chat.ts 内部会触发 loadFulltextSkeleton。
