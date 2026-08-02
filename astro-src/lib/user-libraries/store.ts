@@ -28,6 +28,7 @@ import type { DprUserLibrariesChangeReason } from '../events';
 import { STORAGE_KEYS } from '../storage';
 import type {
   LibraryHue,
+  LibraryRubricItem,
   UserLibrary,
   UserLibrariesDoc,
   WriteResult,
@@ -102,6 +103,10 @@ export function loadUserLibraries(): UserLibrariesDoc {
         statement: l.statement,
         hue: (l.hue as LibraryHue) || 'emerald',
         paperIds: l.paperIds.filter((x): x is string => typeof x === 'string'),
+        categories: sanitizeCategories(l.categories),
+        inclusionKeywords: sanitizeKeywords(l.inclusionKeywords),
+        exclusionKeywords: sanitizeKeywords(l.exclusionKeywords),
+        rubric: sanitizeRubric(l.rubric),
         createdAt: typeof l.createdAt === 'number' ? l.createdAt : 0,
         updatedAt: typeof l.updatedAt === 'number' ? l.updatedAt : 0,
       };
@@ -153,6 +158,76 @@ function isValidStatement(s: unknown): s is string {
   return typeof s === 'string' && s.trim().length > 0 && s.trim().length <= 200;
 }
 
+/** 单个关键词的清洗:trim、长度限制、去大小写化(用 lowercase 留作大小写不敏感比对)。
+ *  过长截断 32 字,空白折叠到单空格。空串直接丢弃。 */
+function sanitizeKeyword(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().replace(/\s+/g, ' ');
+  if (!v) return null;
+  return v.slice(0, 32);
+}
+
+/** 关键词列表:逐项清洗 + 去重(大小写不敏感) + 保序。空数组允许。 */
+function sanitizeKeywords(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of input) {
+    const v = sanitizeKeyword(raw);
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v);
+  }
+  return out;
+}
+
+/** 学科分类 chip:清洗 + dedupe(大小写敏感,arXiv 大小写有含义 cs.cl 不对)。
+ *  每个限制 1-16 字。空数组允许。 */
+function sanitizeCategories(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const v = raw.trim().replace(/\s+/g, '');
+    if (!v) continue;
+    if (v.length > 16) continue;
+    if (seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+/** 打分维度:只留 {name: 1-32 字非空} 的项,空数组允许。 */
+function sanitizeRubric(input: unknown): LibraryRubricItem[] {
+  if (!Array.isArray(input)) return [];
+  const out: LibraryRubricItem[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue;
+    const name = sanitizeKeyword((raw as { name?: unknown }).name);
+    if (!name) continue;
+    out.push({ name });
+  }
+  return out;
+}
+
+/** entry 上可选字段的统一清洗。任何一个键未传 / 不是数组 / 都不是「必填」字段
+ *  —— Polaris 这几个字段都是「没填就跳过筛选」的语义,所以漏斗必须容忍空。 */
+function sanitizeOptionalLists(entry: UserLibrary, patch: Partial<{
+  categories: unknown;
+  inclusionKeywords: unknown;
+  exclusionKeywords: unknown;
+  rubric: unknown;
+}>): void {
+  if ('categories' in patch) entry.categories = sanitizeCategories(patch.categories);
+  if ('inclusionKeywords' in patch) entry.inclusionKeywords = sanitizeKeywords(patch.inclusionKeywords);
+  if ('exclusionKeywords' in patch) entry.exclusionKeywords = sanitizeKeywords(patch.exclusionKeywords);
+  if ('rubric' in patch) entry.rubric = sanitizeRubric(patch.rubric);
+}
+
 /**
  * **唯一写入漏斗**。
  *
@@ -163,7 +238,14 @@ function isValidStatement(s: unknown): s is string {
 function commit(
   id: string,
   reason: DprUserLibrariesChangeReason,
-  mutate: (entry: UserLibrary) => boolean | void,
+  mutate: (entry: UserLibrary, helpers: {
+    setOptionalLists: (patch: Partial<{
+      categories: unknown;
+      inclusionKeywords: unknown;
+      exclusionKeywords: unknown;
+      rubric: unknown;
+    }>) => void;
+  }) => boolean | void,
 ): WriteResult {
   const doc = loadUserLibraries();
   const prev = doc.libraries[id];
@@ -175,12 +257,18 @@ function commit(
         statement: '',
         hue: 'emerald',
         paperIds: [],
+        categories: [],
+        inclusionKeywords: [],
+        exclusionKeywords: [],
+        rubric: [],
         createdAt: 0,
         updatedAt: 0,
       };
 
   const before = JSON.stringify(prev ?? null);
-  const proceed = mutate(next);
+  const proceed = mutate(next, {
+    setOptionalLists: (patch) => sanitizeOptionalLists(next, patch),
+  });
   if (proceed === false) return { ok: true, changed: false };
 
   // 校验必填字段。name / statement 任何一项空了都拒写。
@@ -247,15 +335,23 @@ export function listLibrariesContainingPaper(canonicalId: string): string[] {
 // 写 API —— 全部经过 commit()
 // ---------------------------------------------------------------------------
 
-/** 新建文献库。返回新建的 id(失败时 id 为空串)。 */
+/** 新建文献库。返回新建的 id(失败时 id 为空串)。
+ *
+ *  categories / inclusionKeywords / exclusionKeywords / rubric 全是可选,
+ *  都允许 undefined —— 漏斗不会强制要求。
+ *  Polaris 的必填只有 name + statement;其余都是「没填 = 不过滤 / 不打分」的语义。 */
 export function createLibrary(input: {
   name: string;
   statement: string;
   hue?: LibraryHue;
   paperIds?: string[];
+  categories?: string[];
+  inclusionKeywords?: string[];
+  exclusionKeywords?: string[];
+  rubric?: LibraryRubricItem[];
 }): WriteResult & { id?: string } {
   const id = genId();
-  const result = commit(id, 'create', (entry) => {
+  const result = commit(id, 'create', (entry, { setOptionalLists }) => {
     entry.name = input.name.trim();
     entry.statement = input.statement.trim();
     entry.hue = input.hue || 'emerald';
@@ -269,21 +365,51 @@ export function createLibrary(input: {
         entry.paperIds.push(cid);
       }
     }
+    setOptionalLists({
+      categories: input.categories,
+      inclusionKeywords: input.inclusionKeywords,
+      exclusionKeywords: input.exclusionKeywords,
+      rubric: input.rubric,
+    });
   });
   if (result.ok) return { ...result, id };
   return result;
 }
 
 /** 重命名(name + statement 都允许改;允许单独改 name 不改 statement,
- *  反之亦然 —— 但漏斗会校验两者都非空)。 */
+ *  反之亦然 —— 但漏斗会校验两者都非空)。
+ *  其余 categories / keywords / rubric 也允许通过 patch 传入(部分更新)。 */
 export function renameLibrary(
   id: string,
-  patch: { name?: string; statement?: string; hue?: LibraryHue },
+  patch: {
+    name?: string;
+    statement?: string;
+    hue?: LibraryHue;
+    categories?: string[];
+    inclusionKeywords?: string[];
+    exclusionKeywords?: string[];
+    rubric?: LibraryRubricItem[];
+  },
 ): WriteResult {
-  return commit(id, patch.statement !== undefined ? 'statement' : patch.hue !== undefined ? 'hue' : 'rename', (entry) => {
+  return commit(id, patch.statement !== undefined ? 'statement' : patch.hue !== undefined ? 'hue' : 'rename', (entry, { setOptionalLists }) => {
     if (patch.name !== undefined) entry.name = patch.name.trim();
     if (patch.statement !== undefined) entry.statement = patch.statement.trim();
     if (patch.hue !== undefined) entry.hue = patch.hue;
+    // 注意:只有字段在 patch 里出现(undefined 排除),才 setOptionalLists 同步覆盖。
+    // 这样重命名时不会把已有的 keywords / rubric 误清空。
+    const hasOptional =
+      'categories' in patch ||
+      'inclusionKeywords' in patch ||
+      'exclusionKeywords' in patch ||
+      'rubric' in patch;
+    if (hasOptional) {
+      setOptionalLists({
+        categories: patch.categories,
+        inclusionKeywords: patch.inclusionKeywords,
+        exclusionKeywords: patch.exclusionKeywords,
+        rubric: patch.rubric,
+      });
+    }
   });
 }
 

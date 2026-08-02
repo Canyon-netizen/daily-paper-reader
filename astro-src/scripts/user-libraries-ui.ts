@@ -23,9 +23,10 @@ import {
   listUserLibraries,
   removePaperFromLibrary,
   renameLibrary,
+  type LibraryHue,
+  type LibraryRubricItem,
   type UserLibrary,
   LIBRARY_HUES,
-  type LibraryHue,
 } from '../lib/user-libraries';
 import { showToast } from './toast';
 
@@ -213,6 +214,177 @@ function openModal(modal: HTMLElement): void {
   setTimeout(() => nameInput?.focus(), 30);
 }
 
+interface ModalListRefs {
+  container: HTMLElement;
+  tagListEl: HTMLElement;
+  hidden: HTMLInputElement;
+  input: HTMLInputElement;
+  addBtn: HTMLButtonElement | null;
+  initial?: readonly string[];
+}
+
+/** 把字符串列表绑到一个「输入框 + 已选 tag」控件上,负责:
+ *  - 在 tagListEl 里渲染当前 items(可删除)
+ *  - 同步到 hidden input(JSON 字符串)
+ *  - 处理 input 的回车 / 逗号 / 「+ 添加」按钮
+ *
+ *  onChange 在 items 变更后调用,用于刷新 chip 状态等。 */
+function bindListInput(
+  modal: HTMLElement,
+  opts: {
+    listKey: 'categories' | 'inclusion' | 'exclusion' | 'rubric';
+    presetAttr?: string; // 对 categories:preset chip 的 selector
+  },
+): { tags: string[]; refresh: () => void; rubric: LibraryRubricItem[] } {
+  const isRubric = opts.listKey === 'rubric';
+  const input = modal.querySelector<HTMLInputElement>(
+    isRubric ? '[data-rubric-input]' : `[data-${opts.listKey === 'categories' ? 'categories' : opts.listKey === 'inclusion' ? 'incl' : 'excl'}-input]`,
+  )!;
+  const addBtn = modal.querySelector<HTMLButtonElement>(
+    isRubric ? '[data-rubric-add]' : `[data-${opts.listKey === 'categories' ? 'categories' : opts.listKey === 'inclusion' ? 'incl' : 'excl'}-add]`,
+  );
+  const tagListEl = modal.querySelector<HTMLElement>(
+    isRubric ? '[data-rubric-rows]' : `[data-${opts.listKey === 'categories' ? 'categories' : opts.listKey === 'inclusion' ? 'incl' : 'excl'}-tags]`,
+  )!;
+  const hidden = modal.querySelector<HTMLInputElement>(
+    isRubric ? '[data-modal-rubric]' : `[data-modal-${opts.listKey === 'categories' ? 'categories' : opts.listKey === 'inclusion' ? 'incl' : 'excl'}]`,
+  )!;
+
+  // rubric 用对象数组;其它用字符串数组。
+  let strItems: string[] = [];
+  let rubricItems: LibraryRubricItem[] = [];
+
+  function commit(): void {
+    hidden.value = isRubric ? JSON.stringify(rubricItems) : JSON.stringify(strItems);
+    if (opts.presetAttr && !isRubric) {
+      // 同步 preset chip 的 active 态(categories)
+      const presets = modal.querySelectorAll<HTMLElement>(`[data-cat-preset]`);
+      presets.forEach((chip) => {
+        const v = chip.dataset.catPreset || '';
+        chip.classList.toggle('active', strItems.includes(v));
+      });
+    }
+  }
+
+  function render(): void {
+    const items = isRubric ? rubricItems.map((r) => r.name) : strItems;
+    if (items.length === 0) {
+      tagListEl.innerHTML = '<span class="lib-tag-empty">— 暂未添加 —</span>';
+      commit();
+      return;
+    }
+    tagListEl.innerHTML = items
+      .map(
+        (label, idx) =>
+          `<span class="lib-tag">${escapeHtml(label)}<button type="button" class="lib-tag-x" data-rm="${idx}" aria-label="删除 ${escapeHtml(label)}">×</button></span>`,
+      )
+      .join('');
+    commit();
+  }
+
+  function addOne(raw: string): boolean {
+    const v = raw.trim().replace(/\s+/g, ' ');
+    if (!v) return false;
+    if (isRubric) {
+      if (rubricItems.some((r) => r.name.toLowerCase() === v.toLowerCase())) return false;
+      rubricItems.push({ name: v.slice(0, 32) });
+    } else {
+      if (strItems.some((s) => s.toLowerCase() === v.toLowerCase())) return false;
+      strItems.push(v.slice(0, 32));
+    }
+    render();
+    return true;
+  }
+
+  function addManyFromInput(): void {
+    // 支持中英文逗号 + 空格切分,粘多词进来一次添加多个
+    const raw = input.value;
+    if (!raw.trim()) return;
+    const parts = raw.split(/[,,]+/).map((s) => s.trim()).filter(Boolean);
+    let added = 0;
+    for (const p of parts) {
+      if (addOne(p)) added++;
+    }
+    input.value = '';
+  }
+
+  // input 行为:回车 / 逗号提交,失焦不提交
+  input.addEventListener('keydown', (e) => {
+    const k = (e as KeyboardEvent).key;
+    if (k === 'Enter' || k === ',') {
+      e.preventDefault();
+      addManyFromInput();
+    }
+  });
+  // 中文输入法 IME 阶段不应当吞回车,但这里 input.value 已经能拿到文字了,
+  // 简单起见,IME 状态下走「compositionend 之后回车会立即被 keydown 接收」
+  // —— 现代浏览器对 keydown Enter 在 IME 期间会带 keyCode 229 但 key 名仍是 Enter,
+  // 我们用 inputType 粗略防御:compositionend 之后再清值。
+  input.addEventListener('compositionend', () => {
+    // 不主动 add(让用户回车显式确认),只是确保状态同步
+    void input.value;
+  });
+  addBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    addManyFromInput();
+    input.focus();
+  });
+
+  // 删除 tag
+  tagListEl.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const btn = t.closest<HTMLElement>('[data-rm]');
+    if (!btn) return;
+    e.preventDefault();
+    const idx = Number(btn.dataset.rm || '-1');
+    if (!Number.isFinite(idx) || idx < 0) return;
+    if (isRubric) rubricItems.splice(idx, 1);
+    else strItems.splice(idx, 1);
+    render();
+  });
+
+  // categories preset chip 点击
+  if (opts.presetAttr) {
+    modal.querySelectorAll<HTMLElement>(`[data-cat-preset]`).forEach((chip) => {
+      chip.addEventListener('click', (e) => {
+        e.preventDefault();
+        const v = chip.dataset.catPreset || '';
+        if (!v) return;
+        if (strItems.includes(v)) {
+          strItems = strItems.filter((s) => s !== v);
+        } else {
+          strItems.push(v);
+        }
+        render();
+      });
+    });
+  }
+
+  render();
+  return {
+    get tags() { return strItems.slice(); },
+    get rubric() { return rubricItems.slice(); },
+    refresh: render,
+  };
+}
+
+interface ModalControls {
+  categories: ReturnType<typeof bindListInput>;
+  inclusion: ReturnType<typeof bindListInput>;
+  exclusion: ReturnType<typeof bindListInput>;
+  rubric: ReturnType<typeof bindListInput>;
+}
+
+/** 在弹窗上装好四个 list 控件并 reset 到空态。返回 handlers 让 caller 在 reset/close 时复用。 */
+function setupModalControls(modal: HTMLElement): ModalControls {
+  return {
+    categories: bindListInput(modal, { listKey: 'categories', presetAttr: 'data-cat-preset' }),
+    inclusion: bindListInput(modal, { listKey: 'inclusion' }),
+    exclusion: bindListInput(modal, { listKey: 'exclusion' }),
+    rubric: bindListInput(modal, { listKey: 'rubric' }),
+  };
+}
+
 function closeModal(modal: HTMLElement): void {
   modal.style.display = 'none';
   // 清空 + 重置状态
@@ -227,7 +399,15 @@ function closeModal(modal: HTMLElement): void {
   modal.querySelectorAll<HTMLElement>('.lib-input--error, .lib-textarea--error').forEach((el) =>
     el.classList.remove('lib-input--error', 'lib-textarea--error'),
   );
+  // 清 list 控件:每个 list 都在 form.reset() 后保留内部数组,所以手动派发清空。
+  // 最稳妥做法:每次 open 重新 setupModalControls。这里走简单 reset 路径。
+  // ——「上一次」的 controls 已被 submit 读走后没有意义,直接重新 bind。
+  controlsByModal.set(modal, setupModalControls(modal));
 }
+
+/** 同一 modal 节点在不同打开轮次复用同一组 controls;
+ *  关闭时全部清空 + reset。 */
+const controlsByModal = new WeakMap<HTMLElement, ModalControls>();
 
 function bindHuePicker(modal: HTMLElement): void {
   const chips = modal.querySelectorAll<HTMLElement>('.lib-hue-chip');
@@ -249,6 +429,9 @@ function setupNewLibraryModal(): void {
   modal.querySelectorAll<HTMLElement>('[data-modal-close]').forEach((el) => {
     el.addEventListener('click', () => closeModal(modal));
   });
+
+  // 初始化 list 控件
+  controlsByModal.set(modal, setupModalControls(modal));
 
   // 打开:全局所有 [data-open-new-library] 触发
   document.querySelectorAll<HTMLElement>('[data-open-new-library]').forEach((btn) => {
@@ -306,9 +489,23 @@ function setupNewLibraryModal(): void {
     }
     if (bad) return;
 
+    const controls = controlsByModal.get(modal);
+    const categories = controls?.categories.tags ?? [];
+    const inclusionKeywords = controls?.inclusion.tags ?? [];
+    const exclusionKeywords = controls?.exclusion.tags ?? [];
+    const rubric = controls?.rubric.rubric ?? [];
+
     const submitBtn = form.querySelector<HTMLButtonElement>('[data-modal-submit]');
     if (submitBtn) submitBtn.disabled = true;
-    const res = createLibrary({ name, statement, hue });
+    const res = createLibrary({
+      name,
+      statement,
+      hue,
+      categories,
+      inclusionKeywords,
+      exclusionKeywords,
+      rubric,
+    });
     if (!res.ok || !res.id) {
       const msg = getApiResultMessage(res) || '创建失败';
       showToast(msg, 'error');

@@ -15,9 +15,11 @@
 
 export type {
   LibraryHue,
+  LibraryRubricItem,
   UserLibrary,
   UserLibrariesDoc,
   WriteResult,
+  ARXIV_CATEGORY_PRESETS,
 } from './types';
 
 export { LIBRARY_HUES } from './types';

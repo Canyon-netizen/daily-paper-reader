@@ -37,12 +37,37 @@ export const LIBRARY_HUES: readonly LibraryHue[] = [
 ] as const;
 
 /** 单个用户文献库。**Polaris 字段映射**:
- *  - name      ↔ DirectionLibrary.name
- *  - statement ↔ DirectionLibrary.statement(给这个收藏夹写一句话)
+ *  - name              ↔ DirectionLibrary.name
+ *  - statement         ↔ DirectionLibrary.statement(给这个收藏夹写一句话)
+ *  - inclusionKeywords ↔ DirectionLibrary.inclusion_keywords(必须命中)
+ *  - exclusionKeywords ↔ DirectionLibrary.exclusion_keywords(命中则剔除)
+ *  - categories        ↔ DirectionLibrary.categories(arXiv 学科分类,辅助筛选)
+ *  - rubric            ↔ DirectionLibrary.rubric(自定义打分维度数组)
  *  - 砍:isPublic / status / paper_pool / wiki_snapshot / digest /
  *    last_compiled_at —— Polaris 那些是 DB 后端运算 / 审批状态机,
  *    本仓库不需要。
- *  - 加:hue(Polaris 用图标 + 颜色,本仓库用左竖条 hue 区分)。 */
+ *  - 加:hue(Polaris 用图标 + 颜色,本仓库用左竖条 hue 区分)。
+ *
+ *  Polaris 原版还有个 AI 访谈生成 statement —— 本仓库留 follow-up,
+ *  暂时不做 LLM 介入,手写 statement 已经够用。
+ *
+ *  字段向后兼容:老 doc 里没有这几个字段,store 加载时用空数组兜底。
+ */
+
+/** arXiv 主要学科分类。Polaris modal 里展示的就是这几个 + 自定义。
+ *  实际上 arXiv 还有 cs.IR / cs.CR / cs.CY 等几十个,这里只挑最常见的
+ *  几个作预设,用户也可以在 input 里写自定义分类。 */
+export const ARXIV_CATEGORY_PRESETS: readonly string[] = [
+  'cs.CL', 'cs.AI', 'cs.LG', 'cs.CV', 'cs.MA', 'stat.ML',
+] as const;
+
+/** 单个打分维度。Polaris 用 free-form {name, weight};本仓库简化为
+ *  只有 name(weight 留作后续,UI 上还没暴露)。 */
+export interface LibraryRubricItem {
+  /** 维度名,1-32 字 */
+  name: string;
+}
+
 export interface UserLibrary {
   id: string;
   /** 1-32 字,trim 后非空(漏斗会再校验一次,见 store.ts:isValidName) */
@@ -53,6 +78,14 @@ export interface UserLibrary {
   hue: LibraryHue;
   /** canonicalArxivId[],顺序 = 加入顺序(用户期望「最新加的在前」可 sorted,这里保留序) */
   paperIds: string[];
+  /** arXiv 学科分类,如 ['cs.CL', 'cs.AI']。空数组 = 不按分类过滤。 */
+  categories: string[];
+  /** 命中关键词,大小写不敏感。每个 1-32 字,去重保序。 */
+  inclusionKeywords: string[];
+  /** 排除关键词,大小写不敏感。命中则被剔除。 */
+  exclusionKeywords: string[];
+  /** 自定义打分维度。空数组 = 未设维度,后续打分时只用 statement 兜底。 */
+  rubric: LibraryRubricItem[];
   /** epoch ms */
   createdAt: number;
   /** epoch ms。由 store 的私有写入漏斗统一盖章,调用方不需要也不应该自己填。

@@ -1,11 +1,25 @@
 ---
 // /components/NewLibraryModal.astro — 新建文献库弹窗
 //
-// 对照 Polaris NewLibraryModal.tsx 的字段(name + statement + hue 三必填),
-// 但 DPR 没有 inclusion / anchor / rubric / AI 访谈生成 — 那些留作 follow-up。
+// 对照 Polaris NewLibraryModal.tsx 的字段:
+//
+// 必填:
+//   - name              1-32 字(Polaris 也要求)
+//   - statement         1-200 字(Polaris 强调,挑论文/打分都靠它)
+// 可选:
+//   - hue               7 色挑一,卡片左竖条颜色(本仓库视觉约定)
+//   - categories        arXiv 学科分类 chips(cs.CL / cs.AI ...)
+//   - inclusionKeywords 必须命中的关键词(命中打分)
+//   - exclusionKeywords 命中则剔除的关键词
+//   - rubric            自定义打分维度(空数组 = 未设维度)
+// 不做:
+//   - AI 访谈生成 statement —— Polaris 的 LLM hook,本仓库静态站无服务端 LLM,
+//     用户手写 statement 即可,留作 follow-up。
+//   - 申请转公共文献库 / anchor / admin —— Polaris DB 后端语义,单人静态站
+//     不需要(详见 types.ts 的「Polaris 字段映射」注释)。
 //
 // SSR 渲染空 modal 壳(display:none,JS 控制可见);客户端 user-libraries-ui.ts
-// 接管所有交互(打开/关闭/提交/校验/创建)。
+// 接管所有交互(打开/关闭/提交/校验/创建 + chips 增删)。
 //
 // 引入方式:
 //   1. 在 BaseLayout 之前 import(不必要);2. 在 /libraries/ / 首页 footer 之前
@@ -57,6 +71,82 @@
           ></textarea>
           <div class="lib-field-hint">1-200 字。这句话会显示在卡片上,让你以后翻找时一眼认出来。</div>
           <div class="lib-field-error" data-modal-stmt-err></div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">arXiv 分类</label>
+          <div class="lib-chip-row" data-categories-presets>
+            <button type="button" class="lib-chip" data-cat-preset="cs.CL">cs.CL</button>
+            <button type="button" class="lib-chip" data-cat-preset="cs.AI">cs.AI</button>
+            <button type="button" class="lib-chip" data-cat-preset="cs.LG">cs.LG</button>
+            <button type="button" class="lib-chip" data-cat-preset="cs.CV">cs.CV</button>
+            <button type="button" class="lib-chip" data-cat-preset="cs.MA">cs.MA</button>
+            <button type="button" class="lib-chip" data-cat-preset="stat.ML">stat.ML</button>
+          </div>
+          <div class="lib-chip-input-wrap" data-categories-wrap>
+            <span class="lib-chip-input-prefix">自定义分类</span>
+            <input
+              type="text"
+              class="lib-chip-input"
+              placeholder="如 cs.IR"
+              maxlength="16"
+              data-categories-input
+            />
+            <button type="button" class="lib-chip-add" data-categories-add aria-label="添加分类">添加</button>
+          </div>
+          <div class="lib-tag-list" data-categories-tags></div>
+          <input type="hidden" data-modal-categories />
+          <div class="lib-field-hint">已选分类会用 <code>arxiv:cat</code> 命中。空 = 不过滤分类。</div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">包括关键词</label>
+          <div class="lib-chip-input-wrap">
+            <span class="lib-chip-input-prefix">包括</span>
+            <input
+              type="text"
+              class="lib-chip-input"
+              placeholder="输入关键词后回车或逗号添加,如 agent"
+              maxlength="32"
+              data-incl-input
+            />
+            <button type="button" class="lib-chip-add" data-incl-add aria-label="添加关键词">添加</button>
+          </div>
+          <div class="lib-tag-list" data-incl-tags></div>
+          <input type="hidden" data-modal-incl />
+          <div class="lib-field-hint">命中就不收,检索、打分、每日同步三处都生效。用来挡掉和本方向偏向的其他领域,宁缺毋滥。</div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">排除关键词</label>
+          <div class="lib-chip-input-wrap">
+            <span class="lib-chip-input-prefix">排除</span>
+            <input
+              type="text"
+              class="lib-chip-input"
+              placeholder="输入后回车或逗号添加,如 speech recognition"
+              maxlength="32"
+              data-excl-input
+            />
+            <button type="button" class="lib-chip-add" data-excl-add aria-label="添加关键词">添加</button>
+          </div>
+          <div class="lib-tag-list" data-excl-tags></div>
+          <input type="hidden" data-modal-excl />
+          <div class="lib-field-hint">命中就不收,检索、打分、每日同步三处都生效。用来挡掉和本方向偏向的其他领域,宁缺毋滥。</div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">打分标准</label>
+          <div class="lib-tag-list" data-rubric-rows></div>
+          <div class="lib-chip-input-wrap" data-rubric-input-wrap>
+            <span class="lib-chip-input-prefix">维度</span>
+            <input
+              type="text"
+              class="lib-chip-input"
+              placeholder="如 新颖性 / 实验完备度 / 可复现性"
+              maxlength="32"
+              data-rubric-input
+            />
+            <button type="button" class="lib-chip-add" data-rubric-add aria-label="添加维度">+ 添加维度</button>
+          </div>
+          <input type="hidden" data-modal-rubric />
+          <div class="lib-field-hint">未设维度:只按方向说明判定相关性。添加的维度会按维度名打分,日后可以重排 / 增删。</div>
         </div>
         <div class="lib-field">
           <label class="lib-field-label">卡片颜色</label>
