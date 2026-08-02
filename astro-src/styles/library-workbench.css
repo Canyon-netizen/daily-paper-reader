@@ -1125,3 +1125,74 @@
   border-color: var(--accent, #6366f1);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
 }
+
+/* ============================================================
+   PR 阶段 4:library chat 样式
+   ============================================================ */
+.wb-chat-inner {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  gap: 0.75rem;
+  height: 60vh;
+  min-height: 420px;
+}
+.wb-chat-inner h3 { margin: 0; font-size: 1.05rem; }
+.wb-chat-hint { margin: 0; font-size: 0.85rem; color: var(--text-muted, #6b7280); }
+.wb-chat-log {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  overflow-y: auto;
+  background: var(--bg, #fafafa);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.wb-chat-msg {
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 92%;
+}
+.wb-chat-msg-user {
+  align-self: flex-end;
+  background: var(--accent, #003f88);
+  color: #fff;
+}
+.wb-chat-msg-assistant {
+  align-self: flex-start;
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border);
+}
+.wb-chat-form {
+  display: flex;
+  gap: 0.5rem;
+}
+.wb-chat-form input {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.92rem;
+  background: var(--bg-elevated, #fff);
+}
+.wb-chat-form button {
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent, #003f88);
+  color: #fff;
+  font: inherit;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.wb-chat-form button[type="button"] {
+  background: var(--bg-muted, #f3f4f6);
+  color: var(--text, #111827);
+  border: 1px solid var(--border);
+}
+.wb-chat-status { font-size: 0.82rem; color: var(--text-muted, #6b7280); min-height: 1.2em; }

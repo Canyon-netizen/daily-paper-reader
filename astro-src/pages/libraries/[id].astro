@@ -67,6 +67,23 @@ const newTodayCount = papers.filter((p) => p.date === todayStr).length;
 const libraryPrefix = `${lib.id}-library`;
 const memberCxList = papers.map((p) => p.canonicalArxivId).filter(Boolean);
 
+// 阶段 4:把图谱需要的数据(论文 + 概念)序列化为 JSON,客户端 mount 时直接用。
+// 概念取频次 top-N(沿用上面 topConcepts 顺序);论文只取前 80 条(避免页面过大)。
+const graphData = {
+  papers: papers.slice(0, 80).map((p) => ({
+    id: p.canonicalArxivId,
+    title: p.title_zh || p.title_plain || p.title || p.id,
+    relevanceScore: typeof p.score === 'number' ? p.score : undefined,
+    concepts: Array.isArray(p.concepts)
+      ? p.concepts.map((c: { slug: string }) => c.slug).filter(Boolean)
+      : [],
+  })),
+  concepts: topConcepts.slice(0, 6).map((c) => ({
+    slug: c.slug,
+    displayName: c.display_name,
+  })),
+};
+
 const conceptCategories = [
   { v: 'all', label: '全部' },
   { v: 'method', label: 'method · 方法' },
@@ -442,6 +459,10 @@ const selectedPaper = papers[0];
       data-prefix={libraryPrefix}
       data-hint-id="lib-export-hint"
     ></section>
+
+    {/* 阶段 4:把图谱需要的数据注入 window.__LIBRARY_GRAPH_DATA__,客户端 mount
+        GraphTab 时直接读(SSR 路径,无 fetch)。 */}
+    <script type="application/json" id="library-graph-data" set:html={JSON.stringify(graphData)} is:inline></script>
   </main>
 
   <Footer />
@@ -450,6 +471,7 @@ const selectedPaper = papers[0];
     import '../../scripts/export-bridge.ts';
     import { initLibraryExportButtons } from '../../scripts/export-bridge';
     import '../../scripts/library-workbench-actions.ts';
+    import { mountLibraryGraph, mountLibraryChat } from '../../scripts/library-workbench-mounts';
     initLibraryExportButtons();
 
     // PR 阶段 2:8 tab 切换(PapersTab / ConceptsTab / Graph / Digest / Chat / Notes / Govern / Ingest)
@@ -469,6 +491,9 @@ const selectedPaper = papers[0];
       document.querySelectorAll<HTMLElement>('.library-wb-panel').forEach((p) => {
         p.classList.toggle('active', p.dataset.panel === tab);
       });
+      // 阶段 4:tab 切到 graph / chat 时按需挂载客户端内容(只挂一次)
+      if (tab === 'graph') mountLibraryGraph();
+      if (tab === 'chat') mountLibraryChat();
       // 通知阶段 4 客户端:切到 graph 时可挂载 SVG,切到 chat 时挂载 panel 等
       try {
         document.dispatchEvent(new CustomEvent('dpr:library-tab', { detail: { tab } }));
