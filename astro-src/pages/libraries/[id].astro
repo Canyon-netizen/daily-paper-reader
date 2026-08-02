@@ -225,11 +225,28 @@ const selectedPaper = papers[0];
                 {/* ===== 2. 操作按钮 ===== */}
                 <div class="detail-row detail-actions">
                   <a class="export-btn primary" href={base + '/papers/' + p.id + '/'}>📖 阅读原文</a>
+                  <a class="export-btn" href={base + '/papers/' + p.id + '/#paper-compile-section'}>✨ 编译 / 重新编译</a>
                   <a class="export-btn" href={base + '/papers/' + p.id + '/#paper-notes-section'}>📝 写笔记</a>
                   {p.pdf && (
                     <a class="export-btn" href={p.pdf} target="_blank" rel="noopener">🔗 arXiv PDF</a>
                   )}
                   <a class="export-btn" href={base + '/libraries/'}>📂 所有文献库</a>
+                </div>
+
+                {/* ===== 2.6 内联编译预览(库内直接读 localStorage 缓存) =====
+                    阶段 1 后由 library-workbench-actions.ts 监听 tab 事件时按需挂载:
+                    找到当前选中论文对应的 .wb-paper-compile 节点,读
+                    dpr_paper_compile_v1:<cx> 缓存,把 markdown 渲染到内联容器。
+                    客户端入口会兜底:有缓存 → 直接渲染;无缓存 → 引导用户去
+                    论文页点「✨ 编译」。 */}
+                <div
+                  class="wb-paper-compile"
+                  data-cx={p.canonicalArxivId}
+                  data-paper-id={p.id}
+                  data-figures={JSON.stringify((p.figures || []).slice(0, 12))}
+                  data-tables={JSON.stringify([])}
+                >
+                  <p class="wb-compile-hint">编译结果(浏览器本地缓存)在打开此面板时由客户端按需挂载。</p>
                 </div>
 
 

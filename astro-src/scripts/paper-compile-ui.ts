@@ -27,7 +27,11 @@ import {
   compileStorageKey,
   preloadLibraryPacks,
 } from './paper-compile';
-import { preSubstituteMedia, injectFiguresAndTables } from './paper-compile-render';
+import {
+  preSubstituteMedia,
+  injectFiguresAndTables,
+  renderInlineMarkdown,
+} from './paper-compile-render';
 import type { FigureEntry } from '../lib/paper';
 
 interface CompiledFigures { index: number; caption?: string; page?: number; url: string; }
@@ -62,84 +66,8 @@ function readCompileData(): CompileData | null {
   }
 }
 
-/** 极简 markdown 渲染 —— 不引外部库,只够 LLM 输出用。
- *  - 行内 **粗体** 和 *斜体*
- *  - # ## ### 标题
- *  - [[wikilink]] / ![[fig:N]] 占位(后者在调用方预处理成 <figure>)
- *  - ``` code fence
- *  - 段落换行
- *  不支持:列表、表格、链接(LLM 输出通常不用这些;表格走占位 + 真实替换) */
-function renderInlineMarkdown(md: string): string {
-  const lines = md.split('\n');
-  const out: string[] = [];
-  let inCode = false;
-  let codeBuf: string[] = [];
-  let inPara: string[] = [];
-
-  const flushPara = () => {
-    if (inPara.length === 0) return;
-    const text = inPara.join(' ').trim();
-    if (text) out.push(`<p>${inlineFormat(text)}</p>`);
-    inPara = [];
-  };
-
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    if (line.startsWith('```')) {
-      flushPara();
-      if (inCode) {
-        out.push(`<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`);
-        codeBuf = [];
-        inCode = false;
-      } else {
-        inCode = true;
-      }
-      continue;
-    }
-    if (inCode) { codeBuf.push(raw); continue; }
-
-    if (line.startsWith('### ')) { flushPara(); out.push(`<h3>${inlineFormat(line.slice(4))}</h3>`); continue; }
-    if (line.startsWith('## '))  { flushPara(); out.push(`<h2>${inlineFormat(line.slice(3))}</h2>`); continue; }
-    if (line.startsWith('# '))   { flushPara(); out.push(`<h1>${inlineFormat(line.slice(2))}</h1>`); continue; }
-    if (line === '') { flushPara(); continue; }
-    inPara.push(line);
-  }
-  flushPara();
-  if (inCode) {
-    out.push(`<pre><code>${escapeHtml(codeBuf.join('\n'))}</code></pre>`);
-  }
-  return out.join('');
-}
-
-function inlineFormat(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    // 先转义,再做粗体/斜体/链接(顺序重要)
-    .replace(/&lt;\/em&gt;/g, '</em>')  // 防御性修复
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-    .replace(/\[\[([^\]]+)\]\]/g, (_m, name) => {
-      // wiki-link: 保持原文,客户端已处理 [[fig:N]] 替换
-      const trimmed = name.trim();
-      if (/^fig:\d+$/i.test(trimmed)) return `<span class="wikilink-missing" data-raw="${escapeAttr(trimmed)}">[[${escapeHtml(trimmed)}]]</span>`;
-      if (/^table:\d+$/i.test(trimmed)) return `<span class="wikilink-missing" data-raw="${escapeAttr(trimmed)}">[[${escapeHtml(trimmed)}]]</span>`;
-      return `<span class="wikilink">[[${escapeHtml(trimmed)}]]</span>`;
-    });
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-}
+// 阶段 4:renderInlineMarkdown 改从 paper-compile-render 导入,与 workbench 内联
+// 编译预览共享同一份渲染逻辑。
 
 function renderAll(rawMd: string, figures: CompiledFigures[]): string {
   // 1) 预替换 ![[fig:N]] / [[table:N]] 为占位 <figure data-fig-idx="N">

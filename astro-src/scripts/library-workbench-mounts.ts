@@ -13,6 +13,9 @@ import {
   type GraphPaper,
   type GraphConcept,
 } from '../lib/library/graph';
+import { loadCompileState, compileStorageKey } from './paper-compile';
+import { renderCompileMarkdown } from './paper-compile-render';
+import type { FigureEntry } from '../lib/paper';
 import { loadSettings } from './settings';
 import {
   injectIntoPrompt,
@@ -211,5 +214,78 @@ async function sendChat(
     input.disabled = false;
     sendBtn.disabled = false;
     stopBtn.hidden = true;
+  }
+}
+
+/**
+ * 阶段 4:工作台 PapersTab 详情面板内联编译预览挂载。
+ *
+ * 流程:页面里每个论文的 .wb-paper-compile 节点都带
+ *   data-cx / data-figures / data-titles
+ * 启动时遍历:
+ *   1. 读 localStorage[dpr_paper_compile_v1:<cx>]
+ *   2. 有缓存 → 调 renderCompileMarkdown(md, { figures }) 渲染到内联容器
+ *   3. 无缓存 → 留默认提示文字(引导用户去论文页编译)
+ *
+ * 该函数自动在 DOMContentLoaded / 立即执行,无需 tab 切换触发(论文行
+ * 选中态决定哪个 .wb-paper-compile 可见,但所有节点都先 hydrate)。
+ */
+export function mountWorkbenchCompile(): void {
+  const containers = document.querySelectorAll<HTMLElement>('.wb-paper-compile');
+  if (containers.length === 0) return;
+  for (const el of containers) {
+    if (el.dataset.mounted === '1') continue;
+    const cx = el.dataset.cx || '';
+    if (!cx) continue;
+    let cached: ReturnType<typeof loadCompileState> = null;
+    try {
+      // 直接读 localStorage(避免 paper-compile 模块自身对图等的依赖)
+      const raw = localStorage.getItem(compileStorageKey(cx));
+      if (raw) {
+        const parsed = JSON.parse(raw) as { markdown?: string; status?: string };
+        if (parsed.markdown && parsed.markdown.length > 0) {
+          cached = { status: 'done', markdown: parsed.markdown, startedAt: 0, updatedAt: 0 };
+        }
+      }
+    } catch { /* ignore */ }
+
+    if (cached && cached.markdown) {
+      try {
+        const figures = JSON.parse(el.dataset.figures || '[]') as FigureEntry[];
+        el.innerHTML = renderCompileMarkdown(cached.markdown, { figures });
+        const paperId = el.dataset.paperId || '';
+        const link = document.createElement('p');
+        link.className = 'wb-compile-actions';
+        link.innerHTML = `<a class="export-btn" href="${escapeAttr(paperId ? '/papers/' + paperId + '/#paper-compile-section' : '#')}">🔄 重新编译</a>`;
+        el.appendChild(link);
+        el.dataset.mounted = '1';
+        continue;
+      } catch (e) {
+        console.warn('[workbench-compile] render failed', e);
+      }
+    }
+
+    // 无缓存:留提示
+    el.innerHTML = `
+      <p class="wb-compile-empty">
+        本论文还没有编译结果。点上方
+        <a class="export-btn" href="${escapeAttr('/papers/' + (el.dataset.paperId || '') + '/#paper-compile-section')}">✨ 去编译</a>
+        触发 LLM 流式翻译(浏览器本地缓存,下次访问自动显示)。
+      </p>
+    `;
+    el.dataset.mounted = '1';
+  }
+}
+
+function escapeAttr(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+// 自动启动
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountWorkbenchCompile, { once: true });
+  } else {
+    mountWorkbenchCompile();
   }
 }
