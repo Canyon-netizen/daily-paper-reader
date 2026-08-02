@@ -252,6 +252,22 @@ const selectedPaper = papers[0];
                   );
                 })()}
                 {p.accepted && <p class="detail-accepted">✓ 已收录</p>}
+
+                {/* ===== 2.7 重要图片画廊(Polaris 的重要图片折叠区) ===== */}
+                {p.figures && p.figures.length > 0 && (
+                  <details class="detail-section" open={p.figures.length <= 4}>
+                    <summary>重要图片 · {p.figures.length} 张</summary>
+                    <div class="detail-figures-grid">
+                      {p.figures.slice(0, 8).map((f) => (
+                        <a class="detail-figure" href={base + '/papers/' + p.id + '/#paper-figures'}>
+                          <img src={(f.url || '').startsWith('http') ? f.url : (base + '/' + (f.url || '').replace(/^\.\//, ''))} alt={f.caption || `figure ${f.index}`} loading="lazy" />
+                          {f.caption && <span class="detail-fig-cap">fig.{f.index} {f.caption}</span>}
+                        </a>
+                      ))}
+                    </div>
+                  </details>
+                )}
+
                 {/* ===== 3. TL;DR 卡片 ===== */}
                 {p.tldr && (
                   <div class="tldr-card">

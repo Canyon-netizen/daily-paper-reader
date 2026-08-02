@@ -1196,3 +1196,42 @@
   border: 1px solid var(--border);
 }
 .wb-chat-status { font-size: 0.82rem; color: var(--text-muted, #6b7280); min-height: 1.2em; }
+
+/* ===== 重要图片画廊(Polaris ArticlesTab 风格) ===== */
+.wb-paper-detail .detail-figures-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem;
+  padding: 0 0.85rem 0.75rem;
+}
+.wb-paper-detail .detail-figure {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+  text-decoration: none;
+  color: var(--fg);
+  transition: border-color 0.15s, transform 0.12s;
+}
+.wb-paper-detail .detail-figure:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.wb-paper-detail .detail-figure img {
+  width: 100%;
+  height: 90px;
+  object-fit: cover;
+  background: var(--bg-muted);
+  border-bottom: 1px solid var(--border);
+}
+.wb-paper-detail .detail-fig-cap {
+  font-size: 0.72rem;
+  padding: 0.3rem 0.5rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono, ui-monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
