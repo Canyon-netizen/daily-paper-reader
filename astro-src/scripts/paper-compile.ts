@@ -18,6 +18,7 @@
 //   - 不做 pdf_available 物理 PDF 的图注入(只走 frontmatter figures_json)
 //   - LLM 调用是用户自己配 key,失败弹 toast 不抛
 import { loadSettings, type LLMConfig } from './settings';
+import { injectIntoPromptSync, preloadPacks } from './prompt-pack';
 
 interface FigureSummary { index: number; caption?: string; page?: number; }
 interface TableSummary { index: number; caption?: string; }
@@ -86,9 +87,20 @@ export function hasLLMConfigured(): boolean {
   }
 }
 
-/** LLM 系统提示词 —— 仿 Polaris LIBRARIAN_SYSTEM_PROMPT 的精神,
- *  重点是**显式图片嵌位规则**和**不要遗漏 !**!。 */
-export function buildSystemPrompt(figures: CompileFigure[], tables: TableSummary[]): string {
+/**
+ * LLM 系统提示词 —— 仿 Polaris LIBRARIAN_SYSTEM_PROMPT 的精神,
+ * 重点是**显式图片嵌位规则**和**不要遗漏 !**。
+ *
+ * PR 阶段 1 起:如果 `config.prompt_packs.active.library.compile` 已 pin 了
+ * `library-compile:2026-08-02` pack,会把 Polaris 原版 LIBRARIAN_SYSTEM_PROMPT
+ * 原文拼在前面(对齐 24k 预算截断规则),后接下方 figures/tables 列表与说明。
+ * 未 pin 时完全保留旧行为,零破坏。
+ */
+export function buildSystemPrompt(
+  figures: CompileFigure[],
+  tables: TableSummary[],
+  config?: LLMConfig | null,
+): string {
   const figLines = figures.length > 0
     ? '\n可用图片清单(出现顺序就是内嵌顺序建议):\n' + figures.slice(0, 12).map((f) => {
         const cap = f.caption ? ` —— ${f.caption}` : '';
@@ -103,7 +115,7 @@ export function buildSystemPrompt(figures: CompileFigure[], tables: TableSummary
       }).join('\n')
     : '\n(本论文没有表格)';
 
-  return `你是论文精读助手(Librarian)。把以下英文学术论文翻译并精读成**中文 markdown 深度解读**。
+  const basePrompt = `你是论文精读助手(Librarian)。把以下英文学术论文翻译并精读成**中文 markdown 深度解读**。
 
 结构骨架(保留二级标题,小标题措辞可按内容微调):
 ## TL;DR
@@ -128,6 +140,23 @@ export function buildSystemPrompt(figures: CompileFigure[], tables: TableSummary
 - 表格嵌位:用 [[table:N]] 内嵌第 N 张表(无感叹号);放在引用它的段落附近。
 - 概念双链 [[概念名]] 只标**跨论文复现**的通用概念;论文自己起的名字(方法缩写、
   系统名、模型代号、自建 benchmark)一律**不加**双链,在正文里正常写出来。${figLines}${tableLines}`;
+
+  // pack 注入:任何异常都 fallback 回 basePrompt(0-break)
+  if (!config) return basePrompt;
+  try {
+    return injectIntoPromptSync(basePrompt, 'library.compile', config);
+  } catch {
+    return basePrompt;
+  }
+}
+
+/**
+ * 启动时预热 library.* 全部 pack(供页面 entry 调用一次)。
+ * 不阻塞页面:失败走 graceful fallback,等同于没 pin。
+ */
+export function preloadLibraryPacks(config: LLMConfig | null): Promise<void> {
+  if (!config) return Promise.resolve();
+  return preloadPacks(config).catch(() => undefined);
 }
 
 /** 把 figures 缩到提示词最小集合,保留 url 用于客户端渲染替换。 */

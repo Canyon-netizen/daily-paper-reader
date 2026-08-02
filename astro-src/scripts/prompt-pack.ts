@@ -25,7 +25,16 @@ export type PromptTarget =
   | 'topic.cand'
   | 'topic.explore'
   | 'topic.summary'
-  | 'topic.report';
+  | 'topic.report'
+  // Polaris library workbench — 8 Tab 配套 stage (PR 阶段 1 起)
+  | 'library.compile'       // Polaris wiki_compile.LIBRARIAN_SYSTEM_PROMPT
+  | 'library.relevance'    // Polaris relevance.RELEVANCE_SYSTEM_PROMPT
+  | 'library.concept_def'  // Polaris concepts.CONCEPT_DEF_SYSTEM_PROMPT
+  | 'library.figure'       // Polaris figure_annotate.FIGURE_ANNOTATE_SYSTEM_PROMPT (多模态)
+  | 'library.digest'       // Polaris research_digest.PAPER_INSIGHTS_SYSTEM_PROMPT
+  | 'library.digest_synth' // Polaris research_digest.DIGEST_SYNTHESIS_SYSTEM_PROMPT
+  | 'library.trend'        // Polaris research_digest.TREND_SYSTEM_PROMPT
+  | 'library.chat';        // Polaris papers.CHAT_SYSTEM_PROMPT_TEMPLATE (库级适配)
 
 export interface PackManifest {
   pack_id: string;
@@ -34,6 +43,12 @@ export interface PackManifest {
   kind: 'guidance' | 'persona' | 'tool' | 'workflow';
   targets: PromptTarget[];
   body_file?: string;
+  /**
+   * 多 body 映射 — 同 pack 内不同 target 取不同 body 文件。
+   * 例如 library-digest 三个 stage 分别对应 insights.md / synthesis.md / trend.md。
+   * 缺省时所有 target 共用 body_file。
+   */
+  bodies?: Partial<Record<PromptTarget, string>>;
   requires_taxonomies_version?: string | null;
   config?: Record<string, unknown>;
   [key: string]: unknown;
@@ -73,17 +88,24 @@ function parsePin(pin: string): { pack_id: string; version: string } | null {
   return { pack_id, version };
 }
 
-async function fetchPack(pack_id: string, version: string): Promise<Pack | null> {
+async function fetchPack(
+  pack_id: string,
+  version: string,
+  target?: PromptTarget,
+): Promise<Pack | null> {
   const baseUrl = `${PROMPTS_ROOT}/${encodeURIComponent(pack_id)}/${encodeURIComponent(version)}`;
   try {
-    const [manifestRes, bodyFile] = await Promise.all([
-      fetch(`${baseUrl}/manifest.json`, { credentials: 'omit' }),
-      // manifest 决定 body_file —— 这里先 fetch manifest
-      Promise.resolve<string>('body.md'),
-    ]);
+    const manifestRes = await fetch(`${baseUrl}/manifest.json`, { credentials: 'omit' });
     if (!manifestRes.ok) return null;
     const manifest = (await manifestRes.json()) as PackManifest;
-    const bodyFileName = manifest.body_file || bodyFile;
+    // 多 body 解析:target 命中 bodies[target] 优先,缺省走 body_file
+    const bodiesMap = manifest.bodies as Partial<Record<PromptTarget, string>> | undefined;
+    let bodyFileName: string;
+    if (target && bodiesMap && typeof bodiesMap[target] === 'string') {
+      bodyFileName = bodiesMap[target] as string;
+    } else {
+      bodyFileName = manifest.body_file || 'body.md';
+    }
     const bodyRes = await fetch(`${baseUrl}/${bodyFileName}`, { credentials: 'omit' });
     if (!bodyRes.ok) return null;
     const body = await bodyRes.text();
@@ -95,6 +117,9 @@ async function fetchPack(pack_id: string, version: string): Promise<Pack | null>
 
 /**
  * 加载当前 active pack（pin 未配 / 失败一律返回 null，调用方走硬编码默认）。
+ *
+ * 多 body pack 必传 target,否则取 manifest.body_file 兜底(对 library-digest 这种
+ * 同包内多 stage 的场景意义不大,但兼容单 body pack 行为)。
  */
 export async function loadActivePack(
   target: PromptTarget,
@@ -106,7 +131,7 @@ export async function loadActivePack(
   if (!parsed) return null;
   const cacheKey = `${target}:${pin}`;
   if (packCache.has(cacheKey)) return packCache.get(cacheKey)!;
-  const pack = await fetchPack(parsed.pack_id, parsed.version);
+  const pack = await fetchPack(parsed.pack_id, parsed.version, target);
   if (pack) packCache.set(cacheKey, pack);
   return pack;
 }
@@ -180,7 +205,7 @@ export async function preloadPacks(config: unknown): Promise<void> {
       if (packCache.has(cacheKey)) return Promise.resolve(null);
       const parsed = parsePin(pin);
       if (!parsed) return Promise.resolve(null);
-      return fetchPack(parsed.pack_id, parsed.version).then((p) => {
+      return fetchPack(parsed.pack_id, parsed.version, target).then((p) => {
         if (p) packCache.set(cacheKey, p);
       });
     }),

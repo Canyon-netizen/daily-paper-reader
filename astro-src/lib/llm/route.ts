@@ -31,6 +31,19 @@ const ROUTES: Record<string, Route> = {
   topic_explore: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
   topic_chat: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4 },
   topic_report_chat: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4 },
+
+  // ---- Polaris 文献库工作台 8 Tab 配套 stage (PR 阶段 1) ----
+  // 编译 / 简报 / 对话:长输出,流式。
+  // relevance / concept_def / figure / digest:JSON 结构化输出,非流式,温度偏低。
+  library_compile: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4, isStream: true },
+  library_relevance: { provider: 'deepseek', model: 'deepseek-reasoner', temperature: 0.2 },
+  library_concept_def: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.2 },
+  library_figure: { provider: 'deepseek', model: 'gemini-2.5-pro', temperature: 0.2 },
+  library_digest: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.3 },
+  library_digest_synth: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4, isStream: true },
+  library_trend: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4, isStream: true },
+  library_chat: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4, isStream: true },
+
   default: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
 };
 

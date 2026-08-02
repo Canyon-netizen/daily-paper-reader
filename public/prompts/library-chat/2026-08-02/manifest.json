@@ -1,0 +1,25 @@
+{
+  "pack_id": "library-chat",
+  "version": "2026-08-02",
+  "display_name": "文献库伴读对话(Polaris papers.CHAT_SYSTEM_PROMPT_TEMPLATE 体,适配库级上下文)",
+  "kind": "guidance",
+  "targets": ["library.chat"],
+  "body_file": "body.md",
+  "examples_file": null,
+  "output_contract": null,
+  "personas": null,
+  "steps": null,
+  "config": {
+    "max_chars": 24000,
+    "source": "e:/study/Polaris/src/backend/app/services/papers.py:CHAT_SYSTEM_PROMPT_TEMPLATE / CHAT_REFERENCES_SUFFIX",
+    "taxonomies_version": null
+  },
+  "requires_taxonomies_version": null,
+  "metadata": {
+    "author": "polaris-migration",
+    "created_at": "2026-08-02T00:00:00Z",
+    "tags": ["library", "chat", "rag", "polaris-migration"],
+    "rating": 5.0,
+    "description": "从 Polaris papers.CHAT_SYSTEM_PROMPT_TEMPLATE / CHAT_REFERENCES_SUFFIX 适配而来:把 {title}/{context} 占位符保留,改写为 {library_name}/{library_context} 库级上下文;caller (library-chat.ts) 负责运行时替换。引用规约 [n] 保留,概念 [[…]] 保留,图 ![[fig:N]] 保留。"
+  }
+}

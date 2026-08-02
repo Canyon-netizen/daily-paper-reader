@@ -25,6 +25,7 @@ import {
   summarizeFigures,
   summarizeTables,
   compileStorageKey,
+  preloadLibraryPacks,
 } from './paper-compile';
 import { preSubstituteMedia, injectFiguresAndTables } from './paper-compile-render';
 import type { FigureEntry } from '../lib/paper';
@@ -199,9 +200,11 @@ export function initPaperCompile(): void {
       return;
     }
     const cfg = loadSettings();
+    // 预热 library.* pack(失败不阻断)
+    await preloadLibraryPacks(cfg);
     const figures = summarizeFigures(data.figures);
     const tables = summarizeTables(data.tables);
-    const systemPrompt = buildSystemPrompt(figures, tables);
+    const systemPrompt = buildSystemPrompt(figures, tables, cfg);
     // user prompt:元数据 + 摘要(代替全文 —— 避免 token 爆炸;fulltext 可选)
     const userPrompt = [
       `论文标题(英文): ${data.titleEn}`,

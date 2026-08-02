@@ -34,8 +34,12 @@ class Pack:
     body: str
 
     @classmethod
-    def load(cls, dir_path: str) -> "Pack":
-        """从 dir_path/manifest.json + manifest.body_file 加载。"""
+    def load(cls, dir_path: str, target: str | None = None) -> "Pack":
+        """从 dir_path/manifest.json + manifest.body_file 加载。
+
+        target 可选:命中 manifest.bodies[target] 时优先,缺省回退 body_file。
+        多 body pack(例如 library-digest 三 stage)必传 target 才能取对 body。
+        """
         d = Path(dir_path)
         manifest_path = d / "manifest.json"
         if not manifest_path.exists():
@@ -44,7 +48,11 @@ class Pack:
 
         _validate_manifest(manifest)
 
-        body_file = manifest.get("body_file") or "body.md"
+        bodies_map = manifest.get("bodies") or {}
+        if target and isinstance(bodies_map, dict) and isinstance(bodies_map.get(target), str):
+            body_file = bodies_map[target]
+        else:
+            body_file = manifest.get("body_file") or "body.md"
         body_path = d / body_file
         if not body_path.exists():
             raise FileNotFoundError(f"pack body 不存在: {body_path}")
@@ -80,6 +88,8 @@ def load_active_pack(
 
     pin 格式: "<pack_id>:<version>",如 "nips-style:2026-07-15"。
     返回 None 表示 pin 未配置 / pack 不存在,让 caller 走 hardcoded default。
+
+    多 body pack 会在内部把 target 一并传给 Pack.load(),使 bodies[target] 优先于 body_file。
     """
     if not config:
         return None
@@ -100,7 +110,7 @@ def load_active_pack(
     root = Path(repo_root) if repo_root else _REPO_ROOT_DEFAULT
     dir_path = str(root / "config" / "prompts" / pack_id / version)
     try:
-        return Pack.load(dir_path)
+        return Pack.load(dir_path, target=target)
     except FileNotFoundError:
         # 磁盘上不存在 → graceful fallback(hardcoded 默认)。
         return None

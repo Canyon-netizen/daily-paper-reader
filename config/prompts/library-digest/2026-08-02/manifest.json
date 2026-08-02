@@ -1,0 +1,30 @@
+{
+  "pack_id": "library-digest",
+  "version": "2026-08-02",
+  "display_name": "文献库简报三件套(Polaris research_digest 三 prompt)",
+  "kind": "guidance",
+  "targets": ["library.digest", "library.digest_synth", "library.trend"],
+  "body_file": "insights.md",
+  "bodies": {
+    "library.digest": "insights.md",
+    "library.digest_synth": "synthesis.md",
+    "library.trend": "trend.md"
+  },
+  "examples_file": null,
+  "output_contract": null,
+  "personas": null,
+  "steps": null,
+  "config": {
+    "max_chars": 24000,
+    "source": "e:/study/Polaris/src/backend/app/services/research_digest.py:PAPER_INSIGHTS_SYSTEM_PROMPT, DIGEST_SYNTHESIS_SYSTEM_PROMPT, TREND_SYSTEM_PROMPT",
+    "taxonomies_version": null
+  },
+  "requires_taxonomies_version": null,
+  "metadata": {
+    "author": "polaris-migration",
+    "created_at": "2026-08-02T00:00:00Z",
+    "tags": ["library", "digest", "polaris-migration"],
+    "rating": 5.0,
+    "description": "从 Polaris research_digest 三个 prompt 原样迁移,合并到同一 pack 内,bodies 字段按 stage 区分。DPR 简报 Tab 前端不实装(只占位),但 pack 已就绪,供未来 Actions pipeline 调用;preloadPacks 也会预热。"
+  }
+}
