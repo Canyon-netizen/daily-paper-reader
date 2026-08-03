@@ -201,6 +201,148 @@ async function openIngestPanel(libId: string): Promise<void> {
   }
 }
 
+/** AI 访谈流 —— 引导用户三步生成 statement。
+ *  每步:LLM 给建议 → 用户可编辑 → 「下一题」commit 进 history。 */
+async function runInterviewFlow(
+  modal: HTMLElement,
+  panel: HTMLElement,
+): Promise<void> {
+  const { runInterviewStep, summarizeInterview } = await import('./library-statement-interview');
+  type StepId = 'topic' | 'subtopic' | 'audience';
+  const steps: StepId[] = ['topic', 'subtopic', 'audience'];
+  const stepLabels: Record<StepId, string> = {
+    topic: '① 大致方向',
+    subtopic: '② 子问题',
+    audience: '③ 用法 / 期望读者',
+  };
+  const history: { id: StepId; question: string; answer: string; suggestion: string; rationale: string }[] = [];
+  let current = 0;
+
+  function renderStep(): void {
+    const stepId = steps[current];
+    if (!stepId) {
+      // 完结:综合
+      const summary = summarizeInterview(history);
+      panel.innerHTML = `
+        <h4>✅ 访谈完成</h4>
+        <p class="muted">基于你的回答,推荐 statement:</p>
+        <blockquote class="lib-interview-suggestion">${escapeHtml(summary.statement)}</blockquote>
+        <p class="muted">推荐分类:${summary.categories.map((c) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join('')}</p>
+        <p class="muted">推荐关键词(include):${summary.inclusionKeywords.map((k) => `<span class="lib-tag include">${escapeHtml(k)}</span>`).join('')}</p>
+        <div class="lib-interview-actions">
+          <button type="button" class="btn btn-primary btn-sm" data-interview-apply>应用到表单</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-interview-restart>重新开始</button>
+        </div>
+      `;
+      panel.querySelector('[data-interview-apply]')?.addEventListener('click', () => {
+        // 写到 modal
+        const stmtTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-statement]');
+        if (stmtTA && summary.statement) stmtTA.value = summary.statement;
+        const controls = controlsByModal.get(modal);
+        if (controls && summary.inclusionKeywords.length > 0) {
+          controls.inclusion.loadFrom(summary.inclusionKeywords);
+        }
+        if (controls && summary.exclusionKeywords.length > 0) {
+          controls.exclusion.loadFrom(summary.exclusionKeywords);
+        }
+        if (controls && summary.categories.length > 0) {
+          controls.categories.loadFrom(summary.categories);
+        }
+        showToast('已应用 statement / 关键词 / 分类', 'ok');
+        panel.hidden = true;
+      });
+      panel.querySelector('[data-interview-restart]')?.addEventListener('click', () => {
+        history.length = 0;
+        current = 0;
+        renderStep();
+      });
+      return;
+    }
+
+    panel.innerHTML = `
+      <h4>🎤 AI 访谈 · ${stepLabels[stepId]}</h4>
+      <div class="lib-interview-progress">第 ${current + 1} / ${steps.length} 步</div>
+      <div class="lib-interview-q" data-interview-question></div>
+      <textarea class="lib-interview-a" rows="3" placeholder="在这里写下你的回答…(中文优先)" data-interview-input></textarea>
+      <div class="lib-interview-suggestion" data-interview-suggestion hidden></div>
+      <div class="lib-interview-actions">
+        <button type="button" class="btn btn-soft btn-sm" data-interview-suggest>💡 给我建议</button>
+        <button type="button" class="btn btn-primary btn-sm" data-interview-next ${current === steps.length - 1 ? 'data-interview-finish' : ''}>${current === steps.length - 1 ? '✓ 完成' : '下一题 →'}</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-interview-cancel>取消</button>
+      </div>
+    `;
+    const qEl = panel.querySelector<HTMLElement>('[data-interview-question]');
+    if (qEl) qEl.textContent = stepId === 'topic'
+      ? '你打算跟踪哪个研究方向?(1-2 句话,不需要完美,大致方向即可)'
+      : stepId === 'subtopic'
+      ? '这个方向上,你最关心的 2-3 个子问题是什么?(每个一行)'
+      : '这个库里的论文,你打算用来做什么?(如:写综述 / 跟踪进展 / 给新项目找 idea)';
+
+    const inputTA = panel.querySelector<HTMLTextAreaElement>('[data-interview-input]');
+    const sugEl = panel.querySelector<HTMLElement>('[data-interview-suggestion]');
+
+    panel.querySelector('[data-interview-suggest]')?.addEventListener('click', async () => {
+      const ans = inputTA?.value.trim() || '';
+      panel.querySelector<HTMLElement>('[data-interview-progress]')!.innerHTML =
+        '<span class="lib-spinner"></span> 正在生成建议…';
+      try {
+        const r = await runInterviewStep(stepId, history.map((h) => ({
+          ...h,
+          answer: h.answer || ans,
+        })));
+        const txt = [
+          r.refined ? `<strong>精炼:</strong> ${escapeHtml(r.refined)}` : '',
+          r.categories ? `<strong>分类:</strong> ${r.categories.map((c) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join(' ')}` : '',
+          r.themes ? `<strong>主题:</strong><ul>${r.themes.map((t) => `<li>${escapeHtml(t.title)} — ${escapeHtml(t.papers)}</li>`).join('')}</ul>` : '',
+          r.keywords ? `<strong>关键词:</strong> ${r.keywords.map((k) => `<span class="lib-tag include">${escapeHtml(k)}</span>`).join(' ')}` : '',
+          r.statement ? `<strong>综合 statement:</strong> ${escapeHtml(r.statement)}` : '',
+          r.exclude ? `<strong>排除:</strong> ${r.exclude.map((k) => `<span class="lib-tag exclude">${escapeHtml(k)}</span>`).join(' ')}` : '',
+          r.rationale ? `<em class="muted">${escapeHtml(r.rationale)}</em>` : '',
+        ].filter(Boolean).join('<br/>');
+        if (sugEl) {
+          sugEl.innerHTML = txt;
+          sugEl.hidden = false;
+        }
+        // 把建议暂存,下一步用
+        history.push({ id: stepId, question: qEl?.textContent || '', answer: ans, suggestion: JSON.stringify({
+          refined: r.refined,
+          categories: r.categories,
+          themes: r.themes,
+          keywords: r.keywords,
+          statement: r.statement,
+          exclude: r.exclude,
+        }), rationale: r.rationale });
+        // 把上一次 push 弹掉(每次 suggest 都是「最新一次」)
+        if (history.length > current + 1) history.length = current + 1;
+      } catch (err) {
+        showToast(`生成失败:${(err as Error).message}`, 'error');
+      } finally {
+        panel.querySelector('[data-interview-progress]')!.textContent = `第 ${current + 1} / ${steps.length} 步`;
+      }
+    });
+
+    panel.querySelector('[data-interview-next], [data-interview-finish]')?.addEventListener('click', () => {
+      const ans = inputTA?.value.trim() || '';
+      // 写当前步 history(覆盖 suggest push 的)
+      history[current] = {
+        id: stepId,
+        question: qEl?.textContent || '',
+        answer: ans,
+        suggestion: history[current]?.suggestion || '',
+        rationale: history[current]?.rationale || '',
+      };
+      current += 1;
+      renderStep();
+    });
+
+    panel.querySelector('[data-interview-cancel]')?.addEventListener('click', () => {
+      panel.hidden = true;
+      panel.innerHTML = '';
+    });
+  }
+  renderStep();
+}
+
 /** 渲染 string[] 列表(govern tab 用);空数组 fallback 到 empty 文案。 */
 function renderList(items: string[] | undefined, empty: string): string {
   if (!items || items.length === 0) return `<em class="empty">${escapeHtml(empty)}</em>`;
@@ -954,6 +1096,18 @@ function setupNewLibraryModal(): void {
 
   // hue picker
   bindHuePicker(modal);
+
+  // AI 访谈 — 点击「🎤 AI 帮我写」展开三步访谈,自动填回 statement / keywords / categories
+  const interviewPanel = modal.querySelector<HTMLElement>('[data-interview-panel]');
+  if (interviewPanel) {
+    modal.querySelector<HTMLElement>('[data-modal-interview]')?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      interviewPanel.hidden = false;
+      interviewPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      await runInterviewFlow(modal, interviewPanel);
+    });
+  }
 
   // 提交(同时覆盖新建 + 编辑两种模式)
   const form = modal.querySelector<HTMLFormElement>('form');
