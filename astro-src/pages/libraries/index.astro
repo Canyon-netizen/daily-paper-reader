@@ -150,7 +150,10 @@ const isDetail = !!detailId;
            data-user-library-detail-id={detailId}
            data-papers-json={JSON.stringify(
              items.map((p) => ({
-               id: p.id,
+               // Astro getStaticPaths 把 arxiv 参数喂整段 basename(slug 拼 arxivId),
+               // 所以 href 拼 URL 时必须用 basename —— 不然会得到
+               // /papers/papers/2026/07/17/2607.14171v1-... 双 prefix 404。
+               id: p.id.split('/').pop() || p.id,
                canonicalArxivId: p.canonicalArxivId,
                title: p.title,
                title_zh: p.title_zh,
