@@ -27,14 +27,17 @@ import { emitDprUserLibrariesChange } from '../events';
 import type { DprUserLibrariesChangeReason } from '../events';
 import { STORAGE_KEYS } from '../storage';
 import type {
+  LibraryAnchor,
+  LibraryDefinition,
   LibraryHue,
   LibraryRubricItem,
   UserLibrary,
   UserLibrariesDoc,
   WriteResult,
 } from './types';
+import { defaultLibraryDefinition } from './types';
 
-export const USER_LIBRARIES_SCHEMA_VERSION = 1;
+export const USER_LIBRARIES_SCHEMA_VERSION = 2;
 
 const KEY = STORAGE_KEYS.userLibraries;
 
@@ -69,11 +72,10 @@ function genId(): string {
 /**
  * 读取整个 doc。
  *
- * 迁移策略(v1 只需 10 行守卫,不值得单开 migrate.ts):
- *   - 解析失败 / 不是对象 / schemaVersion 不是 1 → 返回空 doc。
- * 为什么直接丢弃而不是尽力修补:v1 是第一个版本,不存在需要兼容的历史结构;
- * 未来真出现 v2 时,在这里加一个 `if (raw.schemaVersion === 1) return migrateV1toV2(raw)`
- * 分支即可,那时才有真实的迁移语义可写。
+ * 迁移策略:
+ *   - v1 (无 definition):升级到 v2,把顶层字段拷进 definition 兜底。**不丢用户数据**。
+ *   - schemaVersion 不匹配 / 解析失败 → 返回空 doc(老 v0 是裸结构,无任何兼容价值)。
+ * 未来真出现 v3 时,在这里加一个 `if (doc.schemaVersion === 2) return migrateV2toV3(raw)`。
  */
 export function loadUserLibraries(): UserLibrariesDoc {
   if (!storageAvailable()) return emptyDoc();
@@ -94,9 +96,16 @@ export function loadUserLibraries(): UserLibrariesDoc {
     const libs: Record<string, UserLibrary> = {};
     for (const [id, raw] of Object.entries(doc.libraries as Record<string, unknown>)) {
       if (!raw || typeof raw !== 'object') continue;
-      const l = raw as Partial<UserLibrary>;
+      const l = raw as Partial<UserLibrary> & { definition?: unknown };
       if (typeof l.id !== 'string' || typeof l.name !== 'string' || typeof l.statement !== 'string') continue;
       if (!Array.isArray(l.paperIds)) continue;
+      const definition = sanitizeDefinition(l.definition, {
+        statement: l.statement,
+        categories: l.categories ?? [],
+        inclusionKeywords: l.inclusionKeywords ?? [],
+        exclusionKeywords: l.exclusionKeywords ?? [],
+        rubric: l.rubric ?? [],
+      });
       libs[id] = {
         id: l.id,
         name: l.name,
@@ -109,12 +118,88 @@ export function loadUserLibraries(): UserLibrariesDoc {
         rubric: sanitizeRubric(l.rubric),
         createdAt: typeof l.createdAt === 'number' ? l.createdAt : 0,
         updatedAt: typeof l.updatedAt === 'number' ? l.updatedAt : 0,
+        definition,
+        visibility: l.visibility === 'personal' || l.visibility === 'pending' || l.visibility === 'public'
+          ? l.visibility
+          : 'personal',
       };
     }
     return { schemaVersion: USER_LIBRARIES_SCHEMA_VERSION, libraries: libs };
   } catch {
     return emptyDoc();
   }
+}
+
+/** 兜底 definition —— 老 v1 doc 没有时,从顶层字段拷贝成默认。 */
+function sanitizeDefinition(
+  raw: unknown,
+  fallback: {
+    statement: string;
+    categories: string[];
+    inclusionKeywords: string[];
+    exclusionKeywords: string[];
+    rubric: LibraryRubricItem[];
+  },
+): LibraryDefinition {
+  if (!raw || typeof raw !== 'object') return defaultLibraryDefinition(fallback.statement);
+  const d = raw as Record<string, unknown>;
+  const rawKw = (d.keywords && typeof d.keywords === 'object' ? d.keywords : {}) as {
+    arxivCategories?: unknown;
+    include?: unknown;
+    exclude?: unknown;
+  };
+  return {
+    statement: typeof d.statement === 'string' ? d.statement.slice(0, 500) : fallback.statement,
+    cadence: d.cadence === 'daily' || d.cadence === 'weekly' || d.cadence === 'monthly' ? d.cadence : 'manual',
+    anchors: sanitizeAnchors(d.anchors),
+    keywords: {
+      arxivCategories: sanitizeCategories(rawKw.arxivCategories ?? fallback.categories),
+      include: sanitizeKeywords(rawKw.include ?? fallback.inclusionKeywords),
+      exclude: sanitizeKeywords(rawKw.exclude ?? fallback.exclusionKeywords),
+    },
+    rubric: sanitizeRubric(d.rubric ?? fallback.rubric),
+    goals: sanitizeSentences(d.goals, 3, 200),
+    inScope: sanitizeSentences(d.inScope, 8, 80),
+    outOfScope: sanitizeSentences(d.outOfScope, 8, 80),
+    questions: sanitizeSentences(d.questions, 8, 200),
+  };
+}
+
+/** 锚点列表清洗:kind 必须是 arxiv/doi/free;value 1-200 字;note 1-100 字。 */
+function sanitizeAnchors(input: unknown): LibraryAnchor[] {
+  if (!Array.isArray(input)) return [];
+  const out: LibraryAnchor[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue;
+    const a = raw as Partial<LibraryAnchor>;
+    const kind = a.kind === 'arxiv' || a.kind === 'doi' || a.kind === 'free' ? a.kind : 'free';
+    const value = typeof a.value === 'string' ? a.value.trim().slice(0, 200) : '';
+    if (!value) continue;
+    const key = `${kind}:${value.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      kind,
+      value,
+      ...(typeof a.note === 'string' && a.note.trim() ? { note: a.note.trim().slice(0, 100) } : {}),
+    });
+  }
+  return out;
+}
+
+/** 句子列表:每项 trim + 长度限制,空串丢弃。maxItems 兜底,避免恶意大数组。 */
+function sanitizeSentences(input: unknown, maxItems: number, maxLen: number): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const v = raw.trim().replace(/\s+/g, ' ');
+    if (!v) continue;
+    out.push(v.slice(0, maxLen));
+    if (out.length >= maxItems) break;
+  }
+  return out;
 }
 
 /** 落盘。**只有 commit() 应该调用它**(以及 gist.ts 的 sync pull)。 */
@@ -339,7 +424,10 @@ export function listLibrariesContainingPaper(canonicalId: string): string[] {
  *
  *  categories / inclusionKeywords / exclusionKeywords / rubric 全是可选,
  *  都允许 undefined —— 漏斗不会强制要求。
- *  Polaris 的必填只有 name + statement;其余都是「没填 = 不过滤 / 不打分」的语义。 */
+ *  Polaris 的必填只有 name + statement;其余都是「没填 = 不过滤 / 不打分」的语义。
+ *
+ *  v2 起:也接受可选 `definition`(完整 LibraryDefinition)和 `visibility`
+ *  (personal / pending / public)。definition 不传时用 defaultLibraryDefinition。 */
 export function createLibrary(input: {
   name: string;
   statement: string;
@@ -349,6 +437,8 @@ export function createLibrary(input: {
   inclusionKeywords?: string[];
   exclusionKeywords?: string[];
   rubric?: LibraryRubricItem[];
+  definition?: Partial<LibraryDefinition>;
+  visibility?: 'personal' | 'pending' | 'public';
 }): WriteResult & { id?: string } {
   const id = genId();
   const result = commit(id, 'create', (entry, { setOptionalLists }) => {
@@ -371,6 +461,14 @@ export function createLibrary(input: {
       exclusionKeywords: input.exclusionKeywords,
       rubric: input.rubric,
     });
+    entry.definition = sanitizeDefinition(input.definition, {
+      statement: entry.statement,
+      categories: entry.categories,
+      inclusionKeywords: entry.inclusionKeywords,
+      exclusionKeywords: entry.exclusionKeywords,
+      rubric: entry.rubric,
+    });
+    entry.visibility = input.visibility || 'personal';
   });
   if (result.ok) return { ...result, id };
   return result;
@@ -450,6 +548,75 @@ export function setLibraryHue(libraryId: string, hue: LibraryHue): WriteResult {
   return commit(libraryId, 'hue', (entry) => {
     if (entry.hue === hue) return false;
     entry.hue = hue;
+  });
+}
+
+/**
+ * 整表替换 definition。
+ *
+ * Polaris P8a:definition 是 JSONB 大字段,可以独立更新(不触发 statement / keywords
+ * 改时的事件)。本仓库保留同样的「独立性」——definition 改完发 `'definition'` 事件,
+ * 列表卡片不受影响,工作台 Govern tab 重渲染。
+ */
+export function updateLibraryDefinition(
+  libraryId: string,
+  patch: Partial<LibraryDefinition>,
+): WriteResult {
+  return commit(libraryId, 'definition', (entry) => {
+    const cur = entry.definition || defaultLibraryDefinition(entry.statement);
+    const next: LibraryDefinition = {
+      ...cur,
+      ...patch,
+      keywords: patch.keywords ? { ...cur.keywords, ...patch.keywords } : cur.keywords,
+      anchors: patch.anchors ?? cur.anchors,
+      rubric: patch.rubric ?? cur.rubric,
+      goals: patch.goals ?? cur.goals,
+      inScope: patch.inScope ?? cur.inScope,
+      outOfScope: patch.outOfScope ?? cur.outOfScope,
+      questions: patch.questions ?? cur.questions,
+    };
+    entry.definition = next;
+  });
+}
+
+/**
+ * 切 visibility(personal / pending / public)。
+ *
+ * Polaris 是「申请-审批」状态机;DPR 单人静态站没有 admin,但保留字段语义:
+ *   - personal → pending:用户点了「申请公开」,Gist 同步时让其它设备看到请求中。
+ *   - pending → public / personal:用户自己取消 / 手动标 public(等于分享 Gist)。
+ *
+ * 浏览器**没有网络身份**,真正的公共审批是 Gist 跨设备同步时人工对齐,
+ * 这里只是给本地 UI 一个状态信号。
+ */
+export function setLibraryVisibility(
+  libraryId: string,
+  visibility: 'personal' | 'pending' | 'public',
+): WriteResult {
+  return commit(libraryId, 'visibility', (entry) => {
+    if (entry.visibility === visibility) return false;
+    entry.visibility = visibility;
+  });
+}
+
+/** 加锚点。重复 (kind, value) 直接 noop。 */
+export function addLibraryAnchor(libraryId: string, anchor: LibraryAnchor): WriteResult {
+  return commit(libraryId, 'anchor-add', (entry) => {
+    const def = entry.definition || defaultLibraryDefinition(entry.statement);
+    const exists = def.anchors.some((a) => a.kind === anchor.kind && a.value.toLowerCase() === anchor.value.toLowerCase());
+    if (exists) return false;
+    entry.definition = { ...def, anchors: [...def.anchors, anchor] };
+  });
+}
+
+/** 删锚点(按 value)。 */
+export function removeLibraryAnchor(libraryId: string, value: string): WriteResult {
+  return commit(libraryId, 'anchor-remove', (entry) => {
+    const def = entry.definition;
+    if (!def) return false;
+    const next = def.anchors.filter((a) => a.value !== value);
+    if (next.length === def.anchors.length) return false;
+    entry.definition = { ...def, anchors: next };
   });
 }
 

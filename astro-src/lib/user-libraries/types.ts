@@ -68,17 +68,79 @@ export interface LibraryRubricItem {
   name: string;
 }
 
+/**
+ * LibraryDefinition —— 对照 Polaris docs/api-lit.md §P8a:
+ * `direction_libraries.definition` 列(NOT NULL JSONB,Polaris 后端 schema)。
+ *
+ * DPR 没有 Postgres,把这个 blob 嵌进 UserLibrary.definition 一起存 localStorage
+ * + Gist。Schema v2 起强制:新库必有 statement + keywords;in_scope/out_of_scope/
+ * questions/anchors 是可选但 UI 会暴露。
+ *
+ * 设计要点:
+ *  - **不要把 anchors 局限成 arxiv_id** —— 允许 doi / arxiv-id / free-text 三种,
+ *    Polaris 实际也是这样。客户端需各自归一化到 canonicalArxivId。
+ *  - **goals / in_scope / out_of_scope / questions 都是 string[]** —— 人写一句话
+ *    的颗粒度,Polaris 在 schema 里就是这么设计的。不要再细分。
+ *  - **cadence**:Polaris 的「自动同步频率」语义,DPR 单人静态站没有 cron,
+ *    留作 user-facing label(写「每日」「每周」告诉用户预期),**不真调度**。
+ *    Polaris 真正触发 ingest 的也是 cron + voyage agent;DPR 走手动按钮。
+ */
+export interface LibraryDefinition {
+  /** 主声明,1-500 字。Polaris 也用,这是「这个库关心什么」的总纲。
+   *  与顶层 UserLibrary.statement 重复:Polaris 在数据库里 statement 列与
+   *  definition.statement 同步,我们这里把 statement 视为冗余 + 编辑友好,
+   *  显示时优先 statement,fallback definition.statement。 */
+  statement: string;
+  /** 期望的同步频率 label(例如 "daily" / "weekly" / "manual")。Polaris
+   *  真正用 cron 调 voyage;DPR 只是 UI label,不调度。 */
+  cadence: 'manual' | 'daily' | 'weekly' | 'monthly';
+  /** 锚点论文。命中即给高分(Polaris: anchors 内的论文强制 included)。 */
+  anchors: LibraryAnchor[];
+  /** 关键词规则。空 = 不按关键词过滤。 */
+  keywords: {
+    arxivCategories: string[];
+    include: string[];
+    exclude: string[];
+  };
+  /** 自定义打分维度(沿用顶层 rubric,这里冗余一份给 Polaris 兼容)。 */
+  rubric: LibraryRubricItem[];
+  /** 库的目标。1-3 句话形式。Polaris 用来生成 digest prompt 上下文。 */
+  goals: string[];
+  /** 范围内主题(粒度比 keywords 更粗,如「长上下文」「思维链」)。 */
+  inScope: string[];
+  /** 范围外主题(命中即剔除)。与 keywords.exclude 重叠但更宽 ——
+   *  排除关键词是机械匹配,in_scope/out_of_scope 是语义层面的「我不关心」。 */
+  outOfScope: string[];
+  /** 库要回答的研究问题(LLM ingest 时当 prompt 上下文)。 */
+  questions: string[];
+}
+
+/** 锚点论文 = 已知与本库方向高度相关的「种子论文」。Polaris 强制 included。 */
+export interface LibraryAnchor {
+  /** 'arxiv' | 'doi' | 'free'。'arxiv' 走 canonicalArxivId 归一,
+   *  'doi' 在 ingest 时去 openalex 查 arxiv_id,失败就降级成 free。 */
+  kind: 'arxiv' | 'doi' | 'free';
+  /** kind='arxiv':带不带 vN 都行;客户端归一化到 canonicalArxivId */
+  value: string;
+  /** 一句话注释:为什么这是锚点(选论文 / 写 review 时回忆)。1-100 字。 */
+  note?: string;
+}
+
 export interface UserLibrary {
   id: string;
   /** 1-32 字,trim 后非空(漏斗会再校验一次,见 store.ts:isValidName) */
   name: string;
-  /** 1-200 字,trim 后非空(Polaris 强调必填) */
+  /** 1-200 字,trim 后非空(Polaris 强调必填)。
+   *  顶层 statement 是「卡片上一眼看到的总述」,definition.statement 是
+   *  「库方向的全量声明」(更细)。 */
   statement: string;
   /** 7 色挑一;新建默认 emerald */
   hue: LibraryHue;
   /** canonicalArxivId[],顺序 = 加入顺序(用户期望「最新加的在前」可 sorted,这里保留序) */
   paperIds: string[];
-  /** arXiv 学科分类,如 ['cs.CL', 'cs.AI']。空数组 = 不按分类过滤。 */
+  /** arXiv 学科分类,如 ['cs.CL', 'cs.AI']。空数组 = 不按分类过滤。
+   *  这是顶层冗余字段,与 definition.keywords.arxivCategories 同义;
+   *  顶层为「快速过滤」、definition 为「Polaris 兼容 + digest 上下文」。 */
   categories: string[];
   /** 命中关键词,大小写不敏感。每个 1-32 字,去重保序。 */
   inclusionKeywords: string[];
@@ -91,12 +153,37 @@ export interface UserLibrary {
   /** epoch ms。由 store 的私有写入漏斗统一盖章,调用方不需要也不应该自己填。
    *  Gist 合并按本字段做 last-write-wins。 */
   updatedAt: number;
+  /** Polaris P8a LibraryDefinition。可选 —— v1 老库没有,store 加载时
+   *  用 defaultLibraryDefinition() 兜底,UI 显示 v1 老字段。 */
+  definition?: LibraryDefinition;
+  /** 公共申请状态。Polaris 用 status='pending'/'active'/'rejected';
+   *  DPR 单人静态站没有 admin,但保留 status 字段,用户可手动切 public(等于
+   *  公开到 Gist) / pending(申请中) / personal(私有)。 */
+  visibility?: 'personal' | 'pending' | 'public';
+}
+
+/** 兜底 definition —— 用于老 v1 doc 没有 definition 字段时。 */
+export function defaultLibraryDefinition(statement: string): LibraryDefinition {
+  return {
+    statement,
+    cadence: 'manual',
+    anchors: [],
+    keywords: { arxivCategories: [], include: [], exclude: [] },
+    rubric: [],
+    goals: [],
+    inScope: [],
+    outOfScope: [],
+    questions: [],
+  };
 }
 
 /** 整个 doc 的形状。schemaVersion 不匹配时 store 直接丢弃重建(见 store.ts 的
- *  loadUserLibraries),避免旧结构的半残数据在新代码里引发难查的运行时错误。 */
+ *  loadUserLibraries),避免旧结构的半残数据在新代码里引发难查的运行时错误。
+ *
+ *  v2 加入 LibraryDefinition;老 v1 doc 加载时升级(in-place 把顶层字段拷到
+ *  definition,保留原 statement / categories / keywords / rubric)。 */
 export interface UserLibrariesDoc {
-  schemaVersion: 1;
+  schemaVersion: 2;
   /** key = library.id,**永不含 vN**。 */
   libraries: Record<string, UserLibrary>;
 }

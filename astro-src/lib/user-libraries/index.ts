@@ -14,6 +14,8 @@
 //   import { onDprUserLibrariesChange } from '../lib/events';
 
 export type {
+  LibraryAnchor,
+  LibraryDefinition,
   LibraryHue,
   LibraryRubricItem,
   UserLibrary,
@@ -22,7 +24,7 @@ export type {
   ARXIV_CATEGORY_PRESETS,
 } from './types';
 
-export { LIBRARY_HUES } from './types';
+export { LIBRARY_HUES, defaultLibraryDefinition } from './types';
 
 export {
   USER_LIBRARIES_SCHEMA_VERSION,
@@ -37,6 +39,10 @@ export {
   addPaperToLibrary,
   removePaperFromLibrary,
   setLibraryHue,
+  updateLibraryDefinition,
+  setLibraryVisibility,
+  addLibraryAnchor,
+  removeLibraryAnchor,
   replaceUserLibraries,
   clearUserLibraries,
 } from './store';

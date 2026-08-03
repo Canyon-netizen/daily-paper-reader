@@ -65,7 +65,11 @@ export type DprUserLibrariesChangeReason =
   | 'removePaper'
   | 'sync'
   | 'reset'
-  | 'hue';
+  | 'hue'
+  | 'definition'
+  | 'visibility'
+  | 'anchor-add'
+  | 'anchor-remove';
 
 export interface DprUserLibrariesChangeDetail {
   /** 受影响的 library id。'create' / 'sync' / 'reset' 可能很多条。 */
