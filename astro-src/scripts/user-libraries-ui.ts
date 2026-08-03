@@ -214,19 +214,11 @@ function openModal(modal: HTMLElement): void {
   setTimeout(() => nameInput?.focus(), 30);
 }
 
-interface ModalListRefs {
-  container: HTMLElement;
-  tagListEl: HTMLElement;
-  hidden: HTMLInputElement;
-  input: HTMLInputElement;
-  addBtn: HTMLButtonElement | null;
-  initial?: readonly string[];
-}
-
 /** 把字符串列表绑到一个「输入框 + 已选 tag」控件上,负责:
  *  - 在 tagListEl 里渲染当前 items(可删除)
  *  - 同步到 hidden input(JSON 字符串)
  *  - 处理 input 的回车 / 逗号 / 「+ 添加」按钮
+ *  - 暴露 reset() 清空内部状态(closeModal 调用)
  *
  *  onChange 在 items 变更后调用,用于刷新 chip 状态等。 */
 function bindListInput(
@@ -235,7 +227,7 @@ function bindListInput(
     listKey: 'categories' | 'inclusion' | 'exclusion' | 'rubric';
     presetAttr?: string; // 对 categories:preset chip 的 selector
   },
-): { tags: string[]; refresh: () => void; rubric: LibraryRubricItem[] } {
+): { tags: string[]; refresh: () => void; reset: () => void; rubric: LibraryRubricItem[] } {
   const isRubric = opts.listKey === 'rubric';
   const input = modal.querySelector<HTMLInputElement>(
     isRubric ? '[data-rubric-input]' : `[data-${opts.listKey === 'categories' ? 'categories' : opts.listKey === 'inclusion' ? 'incl' : 'excl'}-input]`,
@@ -346,6 +338,9 @@ function bindListInput(
   // categories preset chip 点击
   if (opts.presetAttr) {
     modal.querySelectorAll<HTMLElement>(`[data-cat-preset]`).forEach((chip) => {
+      // 同一节点多次 bindListInput 时避免重复绑(closeModal 会再调一次)
+      if ((chip as unknown as { __bound?: boolean }).__bound) return;
+      (chip as unknown as { __bound?: boolean }).__bound = true;
       chip.addEventListener('click', (e) => {
         e.preventDefault();
         const v = chip.dataset.catPreset || '';
@@ -365,6 +360,12 @@ function bindListInput(
     get tags() { return strItems.slice(); },
     get rubric() { return rubricItems.slice(); },
     refresh: render,
+    reset: () => {
+      strItems = [];
+      rubricItems = [];
+      input.value = '';
+      render();
+    },
   };
 }
 
@@ -399,10 +400,16 @@ function closeModal(modal: HTMLElement): void {
   modal.querySelectorAll<HTMLElement>('.lib-input--error, .lib-textarea--error').forEach((el) =>
     el.classList.remove('lib-input--error', 'lib-textarea--error'),
   );
-  // 清 list 控件:每个 list 都在 form.reset() 后保留内部数组,所以手动派发清空。
-  // 最稳妥做法:每次 open 重新 setupModalControls。这里走简单 reset 路径。
-  // ——「上一次」的 controls 已被 submit 读走后没有意义,直接重新 bind。
-  controlsByModal.set(modal, setupModalControls(modal));
+  // 复位 list 控件:每次 closeModal 复用同一组 controls(避免重复 bind),
+  // 这里只清内部数组 + 重渲染。preset chip 的 active 态通过
+  // controls.categories.refresh() 内部 commit() 同步清掉。
+  const controls = controlsByModal.get(modal);
+  if (controls) {
+    controls.categories.reset();
+    controls.inclusion.reset();
+    controls.exclusion.reset();
+    controls.rubric.reset();
+  }
 }
 
 /** 同一 modal 节点在不同打开轮次复用同一组 controls;
@@ -601,6 +608,9 @@ function renderAddToLibraryPopover(refs: PopoverRefs): void {
         </div>
         <div class="lib-field" style="margin-bottom: 0.5rem;">
           <textarea class="lib-textarea" placeholder="一句话方向描述" maxlength="200" rows="2" data-atl-new-stmt></textarea>
+        </div>
+        <div class="lib-field-hint" style="margin-bottom: 0.5rem;">
+          分类 / 关键词 / 打分维度可后续在文献库详情页补全。
         </div>
         <div style="display: flex; gap: 0.4rem; justify-content: flex-end;">
           <button type="button" class="btn btn-soft btn-sm" data-atl-new-cancel>取消</button>
@@ -896,7 +906,7 @@ function renderUserLibraryDetail(): void {
         <div class="wb-paper-detail" id="wb-detail-pane">
           ${papers.length === 0
             ? '<p class="empty">没有可显示的论文</p>'
-            : papers.map((p, i) => renderPaperDetailBody(p, i, lib.id)).join('')}
+            : papers.map((p, i) => renderPaperDetailBody(p, i)).join('')}
         </div>
       </div>
     </section>
@@ -1105,7 +1115,7 @@ function injectExportDataAttrs(mount: HTMLElement, libId: string, paperIds: stri
   carrier.id = 'library-wb-data';
 }
 
-function renderPaperDetailBody(p: PaperLite, i: number, libId: string): string {
+function renderPaperDetailBody(p: PaperLite, i: number): string {
   return `
     <div id="paper-${escapeHtml(p.canonicalArxivId)}"
          class="wb-detail-body${i === 0 ? ' wb-detail-default' : ''}">

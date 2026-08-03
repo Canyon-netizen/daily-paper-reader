@@ -60,12 +60,24 @@ export function deserializeUserLibraries(block: unknown): UserLibrariesDoc | nul
     const l = raw as Partial<UserLibrary>;
     if (typeof l.id !== 'string' || typeof l.name !== 'string' || typeof l.statement !== 'string') continue;
     if (!Array.isArray(l.paperIds)) continue;
+    // 远端老 doc 可能缺 categories / keywords / rubric —— 一律按 store.ts
+    // sanitizeOptionalLists 同样的语义补成空数组。store 加载时还会再过一遍
+    // 兜底,但这里必须先把 strict UserLibrary 字段填齐,否则 TS 直接报错。
+    const safeArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
     libs[id] = {
       id: l.id,
       name: l.name,
       statement: l.statement,
       hue: (l.hue as UserLibrary['hue']) || 'emerald',
       paperIds: l.paperIds.filter((x): x is string => typeof x === 'string'),
+      categories: safeArr(l.categories).filter((x): x is string => typeof x === 'string'),
+      inclusionKeywords: safeArr(l.inclusionKeywords).filter((x): x is string => typeof x === 'string'),
+      exclusionKeywords: safeArr(l.exclusionKeywords).filter((x): x is string => typeof x === 'string'),
+      rubric: safeArr(l.rubric)
+        .map((r) => (r && typeof r === 'object' && typeof (r as { name?: unknown }).name === 'string'
+          ? { name: (r as { name: string }).name.slice(0, 32) }
+          : null))
+        .filter((r): r is { name: string } => r !== null),
       createdAt: typeof l.createdAt === 'number' ? l.createdAt : 0,
       updatedAt: typeof l.updatedAt === 'number' ? l.updatedAt : 0,
     };
