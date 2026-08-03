@@ -1957,11 +1957,25 @@ function renderUserLibraryDetail(): void {
     });
   });
   mount.querySelectorAll<HTMLButtonElement>('[data-action="rescore"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.preventDefault();
       e.stopPropagation();
-      showToast('正在按新方向给库内论文重打分 — 见 PapersTab', 'info');
-      window.location.hash = '#papers';
+      const id = btn.dataset.libId || lib.id;
+      // 进度显示
+      const orig = btn.textContent;
+      btn.textContent = '⏳ 重打分中…';
+      btn.disabled = true;
+      try {
+        const { rescoreLibrary } = await import('./library-rescore');
+        const r = await rescoreLibrary(id, allPapers);
+        showToast(`重打分完成:打了 ${r.scored} 篇,跳过 ${r.skipped} 篇(已有分)`, 'ok');
+      } catch (err) {
+        showToast(`重打分失败:${(err as Error).message}`, 'error');
+      } finally {
+        btn.textContent = orig;
+        btn.disabled = false;
+        renderUserLibraryDetail();
+      }
     });
   });
   mount.querySelectorAll<HTMLButtonElement>('[data-action="ingest"]').forEach((btn) => {
