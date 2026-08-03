@@ -19,6 +19,7 @@ import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
 import { defaultPaperRepository } from '../../lib/paper-repository';
 import { getLibrary, LIBRARIES, selectLibraryPapers } from '../../lib/libraries';
+import { paperHref } from '../../lib/paper';
 import '../../styles/library-workbench.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
@@ -231,9 +232,9 @@ const selectedPaper = papers[0];
 
                 {/* ===== 2. 操作按钮 ===== */}
                 <div class="detail-row detail-actions">
-                  <a class="export-btn primary" href={base + '/papers/' + p.id + '/'}>📖 阅读原文</a>
-                  <a class="export-btn" href={base + '/papers/' + p.id + '/#paper-compile-section'}>✨ 编译 / 重新编译</a>
-                  <a class="export-btn" href={base + '/papers/' + p.id + '/#paper-notes-section'}>📝 写笔记</a>
+                  <a class="export-btn primary" href={paperHref(p.id, base)}>📖 阅读原文</a>
+                  <a class="export-btn" href={paperHref(p.id, base, '#paper-compile-section')}>✨ 编译 / 重新编译</a>
+                  <a class="export-btn" href={paperHref(p.id, base, '#paper-notes-section')}>📝 写笔记</a>
                   {p.pdf && (
                     <a class="export-btn" href={p.pdf} target="_blank" rel="noopener">🔗 arXiv PDF</a>
                   )}
@@ -284,7 +285,7 @@ const selectedPaper = papers[0];
                     <summary>重要图片 · {p.figures.length} 张</summary>
                     <div class="detail-figures-grid">
                       {p.figures.slice(0, 8).map((f) => (
-                        <a class="detail-figure" href={base + '/papers/' + p.id + '/#paper-figures'}>
+                        <a class="detail-figure" href={paperHref(p.id, base, '#paper-figures')}>
                           <img src={(f.url || '').startsWith('http') ? f.url : (base + '/' + (f.url || '').replace(/^\.\//, ''))} alt={f.caption || `figure ${f.index}`} loading="lazy" />
                           {f.caption && <span class="detail-fig-cap">fig.{f.index} {f.caption}</span>}
                         </a>
@@ -333,7 +334,7 @@ const selectedPaper = papers[0];
                   <summary>我的笔记</summary>
                   <p class="empty muted">
                     笔记存在浏览器 localStorage,SSR 无法读取。<br />
-                    <a href={base + '/papers/' + p.id + '/#paper-notes-section'}>→ 去论文页底部写笔记 / 读笔记</a>
+                    <a href={paperHref(p.id, base, '#paper-notes-section')}>→ 去论文页底部写笔记 / 读笔记</a>
                   </p>
                 </details>
 
@@ -436,7 +437,7 @@ const selectedPaper = papers[0];
           选中下面的论文直接进入"📝 写笔记"位置。
         </p>
         {notesPapers.slice(0, 50).map((p) => (
-          <a class="wb-note-row" href={base + '/papers/' + p.id + '/#paper-notes-section'}>
+          <a class="wb-note-row" href={paperHref(p.id, base, '#paper-notes-section')}>
             <div class="note-head">
               <span>{p.arxivId || '—'}</span>
               <span>{p.date?.slice(5) || '—'}</span>

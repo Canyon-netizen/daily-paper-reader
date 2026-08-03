@@ -257,7 +257,8 @@ export function mountWorkbenchCompile(): void {
         const base = el.dataset.base || '';
         const link = document.createElement('p');
         link.className = 'wb-compile-actions';
-        link.innerHTML = `<a class="export-btn" href="${escapeAttr(base + '/papers/' + paperId + '/#paper-compile-section')}">🔄 重新编译</a>`;
+        const paperName = (paperId || '').split('/').pop() || paperId;
+        link.innerHTML = `<a class="export-btn" href="${escapeAttr(base + '/papers/' + paperName + '/#paper-compile-section')}">🔄 重新编译</a>`;
         el.appendChild(link);
         el.dataset.mounted = '1';
         continue;
@@ -270,7 +271,8 @@ export function mountWorkbenchCompile(): void {
     el.innerHTML = `
       <p class="wb-compile-empty">
         本论文还没有编译结果。点上方
-        <a class="export-btn" href="${escapeAttr((el.dataset.base || '') + '/papers/' + (el.dataset.paperId || '') + '/#paper-compile-section')}">✨ 去编译</a>
+        const paperName = ((el.dataset.paperId || '')).split('/').pop() || el.dataset.paperId;
+      <a class="export-btn" href="${escapeAttr((el.dataset.base || '') + '/papers/' + paperName + '/#paper-compile-section')}">✨ 去编译</a>
         触发 LLM 流式翻译(浏览器本地缓存,下次访问自动显示)。
       </p>
     `;

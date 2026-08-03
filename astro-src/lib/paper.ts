@@ -47,6 +47,25 @@ function extractArxivIdFromPaperId(id: string): string {
   return m[2] ? `${m[1]}${m[2]}` : m[1];
 }
 
+/** Paper 静态路由参数(URL basename)—— 全路径或 basename 都接受。
+ *  Paper.id 在仓库内两种表示都存在:
+ *    - 全路径: "papers/2026/07/17/2607.14171v1-branch-..."
+ *    - basename: "2607.14171v1-branch-..."
+ *  静态路由 [arxiv].astro 的 getStaticPaths 用 basename 作 params.arxiv,
+ *  URL 形如 /papers/<basename>/。所有跳转必须用 basename,否则双 prefix
+ *  404(命中 dist/papers/papers/2026/... 而那个目录不存在)。 */
+export function paperBasename(id: string): string {
+  return id.split('/').pop() || id;
+}
+
+/** 拼论文页 URL(SSR 侧:需要拼上 base;客户端侧:走 url() 包装)。
+ *  hash 可选(例如 '#paper-compile-section')。 */
+export function paperHref(id: string, base: string, hash?: string): string {
+  const name = paperBasename(id);
+  const tail = hash ? `/${hash}` : '/';
+  return `${base.replace(/\/$/, '')}/papers/${name}${tail}`;
+}
+
 export interface PaperFrontmatter {
   title?: string;
   title_zh?: string;

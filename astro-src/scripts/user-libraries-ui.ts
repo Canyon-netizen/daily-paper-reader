@@ -1764,7 +1764,7 @@ function renderUserLibraryDetail(): void {
           选中下面的论文直接进入「📝 写笔记」位置。
         </p>
         ${papers.slice(0, 50).map((p) => `
-          <a class="wb-note-row" href="${url('/papers/' + p.id + '/#paper-notes-section')}">
+          <a class="wb-note-row" href="${url('/papers/' + (p.id.split('/').pop() || p.id) + '/#paper-notes-section')}">
             <div class="note-head">
               <span>${escapeHtml(p.arxivId || '—')}</span>
               <span>${escapeHtml((p.date || '').slice(5) || '—')}</span>
@@ -2227,8 +2227,8 @@ function renderPaperDetailBody(p: PaperLite, i: number, meta: LibraryPaperMeta |
       </div>
 
       <div class="detail-row detail-actions">
-        <a class="export-btn primary" href="${url('/papers/' + p.id + '/')}">📖 阅读原文</a>
-        <a class="export-btn" href="${url('/papers/' + p.id + '/#paper-notes-section')}">📝 写笔记</a>
+        <a class="export-btn primary" href="${url('/papers/' + (p.id.split('/').pop() || p.id) + '/')}">📖 阅读原文</a>
+        <a class="export-btn" href="${url('/papers/' + (p.id.split('/').pop() || p.id) + '/#paper-notes-section')}">📝 写笔记</a>
         ${p.pdf ? `<a class="export-btn" href="${escapeHtml(p.pdf)}" target="_blank" rel="noopener">🔗 arXiv PDF</a>` : ''}
         <button type="button" class="export-btn" data-action="remove-from-lib" data-cx-id="${escapeHtml(p.canonicalArxivId)}">🗑 从文献库移出</button>
       </div>
@@ -2287,7 +2287,7 @@ function renderPaperDetailBody(p: PaperLite, i: number, meta: LibraryPaperMeta |
         <summary>我的笔记</summary>
         <p class="empty muted">
           笔记存在浏览器 localStorage,SSR 无法读取。<br />
-          <a href="${url('/papers/' + p.id + '/#paper-notes-section')}">→ 去论文页底部写笔记 / 读笔记</a>
+          <a href="${url('/papers/' + (p.id.split('/').pop() || p.id) + '/#paper-notes-section')}">→ 去论文页底部写笔记 / 读笔记</a>
         </p>
       </details>
 
