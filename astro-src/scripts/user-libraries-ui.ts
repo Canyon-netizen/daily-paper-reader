@@ -26,11 +26,13 @@ import {
   removeLibraryAnchor,
   removePaperFromLibrary,
   renameLibrary,
+  setLibraryPaperMeta,
   setLibraryVisibility,
   updateLibraryDefinition,
   defaultLibraryDefinition,
   type LibraryAnchor,
   type LibraryHue,
+  type LibraryPaperMeta,
   type LibraryRubricItem,
   type UserLibrary,
   LIBRARY_HUES,
@@ -56,6 +58,25 @@ function escapeHtml(s: string): string {
 function renderList(items: string[] | undefined, empty: string): string {
   if (!items || items.length === 0) return `<em class="empty">${escapeHtml(empty)}</em>`;
   return `<ul class="govern-list">${items.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
+}
+
+/** Polaris library_papers.status → UI badge。
+ *  - candidate  = LLM 还没打分
+ *  - scored     = LLM 打分完,等用户确认
+ *  - included   = 已纳入(membership 默认值)
+ *  - excluded   = 用户/打分剔除
+ *  - trashed    = 回收站 */
+function renderStatusBadge(status: string): string {
+  const map: Record<string, { label: string; emoji: string; cls: string }> = {
+    candidate: { label: '候选', emoji: '🕐', cls: 'badge-candidate' },
+    scored:    { label: '已打分', emoji: '⭐', cls: 'badge-scored' },
+    included:  { label: '已纳入', emoji: '✓', cls: 'badge-included' },
+    excluded:  { label: '已剔除', emoji: '✗', cls: 'badge-excluded' },
+    trashed:   { label: '回收站', emoji: '🗑', cls: 'badge-trashed' },
+  };
+  const m = map[status];
+  if (!m) return '';
+  return `<span class="row-status ${m.cls}">${m.emoji} ${m.label}</span>`;
 }
 
 function fmtDateShort(ts: number): string {
@@ -1196,7 +1217,10 @@ function renderUserLibraryDetail(): void {
                 <br />在论文详情页右上角点 <strong>+ 加进文献库</strong> 即可加入;
                 或点这里 <button type="button" class="btn btn-soft btn-sm" data-action="add-papers" data-lib-id="${escapeHtml(lib.id)}">去添加</button>。
               </p>`
-            : papers.map((p, i) => `
+            : papers.map((p, i) => {
+              const meta = lib.papers[p.canonicalArxivId];
+              const statusBadge = meta ? renderStatusBadge(meta.status) : '';
+              return `
               <a class="wb-paper-row${i === 0 ? ' is-selected' : ''}"
                  href="#paper-${escapeHtml(p.canonicalArxivId)}"
                  data-paper-id="${escapeHtml(p.canonicalArxivId)}"
@@ -1205,6 +1229,7 @@ function renderUserLibraryDetail(): void {
                   <span class="arx">${escapeHtml(p.arxivId || '—')}</span>
                   ${p.date ? `<span>${escapeHtml(p.date.slice(5))}</span>` : ''}
                   <span class="year">${escapeHtml((p.date || '').slice(0, 4) || '—')}</span>
+                  ${statusBadge}
                 </div>
                 <p class="row-title">${escapeHtml(p.title_zh || p.title_plain || p.title || p.id)}</p>
                 ${p.title && p.title_zh ? `<p class="row-en">${escapeHtml(p.title)}</p>` : ''}
@@ -1213,12 +1238,12 @@ function renderUserLibraryDetail(): void {
                   <span class="row-chip">📅 ${escapeHtml(p.date || '—')}</span>
                 </div>
               </a>
-            `).join('')}
+            `;}).join('')}
         </div>
         <div class="wb-paper-detail" id="wb-detail-pane">
           ${papers.length === 0
             ? '<p class="empty">没有可显示的论文</p>'
-            : papers.map((p, i) => renderPaperDetailBody(p, i)).join('')}
+            : papers.map((p, i) => renderPaperDetailBody(p, i, lib.papers[p.canonicalArxivId])).join('')}
         </div>
       </div>
     </section>
@@ -1467,6 +1492,50 @@ function renderUserLibraryDetail(): void {
     });
   });
 
+  // status 切换(Polaris library_papers.status 状态机:included/excluded/trashed/candidate)
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="status"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const cxId = btn.dataset.cxId || '';
+      const status = btn.dataset.status as 'included' | 'excluded' | 'trashed' | 'candidate' | undefined;
+      if (!cxId || !status) return;
+      const res = setLibraryPaperMeta(lib.id, cxId, { status });
+      if (!res.ok) {
+        showToast(getApiResultMessage(res), 'error');
+      } else {
+        showToast(`状态 → ${status}`, 'ok');
+        renderUserLibraryDetail();
+      }
+    });
+  });
+
+  // 本库专属 TL;DR(失焦防抖保存)
+  let saveTimer: number | null = null;
+  mount.querySelectorAll<HTMLTextAreaElement>('.lib-tldr-note').forEach((ta) => {
+    ta.addEventListener('blur', () => {
+      const cxId = ta.dataset.cxId || '';
+      if (!cxId) return;
+      if (saveTimer) window.clearTimeout(saveTimer);
+      const note = ta.value.trim();
+      saveTimer = window.setTimeout(() => {
+        const res = setLibraryPaperMeta(lib.id, cxId, { tldrNote: note });
+        if (!res.ok) {
+          showToast(getApiResultMessage(res), 'error');
+        } else if (res.changed) {
+          showToast('已保存本库 TL;DR', 'ok');
+        }
+      }, 250);
+    });
+    // Ctrl/Cmd+Enter 立即保存
+    ta.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        ta.blur();
+      }
+    });
+  });
+
   // 导出按钮(走 export-bridge 同一份函数,但 prefix + paperIds 是用户库自己)
   // export-bridge.ts 期望 data-cx 是 JSON.stringify(canonicalId[]) + data-prefix
   // 我们用 data-cx-prefix(自定义属性)+ data-paper-ids 注入;这里简单直接调用
@@ -1499,14 +1568,16 @@ function injectExportDataAttrs(mount: HTMLElement, libId: string, paperIds: stri
   carrier.id = 'library-wb-data';
 }
 
-function renderPaperDetailBody(p: PaperLite, i: number): string {
+function renderPaperDetailBody(p: PaperLite, i: number, meta: LibraryPaperMeta | undefined): string {
+  const statusLabel = meta ? renderStatusBadge(meta.status) : '';
+  const relevanceScore = typeof meta?.relevanceScore === 'number' ? meta.relevanceScore : null;
   return `
     <div id="paper-${escapeHtml(p.canonicalArxivId)}"
          class="wb-detail-body${i === 0 ? ' wb-detail-default' : ''}">
       <div class="detail-head">
         <div class="detail-head-text">
           <div class="detail-pills">
-            <span class="pill pill-status">已纳入</span>
+            ${statusLabel ? `<span class="pill pill-libstatus pill-${escapeHtml(meta?.status || 'included')}">${statusLabel.replace(/<[^>]*>/g, '')}</span>` : '<span class="pill pill-status">已纳入</span>'}
             ${p.tldr ? '<span class="pill pill-wiki">✨ wiki</span>' : ''}
             ${p.pdf ? '<span class="pill pill-pdf">📄 PDF</span>' : ''}
             ${p.venue ? `<span class="pill pill-venue">${escapeHtml(p.venue)}</span>` : ''}
@@ -1545,6 +1616,26 @@ function renderPaperDetailBody(p: PaperLite, i: number): string {
           <span class="tldr-label">TL;DR</span>
           <p>${escapeHtml(p.tldr)}</p>
         </div>
+      ` : ''}
+
+      ${meta ? `
+        <details class="detail-section" open>
+          <summary>本库专属 TL;DR · ${meta.status}</summary>
+          ${relevanceScore !== null ? `<p class="lib-meta-line">📊 本库相关度:<strong>${relevanceScore.toFixed(2)}</strong>${meta.relevanceReason ? ` — ${escapeHtml(meta.relevanceReason)}` : ''}</p>` : ''}
+          <textarea
+            class="lib-tldr-note"
+            rows="3"
+            maxlength="500"
+            placeholder="在这条库的方向上,这篇论文的核心要点 / 我的批注(0-500 字)"
+            data-cx-id="${escapeHtml(p.canonicalArxivId)}"
+          >${escapeHtml(meta.tldrNote || '')}</textarea>
+          <div class="lib-meta-actions">
+            <button type="button" class="btn btn-soft btn-sm" data-action="status" data-cx-id="${escapeHtml(p.canonicalArxivId)}" data-status="included">✓ 纳入</button>
+            <button type="button" class="btn btn-soft btn-sm" data-action="status" data-cx-id="${escapeHtml(p.canonicalArxivId)}" data-status="excluded">✗ 剔除</button>
+            <button type="button" class="btn btn-soft btn-sm" data-action="status" data-cx-id="${escapeHtml(p.canonicalArxivId)}" data-status="candidate">🕐 重置候选</button>
+            <button type="button" class="btn btn-danger btn-sm" data-action="status" data-cx-id="${escapeHtml(p.canonicalArxivId)}" data-status="trashed">🗑 回收站</button>
+          </div>
+        </details>
       ` : ''}
 
       ${p.concepts && p.concepts.length > 0 ? (() => {

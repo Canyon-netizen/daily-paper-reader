@@ -126,6 +126,48 @@ export interface LibraryAnchor {
   note?: string;
 }
 
+/**
+ * LibraryPaperMeta —— 单篇论文在某条 library 内的「成员元数据」。
+ *
+ * 对照 Polaris `library_papers` 表(后端唯一真相):
+ *   - library_id     ↔ LibraryPaperMeta.lid
+ *   - paper_id       ↔ LibraryPaperMeta.cx
+ *   - relevance_score ↔ LibraryPaperMeta.relevanceScore
+ *   - relevance_reason ↔ LibraryPaperMeta.relevanceReason
+ *   - tldr_note      ↔ LibraryPaperMeta.tldrNote
+ *   - status         ↔ LibraryPaperMeta.status
+ *   - trash_reason   ↔ LibraryPaperMeta.trashReason
+ *
+ * Polaris 的 `status` 是状态机:candidate → scored → included / excluded;
+ * 同一篇论文在多个 library 里有不同 status —— 这是与单数 `user-library` 的
+ * (单篇论文级 star / status) 不同维度的状态,**绝不合并**。
+ *
+ * 存储:`UserLibrariesDoc.libraries[libId].papers` = Record<cx, LibraryPaperMeta>。
+ * 老 v1/v2 doc 没有此字段,loadUserLibraries() 升级时置空对象 `{}`。
+ */
+export type LibraryPaperStatus =
+  | 'candidate'   // LLM 没打过分,候选状态(刚被 ingest 拉进来)
+  | 'scored'      // LLM 打过分了,等用户确认
+  | 'included'    // 用户接受 / 原本就在 paperIds[]
+  | 'excluded'    // 用户/打分剔除
+  | 'trashed';    // 回收站
+
+export interface LibraryPaperMeta {
+  /** 0-1;LLM 给的相关度。undefined = 还没打分 */
+  relevanceScore?: number;
+  /** 1-200 字:LLM 给的「为什么这个分」一句话 */
+  relevanceReason?: string;
+  /** 1-500 字:本库专属 TL;DR(可能与论文 wiki_compiled 不同)。
+   *  比如同一篇 RL 论文,在「LLM Agent」库里侧重 agent 部分,
+   *  在「RL 算法」库里侧重算法部分。 */
+  tldrNote?: string;
+  status: LibraryPaperStatus;
+  /** trashed / excluded 的原因标签('irrelevant' | 'manual' | 'duplicate' | 等) */
+  trashReason?: string;
+  /** epoch ms;store 漏斗盖 */
+  updatedAt: number;
+}
+
 export interface UserLibrary {
   id: string;
   /** 1-32 字,trim 后非空(漏斗会再校验一次,见 store.ts:isValidName) */
@@ -160,6 +202,9 @@ export interface UserLibrary {
    *  DPR 单人静态站没有 admin,但保留 status 字段,用户可手动切 public(等于
    *  公开到 Gist) / pending(申请中) / personal(私有)。 */
   visibility?: 'personal' | 'pending' | 'public';
+  /** 每篇论文在本库内的元数据(Polaris library_papers 表的镜像)。
+   *  key = canonicalArxivId,**永不含 vN**。老库没有 = `{}`。 */
+  papers: Record<string, LibraryPaperMeta>;
 }
 
 /** 兜底 definition —— 用于老 v1 doc 没有 definition 字段时。 */
@@ -181,9 +226,11 @@ export function defaultLibraryDefinition(statement: string): LibraryDefinition {
  *  loadUserLibraries),避免旧结构的半残数据在新代码里引发难查的运行时错误。
  *
  *  v2 加入 LibraryDefinition;老 v1 doc 加载时升级(in-place 把顶层字段拷到
- *  definition,保留原 statement / categories / keywords / rubric)。 */
+ *  definition,保留原 statement / categories / keywords / rubric)。
+ *  v3 加入 papers:Record<cx, LibraryPaperMeta>(Polaris library_papers 镜像),
+ *  老 doc 加载时此字段兜底为 `{}`。 */
 export interface UserLibrariesDoc {
-  schemaVersion: 2;
+  schemaVersion: 3;
   /** key = library.id,**永不含 vN**。 */
   libraries: Record<string, UserLibrary>;
 }

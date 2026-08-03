@@ -30,6 +30,8 @@ import type {
   LibraryAnchor,
   LibraryDefinition,
   LibraryHue,
+  LibraryPaperMeta,
+  LibraryPaperStatus,
   LibraryRubricItem,
   UserLibrary,
   UserLibrariesDoc,
@@ -37,7 +39,7 @@ import type {
 } from './types';
 import { defaultLibraryDefinition } from './types';
 
-export const USER_LIBRARIES_SCHEMA_VERSION = 2;
+export const USER_LIBRARIES_SCHEMA_VERSION = 3;
 
 const KEY = STORAGE_KEYS.userLibraries;
 
@@ -122,6 +124,7 @@ export function loadUserLibraries(): UserLibrariesDoc {
         visibility: l.visibility === 'personal' || l.visibility === 'pending' || l.visibility === 'public'
           ? l.visibility
           : 'personal',
+        papers: sanitizePaperMetas(l.papers),
       };
     }
     return { schemaVersion: USER_LIBRARIES_SCHEMA_VERSION, libraries: libs };
@@ -198,6 +201,38 @@ function sanitizeSentences(input: unknown, maxItems: number, maxLen: number): st
     if (!v) continue;
     out.push(v.slice(0, maxLen));
     if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+/** 清洗 papers:Record<cx, LibraryPaperMeta>。Polaris library_papers 表镜像。 */
+function sanitizePaperMetas(input: unknown): Record<string, LibraryPaperMeta> {
+  if (!input || typeof input !== 'object') return {};
+  const out: Record<string, LibraryPaperMeta> = {};
+  for (const [cx, raw] of Object.entries(input as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const m = raw as Partial<LibraryPaperMeta>;
+    const status: LibraryPaperStatus =
+      m.status === 'candidate' || m.status === 'scored' || m.status === 'included' ||
+      m.status === 'excluded' || m.status === 'trashed'
+        ? m.status : 'included';
+    const entry: LibraryPaperMeta = {
+      status,
+      updatedAt: typeof m.updatedAt === 'number' ? m.updatedAt : 0,
+    };
+    if (typeof m.relevanceScore === 'number') {
+      entry.relevanceScore = Math.max(0, Math.min(1, m.relevanceScore));
+    }
+    if (typeof m.relevanceReason === 'string' && m.relevanceReason.trim()) {
+      entry.relevanceReason = m.relevanceReason.trim().slice(0, 200);
+    }
+    if (typeof m.tldrNote === 'string' && m.tldrNote.trim()) {
+      entry.tldrNote = m.tldrNote.trim().slice(0, 500);
+    }
+    if (typeof m.trashReason === 'string' && m.trashReason.trim()) {
+      entry.trashReason = m.trashReason.trim().slice(0, 80);
+    }
+    out[cx] = entry;
   }
   return out;
 }
@@ -335,7 +370,7 @@ function commit(
   const doc = loadUserLibraries();
   const prev = doc.libraries[id];
   const next: UserLibrary = prev
-    ? { ...prev, paperIds: prev.paperIds.slice() }
+    ? { ...prev, paperIds: prev.paperIds.slice(), papers: { ...(prev.papers || {}) } }
     : {
         id,
         name: '',
@@ -348,6 +383,7 @@ function commit(
         rubric: [],
         createdAt: 0,
         updatedAt: 0,
+        papers: {},
       };
 
   const before = JSON.stringify(prev ?? null);
@@ -439,6 +475,7 @@ export function createLibrary(input: {
   rubric?: LibraryRubricItem[];
   definition?: Partial<LibraryDefinition>;
   visibility?: 'personal' | 'pending' | 'public';
+  papers?: Record<string, LibraryPaperMeta>;
 }): WriteResult & { id?: string } {
   const id = genId();
   const result = commit(id, 'create', (entry, { setOptionalLists }) => {
@@ -469,6 +506,7 @@ export function createLibrary(input: {
       rubric: entry.rubric,
     });
     entry.visibility = input.visibility || 'personal';
+    entry.papers = sanitizePaperMetas(input.papers);
   });
   if (result.ok) return { ...result, id };
   return result;
@@ -618,6 +656,94 @@ export function removeLibraryAnchor(libraryId: string, value: string): WriteResu
     if (next.length === def.anchors.length) return false;
     entry.definition = { ...def, anchors: next };
   });
+}
+
+/**
+ * 设置单篇论文在某库内的元数据(status / relevance / reason / tldrNote)。
+ * 对照 Polaris `library_papers` 单行写入(API: PATCH /libraries/{lid}/papers/{pid})。
+ *
+ * 调用场景:
+ *  - LLM 批量打分后:scorePaperMeta(lib, cx, { relevanceScore, relevanceReason, status:'scored' })
+ *  - 用户写本库 TL;DR:setLibraryPaperTldr(lib, cx, '本文在 agent 维度看...')
+ *  - 用户手动排除:setLibraryPaperStatus(lib, cx, 'excluded', 'duplicate')
+ *  - 候选论文刚被 ingest 拉进来:setLibraryPaperStatus(lib, cx, 'candidate')
+ *
+ * 不会**自动**把 paper 加进 paperIds[] —— paperIds 是 membership,本函数只
+ * 设置元数据;caller 决定是否同时 addPaperToLibrary()(Polaris 后端也是分两张表)。
+ */
+export function setLibraryPaperMeta(
+  libraryId: string,
+  arxivId: string,
+  patch: Partial<Omit<LibraryPaperMeta, 'updatedAt'>>,
+): WriteResult {
+  const cid = canonicalArxivId(arxivId);
+  if (!cid) return { ok: false, reason: 'invalid' };
+  return commit(libraryId, 'paper-meta', (entry) => {
+    const cur = entry.papers[cid] || { status: 'included' as LibraryPaperStatus, updatedAt: 0 };
+    const next: LibraryPaperMeta = { ...cur, ...patch };
+    if (
+      cur.status === next.status &&
+      cur.relevanceScore === next.relevanceScore &&
+      cur.relevanceReason === next.relevanceReason &&
+      cur.tldrNote === next.tldrNote &&
+      cur.trashReason === next.trashReason
+    ) return false;
+    entry.papers = { ...entry.papers, [cid]: next };
+  });
+}
+
+/** 批量打分(LLM batch 跑完一次,把所有结果一次性 commit)。 */
+export function batchSetLibraryPaperMeta(
+  libraryId: string,
+  items: Array<{ arxivId: string; meta: Partial<Omit<LibraryPaperMeta, 'updatedAt'>> }>,
+): WriteResult {
+  const doc = loadUserLibraries();
+  const lib = doc.libraries[libraryId];
+  if (!lib) return { ok: false, reason: 'unavailable' };
+  const now = Date.now();
+  const papers = { ...lib.papers };
+  let changed = 0;
+  for (const it of items) {
+    const cid = canonicalArxivId(it.arxivId);
+    if (!cid) continue;
+    const cur = papers[cid] || { status: 'scored' as LibraryPaperStatus, updatedAt: 0 };
+    papers[cid] = { ...cur, ...it.meta, updatedAt: now };
+    changed++;
+  }
+  if (changed === 0) return { ok: true, changed: false };
+  const next: UserLibrary = { ...lib, papers, updatedAt: now };
+  doc.libraries[libraryId] = next;
+  const res = persist(doc);
+  if (!res.ok) return res;
+  emitDprUserLibrariesChange(emitTarget(), { ids: [libraryId], reason: 'paper-meta' });
+  return { ok: true, changed: true };
+}
+
+/** 移除某篇论文在本库内的元数据(被 paperIds 移走时调,免留垃圾)。 */
+export function removeLibraryPaperMeta(libraryId: string, arxivId: string): WriteResult {
+  const cid = canonicalArxivId(arxivId);
+  if (!cid) return { ok: false, reason: 'invalid' };
+  return commit(libraryId, 'paper-meta-remove', (entry) => {
+    if (!(cid in entry.papers)) return false;
+    const next = { ...entry.papers };
+    delete next[cid];
+    entry.papers = next;
+  });
+}
+
+/** 读:某 library 内某论文的元数据(无则返回 undefined)。 */
+export function getLibraryPaperMeta(
+  libraryId: string,
+  arxivId: string,
+): LibraryPaperMeta | undefined {
+  const cid = canonicalArxivId(arxivId);
+  if (!cid) return undefined;
+  return getUserLibrary(libraryId)?.papers[cid];
+}
+
+/** 读:整 library 的 paper metas(caller 自己 filter status)。 */
+export function listLibraryPaperMetas(libraryId: string): Record<string, LibraryPaperMeta> {
+  return getUserLibrary(libraryId)?.papers || {};
 }
 
 /**
