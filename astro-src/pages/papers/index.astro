@@ -26,8 +26,10 @@ export const getStaticPaths: GetStaticPaths = async () => [{ params: {} }];
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const repo = defaultPaperRepository;
 
-// 全量论文(去重 + 按日期倒序)
-const papers = await repo.list({ dedup: true, sortBy: 'date', base });
+// 全量论文(去重 + 按 ?sort= 控制;默认 'score' 相关度倒序,因为论文都有 frontmatter
+// score 字段;不传 ?sort= 或传 ?sort=date 走日期倒序,保留历史/无 score 论文置顶的可能)
+const sortKey = (Astro.url.searchParams.get('sort') === 'date' ? 'date' : 'score') as 'date' | 'score';
+const papers = await repo.list({ dedup: true, sortBy: sortKey, base });
 
 // 今日新增(按 YYYY-MM-DD)
 const today = new Date().toISOString().slice(0, 10);
@@ -86,6 +88,15 @@ const payload = {
           <div class="papers-hero-stat">
             <span class="papers-hero-stat-label">主题分类</span>
             <span class="papers-hero-stat-value">{uniqueTagCount}</span>
+          </div>
+          <div class="papers-hero-stat papers-hero-sort">
+            <span class="papers-hero-stat-label">排序</span>
+            <span class="papers-hero-sort-options">
+              <a class={`filter-pill ${sortKey === 'score' ? 'active' : ''}`}
+                 href={base + '/papers/'}>⭐ 相关度</a>
+              <a class={`filter-pill ${sortKey === 'date' ? 'active' : ''}`}
+                 href={base + '/papers/?sort=date'}>📅 时间</a>
+            </span>
           </div>
         </div>
       </div>
