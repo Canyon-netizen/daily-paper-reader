@@ -371,6 +371,45 @@ function renderStatusBadge(status: string): string {
 }
 
 /** 极简 markdown → HTML(Digest 显示用,不需要 fig/table 替换)。 */
+/** 渲染 Polaris 风格 wiki 5 节中文 markdown 为 HTML(简化版)。
+ *  Polaris 顺序:TL;DR / 研究背景与动机 / 方法 / 实验与结果 / 讨论与可借鉴点。
+ *  不引外部 markdown 解析器 —— 标题 / 段落 / 列表 / **粗** / *斜* / `code` / [[wikilink]] 就够。 */
+function renderWikiMarkdown(md: string): string {
+  const esc = md
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const lines = esc.split('\n');
+  const out: string[] = [];
+  let para: string[] = [];
+  let inList = false;
+  const flushPara = () => {
+    if (para.length === 0) return;
+    const text = para.join(' ').trim();
+    if (text) out.push(`<p>${inline(text)}</p>`);
+    para = [];
+  };
+  const closeList = () => {
+    if (inList) { out.push('</ul>'); inList = false; }
+  };
+  const inline = (s: string) =>
+    s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+     .replace(/`([^`]+)`/g, '<code>$1</code>')
+     .replace(/\[\[([^\]]+)\]\]/g, (_m, n) => `<span class="wikilink">[[${escapeHtml(String(n))}]]</span>`);
+  for (const raw of lines) {
+    const l = raw.trimEnd();
+    if (l.startsWith('## ')) { flushPara(); closeList(); out.push(`<h2>${inline(l.slice(3))}</h2>`); continue; }
+    if (l.startsWith('### ')) { flushPara(); closeList(); out.push(`<h3>${inline(l.slice(4))}</h3>`); continue; }
+    if (l.startsWith('- ')) { flushPara(); if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${inline(l.slice(2))}</li>`); continue; }
+    if (l === '') { flushPara(); closeList(); continue; }
+    para.push(l);
+  }
+  flushPara();
+  closeList();
+  return out.join('\n');
+}
+
 function renderDigestMarkdown(md: string): string {
   // escape first
   const esc = md
@@ -2238,6 +2277,16 @@ function renderPaperDetailBody(p: PaperLite, i: number, meta: LibraryPaperMeta |
           <span class="tldr-label">TL;DR</span>
           <p>${escapeHtml(p.tldr)}</p>
         </div>
+      ` : ''}
+
+      ${p.wikiContent ? `
+        <details class="detail-section wiki-section" open>
+          <summary>
+            <span class="wiki-label">📖 中文解读</span>
+            <span class="wiki-hint">Polaris 风格 5 节</span>
+          </summary>
+          <div class="wiki-body">${renderWikiMarkdown(p.wikiContent)}</div>
+        </details>
       ` : ''}
 
       ${meta ? `

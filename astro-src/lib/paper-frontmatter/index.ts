@@ -12,6 +12,7 @@ export {
   normalizeFigureEntry,
   normalizeDate,
   normalizeCategories,
+  extractWikiArticle,
 } from './parse';
 
 export {

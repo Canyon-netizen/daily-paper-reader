@@ -20,7 +20,17 @@ import Footer from '../../components/Footer.astro';
 import { defaultPaperRepository } from '../../lib/paper-repository';
 import { getLibrary, LIBRARIES, selectLibraryPapers } from '../../lib/libraries';
 import { paperHref } from '../../lib/paper';
+import { renderMarkdownBody } from '../../lib/markdown';
 import '../../styles/library-workbench.css';
+
+/** 把 wiki 5 节中文 markdown 渲染成 HTML,挂到 set:html 上。
+ *  Polaris 风格:TL;DR / 研究背景与动机 / 方法 / 实验与结果 / 讨论与可借鉴点。
+ *  不抽 frontmatter / 不引外部 markdown 解析器 —— lib/markdown/render 已能
+ *  处理标题/段落/列表/代码/链接,够用。 */
+function renderWikiHtml(md: string): string {
+  // 在调用方已用 escape 防御,这里直接进 markdown 渲染
+  return renderMarkdownBody(md);
+}
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
@@ -308,6 +318,19 @@ const selectedPaper = papers[0];
                     <span class="tldr-label">TL;DR</span>
                     <p>{p.tldr}</p>
                   </div>
+                )}
+
+                {/* ===== 3.5 5 节中文解读(Polaris wiki_content 镜像) =====
+                    translate_polaris.py 把 LLM 编译产物写进 .md(## TL;DR ... ## 讨论与可借鉴点),
+                    在此就地展示。优先级:在 TL;DR 之后、raw 摘要之前(Polaris PapersTab 顺序)。 */}
+                {p.wikiContent && (
+                  <details class="detail-section wiki-section" open>
+                    <summary>
+                      <span class="wiki-label">📖 中文解读</span>
+                      <span class="wiki-hint">Polaris 风格 5 节</span>
+                    </summary>
+                    <div class="wiki-body" set:html={renderWikiHtml(p.wikiContent)} />
+                  </details>
                 )}
 
                 {/* ===== 4. 概念 chips(过多时折叠) ===== */}

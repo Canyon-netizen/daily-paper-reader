@@ -106,3 +106,40 @@ export function parseFrontmatter(
     return { error: (e as Error).message.slice(0, 100) };
   }
 }
+
+/**
+ * 从 paper body 里抽「Polaris-style 5 节中文解读」段。
+ * translate_polaris.py 把它插在 frontmatter 关闭后,## 摘要 / ## Abstract
+ * 之前(空行隔开)。结构:
+ *   <空行>
+ *   ## TL;DR
+ *   ...
+ *   ## 研究背景与动机
+ *   ...
+ *   ## 方法
+ *   ...
+ *   ## 实验与结果
+ *   ...
+ *   ## 讨论与可借鉴点
+ *   ...
+ *   <空行>
+ *   ## 摘要
+ *   ## Abstract
+ *   ...
+ *
+ * 没有 5 节 → 返回 null(没编译过的论文)。
+ * 用于 workbench 右侧详情面板就地展示 wiki(Polaris 模式)。
+ */
+export function extractWikiArticle(body: string): string | null {
+  if (!body) return null;
+  // 在 body 里找 `## TL;DR` 起始,到下一个二级标题或纯英文 ## Abstract / ## 摘要 之前
+  const startRe = /^## TL;DR\s*$/m;
+  const startMatch = startRe.exec(body);
+  if (!startMatch) return null;
+  // 终止:到第一个非 wiki 节段(## 摘要 / ## Abstract / 任何 ## 标题(非 TL;DR/研究背景/方法/实验/讨论))
+  // 简单做法:扫到「## 摘要」或「## Abstract」就停
+  const endRe = /^## (摘要|Abstract)\s*$/m;
+  const endMatch = endRe.exec(body.slice(startMatch.index + 1));
+  const end = endMatch ? startMatch.index + 1 + endMatch.index : body.length;
+  return body.slice(startMatch.index, end).trim();
+}

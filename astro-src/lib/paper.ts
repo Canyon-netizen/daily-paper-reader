@@ -27,6 +27,7 @@ import {
   parseFrontmatter,
   parseFigureList,
   loadFiguresFromAssetMeta,
+  extractWikiArticle,
 } from './paper-frontmatter';
 
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
@@ -114,6 +115,10 @@ export interface Paper extends PaperFrontmatter {
   brokenReason?: string;
   figures?: FigureEntry[];
   tables?: FigureEntry[];
+  /** Polaris 风格 5 节中文解读(TL;DR / 研究背景与动机 / 方法 / 实验与结果 /
+   *  讨论与可借鉴点)。由 translate_polaris.py 写入 .md 之后,parseFrontmatter
+   *  + extractWikiArticle 抽出来。workbench 右侧详情面板就地展示。 */
+  wikiContent?: string;
 }
 
 export interface FigureEntry {
@@ -184,6 +189,8 @@ export async function readPaper(id: string): Promise<Paper | null> {
     isBroken: false,
     figures,
     tables: parseFigureList(parsed.data.tables_json),
+    // Polaris 5 节中文解读(translate_polaris.py 写入),undefined = 旧论文没编译过
+    wikiContent: extractWikiArticle(parsed.body) || undefined,
   };
 }
 
@@ -229,6 +236,8 @@ export interface PaperListItem {
   thumbnail?: string;
   /** 完整 figure 列表(未拼 base),供需要展示多图的场景(展开抽屉等)。 */
   figures?: FigureEntry[];
+  /** Polaris 5 节中文解读(wiki_content 镜像)。workbench 右侧详情面板就地展示。 */
+  wikiContent?: string;
 }
 
 /**
@@ -344,6 +353,8 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       concepts: p.concepts,
       thumbnail: p.figures && p.figures.length > 0 ? figureUrlToAbsolute(p.figures[0].url, base) : undefined,
       figures: p.figures,
+      // Polaris 5 节中文解读(Polaris wiki_content 镜像)
+      wikiContent: p.wikiContent,
     });
   }
   // 过滤+排序+限条 + dedup 全部委托给 paper-filter(纯数据 pipeline)
