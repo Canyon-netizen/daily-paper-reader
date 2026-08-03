@@ -233,7 +233,6 @@ const selectedPaper = papers[0];
                 {/* ===== 2. 操作按钮 ===== */}
                 <div class="detail-row detail-actions">
                   <a class="export-btn primary" href={paperHref(p.id, base)}>📖 阅读原文</a>
-                  <a class="export-btn" href={paperHref(p.id, base, '#paper-compile-section')}>✨ 编译 / 重新编译</a>
                   <a class="export-btn" href={paperHref(p.id, base, '#paper-notes-section')}>📝 写笔记</a>
                   {p.pdf && (
                     <a class="export-btn" href={p.pdf} target="_blank" rel="noopener">🔗 arXiv PDF</a>
@@ -254,8 +253,17 @@ const selectedPaper = papers[0];
                   data-base={base}
                   data-figures={JSON.stringify((p.figures || []).slice(0, 12))}
                   data-tables={JSON.stringify([])}
+                  data-title-en={p.title || ''}
+                  data-title-zh={p.title_zh || p.title_plain || p.title || ''}
+                  data-abstract={p.abstract || p.evidence || ''}
                 >
-                  <p class="wb-compile-hint">编译结果(浏览器本地缓存)在打开此面板时由客户端按需挂载。</p>
+                  <p class="wb-compile-hint">📒 编译结果(浏览器本地缓存,下次访问自动显示)</p>
+                  <div class="wb-compile-actions">
+                    <button type="button" class="btn btn-primary btn-sm" data-wb-compile-start>✨ 编译</button>
+                    <button type="button" class="btn btn-ghost btn-sm" data-wb-compile-stop hidden>⏹ 停止</button>
+                    <span class="wb-compile-status" data-wb-compile-status></span>
+                  </div>
+                  <div class="wb-compile-output" data-wb-compile-output></div>
                 </div>
 
 

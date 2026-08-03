@@ -88,6 +88,129 @@ function showStatus(target: HTMLElement, msg: string, kind: 'info' | 'ok' | 'err
   status.dataset.kind = kind;
 }
 
+/**
+ * 把一段 paper 数据 + 容器节点 + 控件引用打包,跑一次编译并就地渲染。
+ * 既给 paper 页 initPaperCompile 用(走它自己绑好的 startBtn/stopBtn),
+ * 也给 library 工作台「就地编译」用(走它自己的 btn / 容器)。
+ * 返回:可取消的 AbortController(让 caller 二次 abort / dispose)。
+ */
+export interface InlineCompileArgs {
+  canonicalId: string;
+  titleZh: string;
+  titleEn: string;
+  abstract: string;
+  fulltext?: string;
+  figures: CompiledFigures[];
+  tables: CompiledTables[];
+  output: HTMLElement;
+  startBtn?: HTMLButtonElement | null;
+  stopBtn?: HTMLButtonElement | null;
+  recompileBtn?: HTMLButtonElement | null;
+  clearBtn?: HTMLButtonElement | null;
+  statusEl?: HTMLElement | null;
+  onStatus?: (msg: string, kind: 'info' | 'ok' | 'error' | 'live') => void;
+  onChunk?: (fullMd: string) => void;
+}
+
+export async function runInlineCompile(args: InlineCompileArgs): Promise<AbortController> {
+  const ctrl = new AbortController();
+  const setStatus = (msg: string, kind: 'info' | 'ok' | 'error' | 'live') => {
+    if (args.onStatus) args.onStatus(msg, kind);
+    else if (args.statusEl) showStatusEl(args.statusEl, msg, kind);
+  };
+  const renderChunk = (fullMd: string) => {
+    if (args.onChunk) args.onChunk(fullMd);
+    else args.output.innerHTML = renderAll(fullMd, args.figures as FigureEntry[]);
+  };
+
+  if (!hasLLMConfigured()) {
+    setStatus('请先在设置页配置 LLM key', 'error');
+    return ctrl;
+  }
+  const cfg = loadSettings();
+  await preloadLibraryPacks(cfg);
+  const figures = summarizeFigures(args.figures);
+  const tables = summarizeTables(args.tables);
+  const systemPrompt = buildSystemPrompt(figures, tables, cfg);
+  const userPrompt = [
+    `论文标题(英文): ${args.titleEn}`,
+    `论文标题(中文): ${args.titleZh}`,
+    '',
+    '## 摘要',
+    args.abstract || '(无摘要)',
+    args.fulltext ? '\n## 论文全文(markdown,前 6000 字符)\n' + args.fulltext.slice(0, 6000) : '',
+  ].join('\n');
+
+  if (args.startBtn) args.startBtn.disabled = true;
+  if (args.recompileBtn) args.recompileBtn.disabled = true;
+  if (args.clearBtn) args.clearBtn.disabled = true;
+  if (args.stopBtn) args.stopBtn.hidden = false;
+  args.output.innerHTML = '';
+  setStatus('编译中…', 'live');
+
+  let fullMd = '';
+  saveCompileState(args.canonicalId, {
+    status: 'streaming', markdown: '', startedAt: Date.now(), updatedAt: Date.now(),
+  });
+
+  try {
+    await streamLLMCompile(
+      cfg,
+      systemPrompt,
+      userPrompt,
+      (chunk) => {
+        fullMd += chunk;
+        renderChunk(fullMd);
+        saveCompileState(args.canonicalId, {
+          status: 'streaming',
+          markdown: fullMd,
+          startedAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      },
+      ctrl.signal,
+    );
+    saveCompileState(args.canonicalId, {
+      status: 'done',
+      markdown: fullMd,
+      startedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    setStatus('✓ 编译完成,已存到本地存储', 'ok');
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') {
+      setStatus('已停止', 'info');
+      saveCompileState(args.canonicalId, {
+        status: 'done',
+        markdown: fullMd,
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    } else {
+      setStatus(`✗ ${(e as Error).message || '编译失败'}`, 'error');
+      saveCompileState(args.canonicalId, {
+        status: 'error',
+        markdown: fullMd,
+        startedAt: Date.now(),
+        updatedAt: Date.now(),
+        errorMessage: (e as Error).message,
+      });
+    }
+  } finally {
+    if (args.startBtn) args.startBtn.disabled = false;
+    if (args.recompileBtn) args.recompileBtn.disabled = false;
+    if (args.clearBtn) args.clearBtn.disabled = false;
+    if (args.stopBtn) args.stopBtn.hidden = true;
+  }
+  return ctrl;
+}
+
+/** runInlineCompile fallback status 写入 */
+function showStatusEl(el: HTMLElement, msg: string, kind: 'info' | 'ok' | 'error' | 'live'): void {
+  el.textContent = msg;
+  el.dataset.kind = kind;
+}
+
 export function initPaperCompile(): void {
   const data = readCompileData();
   if (!data) return;
@@ -122,93 +245,24 @@ export function initPaperCompile(): void {
   let currentAbort: AbortController | null = null;
   let inflight: Promise<void> | null = null;
 
-  async function runCompile() {
+  /** 复刻 paper 页 runCompile 的行为(为 initPaperCompile 内部用) */
+  async function runCompile(): Promise<void> {
     if (!hasLLMConfigured()) {
       showStatus(section, '请先在设置页配置 LLM key', 'error');
       return;
     }
-    const cfg = loadSettings();
-    // 预热 library.* pack(失败不阻断)
-    await preloadLibraryPacks(cfg);
-    const figures = summarizeFigures(data.figures);
-    const tables = summarizeTables(data.tables);
-    const systemPrompt = buildSystemPrompt(figures, tables, cfg);
-    // user prompt:元数据 + 摘要(代替全文 —— 避免 token 爆炸;fulltext 可选)
-    const userPrompt = [
-      `论文标题(英文): ${data.titleEn}`,
-      `论文标题(中文): ${data.titleZh}`,
-      '',
-      '## 摘要',
-      data.abstract || '(无摘要)',
-      data.fulltext ? '\n## 论文全文(markdown,前 6000 字符)\n' + data.fulltext.slice(0, 6000) : '',
-    ].join('\n');
-
-    // 状态机
-    if (startBtn) startBtn.disabled = true;
-    if (recompileBtn) recompileBtn.disabled = true;
-    if (clearBtn) clearBtn.disabled = true;
-    if (stopBtn) stopBtn.hidden = false;
-    output.innerHTML = '';
-    showStatus(section, '编译中…', 'live');
-
-    let fullMd = '';
-    saveCompileState(data.canonicalId, {
-      status: 'streaming', markdown: '', startedAt: Date.now(), updatedAt: Date.now(),
+    // 委托给 runInlineCompile,用本闭包里的 output/buttons
+    currentAbort = await runInlineCompile({
+      canonicalId: data.canonicalId,
+      titleZh: data.titleZh,
+      titleEn: data.titleEn,
+      abstract: data.abstract,
+      fulltext: data.fulltext,
+      figures: data.figures,
+      tables: data.tables,
+      output,
+      startBtn, stopBtn, recompileBtn, clearBtn,
     });
-
-    currentAbort = new AbortController();
-    try {
-      await streamLLMCompile(
-        cfg,
-        systemPrompt,
-        userPrompt,
-        (chunk) => {
-          fullMd += chunk;
-          output.innerHTML = renderAll(fullMd, data.figures);
-          // 节流保存
-          saveCompileState(data.canonicalId, {
-            status: 'streaming',
-            markdown: fullMd,
-            startedAt: Date.now(),
-            updatedAt: Date.now(),
-          });
-        },
-        currentAbort.signal,
-      );
-      saveCompileState(data.canonicalId, {
-        status: 'done',
-        markdown: fullMd,
-        startedAt: Date.now(),
-        updatedAt: Date.now(),
-      });
-      showStatus(section, '✓ 编译完成,已存到本地存储', 'ok');
-    } catch (e) {
-      if ((e as Error).name === 'AbortError') {
-        showStatus(section, '已停止', 'info');
-        saveCompileState(data.canonicalId, {
-          status: 'done',  // 部分内容也保存
-          markdown: fullMd,
-          startedAt: Date.now(),
-          updatedAt: Date.now(),
-        });
-      } else {
-        showStatus(section, `✗ ${(e as Error).message || '编译失败'}`, 'error');
-        saveCompileState(data.canonicalId, {
-          status: 'error',
-          markdown: fullMd,
-          startedAt: Date.now(),
-          updatedAt: Date.now(),
-          errorMessage: (e as Error).message,
-        });
-      }
-    } finally {
-      if (startBtn) startBtn.disabled = false;
-      if (recompileBtn) recompileBtn.disabled = false;
-      if (clearBtn) clearBtn.disabled = false;
-      if (stopBtn) stopBtn.hidden = true;
-      currentAbort = null;
-      inflight = null;
-    }
   }
 
   if (startBtn) {

@@ -237,9 +237,9 @@ export function mountWorkbenchCompile(): void {
     if (el.dataset.mounted === '1') continue;
     const cx = el.dataset.cx || '';
     if (!cx) continue;
+    // 读缓存
     let cached: ReturnType<typeof loadCompileState> = null;
     try {
-      // 直接读 localStorage(避免 paper-compile 模块自身对图等的依赖)
       const raw = localStorage.getItem(compileStorageKey(cx));
       if (raw) {
         const parsed = JSON.parse(raw) as { markdown?: string; status?: string };
@@ -249,33 +249,59 @@ export function mountWorkbenchCompile(): void {
       }
     } catch { /* ignore */ }
 
-    if (cached && cached.markdown) {
+    // 解析容器上的所有 data
+    const titleEn = el.dataset.titleEn || '';
+    const titleZh = el.dataset.titleZh || '';
+    const abstract = el.dataset.abstract || '';
+    let figures: { index: number; caption?: string; page?: number; url: string }[] = [];
+    let tables: { index: number; caption?: string }[] = [];
+    try { figures = JSON.parse(el.dataset.figures || '[]'); } catch { /* ignore */ }
+    try { tables = JSON.parse(el.dataset.tables || '[]'); } catch { /* ignore */ }
+
+    const output = el.querySelector<HTMLElement>('[data-wb-compile-output]');
+    const startBtn = el.querySelector<HTMLButtonElement>('[data-wb-compile-start]');
+    const stopBtn = el.querySelector<HTMLButtonElement>('[data-wb-compile-stop]');
+    const statusEl = el.querySelector<HTMLElement>('[data-wb-compile-status]');
+
+    // 有缓存 → 直接渲染,start 按钮文案变「🔄 重新编译」
+    if (cached && cached.markdown && output) {
       try {
-        const figures = JSON.parse(el.dataset.figures || '[]') as FigureEntry[];
-        el.innerHTML = renderCompileMarkdown(cached.markdown, { figures });
-        const paperId = el.dataset.paperId || '';
-        const base = el.dataset.base || '';
-        const link = document.createElement('p');
-        link.className = 'wb-compile-actions';
-        const paperName = (paperId || '').split('/').pop() || paperId;
-        link.innerHTML = `<a class="export-btn" href="${escapeAttr(base + '/papers/' + paperName + '/#paper-compile-section')}">🔄 重新编译</a>`;
-        el.appendChild(link);
+        output.innerHTML = renderCompileMarkdown(cached.markdown, { figures });
+        if (startBtn) startBtn.textContent = '🔄 重新编译';
         el.dataset.mounted = '1';
-        continue;
       } catch (e) {
         console.warn('[workbench-compile] render failed', e);
       }
     }
 
-    // 无缓存:留提示
-    el.innerHTML = `
-      <p class="wb-compile-empty">
-        本论文还没有编译结果。点上方
-        const paperName = ((el.dataset.paperId || '')).split('/').pop() || el.dataset.paperId;
-      <a class="export-btn" href="${escapeAttr((el.dataset.base || '') + '/papers/' + paperName + '/#paper-compile-section')}">✨ 去编译</a>
-        触发 LLM 流式翻译(浏览器本地缓存,下次访问自动显示)。
-      </p>
-    `;
+    // 绑定 start / stop 按钮
+    if (startBtn && output) {
+      startBtn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const { runInlineCompile } = await import('./paper-compile-ui');
+        startBtn.disabled = true;
+        if (stopBtn) stopBtn.hidden = false;
+        const ctrl = await runInlineCompile({
+          canonicalId: cx,
+          titleEn, titleZh, abstract, fulltext: '',
+          figures, tables,
+          output, startBtn, stopBtn, statusEl,
+        });
+        (el as unknown as { __compileCtrl: AbortController | null }).__compileCtrl = ctrl;
+        startBtn.disabled = false;
+        startBtn.textContent = '🔄 重新编译';
+      });
+    }
+    if (stopBtn) {
+      stopBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const c = (el as unknown as { __compileCtrl?: AbortController | null }).__compileCtrl;
+        c?.abort();
+        stopBtn.hidden = true;
+      });
+    }
     el.dataset.mounted = '1';
   }
 }
