@@ -1592,3 +1592,21 @@
   margin: 0.5rem 0 0;
   padding-left: 1.2rem;
 }
+
+/* ========== 虚拟滚动 viewport(单库工作台 PapersTab) ========== */
+.wb-paper-rows-viewport {
+  height: calc(100vh - 22rem);
+  min-height: 320px;
+  max-height: 720px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+.wb-paper-rows-viewport::-webkit-scrollbar { width: 8px; }
+.wb-paper-rows-viewport::-webkit-scrollbar-thumb {
+  background: var(--bg-muted);
+  border-radius: 4px;
+}
+.wb-paper-rows-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-subtle, #888);
+}

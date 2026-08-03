@@ -1454,28 +1454,12 @@ function renderUserLibraryDetail(): void {
                 <br />在论文详情页右上角点 <strong>+ 加进文献库</strong> 即可加入;
                 或点这里 <button type="button" class="btn btn-soft btn-sm" data-action="add-papers" data-lib-id="${escapeHtml(lib.id)}">去添加</button>。
               </p>`
-            : papers.map((p, i) => {
-              const meta = lib.papers[p.canonicalArxivId];
-              const statusBadge = meta ? renderStatusBadge(meta.status) : '';
-              return `
-              <a class="wb-paper-row${i === 0 ? ' is-selected' : ''}"
-                 href="#paper-${escapeHtml(p.canonicalArxivId)}"
-                 data-paper-id="${escapeHtml(p.canonicalArxivId)}"
-                 ${typeof p.score === 'number' && p.score > 0 ? `data-score="${p.score}"` : ''}>
-                <div class="row-head">
-                  <span class="arx">${escapeHtml(p.arxivId || '—')}</span>
-                  ${p.date ? `<span>${escapeHtml(p.date.slice(5))}</span>` : ''}
-                  <span class="year">${escapeHtml((p.date || '').slice(0, 4) || '—')}</span>
-                  ${statusBadge}
-                </div>
-                <p class="row-title">${escapeHtml(p.title_zh || p.title_plain || p.title || p.id)}</p>
-                ${p.title && p.title_zh ? `<p class="row-en">${escapeHtml(p.title)}</p>` : ''}
-                <div class="row-chips">
-                  ${(p.concepts?.length || 0) > 0 ? `<span class="row-chip">🕸 ${p.concepts?.length} 概念</span>` : ''}
-                  <span class="row-chip">📅 ${escapeHtml(p.date || '—')}</span>
-                </div>
-              </a>
-            `;}).join('')}
+            : `<div class="wb-paper-rows-viewport" data-vlist-viewport data-vlist-host>
+                 <div data-vlist-spacer>
+                   <div data-vlist-rows></div>
+                 </div>
+                 <p class="wb-paper-rows-empty" hidden>暂无论文</p>
+               </div>`}
         </div>
         <div class="wb-paper-detail" id="wb-detail-pane">
           ${papers.length === 0
@@ -1609,6 +1593,48 @@ function renderUserLibraryDetail(): void {
   // tab 切换
   const VALID_TABS = ['papers', 'concepts', 'digest', 'notes', 'govern'] as const;
   type Tab = typeof VALID_TABS[number];
+
+  // 虚拟滚动 init —— 把 papers[] 渲染成可见行,大幅降低 DOM 节点数
+  // (Polaris 工作台 PapersTab 同构:460+ 论文不会卡顿)
+  let visibleItems: typeof papers = papers;
+  const vlistHost = mount.querySelector<HTMLElement>('[data-vlist-host]');
+  let vlistCtl: ReturnType<typeof import('./virtual-list').createVirtualList> | null = null;
+  if (vlistHost && papers.length > 0) {
+    // 动态 import 避免 SSR bundle 膨胀
+    void import('./virtual-list').then(({ createVirtualList }) => {
+      vlistCtl = createVirtualList(vlistHost, {
+        items: visibleItems,
+        estimate: 110,
+        overscan: 6,
+        renderRow: (p, i) => {
+          const meta = lib.papers[p.canonicalArxivId];
+          const statusBadge = meta ? renderStatusBadge(meta.status) : '';
+          const selected = i === 0 ? ' is-selected' : '';
+          return `
+            <a class="wb-paper-row${selected}"
+               href="#paper-${escapeHtml(p.canonicalArxivId)}"
+               data-paper-id="${escapeHtml(p.canonicalArxivId)}"
+               data-vlist-idx="${i}"
+               ${typeof p.score === 'number' && p.score > 0 ? `data-score="${p.score}"` : ''}>
+              <div class="row-head">
+                <span class="arx">${escapeHtml(p.arxivId || '—')}</span>
+                ${p.date ? `<span>${escapeHtml(p.date.slice(5))}</span>` : ''}
+                <span class="year">${escapeHtml((p.date || '').slice(0, 4) || '—')}</span>
+                ${statusBadge}
+              </div>
+              <p class="row-title">${escapeHtml(p.title_zh || p.title_plain || p.title || p.id)}</p>
+              ${p.title && p.title_zh ? `<p class="row-en">${escapeHtml(p.title)}</p>` : ''}
+              <div class="row-chips">
+                ${(p.concepts?.length || 0) > 0 ? `<span class="row-chip">🕸 ${p.concepts?.length} 概念</span>` : ''}
+                <span class="row-chip">📅 ${escapeHtml(p.date || '—')}</span>
+              </div>
+            </a>
+          `;
+        },
+      });
+    });
+  }
+
   function setActiveTab(tab: Tab) {
     mount.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
       t.classList.toggle('active', (t.dataset.tab || '') === tab);
@@ -1638,43 +1664,46 @@ function renderUserLibraryDetail(): void {
     });
   });
 
-  // view 过滤(全部 / 今日)
+  // view 过滤(全部 / 今日)—— 改 items 后 vlist.setItems()
+  let currentView: 'all' | 'today' = 'all';
+  let currentSort: 'date' | 'score' = 'score';
+  function applyPaperListFilter(): void {
+    const today = new Date().toISOString().slice(0, 10);
+    let items = papers;
+    if (currentView === 'today') {
+      items = items.filter((p) => p.date === today);
+    }
+    if (currentSort === 'score') {
+      items = items.slice().sort((a, b) => {
+        const sa = typeof a.score === 'number' ? a.score : 0;
+        const sb = typeof b.score === 'number' ? b.score : 0;
+        if (sb !== sa) return sb - sa;
+        return (b.date || '').localeCompare(a.date || '');
+      });
+    } else {
+      items = items.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    }
+    visibleItems = items;
+    vlistCtl?.setItems(items);
+    vlistCtl?.scrollToIndex(0);
+  }
+
   mount.querySelectorAll<HTMLAnchorElement>('.wb-papers-filter .filter-pill').forEach((p) => {
     p.addEventListener('click', (e) => {
       e.preventDefault();
       mount.querySelectorAll('.wb-papers-filter .filter-pill').forEach((b) => b.classList.toggle('active', b === p));
-      const view = p.dataset.view;
-      mount.querySelectorAll<HTMLElement>('.wb-paper-row').forEach((row) => {
-        const date = row.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
-        const show = view === 'all' || (view === 'today' && /\d{2}-\d{2}/.test(date));
-        row.style.display = show ? '' : 'none';
-      });
+      currentView = (p.dataset.view === 'today' ? 'today' : 'all');
+      applyPaperListFilter();
     });
   });
 
-  // 排序(按时间 / 按相关度)—— 客户端重排 DOM,与公共库工作台口径一致。
-  // 读 row 上的 data-score 属性;缺失视为 0;同分 fallback 到 date 降序。
+  // 排序
   mount.querySelectorAll<HTMLAnchorElement>('.wb-papers-sort .filter-pill').forEach((p) => {
     p.addEventListener('click', (e) => {
       e.preventDefault();
       mount.querySelectorAll('.wb-papers-sort .filter-pill').forEach((b) => b.classList.toggle('active', b === p));
-      const sort = p.dataset.sort;
-      const list = mount.querySelector<HTMLElement>('.wb-papers-list');
-      if (!list) return;
-      const rows = Array.from(list.querySelectorAll<HTMLElement>('.wb-paper-row'));
-      rows.sort((a, b) => {
-        if (sort === 'score') {
-          const sa = parseFloat(a.dataset.score || '0');
-          const sb = parseFloat(b.dataset.score || '0');
-          if (sb !== sa) return sb - sa;
-        }
-        const da = a.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
-        const db = b.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
-        return db.localeCompare(da);
-      });
-      const frag = document.createDocumentFragment();
-      rows.forEach((r) => frag.appendChild(r));
-      list.appendChild(frag);
+      currentSort = (p.dataset.sort === 'date' ? 'date' : 'score');
+      applyPaperListFilter();
     });
   });
 
