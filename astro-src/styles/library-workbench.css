@@ -332,11 +332,15 @@
 .wb-paper-detail .wb-detail-body.wb-detail-default {
   display: block;
 }
-/* 当 URL hash 命中某个 id,该 id 元素显示;default 隐藏(去掉 css *) */
+/* 当 URL hash 命中某个 id,该 id 元素显示 */
 .wb-paper-detail .wb-detail-body:target {
   display: block;
 }
-.wb-paper-detail .wb-detail-body:target ~ .wb-detail-body.wb-detail-default {
+/* 任意 .wb-detail-body 被 :target 时,默认第一篇隐藏
+   (用 :has 替代原来的 `:target ~ .wb-detail-default`,后者要求 target 在
+   default 之前 —— 但 wb-detail-default 是第一篇,点后面的论文时 default
+   在 target 之前,~ 匹配不到,导致第一篇永远盖住后续点击。) */
+.wb-paper-detail:has(.wb-detail-body:target) .wb-detail-body.wb-detail-default {
   display: none;
 }
 .wb-paper-detail h2 {
