@@ -411,6 +411,143 @@
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
 }
 
+/* --- 新建文献库弹窗新增字段:chip 行 / chip 输入 / tag 列表 ---
+ * 对照 Polaris NewLibraryModal:
+ *   - .lib-chip-row       arXiv 预设分类按钮行(cs.CL / cs.AI ...)
+ *   - .lib-chip           单个分类按钮(可多选)
+ *   - .lib-chip-input-wrap  「前缀 + 输入框 + 添加」组合控件
+ *   - .lib-tag-list       已选 tag 容器
+ *   - .lib-tag            已选 tag(可点 × 删除)
+ *   - .lib-tag-empty      空状态提示
+ * 设计上对齐 Polaris:圆角小按钮、淡灰背景,active 用主题色边框。 */
+.lib-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.lib-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-muted);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.lib-chip:hover {
+  border-color: var(--accent);
+}
+.lib-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.lib-chip-input-wrap {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  overflow: hidden;
+  transition: border-color 0.12s;
+}
+.lib-chip-input-wrap:focus-within {
+  border-color: var(--accent);
+}
+.lib-chip-input-prefix {
+  display: flex;
+  align-items: center;
+  padding: 0 0.6rem;
+  font-size: 0.82rem;
+  color: var(--fg-subtle);
+  background: var(--bg-muted);
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+}
+.lib-chip-input {
+  flex: 1 1 auto;
+  border: none;
+  outline: none;
+  padding: 0.5rem 0.7rem;
+  font-family: inherit;
+  font-size: 0.88rem;
+  background: transparent;
+  color: var(--fg);
+  min-width: 0;
+}
+.lib-chip-input::placeholder {
+  color: var(--fg-subtle);
+}
+.lib-chip-add {
+  border: none;
+  background: var(--bg-muted);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0 0.85rem;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.lib-chip-add:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.lib-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+  min-height: 1.5rem;
+}
+.lib-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.45rem 0.18rem 0.6rem;
+  border-radius: 999px;
+  background: var(--bg-muted);
+  color: var(--fg);
+  font-size: 0.82rem;
+  border: 1px solid var(--border);
+}
+.lib-tag-x {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--fg-subtle);
+  padding: 0 0.15rem;
+  border-radius: 999px;
+  transition: background 0.1s, color 0.1s;
+}
+.lib-tag-x:hover {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+.lib-tag-empty {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+  font-style: italic;
+}
+.lib-field-hint code {
+  background: var(--bg-muted);
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
 /* --- 「+ 加进文献库」按钮 + 弹层(对照 Polaris LibraryPicker) --- */
 .add-to-library-wrap {
   position: relative;
