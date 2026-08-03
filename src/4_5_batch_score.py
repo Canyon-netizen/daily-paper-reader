@@ -1,21 +1,11 @@
 # -*- coding: utf-8 -*-
-"""src/4.5.batch_score.py — 一次性给所有论文打 0-1 相关度分。
-
-用法:
-  # 真实打分(用配置好的 LLM):
-  python -m src.4_5_batch_score
-
-  # 启发式占位(无 LLM key,仅按 venue / date 算):
-  python -m src.4_5_batch_score --heuristic
-
-  # 跑完后:
-  #   - frontmatter score 字段被覆写
-  #   - 打印 ≥0.8 留下 / <0.8 删除清单
-  #   - delete-candidates.txt 写到 data/ 让你审核
-
-风险:
-  - 0.8 阈值几乎会全删(LLM 给的 0-1 分大多 0.3-0.6)
-  - 实际删除必须用户手动确认:本脚本只生成候选清单,不直接删
+"""
+Score all papers 0-1 via LLM, write to frontmatter.
+Usage:
+  python -m src.4_5_batch_score              # LLM mode (needs LLM_API_KEY/BASE_URL/MODEL)
+  python -m src.4_5_batch_score --heuristic  # no-LLM fallback (heuristic placeholders)
+  python -m src.4_5_batch_score --threshold 0.3  # change cutoff (default 0.8)
+  python -m src.4_5_batch_score --yes-delete  # actually delete (DANGEROUS)
 """
 from __future__ import annotations
 
@@ -24,7 +14,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -33,9 +23,8 @@ DOCS_PAPERS = REPO_ROOT / "docs" / "papers"
 DATA_DIR = REPO_ROOT / "data"
 
 
-def iter_paper_md_files() -> List[Path]:
-    """所有 docs/papers/**/*.md(跳过 README / 路径占位)。"""
-    out: List[Path] = []
+def iter_paper_md_files():
+    out = []
     for p in DOCS_PAPERS.rglob("*.md"):
         name = p.name
         if name in ("README.md", "path-spec.md", "zotero-usage.md"):
@@ -46,14 +35,14 @@ def iter_paper_md_files() -> List[Path]:
     return out
 
 
-def parse_frontmatter(md: str) -> Tuple[Dict[str, Any], str]:
+def parse_frontmatter(md):
     if not md.startswith("---"):
         return ({}, md)
     end = md.find("\n---", 4)
     if end < 0:
         return ({}, md)
     block = md[4:end]
-    body = md[end + 4 :]
+    body = md[end + 4:]
     try:
         data = yaml.safe_load(block) or {}
         if not isinstance(data, dict):
@@ -63,165 +52,164 @@ def parse_frontmatter(md: str) -> Tuple[Dict[str, Any], str]:
     return (data, body)
 
 
-def write_frontmatter(md_path: Path, score: float) -> None:
-    """覆写 frontmatter score 字段(score: 0.0 ~ 1.0)。"""
+def write_frontmatter(md_path, score):
     text = md_path.read_text(encoding="utf-8")
     data, body = parse_frontmatter(text)
     data["score"] = round(score, 3)
-    # 重写 frontmatter,保持 body
     yaml_str = yaml.safe_dump(data, allow_unicode=True, sort_keys=False)
     md_path.write_text(f"---\n{yaml_str}---{body}", encoding="utf-8")
 
 
-def heuristic_score(front: Dict[str, Any]) -> float:
-    """无 LLM 时的占位评分。
-    base 0.50 + venue 会议 +0.20 + categories.task rl/agent +0.05(每个) + 新近 +0.10。
-    限定 0-1 范围。"""
+def heuristic_score(front):
     score = 0.50
     venue = (front.get("venue") or "").lower()
-    if any(v in venue for v in ("icml", "iclr", "neurips", "aaai", "acl", "emnlp", "cvpr", "iccv", "aaai")):
+    if any(v in venue for v in ("icml", "iclr", "neurips", "aaai", "acl", "emnlp", "cvpr", "iccv")):
         score += 0.20
     cats = front.get("categories") or {}
     tasks = cats.get("task") or []
     boost = min(0.10, 0.05 * len([t for t in tasks if t in ("rl", "agent", "mas", "llm-agent", "robotics")]))
     score += boost
-    date = front.get("date") or ""
+    date = str(front.get("date") or "")
     if date.startswith("2026-") or date.startswith("2025-"):
         score += 0.10
     return min(1.0, max(0.0, score))
 
 
-def llm_score_papers(router, items: List[Tuple[Path, Dict[str, Any]]]) -> Dict[Path, float]:
-    """批量调 LLM 一次给所有论文打 0-1 分,返回 {path: score}。
+SYSTEM_PROMPT = (
+    "You are a research assistant. Score each arXiv paper 0-1 for relevance to this user interest: "
+    "deep learning, AI agents, reinforcement learning, NLP, robotics, computer vision. "
+    "0.0 = unrelated, 1.0 = core match. "
+    "Respond with a JSON object only, no extra text, no <think> blocks, of the form: "
+    "{\"scores\": [{\"i\": 1, \"s\": 0.7}, ...]} (one per paper, in order)."
+)
 
-    系统提示词(精读 + 相关度评估):
-    - 用户兴趣(默认 arxiv AI/ML/NLP/RL):"深度学习、AI 智能体、强化学习"
-    - 论文含 title / tldr / abstract,LLM 输出 0-1 浮点分
-    - 输出格式:JSON 数组 [{id, score}],严格
 
-    简化版:一次 LLM 调用装 50 篇,分批处理。
-    """
-    SYSTEM_PROMPT = (
-        "你是研究助手,任务:根据用户的整体兴趣,给每篇 arXiv 论文打一个 0-1 的"
-        "相关度分数。\n"
-        "用户兴趣(默认):深度学习、AI 智能体、强化学习、自然语言处理、"
-        "机器人、计算机视觉。\n"
-        "打分原则:论文主题与上述兴趣的相关度。0.0 = 完全无关,1.0 = 核心相关。\n"
-        "**重要**:你只能根据给定的标题 / 摘要,不要追求与兴趣字面匹配,应理解"
-        "研究问题与方法的语义关联(例如 RLHF / 对齐虽然不直接写"强化学习"四字,"
-        "但本质相关)。\n"
-        "输出格式:严格 JSON 数组,每项是 {\"i\": \"<顺序索引>\", \"s\": <0-1 浮点数>},"
-        "无任何额外文字、Markdown 代码块、注释。"
+def _strip_think(text: str) -> str:
+    """Strip <think>...</think> blocks M3 reasoning model emits."""
+    import re
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # also strip any leading/trailing non-json prose
+    return text.strip()
+
+
+def llm_score_one_batch(url, api_key, model, items):
+    """Send one batch to LLM, return {path: score}. {} on failure."""
+    user_lines = []
+    for i, (_, front) in enumerate(items, start=1):
+        title = (front.get("title_zh") or front.get("title") or "").strip()
+        tldr = (front.get("tldr") or front.get("abstract") or front.get("evidence") or "").strip()[:300]
+        user_lines.append(f"{i}. {title}\n   {tldr}")
+    user_msg = (
+        f"Below are {len(items)} arXiv papers. Score each 0-1 per system instructions. "
+        f"Output a JSON object: {{\"scores\": [{{\"i\": 1, \"s\": 0.7}}, ...]}}. "
+        f"No prose, no <think> blocks.\n\n"
+        + "\n".join(user_lines)
     )
-
-    BATCH = 50
-    results: Dict[Path, float] = {}
-    for start in range(0, len(items), BATCH):
-        batch = items[start : start + BATCH]
-        user_lines = [
-            f"论文 #{i + 1}:",
-            f"  标题: {front.get('title_zh') or front.get('title') or ''}",
-            f"  摘要: {(front.get('tldr') or front.get('abstract') or front.get('evidence') or '')[:300]}",
-            ""
-            for i, (_p, front) in enumerate(batch)
-        ]
-        # 上面这行会插入空行
-        user_msg = (
-            f"下面共 {len(batch)} 篇论文,逐篇打分。输出 [{','.join(['#'+str(i+1) for i in range(len(batch))])}] "
-            f"对应的 JSON 数组(每项是 {{\"i\":<1..N 顺序>,\"s\":<0-1 浮点>}})。\n\n"
-            + "\n".join(user_lines)
-        )
-        try:
-            resp = router.call(
-                "library.score",
-                messages=[
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{url.rstrip('/')}/chat/completions",
+            data=json.dumps({
+                "model": model,
+                "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_msg},
                 ],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
-        except Exception as e:
-            print(f"[batch {start}-{start+len(batch)}] LLM call failed: {e}", file=sys.stderr)
-            for _p, _ in batch:
-                results[_p] = 0.5
-            continue
-        # Parse JSON object
-        try:
-            content = resp.get("content") if isinstance(resp, dict) else None
-            if not content:
-                print(f"[batch {start}] empty response", file=sys.stderr)
-                for _p, _ in batch:
-                    results[_p] = 0.5
+                "temperature": 0.1,
+                "response_format": {"type": "json_object"},
+            }).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        content = data["choices"][0]["message"]["content"]
+        content = _strip_think(content)
+        # Find first { ... } block
+        start = content.find("{")
+        end = content.rfind("}")
+        if start >= 0 and end > start:
+            content = content[start:end + 1]
+        payload = json.loads(content)
+        if isinstance(payload, list):
+            arr = payload
+        else:
+            arr = payload.get("scores") or payload.get("results") or []
+        out = {}
+        for it in arr:
+            try:
+                idx = int(it.get("i"))
+                s_raw = it.get("s")
+                if s_raw is None:
+                    continue  # LLM skipped this paper
+                s = float(s_raw)
+                out[items[idx - 1][0]] = max(0.0, min(1.0, s))
+            except Exception:
                 continue
-            payload = json.loads(content)
-            # 支持 {"scores": [{"i":1,"s":0.7},...]} 或 [...数组...]
-            if isinstance(payload, dict):
-                arr = payload.get("scores") or payload.get("results") or next(iter(payload.values()), [])
-            else:
-                arr = payload
-            score_map: Dict[int, float] = {}
-            for it in arr or []:
-                try:
-                    idx = int(it.get("i"))
-                    s = float(it.get("s"))
-                    score_map[idx] = max(0.0, min(1.0, s))
-                except Exception:
-                    continue
-            for i, (path, _front) in enumerate(batch, start=1):
-                if i in score_map:
-                    results[path] = score_map[i]
-                else:
-                    results[path] = 0.5  # 没回分,默认中位
-        except Exception as e:
-            print(f"[batch {start}] parse failed: {e}; raw={content[:200]}", file=sys.stderr)
-            for _p, _ in batch:
-                results[_p] = 0.5
-    return results
+        return out
+    except Exception as e:
+        print(f"[batch] LLM call failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return {}
 
 
-def main() -> int:
-    p = argparse.ArgumentParser(description="批量给所有论文打 0-1 相关度分,写回 frontmatter")
-    p.add_argument("--heuristic", action="store_true", help="无 LLM,占位评分")
-    p.add_argument("--threshold", type=float, default=0.8, help="删除阈值(默认 0.8)")
-    p.add_argument("--dry-run", action="store_true", help="不写文件,只打印")
-    p.add_argument("--yes-delete", action="store_true", help="**真删** ≥ threshold 以下的论文(默认只列清单)")
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--heuristic", action="store_true")
+    p.add_argument("--threshold", type=float, default=0.8)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--yes-delete", action="store_true")
+    p.add_argument("--batch-size", type=int, default=20)
+    p.add_argument("--concurrency", type=int, default=10)
     args = p.parse_args()
 
     files = iter_paper_md_files()
-    print(f"[batch-score] 扫到 {len(files)} 个 paper md 文件")
+    print(f"[batch-score] {len(files)} paper md files")
 
-    items: List[Tuple[Path, Dict[str, Any]]] = []
+    items = []
     for f in files:
-        text = f.read_text(encoding="utf-8")
-        front, _ = parse_frontmatter(text)
+        front, _ = parse_frontmatter(f.read_text(encoding="utf-8"))
         items.append((f, front))
 
-    scores: Dict[Path, float] = {}
-    if args.heuristic:
+    scores = {}
+    if args.heuristic or not os.environ.get("LLM_API_KEY"):
+        print("[batch-score] heuristic mode")
         for p_, front in items:
             scores[p_] = heuristic_score(front)
     else:
-        try:
-            from src.llm_router import get_llm_router
-        except Exception as e:
-            print(f"[batch-score] import llm_router 失败: {e}; 回退启发式", file=sys.stderr)
-            args.heuristic = True
-        if not args.heuristic:
-            router = get_llm_router()
-            scores = llm_score_papers(router, items)
+        url = os.environ["LLM_BASE_URL"]
+        api_key = os.environ["LLM_API_KEY"]
+        model = os.environ.get("LLM_MODEL", "MiniMax-M2.7-highspeed")
+        # url may already include /v1; llm_score_one_batch appends /chat/completions
+        BATCH = args.batch_size
+        print(f"[batch-score] LLM: {url} model={model} batch={BATCH} conc={args.concurrency}")
+        import concurrent.futures
+        batches = [items[i:i + BATCH] for i in range(0, len(items), BATCH)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+            futures = {pool.submit(llm_score_one_batch, url, api_key, model, b): b for b in batches}
+            for fut in concurrent.futures.as_completed(futures):
+                batch = futures[fut]
+                try:
+                    res = fut.result()
+                except Exception as e:
+                    print(f"[batch] raised: {e}", file=sys.stderr)
+                    res = {}
+                if not res:
+                    for p_, _ in batch:
+                        scores.setdefault(p_, 0.5)
+                else:
+                    scores.update(res)
+                print(f"[batch] progress {len(scores)}/{len(items)}", file=sys.stderr)
 
-    # 写回 frontmatter
     if not args.dry_run:
         for p_, s in scores.items():
             write_frontmatter(p_, s)
-    print(f"[batch-score] 已写 {len(scores)} 个 score(0-1)")
+    print(f"[batch-score] wrote {len(scores)} scores")
 
-    # 统计 + 写候选清单
     keep, kill = [], []
     for p_, s in sorted(scores.items(), key=lambda x: -x[1]):
-        front = dict(x[0] for x in [])  # noop
-        # 重建 frontmatter from file
         text = p_.read_text(encoding="utf-8")
         front, _ = parse_frontmatter(text)
         title = (front.get("title_zh") or front.get("title") or "").strip()[:60]
@@ -231,45 +219,36 @@ def main() -> int:
         else:
             kill.append((arxiv, title, s))
 
-    print(f"\n=== ≥ {args.threshold} 留下: {len(keep)} 篇 ===")
-    for a, t, s in keep[:50]:
-        print(f"  ✓ {s:.2f} {a}  {t}")
-    if len(keep) > 50:
-        print(f"  ... 还有 {len(keep) - 50} 篇")
-    print(f"\n=== < {args.threshold} 删除候选: {len(kill)} 篇 ===")
-    for a, t, s in kill[:50]:
-        print(f"  ✗ {s:.2f} {a}  {t}")
-    if len(kill) > 50:
-        print(f"  ... 还有 {len(kill) - 50} 篇")
+    print(f"\n=== >= {args.threshold} KEEP: {len(keep)} ===")
+    for a, t, s in keep[:60]:
+        print(f"  keep {s:.2f} {a}  {t}")
+    if len(keep) > 60:
+        print(f"  ... {len(keep) - 60} more")
+    print(f"\n=== < {args.threshold} KILL candidates: {len(kill)} ===")
+    for a, t, s in kill[:60]:
+        print(f"  kill {s:.2f} {a}  {t}")
+    if len(kill) > 60:
+        print(f"  ... {len(kill) - 60} more")
 
-    # 写候选清单
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    candidate_path = DATA_DIR / "delete-candidates.txt"
-    with open(candidate_path, "w", encoding="utf-8") as f:
-        f.write(f"# delete-candidates — score < {args.threshold}\n")
-        f.write(f"# generated: {args.heuristic and 'heuristic' or 'LLM'}\n")
+    cand_path = DATA_DIR / "delete-candidates.txt"
+    with open(cand_path, "w", encoding="utf-8") as f:
+        f.write(f"# delete-candidates -- score < {args.threshold}\n")
+        f.write(f"# generated: {'heuristic' if args.heuristic else 'LLM'}\n")
         f.write(f"# total: {len(kill)} papers\n\n")
         for a, t, s in kill:
             f.write(f"{s:.3f}\t{a}\t{t}\n")
-    print(f"\n[batch-score] 候选清单写到 {candidate_path}")
+    print(f"\n[batch-score] candidate list: {cand_path}")
 
-    if not args.yes_delete:
-        print(f"\n⚠️ 这次没删任何文件。带 --yes-delete 才会真删(谨慎!)")
-        return 0
-
-    # 真删
-    import shutil
-    deleted = 0
-    for p_, s in scores.items():
-        if s < args.threshold:
-            shutil.rmtree(p_.parent, ignore_errors=False) if p_.parent != DOCS_PAPERS else None
-            if p_.parent != DOCS_PAPERS:
-                # 不要把整个 docs/papers 删了,只删文件
+    if args.yes_delete:
+        deleted = 0
+        for p_, s in scores.items():
+            if s < args.threshold and p_.parent != DOCS_PAPERS:
                 p_.unlink()
-            else:
-                p_.unlink()
-            deleted += 1
-    print(f"[batch-score] ⚠️ 已删 {deleted} 个文件(< {args.threshold});需 git commit")
+                deleted += 1
+        print(f"[batch-score] DELETED {deleted} files (< {args.threshold})")
+    else:
+        print(f"\n[!] pass --yes-delete to actually delete. 0 files removed.")
     return 0
 
 

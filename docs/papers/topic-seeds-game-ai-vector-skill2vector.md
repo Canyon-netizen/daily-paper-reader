@@ -1,4 +1,6 @@
-# Topic Seeds · Game AI · Vector · Skill2Vector
+---
+score: 0.0
+---# Topic Seeds · Game AI · Vector · Skill2Vector
 
 > **用途**:主题探索页 `/topic/` 阶段 1 的"种子论文清单"。
 > 把下面 `arxiv_id` 一栏的值,逐条粘到主题页的"📚 添加参考论文 → 已知 arXiv ID / 链接"输入框即可加入种子。
