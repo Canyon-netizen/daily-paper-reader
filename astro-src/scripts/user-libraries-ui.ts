@@ -810,9 +810,17 @@ function renderUserLibraryDetail(): void {
   } catch {
     allPapers = [];
   }
+  // 默认按相关度(score 降序,同分按 date 降序)排序 —— 跟公共库工作台的口径一致,
+  // 进库第一眼看到最相关的研究,而不是按入库时间。"未打分"的论文(score 缺)
+  // 会落到列表底部:不把"近期但未评估"的论文顶到 top 位置。
   const papers = allPapers
     .filter((p) => lib.paperIds.includes(p.canonicalArxivId))
-    .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    .sort((a, b) => {
+      const sa = typeof a.score === 'number' ? a.score : 0;
+      const sb = typeof b.score === 'number' ? b.score : 0;
+      if (sb !== sa) return sb - sa;
+      return (b.date || '').localeCompare(a.date || '');
+    });
 
   // 概念聚合
   const conceptMap = new Map<string, { slug: string; display_name: string; category: string; n: number }>();
@@ -877,7 +885,8 @@ function renderUserLibraryDetail(): void {
           </div>
           <div class="wb-papers-sort">
             <span class="sort-label">排序</span>
-            <a class="filter-pill active" data-sort="date" href="#papers">📅 按时间</a>
+            <a class="filter-pill" data-sort="date" href="#papers">📅 按时间</a>
+            <a class="filter-pill active" data-sort="score" href="#papers">⭐ 按相关度</a>
           </div>
           ${papers.length === 0
             ? `<p class="empty" data-user-lib-empty-hint>
@@ -888,7 +897,8 @@ function renderUserLibraryDetail(): void {
             : papers.map((p, i) => `
               <a class="wb-paper-row${i === 0 ? ' is-selected' : ''}"
                  href="#paper-${escapeHtml(p.canonicalArxivId)}"
-                 data-paper-id="${escapeHtml(p.canonicalArxivId)}">
+                 data-paper-id="${escapeHtml(p.canonicalArxivId)}"
+                 ${typeof p.score === 'number' && p.score > 0 ? `data-score="${p.score}"` : ''}>
                 <div class="row-head">
                   <span class="arx">${escapeHtml(p.arxivId || '—')}</span>
                   ${p.date ? `<span>${escapeHtml(p.date.slice(5))}</span>` : ''}
@@ -999,6 +1009,32 @@ function renderUserLibraryDetail(): void {
         const show = view === 'all' || (view === 'today' && /\d{2}-\d{2}/.test(date));
         row.style.display = show ? '' : 'none';
       });
+    });
+  });
+
+  // 排序(按时间 / 按相关度)—— 客户端重排 DOM,与公共库工作台口径一致。
+  // 读 row 上的 data-score 属性;缺失视为 0;同分 fallback 到 date 降序。
+  mount.querySelectorAll<HTMLAnchorElement>('.wb-papers-sort .filter-pill').forEach((p) => {
+    p.addEventListener('click', (e) => {
+      e.preventDefault();
+      mount.querySelectorAll('.wb-papers-sort .filter-pill').forEach((b) => b.classList.toggle('active', b === p));
+      const sort = p.dataset.sort;
+      const list = mount.querySelector<HTMLElement>('.wb-papers-list');
+      if (!list) return;
+      const rows = Array.from(list.querySelectorAll<HTMLElement>('.wb-paper-row'));
+      rows.sort((a, b) => {
+        if (sort === 'score') {
+          const sa = parseFloat(a.dataset.score || '0');
+          const sb = parseFloat(b.dataset.score || '0');
+          if (sb !== sa) return sb - sa;
+        }
+        const da = a.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
+        const db = b.querySelector('.row-head > span:nth-child(2)')?.textContent || '';
+        return db.localeCompare(da);
+      });
+      const frag = document.createDocumentFragment();
+      rows.forEach((r) => frag.appendChild(r));
+      list.appendChild(frag);
     });
   });
 

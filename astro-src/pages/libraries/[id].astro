@@ -34,9 +34,16 @@ if (!lib) {
   return Astro.redirect(base + '/libraries/');
 }
 
-const items = await defaultPaperRepository.list({ sortBy: 'date' });
-const papers = selectLibraryPapers(items, lib)
-  .sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+// 默认按相关度(score 降序,同分按 date 降序)排序 —— 用户进库第一眼看到
+// 最相关的研究,而非最新 arXiv 流。论文若未跑 LLM 打分(没有 score 字段),
+// 会落到列表底部,这是有意的:不把"近期但未评估"的论文顶到 top 位置。
+const items = await defaultPaperRepository.list({ sortBy: 'score' });
+const papers = selectLibraryPapers(items, lib).sort((a, b) => {
+  const sa = typeof a.score === 'number' ? a.score : 0;
+  const sb = typeof b.score === 'number' ? b.score : 0;
+  if (sb !== sa) return sb - sa;
+  return (b.date || '').localeCompare(a.date || '');
+});
 
 interface ConceptHit { slug: string; display_name: string; category: string; n: number }
 const conceptMap = new Map<string, ConceptHit>();
@@ -149,8 +156,8 @@ const selectedPaper = papers[0];
           </div>
           <div class="wb-papers-sort">
             <span class="sort-label">排序</span>
-            <a class="filter-pill active" data-sort="date" href="#papers">📅 按时间</a>
-            <a class="filter-pill" data-sort="score" href="#papers">⭐ 按相关度</a>
+            <a class="filter-pill" data-sort="date" href="#papers">📅 按时间</a>
+            <a class="filter-pill active" data-sort="score" href="#papers">⭐ 按相关度</a>
           </div>
           {papers.map((p, i) => {
             const conceptsHere = p.concepts?.length || 0;
