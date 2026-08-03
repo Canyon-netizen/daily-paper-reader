@@ -15,6 +15,7 @@
 
 export type {
   LibraryAnchor,
+  LibraryConceptOverride,
   LibraryDefinition,
   LibraryHue,
   LibraryPaperMeta,
@@ -50,6 +51,9 @@ export {
   removeLibraryPaperMeta,
   getLibraryPaperMeta,
   listLibraryPaperMetas,
+  setLibraryConceptOverride,
+  removeLibraryConceptOverride,
+  getLibraryConceptDisplay,
   replaceUserLibraries,
   clearUserLibraries,
 } from './store';

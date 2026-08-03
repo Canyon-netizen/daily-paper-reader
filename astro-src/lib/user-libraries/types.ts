@@ -152,6 +152,25 @@ export type LibraryPaperStatus =
   | 'excluded'    // 用户/打分剔除
   | 'trashed';    // 回收站
 
+/**
+ * LibraryConceptOverride —— 本库对一个概念的自定义。
+ * 对照 Polaris `POST /libraries/{id}/concepts/relink`:
+ *  - displayName: 重命名(只在本库生效,不影响全局 / 论文 frontmatter)
+ *  - exclude: true 时,这个概念在 ConceptsTab 标灰 + 隐藏 chip
+ *  - canonicalSlug: 如果概念有别名 / 拼写错误,指向真正的概念 slug
+ *                    (Polaris 的「概念合并」语义)
+ *  - note: 1-100 字私人批注
+ *
+ * 不影响论文 frontmatter.concepts —— 只是 UI 层的覆盖。
+ * 删除 paper.concepts 里的 slug 不会清掉这里,反而留下了「之前我改过名字」的轨迹。
+ */
+export interface LibraryConceptOverride {
+  displayName?: string;
+  exclude?: boolean;
+  canonicalSlug?: string;
+  note?: string;
+}
+
 export interface LibraryPaperMeta {
   /** 0-1;LLM 给的相关度。undefined = 还没打分 */
   relevanceScore?: number;
@@ -205,6 +224,10 @@ export interface UserLibrary {
   /** 每篇论文在本库内的元数据(Polaris library_papers 表的镜像)。
    *  key = canonicalArxivId,**永不含 vN**。老库没有 = `{}`。 */
   papers: Record<string, LibraryPaperMeta>;
+  /** 概念覆盖(Polaris concept_relink 镜像)。
+   *  key = concept slug,值可以是 displayName 重命名 / exclude 隐藏 /
+   *  canonicalSlug 合并到另一 slug。 */
+  conceptOverrides: Record<string, LibraryConceptOverride>;
 }
 
 /** 兜底 definition —— 用于老 v1 doc 没有 definition 字段时。 */
@@ -228,9 +251,11 @@ export function defaultLibraryDefinition(statement: string): LibraryDefinition {
  *  v2 加入 LibraryDefinition;老 v1 doc 加载时升级(in-place 把顶层字段拷到
  *  definition,保留原 statement / categories / keywords / rubric)。
  *  v3 加入 papers:Record<cx, LibraryPaperMeta>(Polaris library_papers 镜像),
- *  老 doc 加载时此字段兜底为 `{}`。 */
+ *  老 doc 加载时此字段兜底为 `{}`。
+ *  v4 加入 conceptOverrides:Record<slug, LibraryConceptOverride>
+ *  (Polaris concept_relink 镜像),老 doc 加载时此字段兜底为 `{}`。 */
 export interface UserLibrariesDoc {
-  schemaVersion: 3;
+  schemaVersion: 4;
   /** key = library.id,**永不含 vN**。 */
   libraries: Record<string, UserLibrary>;
 }

@@ -24,8 +24,10 @@ import {
   listLibrariesContainingPaper,
   listUserLibraries,
   removeLibraryAnchor,
+  removeLibraryConceptOverride,
   removePaperFromLibrary,
   renameLibrary,
+  setLibraryConceptOverride,
   setLibraryPaperMeta,
   setLibraryVisibility,
   updateLibraryDefinition,
@@ -1639,13 +1641,25 @@ function renderUserLibraryDetail(): void {
         <div class="wb-concepts-grid">
           ${topConcepts.length === 0
             ? '<p class="empty">库内还没有概念(论文还没挂概念时这里会空)。</p>'
-            : topConcepts.map((c) => `
-              <a class="wb-concepts-card" href="${url('/wiki/concepts/' + c.slug + '/')}" data-cat="${escapeHtml(c.category)}">
-                <p class="cc-name">${escapeHtml(c.display_name)}</p>
+            : topConcepts.map((c) => {
+              const ov = lib.conceptOverrides[c.slug] || {};
+              const displayName = ov.displayName || c.display_name;
+              const excluded = !!ov.exclude;
+              return `
+              <div class="wb-concepts-card${excluded ? ' cc-excluded' : ''}" data-cat="${escapeHtml(c.category)}" data-slug="${escapeHtml(c.slug)}">
+                <a class="cc-name" href="${url('/wiki/concepts/' + c.slug + '/')}">${escapeHtml(displayName)}</a>
                 <div class="cc-meta"><span>×${c.n} 篇</span></div>
                 <p class="cc-cat">${escapeHtml(c.category)}</p>
-              </a>
-            `).join('')}
+                <div class="cc-actions">
+                  <button type="button" class="btn btn-soft btn-sm" data-action="cc-rename" data-slug="${escapeHtml(c.slug)}" data-name="${escapeHtml(displayName)}">✏️ 重命名</button>
+                  ${excluded
+                    ? `<button type="button" class="btn btn-soft btn-sm" data-action="cc-unexclude" data-slug="${escapeHtml(c.slug)}">↩ 恢复</button>`
+                    : `<button type="button" class="btn btn-soft btn-sm" data-action="cc-exclude" data-slug="${escapeHtml(c.slug)}">⊘ 排除</button>`}
+                  ${(ov.displayName || ov.exclude) ? `<button type="button" class="btn btn-ghost btn-sm" data-action="cc-reset" data-slug="${escapeHtml(c.slug)}">↺ 默认</button>` : ''}
+                </div>
+                ${ov.note ? `<p class="cc-note">📝 ${escapeHtml(ov.note)}</p>` : ''}
+              </div>
+            `;}).join('')}
         </div>
       </div>
     </section>
@@ -1942,6 +1956,53 @@ function renderUserLibraryDetail(): void {
         const show = cat === 'all' || card.dataset.cat === cat;
         card.style.display = show ? '' : 'none';
       });
+    });
+  });
+
+  // 概念 relink(Polaris concept_relink):rename / exclude / unexclude / reset
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="cc-rename"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slug = btn.dataset.slug || '';
+      const orig = btn.dataset.name || '';
+      const v = window.prompt(`重命名概念(只在本库生效;0-64 字)\n\n原名: ${orig}`, orig);
+      if (v === null) return;
+      const t = v.trim();
+      if (!t || t === orig) return;
+      const res = setLibraryConceptOverride(lib.id, slug, { displayName: t });
+      if (!res.ok) showToast(getApiResultMessage(res), 'error');
+      else { showToast('已重命名', 'ok'); renderUserLibraryDetail(); }
+    });
+  });
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="cc-exclude"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slug = btn.dataset.slug || '';
+      const res = setLibraryConceptOverride(lib.id, slug, { exclude: true });
+      if (!res.ok) showToast(getApiResultMessage(res), 'error');
+      else { showToast('已排除(只在本库)', 'ok'); renderUserLibraryDetail(); }
+    });
+  });
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="cc-unexclude"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slug = btn.dataset.slug || '';
+      const res = setLibraryConceptOverride(lib.id, slug, { exclude: false });
+      if (!res.ok) showToast(getApiResultMessage(res), 'error');
+      else { showToast('已恢复', 'ok'); renderUserLibraryDetail(); }
+    });
+  });
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="cc-reset"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slug = btn.dataset.slug || '';
+      const res = removeLibraryConceptOverride(lib.id, slug);
+      if (!res.ok) showToast(getApiResultMessage(res), 'error');
+      else { showToast('已恢复默认', 'ok'); renderUserLibraryDetail(); }
     });
   });
 

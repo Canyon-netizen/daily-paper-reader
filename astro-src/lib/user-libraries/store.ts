@@ -28,6 +28,7 @@ import type { DprUserLibrariesChangeReason } from '../events';
 import { STORAGE_KEYS } from '../storage';
 import type {
   LibraryAnchor,
+  LibraryConceptOverride,
   LibraryDefinition,
   LibraryHue,
   LibraryPaperMeta,
@@ -39,7 +40,7 @@ import type {
 } from './types';
 import { defaultLibraryDefinition } from './types';
 
-export const USER_LIBRARIES_SCHEMA_VERSION = 3;
+export const USER_LIBRARIES_SCHEMA_VERSION = 4;
 
 const KEY = STORAGE_KEYS.userLibraries;
 
@@ -125,6 +126,7 @@ export function loadUserLibraries(): UserLibrariesDoc {
           ? l.visibility
           : 'personal',
         papers: sanitizePaperMetas(l.papers),
+        conceptOverrides: sanitizeConceptOverrides(l.conceptOverrides),
       };
     }
     return { schemaVersion: USER_LIBRARIES_SCHEMA_VERSION, libraries: libs };
@@ -233,6 +235,30 @@ function sanitizePaperMetas(input: unknown): Record<string, LibraryPaperMeta> {
       entry.trashReason = m.trashReason.trim().slice(0, 80);
     }
     out[cx] = entry;
+  }
+  return out;
+}
+
+/** 清洗 conceptOverrides:Record<slug, LibraryConceptOverride>。Polaris concept_relink 镜像。 */
+function sanitizeConceptOverrides(input: unknown): Record<string, LibraryConceptOverride> {
+  if (!input || typeof input !== 'object') return {};
+  const out: Record<string, LibraryConceptOverride> = {};
+  for (const [slug, raw] of Object.entries(input as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const o = raw as Partial<LibraryConceptOverride>;
+    const entry: LibraryConceptOverride = {};
+    if (typeof o.displayName === 'string' && o.displayName.trim()) {
+      entry.displayName = o.displayName.trim().slice(0, 64);
+    }
+    if (typeof o.canonicalSlug === 'string' && o.canonicalSlug.trim()) {
+      entry.canonicalSlug = o.canonicalSlug.trim().slice(0, 64);
+    }
+    if (typeof o.note === 'string' && o.note.trim()) {
+      entry.note = o.note.trim().slice(0, 100);
+    }
+    if (typeof o.exclude === 'boolean') entry.exclude = o.exclude;
+    // 至少一个字段非空才保留(否则是空 override,丢)
+    if (Object.keys(entry).length > 0) out[slug] = entry;
   }
   return out;
 }
@@ -370,7 +396,7 @@ function commit(
   const doc = loadUserLibraries();
   const prev = doc.libraries[id];
   const next: UserLibrary = prev
-    ? { ...prev, paperIds: prev.paperIds.slice(), papers: { ...(prev.papers || {}) } }
+    ? { ...prev, paperIds: prev.paperIds.slice(), papers: { ...(prev.papers || {}) }, conceptOverrides: { ...(prev.conceptOverrides || {}) } }
     : {
         id,
         name: '',
@@ -384,6 +410,7 @@ function commit(
         createdAt: 0,
         updatedAt: 0,
         papers: {},
+        conceptOverrides: {},
       };
 
   const before = JSON.stringify(prev ?? null);
@@ -476,6 +503,7 @@ export function createLibrary(input: {
   definition?: Partial<LibraryDefinition>;
   visibility?: 'personal' | 'pending' | 'public';
   papers?: Record<string, LibraryPaperMeta>;
+  conceptOverrides?: Record<string, LibraryConceptOverride>;
 }): WriteResult & { id?: string } {
   const id = genId();
   const result = commit(id, 'create', (entry, { setOptionalLists }) => {
@@ -507,6 +535,7 @@ export function createLibrary(input: {
     });
     entry.visibility = input.visibility || 'personal';
     entry.papers = sanitizePaperMetas(input.papers);
+    entry.conceptOverrides = sanitizeConceptOverrides(input.conceptOverrides);
   });
   if (result.ok) return { ...result, id };
   return result;
@@ -744,6 +773,54 @@ export function getLibraryPaperMeta(
 /** 读:整 library 的 paper metas(caller 自己 filter status)。 */
 export function listLibraryPaperMetas(libraryId: string): Record<string, LibraryPaperMeta> {
   return getUserLibrary(libraryId)?.papers || {};
+}
+
+/** 设置某个概念的覆盖(Polaris concept_relink 镜像)。
+ *  - patch 只传你想改的字段(undefined = 不动)
+ *  - 传 `{ exclude: undefined }` 想删 exclude 字段?做不到 —— 用 removeLibraryConceptOverride。 */
+export function setLibraryConceptOverride(
+  libraryId: string,
+  slug: string,
+  patch: Partial<LibraryConceptOverride>,
+): WriteResult {
+  return commit(libraryId, 'concept-override', (entry) => {
+    const cur = entry.conceptOverrides[slug] || {};
+    const next: LibraryConceptOverride = { ...cur, ...patch };
+    if (
+      cur.displayName === next.displayName &&
+      cur.exclude === next.exclude &&
+      cur.canonicalSlug === next.canonicalSlug &&
+      cur.note === next.note
+    ) return false;
+    entry.conceptOverrides = { ...entry.conceptOverrides, [slug]: next };
+  });
+}
+
+/** 删一个 concept override(把概念恢复到默认显示名 + 不 exclude)。 */
+export function removeLibraryConceptOverride(libraryId: string, slug: string): WriteResult {
+  return commit(libraryId, 'concept-override-remove', (entry) => {
+    if (!(slug in entry.conceptOverrides)) return false;
+    const next = { ...entry.conceptOverrides };
+    delete next[slug];
+    entry.conceptOverrides = next;
+  });
+}
+
+/** 读:一个概念在某 library 的最终显示信息(override 优先,fallback 到原始)。
+ *  概念原始信息 caller 自己从 paper.concepts 聚合。 */
+export function getLibraryConceptDisplay(
+  libraryId: string,
+  slug: string,
+  original: { display_name: string; category: string; n: number },
+): { displayName: string; category: string; n: number; excluded: boolean; note?: string } {
+  const ov = getUserLibrary(libraryId)?.conceptOverrides[slug] || {};
+  return {
+    displayName: ov.displayName || original.display_name,
+    category: original.category,
+    n: original.n,
+    excluded: !!ov.exclude,
+    ...(ov.note ? { note: ov.note } : {}),
+  };
 }
 
 /**

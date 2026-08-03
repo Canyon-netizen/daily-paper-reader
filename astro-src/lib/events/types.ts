@@ -71,7 +71,9 @@ export type DprUserLibrariesChangeReason =
   | 'anchor-add'
   | 'anchor-remove'
   | 'paper-meta'
-  | 'paper-meta-remove';
+  | 'paper-meta-remove'
+  | 'concept-override'
+  | 'concept-override-remove';
 
 export interface DprUserLibrariesChangeDetail {
   /** 受影响的 library id。'create' / 'sync' / 'reset' 可能很多条。 */

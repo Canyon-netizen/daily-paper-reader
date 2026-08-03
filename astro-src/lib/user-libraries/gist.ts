@@ -81,6 +81,7 @@ export function deserializeUserLibraries(block: unknown): UserLibrariesDoc | nul
       createdAt: typeof l.createdAt === 'number' ? l.createdAt : 0,
       updatedAt: typeof l.updatedAt === 'number' ? l.updatedAt : 0,
       papers: {},
+      conceptOverrides: {},
     };
   }
   return { schemaVersion: USER_LIBRARIES_SCHEMA_VERSION, libraries: libs };
