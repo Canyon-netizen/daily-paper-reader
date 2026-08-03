@@ -16,13 +16,20 @@
 import { canonicalArxivId } from '../lib/arxiv';
 import { onDprUserLibrariesChange } from '../lib/events';
 import {
+  addLibraryAnchor,
   addPaperToLibrary,
   createLibrary,
   deleteLibrary,
+  getUserLibrary,
   listLibrariesContainingPaper,
   listUserLibraries,
+  removeLibraryAnchor,
   removePaperFromLibrary,
   renameLibrary,
+  setLibraryVisibility,
+  updateLibraryDefinition,
+  defaultLibraryDefinition,
+  type LibraryAnchor,
   type LibraryHue,
   type LibraryRubricItem,
   type UserLibrary,
@@ -43,6 +50,12 @@ function escapeHtml(s: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/** 渲染 string[] 列表(govern tab 用);空数组 fallback 到 empty 文案。 */
+function renderList(items: string[] | undefined, empty: string): string {
+  if (!items || items.length === 0) return `<em class="empty">${escapeHtml(empty)}</em>`;
+  return `<ul class="govern-list">${items.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul>`;
 }
 
 function fmtDateShort(ts: number): string {
@@ -227,7 +240,7 @@ function bindListInput(
     listKey: 'categories' | 'inclusion' | 'exclusion' | 'rubric';
     presetAttr?: string; // 对 categories:preset chip 的 selector
   },
-): { tags: string[]; refresh: () => void; reset: () => void; rubric: LibraryRubricItem[] } {
+): { tags: string[]; refresh: () => void; reset: () => void; loadFrom: (items: string[]) => void; rubric: LibraryRubricItem[] } {
   const isRubric = opts.listKey === 'rubric';
   const input = modal.querySelector<HTMLInputElement>(
     isRubric ? '[data-rubric-input]' : `[data-${opts.listKey === 'categories' ? 'categories' : opts.listKey === 'inclusion' ? 'incl' : 'excl'}-input]`,
@@ -366,6 +379,12 @@ function bindListInput(
       input.value = '';
       render();
     },
+    loadFrom: (items: string[]) => {
+      strItems = isRubric ? [] : items.slice();
+      rubricItems = isRubric ? items.slice().map((name) => ({ name: name.slice(0, 32) })) : [];
+      input.value = '';
+      render();
+    },
   };
 }
 
@@ -374,6 +393,95 @@ interface ModalControls {
   inclusion: ReturnType<typeof bindListInput>;
   exclusion: ReturnType<typeof bindListInput>;
   rubric: ReturnType<typeof bindListInput>;
+}
+
+interface AnchorControl {
+  get: () => LibraryAnchor[];
+  reset: () => void;
+  loadFrom: (anchors: LibraryAnchor[]) => void;
+}
+
+/** 锚点论文控件。Polaris LibraryDefinition.anchors 在 P8a JSONB 里,
+ *  UI 上需要可增可删。每行 kind badge + value + 可选 note + 删除。 */
+function bindAnchorControl(modal: HTMLElement): AnchorControl {
+  const rowsEl = modal.querySelector<HTMLElement>('[data-anchor-rows]')!;
+  const kindSel = modal.querySelector<HTMLSelectElement>('[data-anchor-kind]')!;
+  const valueInput = modal.querySelector<HTMLInputElement>('[data-anchor-value]')!;
+  const addBtn = modal.querySelector<HTMLButtonElement>('[data-anchor-add]')!;
+
+  let items: LibraryAnchor[] = [];
+
+  function render(): void {
+    if (items.length === 0) {
+      rowsEl.innerHTML = '<span class="lib-tag-empty">— 暂未添加锚点 —</span>';
+      return;
+    }
+    rowsEl.innerHTML = items
+      .map(
+        (a, idx) => `
+        <div class="lib-anchor-row" data-idx="${idx}">
+          <span class="kind-badge kind-${a.kind}">${escapeHtml(a.kind)}</span>
+          <span class="value">${escapeHtml(a.value)}</span>
+          ${a.note ? `<span class="note">${escapeHtml(a.note)}</span>` : ''}
+          <button type="button" class="lib-anchor-rm" aria-label="删除锚点">×</button>
+        </div>
+      `,
+      )
+      .join('');
+    rowsEl.querySelectorAll<HTMLButtonElement>('.lib-anchor-rm').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const row = btn.closest<HTMLElement>('.lib-anchor-row');
+        const idx = Number(row?.dataset.idx);
+        if (Number.isFinite(idx)) {
+          items.splice(idx, 1);
+          render();
+        }
+      });
+    });
+  }
+
+  function add(): void {
+    const kind = (kindSel.value === 'arxiv' || kindSel.value === 'doi' || kindSel.value === 'free')
+      ? kindSel.value
+      : 'free';
+    const v = valueInput.value.trim();
+    if (!v) return;
+    if (items.some((a) => a.kind === kind && a.value.toLowerCase() === v.toLowerCase())) {
+      showToast('已存在相同锚点', 'info');
+      return;
+    }
+    if (items.length >= 32) {
+      showToast('锚点最多 32 条', 'error');
+      return;
+    }
+    // 询问 note(prompt) — Polaris 留 note 字段;可选。
+    const note = window.prompt('这个锚点为什么相关?(可选,1-100 字)')?.trim() || undefined;
+    items.push({ kind, value: v.slice(0, 200), ...(note ? { note: note.slice(0, 100) } : {}) });
+    valueInput.value = '';
+    render();
+  }
+
+  addBtn.addEventListener('click', add);
+  valueInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      add();
+    }
+  });
+
+  render();
+  return {
+    get: () => items.slice(),
+    reset: () => {
+      items = [];
+      render();
+      valueInput.value = '';
+    },
+    loadFrom: (anchors) => {
+      items = anchors.slice();
+      render();
+    },
+  };
 }
 
 /** 在弹窗上装好四个 list 控件并 reset 到空态。返回 handlers 让 caller 在 reset/close 时复用。 */
@@ -388,6 +496,12 @@ function setupModalControls(modal: HTMLElement): ModalControls {
 
 function closeModal(modal: HTMLElement): void {
   modal.style.display = 'none';
+  // 清 edit 模式
+  delete modal.dataset.editId;
+  const titleEl = modal.querySelector<HTMLElement>('#new-library-modal-title');
+  if (titleEl) titleEl.textContent = '新建文献库';
+  const submitBtn = modal.querySelector<HTMLButtonElement>('[data-modal-submit]');
+  if (submitBtn) submitBtn.textContent = '创建个人文献库';
   // 清空 + 重置状态
   const form = modal.querySelector<HTMLFormElement>('form');
   form?.reset();
@@ -410,11 +524,24 @@ function closeModal(modal: HTMLElement): void {
     controls.exclusion.reset();
     controls.rubric.reset();
   }
+  // 锚点控件
+  const anchorCtl = anchorControlByModal.get(modal);
+  if (anchorCtl) anchorCtl.reset();
+  // 清空 P8a 多行文本
+  modal.querySelectorAll<HTMLTextAreaElement>('[data-modal-goals],[data-modal-in-scope],[data-modal-out-of-scope],[data-modal-questions]').forEach((el) => {
+    el.value = '';
+  });
+  // 重置 select 默认值
+  const visSel = modal.querySelector<HTMLSelectElement>('[data-modal-visibility]');
+  if (visSel) visSel.value = 'personal';
+  const cadSel = modal.querySelector<HTMLSelectElement>('[data-modal-cadence]');
+  if (cadSel) cadSel.value = 'manual';
 }
 
 /** 同一 modal 节点在不同打开轮次复用同一组 controls;
  *  关闭时全部清空 + reset。 */
 const controlsByModal = new WeakMap<HTMLElement, ModalControls>();
+const anchorControlByModal = new WeakMap<HTMLElement, AnchorControl>();
 
 function bindHuePicker(modal: HTMLElement): void {
   const chips = modal.querySelectorAll<HTMLElement>('.lib-hue-chip');
@@ -428,6 +555,98 @@ function bindHuePicker(modal: HTMLElement): void {
   });
 }
 
+/** 多行文本 → string[];空串丢,空白折叠,长度限制,maxItems 兜底。 */
+function parseSentences(raw: string, maxItems: number, maxLen: number): string[] {
+  if (!raw) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of raw.split(/\n+/)) {
+    const v = line.trim().replace(/\s+/g, ' ');
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(v.slice(0, maxLen));
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+/** 把 library 现有 definition 回填到 modal(编辑模式) */
+function fillModalFromLibrary(modal: HTMLElement, lib: UserLibrary): void {
+  // 基础
+  const nameInput = modal.querySelector<HTMLInputElement>('[data-modal-name]');
+  if (nameInput) nameInput.value = lib.name;
+  const stmt = modal.querySelector<HTMLTextAreaElement>('[data-modal-statement]');
+  if (stmt) stmt.value = lib.statement;
+  const hueInput = modal.querySelector<HTMLInputElement>('[data-modal-hue]');
+  if (hueInput) hueInput.value = lib.hue;
+  modal.querySelectorAll<HTMLElement>('.lib-hue-chip').forEach((el) => {
+    el.classList.toggle('active', el.dataset.hue === lib.hue);
+  });
+
+  // visibility + cadence
+  const visSel = modal.querySelector<HTMLSelectElement>('[data-modal-visibility]');
+  if (visSel) visSel.value = lib.visibility || 'personal';
+  const cadSel = modal.querySelector<HTMLSelectElement>('[data-modal-cadence]');
+  const def = lib.definition || defaultLibraryDefinition(lib.statement);
+  if (cadSel) cadSel.value = def.cadence;
+
+  // P8a 字段
+  const goalsTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-goals]');
+  if (goalsTA) goalsTA.value = def.goals.join('\n');
+  const inScopeTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-in-scope]');
+  if (inScopeTA) inScopeTA.value = def.inScope.join('\n');
+  const outScopeTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-out-of-scope]');
+  if (outScopeTA) outScopeTA.value = def.outOfScope.join('\n');
+  const questionsTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-questions]');
+  if (questionsTA) questionsTA.value = def.questions.join('\n');
+}
+
+/** 编辑模式:把 library.definition.anchors + 已加入 paperIds 之外的 arxiv-id
+ *  显示在锚点控件里。Polaris 实际只把「外部种子论文」放 anchors,library 内
+ *  已有论文由 paperIds 自动 included。 */
+function openEditLibraryModal(modal: HTMLElement, libId: string): boolean {
+  const lib = getUserLibrary(libId);
+  if (!lib) {
+    showToast(`找不到文献库 ${libId.slice(0, 8)}`, 'error');
+    return false;
+  }
+  // 标题切到「编辑」
+  const titleEl = modal.querySelector<HTMLElement>('#new-library-modal-title');
+  if (titleEl) titleEl.textContent = `编辑「${lib.name}」`;
+  const submitBtn = modal.querySelector<HTMLButtonElement>('[data-modal-submit]');
+  if (submitBtn) submitBtn.textContent = '保存修改';
+
+  // 标 edit 模式
+  modal.dataset.editId = libId;
+
+  fillModalFromLibrary(modal, lib);
+
+  // 控制依赖(创建阶段 setupModalControls 已经 bind;close 时 reset)
+  const controls = controlsByModal.get(modal);
+  if (controls) {
+    controls.categories.loadFrom?.(lib.categories);
+    controls.inclusion.loadFrom?.(lib.inclusionKeywords);
+    controls.exclusion.loadFrom?.(lib.exclusionKeywords);
+    controls.rubric.loadFrom?.(lib.rubric.map((r) => r.name));
+  }
+  // anchors 控件(创建阶段已 bind;现在 load)
+  const anchorCtl = anchorControlByModal.get(modal);
+  if (anchorCtl) {
+    anchorCtl.loadFrom(lib.definition?.anchors || []);
+  } else {
+    // 没 bind(SSR 后没初始化过):补一次 bind 然后 load
+    const ctl = bindAnchorControl(modal);
+    ctl.loadFrom(lib.definition?.anchors || []);
+    anchorControlByModal.set(modal, ctl);
+  }
+  modal.style.display = 'flex';
+  const nameInput = modal.querySelector<HTMLInputElement>('[data-modal-name]');
+  setTimeout(() => nameInput?.focus(), 30);
+  return true;
+}
+
 function setupNewLibraryModal(): void {
   const modal = document.querySelector<HTMLElement>('[data-new-library-modal]');
   if (!modal) return;
@@ -439,13 +658,34 @@ function setupNewLibraryModal(): void {
 
   // 初始化 list 控件
   controlsByModal.set(modal, setupModalControls(modal));
+  // 初始化 anchors 控件(只 bind 一次)
+  if (!anchorControlByModal.has(modal)) {
+    anchorControlByModal.set(modal, bindAnchorControl(modal));
+  }
 
   // 打开:全局所有 [data-open-new-library] 触发
   document.querySelectorAll<HTMLElement>('[data-open-new-library]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
+      // 切到「新建」态
+      delete modal.dataset.editId;
+      const titleEl = modal.querySelector<HTMLElement>('#new-library-modal-title');
+      if (titleEl) titleEl.textContent = '新建文献库';
+      const submitBtn = modal.querySelector<HTMLButtonElement>('[data-modal-submit]');
+      if (submitBtn) submitBtn.textContent = '创建个人文献库';
       openModal(modal);
+    });
+  });
+
+  // 编辑:任意位置 [data-edit-library="<id>"]
+  document.querySelectorAll<HTMLElement>('[data-edit-library]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = btn.dataset.editLibrary || '';
+      if (!id) return;
+      openEditLibraryModal(modal, id);
     });
   });
 
@@ -458,7 +698,7 @@ function setupNewLibraryModal(): void {
   // hue picker
   bindHuePicker(modal);
 
-  // 提交
+  // 提交(同时覆盖新建 + 编辑两种模式)
   const form = modal.querySelector<HTMLFormElement>('form');
   form?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -502,31 +742,93 @@ function setupNewLibraryModal(): void {
     const exclusionKeywords = controls?.exclusion.tags ?? [];
     const rubric = controls?.rubric.rubric ?? [];
 
+    // 新字段
+    const visibility = (form.querySelector<HTMLSelectElement>('[data-modal-visibility]')?.value as 'personal' | 'pending' | 'public') || 'personal';
+    const cadence = (form.querySelector<HTMLSelectElement>('[data-modal-cadence]')?.value as 'manual' | 'daily' | 'weekly' | 'monthly') || 'manual';
+    const goals = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-goals]')?.value || '', 3, 200);
+    const inScope = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-in-scope]')?.value || '', 8, 80);
+    const outOfScope = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-out-of-scope]')?.value || '', 8, 80);
+    const questions = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-questions]')?.value || '', 8, 200);
+    const anchors = anchorControlByModal.get(modal)?.get() ?? [];
+
     const submitBtn = form.querySelector<HTMLButtonElement>('[data-modal-submit]');
     if (submitBtn) submitBtn.disabled = true;
-    const res = createLibrary({
-      name,
-      statement,
-      hue,
-      categories,
-      inclusionKeywords,
-      exclusionKeywords,
-      rubric,
-    });
-    if (!res.ok || !res.id) {
-      const msg = getApiResultMessage(res) || '创建失败';
-      showToast(msg, 'error');
+    try {
+      const editId = modal.dataset.editId;
+      if (editId) {
+        // 编辑模式
+        const r1 = renameLibrary(editId, { name, statement, hue, categories, inclusionKeywords, exclusionKeywords, rubric });
+        if (!r1.ok) {
+          showToast(getApiResultMessage(r1) || '保存失败', 'error');
+          return;
+        }
+        const r2 = updateLibraryDefinition(editId, {
+          statement,
+          cadence,
+          anchors,
+          keywords: {
+            arxivCategories: categories,
+            include: inclusionKeywords,
+            exclude: exclusionKeywords,
+          },
+          rubric,
+          goals,
+          inScope,
+          outOfScope,
+          questions,
+        });
+        if (!r2.ok) {
+          showToast(getApiResultMessage(r2) || '保存失败', 'error');
+          return;
+        }
+        const r3 = setLibraryVisibility(editId, visibility);
+        if (!r3.ok) {
+          showToast(getApiResultMessage(r3) || '可见性保存失败', 'error');
+          return;
+        }
+        showToast(`已保存「${name}」`, 'ok');
+        closeModal(modal);
+        // 触发详情视图重渲染(在 /libraries/?id=<editId> 上)
+        document.dispatchEvent(new CustomEvent('dpr:user-library-edit', { detail: { id: editId } }));
+        return;
+      }
+
+      // 新建模式
+      const res = createLibrary({
+        name,
+        statement,
+        hue,
+        categories,
+        inclusionKeywords,
+        exclusionKeywords,
+        rubric,
+        visibility,
+        definition: {
+          statement,
+          cadence,
+          anchors,
+          keywords: {
+            arxivCategories: categories,
+            include: inclusionKeywords,
+            exclude: exclusionKeywords,
+          },
+          rubric,
+          goals,
+          inScope,
+          outOfScope,
+          questions,
+        },
+      });
+      if (!res.ok || !res.id) {
+        showToast(getApiResultMessage(res) || '创建失败', 'error');
+        return;
+      }
+      showToast(`已创建「${name}」`, 'ok');
+      closeModal(modal);
+      window.location.href = url(`/libraries/?id=${encodeURIComponent(res.id)}`);
+    } finally {
       if (submitBtn) submitBtn.disabled = false;
-      return;
     }
-    showToast(`已创建「${name}」`, 'ok');
-    if (submitBtn) submitBtn.disabled = false;
-    closeModal(modal);
-    // 跳详情页(Polaris NewLibraryModal 行为一致)。
-    // DPR 静态站不能用 /libraries/<id>/(那是 getStaticPaths 预渲染 7 个公共库,
-    // 走不到运行时生成的 user library id),所以用 /libraries/?id=<id> 走
-    // /libraries/ 页的客户端 query-string 模式渲染详情。
-    window.location.href = url(`/libraries/?id=${encodeURIComponent(res.id)}`);
   });
 }
 
@@ -856,9 +1158,8 @@ function renderUserLibraryDetail(): void {
           </span>
         </div>
         <div class="lib-detail-actions">
-          <button type="button" class="btn btn-soft btn-sm" data-action="rename" data-lib-id="${escapeHtml(lib.id)}">✏️ 重命名 / 改描述</button>
-          <button type="button" class="btn btn-soft btn-sm" data-action="hue" data-lib-id="${escapeHtml(lib.id)}">🎨 改颜色</button>
-          <button type="button" class="btn btn-danger btn-sm" data-action="delete" data-lib-id="${escapeHtml(lib.id)}">🗑 删除文献库</button>
+          <button type="button" class="btn btn-soft btn-sm" data-action="edit" data-lib-id="${escapeHtml(lib.id)}">📝 编辑文献库(全部)</button>
+          <button type="button" class="btn btn-soft btn-sm" data-action="delete" data-lib-id="${escapeHtml(lib.id)}">🗑 删除文献库</button>
         </div>
       </div>
       <div class="library-wb-export">
@@ -873,6 +1174,7 @@ function renderUserLibraryDetail(): void {
       <a class="lib-wb-tab active" href="#papers" data-tab="papers">📄 论文库 <span class="tab-count">${papers.length}</span></a>
       <a class="lib-wb-tab" href="#concepts" data-tab="concepts">🕸 概念库 <span class="tab-count">${topConcepts.length}</span></a>
       <a class="lib-wb-tab" href="#notes" data-tab="notes">📝 笔记 <span class="tab-count">—</span></a>
+      <a class="lib-wb-tab" href="#govern" data-tab="govern">⚙️ 文献库配置 <span class="tab-count">P8a</span></a>
       <a class="back" href="${url('/libraries/')}">← 所有文献库</a>
     </nav>
 
@@ -946,6 +1248,65 @@ function renderUserLibraryDetail(): void {
       </div>
     </section>
 
+    <section id="govern-panel" class="library-wb-panel" data-panel="govern">
+      <div class="wb-govern">
+        <div class="govern-header">
+          <h3>文献库配置(P8a LibraryDefinition)</h3>
+          <button type="button" class="btn btn-soft btn-sm" data-action="edit" data-lib-id="${escapeHtml(lib.id)}">📝 编辑</button>
+        </div>
+        <dl class="govern-dl">
+          <dt>可见性</dt>
+          <dd>
+            <span class="lib-visibility-pill vis-${escapeHtml(lib.visibility || 'personal')}">${escapeHtml({
+              personal: '个人(仅本机 + Gist)',
+              pending: '申请公开(请求中)',
+              public: '公开(已发布)',
+            }[lib.visibility || 'personal'])}</span>
+          </dd>
+          <dt>同步节奏</dt>
+          <dd>${escapeHtml((lib.definition?.cadence || 'manual'))}</dd>
+          <dt>研究方向陈述</dt>
+          <dd>${escapeHtml(lib.statement)}</dd>
+          <dt>分类 / 包括 / 排除关键词</dt>
+          <dd>
+            ${lib.categories.map((c) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join('')}
+            ${lib.inclusionKeywords.length > 0 ? '<div>包括:' + lib.inclusionKeywords.map((k) => `<span class="lib-tag include">${escapeHtml(k)}</span>`).join('') + '</div>' : ''}
+            ${lib.exclusionKeywords.length > 0 ? '<div>排除:' + lib.exclusionKeywords.map((k) => `<span class="lib-tag exclude">${escapeHtml(k)}</span>`).join('') + '</div>' : ''}
+            ${lib.categories.length + lib.inclusionKeywords.length + lib.exclusionKeywords.length === 0 ? '<em class="empty">— 未设置 —</em>' : ''}
+          </dd>
+          <dt>打分维度(rubric)</dt>
+          <dd>
+            ${lib.rubric.length > 0 ? lib.rubric.map((r) => `<span class="lib-tag">${escapeHtml(r.name)}</span>`).join('') : '<em class="empty">— 未设置 —</em>'}
+          </dd>
+          <dt>库目标(goals)</dt>
+          <dd>${renderList(lib.definition?.goals, '— 未设置 —')}</dd>
+          <dt>范围内(in scope)</dt>
+          <dd>${renderList(lib.definition?.inScope, '— 未设置 —')}</dd>
+          <dt>范围外(out of scope)</dt>
+          <dd>${renderList(lib.definition?.outOfScope, '— 未设置 —')}</dd>
+          <dt>研究问题</dt>
+          <dd>${renderList(lib.definition?.questions, '— 未设置 —')}</dd>
+          <dt>锚点论文</dt>
+          <dd>
+            ${lib.definition?.anchors && lib.definition.anchors.length > 0
+              ? lib.definition.anchors.map((a) => `
+                  <div class="lib-anchor-row">
+                    <span class="kind-badge kind-${escapeHtml(a.kind)}">${escapeHtml(a.kind)}</span>
+                    <span class="value">${escapeHtml(a.value)}</span>
+                    ${a.note ? `<span class="note">${escapeHtml(a.note)}</span>` : ''}
+                  </div>
+                `).join('')
+              : '<em class="empty">— 未设置 —</em>'}
+          </dd>
+        </dl>
+        <p class="lib-edit-hint">
+          配置变化后,顶部的论文列表会按新的 statement / 关键词重新过滤;
+          想立刻按新方向给库内论文打分,
+          <button type="button" class="linklike" data-action="rescore" data-lib-id="${escapeHtml(lib.id)}">点这里重打分</button>。
+        </p>
+      </div>
+    </section>
+
     <section id="notes-panel" class="library-wb-panel" data-panel="notes">
       <div class="wb-notes">
         <p class="empty">
@@ -967,7 +1328,7 @@ function renderUserLibraryDetail(): void {
   `;
 
   // tab 切换
-  const VALID_TABS = ['papers', 'concepts', 'notes'] as const;
+  const VALID_TABS = ['papers', 'concepts', 'notes', 'govern'] as const;
   type Tab = typeof VALID_TABS[number];
   function setActiveTab(tab: Tab) {
     mount.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
@@ -978,7 +1339,7 @@ function renderUserLibraryDetail(): void {
     });
   }
   function syncFromHash() {
-    const m = window.location.hash.match(/^#(papers|concepts|notes)$/);
+    const m = window.location.hash.match(/^#(papers|concepts|notes|govern)$/);
     if (m) setActiveTab(m[1] as Tab);
   }
   mount.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
@@ -1051,37 +1412,24 @@ function renderUserLibraryDetail(): void {
     });
   });
 
-  // 顶部按钮(重命名 / 改 hue / 删除)
-  mount.querySelector<HTMLButtonElement>('[data-action="rename"]')?.addEventListener('click', () => {
-    const newName = window.prompt('新名称(1-32 字)', lib.name);
-    if (newName === null) return;
-    const newStmt = window.prompt('新方向描述(1-200 字)', lib.statement);
-    if (newStmt === null) return;
-    const res = renameLibrary(lib.id, { name: newName, statement: newStmt });
-    if (!res.ok) {
-      showToast(getApiResultMessage(res), 'error');
-    } else {
-      showToast('已更新', 'ok');
-      // 重渲
-      renderUserLibraryDetail();
-    }
+  // 顶部按钮(编辑 / 删除)
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="edit"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const modal = document.querySelector<HTMLElement>('[data-new-library-modal]');
+      if (!modal) return;
+      const id = btn.dataset.libId || lib.id;
+      openEditLibraryModal(modal, id);
+    });
   });
-  mount.querySelector<HTMLButtonElement>('[data-action="hue"]')?.addEventListener('click', () => {
-    const list = HUE_LIST.join(' / ');
-    const v = window.prompt(`新颜色(7 选 1):\n${list}\n\n当前:${lib.hue}`, lib.hue);
-    if (!v) return;
-    const hue = v.trim() as LibraryHue;
-    if (!HUE_LIST.includes(hue)) {
-      showToast(`无效颜色,允许值:${list}`, 'error');
-      return;
-    }
-    const res = renameLibrary(lib.id, { hue });
-    if (!res.ok) {
-      showToast(getApiResultMessage(res), 'error');
-    } else {
-      showToast('已改颜色', 'ok');
-      renderUserLibraryDetail();
-    }
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="rescore"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showToast('正在按新方向给库内论文重打分 — 见 PapersTab', 'info');
+      window.location.hash = '#papers';
+    });
   });
   mount.querySelector<HTMLButtonElement>('[data-action="delete"]')?.addEventListener('click', () => {
     const ok = window.confirm(
@@ -1286,6 +1634,12 @@ function bootstrap(): void {
   setupAddToLibraryButtons();
   renderUserLibraryDetail();
   setupTypeFilter();
+
+  // 编辑 modal 保存后刷新详情(沿用 dpr:user-libraries-change 已经会刷新卡片,
+  // 但 detail 视图是 SSR-空壳 + 客户端挂载,需要在 save 后主动重渲)
+  document.addEventListener('dpr:user-library-edit', () => {
+    renderUserLibraryDetail();
+  });
 }
 
 if (typeof window !== 'undefined') {

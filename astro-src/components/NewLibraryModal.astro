@@ -1,17 +1,27 @@
 ---
-// /components/NewLibraryModal.astro — 新建文献库弹窗
+// /components/NewLibraryModal.astro — 新建 / 编辑文献库弹窗(2026-08 升级)
 //
-// 对照 Polaris NewLibraryModal.tsx 的字段:
+// 双模式:同一个 modal 既能「新建」也能「编辑」某条已有 library。
+// 模式由 modal 根上的 `data-edit-id="<libraryId>"` 决定:有值 = 编辑,空 = 新建。
+// JS 控制器 user-libraries-ui.ts 的 setupLibraryFormModal() 通用接管。
+//
+// 对照 Polaris NewLibraryModal.tsx + InclusionSettingsForm 的字段:
 //
 // 必填:
 //   - name              1-32 字(Polaris 也要求)
 //   - statement         1-200 字(Polaris 强调,挑论文/打分都靠它)
-// 可选:
-//   - hue               7 色挑一,卡片左竖条颜色(本仓库视觉约定)
-//   - categories        arXiv 学科分类 chips(cs.CL / cs.AI ...)
-//   - inclusionKeywords 必须命中的关键词(命中打分)
-//   - exclusionKeywords 命中则剔除的关键词
-//   - rubric            自定义打分维度(空数组 = 未设维度)
+// 可选(基础):
+//   - hue               7 色挑一,卡片左竖条颜色
+//   - visibility        personal / pending / public(Polaris 的 status 状态机,DPR 单人站保留语义)
+//   - cadence           manual / daily / weekly / monthly(Polaris 也用,DPR 仅 UI label)
+// P8a LibraryDefinition(Polaris direction_libraries.definition JSONB):
+//   - goals[]           库目标(最多 3 条)
+//   - inScope[]         范围内主题(最多 8 条)
+//   - outOfScope[]      范围外(最多 8 条)
+//   - questions[]       要回答的研究问题(最多 8 条)
+//   - anchors[]         种子论文(arxiv/doi/free,带 note)
+// 其余字段沿用 v1 老 schema:categories / inclusionKeywords / exclusionKeywords / rubric
+//
 // 不做:
 //   - AI 访谈生成 statement —— Polaris 的 LLM hook,本仓库静态站无服务端 LLM,
 //     用户手写 statement 即可,留作 follow-up。
@@ -24,7 +34,7 @@
 // 引入方式:
 //   1. 在 BaseLayout 之前 import(不必要);2. 在 /libraries/ / 首页 footer 之前
 //   直接 <NewLibraryModal /> 一次(全局唯一实例)。点 [data-open-new-library]
-//   任意位置的按钮都会打开它。
+//   任意位置的按钮都会打开它;点 [data-edit-library="<id>"] 会打开编辑模式。
 ---
 
 <div
@@ -71,6 +81,97 @@
           ></textarea>
           <div class="lib-field-hint">1-200 字。这句话会显示在卡片上,让你以后翻找时一眼认出来。</div>
           <div class="lib-field-error" data-modal-stmt-err></div>
+        </div>
+
+        {/* 可见性 + 同步频率 —— Polaris 把这两项放在 definition JSON 里,
+            UI 上贴近基础信息更直观。 */}
+        <div class="lib-field-row">
+          <div class="lib-field">
+            <label class="lib-field-label" for="new-lib-visibility">可见性</label>
+            <select id="new-lib-visibility" class="lib-input" data-modal-visibility>
+              <option value="personal">个人(仅本机 + Gist)</option>
+              <option value="pending">申请公开(请求中)</option>
+              <option value="public">公开(已发布)</option>
+            </select>
+            <div class="lib-field-hint">Polaris 状态机;DPR 客户端标记,跨设备同步时对齐。</div>
+          </div>
+          <div class="lib-field">
+            <label class="lib-field-label" for="new-lib-cadence">同步节奏</label>
+            <select id="new-lib-cadence" class="lib-input" data-modal-cadence>
+              <option value="manual">手动</option>
+              <option value="daily">每日</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+            </select>
+            <div class="lib-field-hint">纯 label,无服务端 cron。</div>
+          </div>
+        </div>
+
+        {/* P8a definition 字段:goals / inScope / outOfScope / questions
+            都是自由文本行,逗号 / 回车分隔。Polaris 用同样的粒度。 */}
+        <div class="lib-field">
+          <label class="lib-field-label">库目标(goals)</label>
+          <textarea
+            class="lib-textarea"
+            rows="2"
+            maxlength="600"
+            placeholder="如:整理今年 ICML 的 agent 工作;跟踪稀疏注意力进展。每行一条,最多 3 条。"
+            data-modal-goals
+          ></textarea>
+          <div class="lib-field-hint">驱动 digest 生成的上下文。</div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">范围内主题(in scope)</label>
+          <textarea
+            class="lib-textarea"
+            rows="2"
+            maxlength="600"
+            placeholder="如:LLM agent / 多智能体协作 / 思维链推理。每行一条,最多 8 条。"
+            data-modal-in-scope
+          ></textarea>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">范围外(out of scope)</label>
+          <textarea
+            class="lib-textarea"
+            rows="2"
+            maxlength="600"
+            placeholder="如:语音识别 / 图像超分。每行一条,最多 8 条。"
+            data-modal-out-of-scope
+          ></textarea>
+          <div class="lib-field-hint">命中即剔除 —— 比关键词排除更宽。</div>
+        </div>
+        <div class="lib-field">
+          <label class="lib-field-label">要回答的研究问题</label>
+          <textarea
+            class="lib-textarea"
+            rows="2"
+            maxlength="800"
+            placeholder="如:稀疏注意力在 8K context 上能否保持线性推理开销?每行一条,最多 8 条。"
+            data-modal-questions
+          ></textarea>
+          <div class="lib-field-hint">驱动 ingest 拉论文的 prompt 上下文。</div>
+        </div>
+
+        {/* anchors:种子论文清单。Polaris 强制 included。 */}
+        <div class="lib-field">
+          <label class="lib-field-label">锚点论文(anchors)</label>
+          <div class="lib-anchor-rows" data-anchor-rows></div>
+          <div class="lib-chip-input-wrap">
+            <select class="lib-input lib-anchor-kind" data-anchor-kind>
+              <option value="arxiv">arxiv-id</option>
+              <option value="doi">DOI</option>
+              <option value="free">free text</option>
+            </select>
+            <input
+              type="text"
+              class="lib-chip-input"
+              placeholder="如 2503.12345 或 10.1109/... 或 'OpenAI o1'"
+              data-anchor-value
+            />
+            <button type="button" class="lib-chip-add" data-anchor-add>+ 添加锚点</button>
+          </div>
+          <div class="lib-field-hint">最多 32 条,带「为什么是锚点」备注。</div>
         </div>
         <div class="lib-field">
           <label class="lib-field-label">arXiv 分类</label>
