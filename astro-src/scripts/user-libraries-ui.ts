@@ -226,6 +226,95 @@ function renderStatusBadge(status: string): string {
   return `<span class="row-status ${m.cls}">${m.emoji} ${m.label}</span>`;
 }
 
+/** 极简 markdown → HTML(Digest 显示用,不需要 fig/table 替换)。 */
+function renderDigestMarkdown(md: string): string {
+  // escape first
+  const esc = md
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  // 段(以空行切)+ 行内(**粗** / *斜*)
+  const lines = esc.split('\n');
+  const out: string[] = [];
+  let para: string[] = [];
+  let inList = false;
+  const flushPara = () => {
+    if (para.length === 0) return;
+    const text = para.join(' ').trim();
+    if (text) out.push(`<p>${inline(text)}</p>`);
+    para = [];
+  };
+  const closeList = () => {
+    if (inList) { out.push('</ul>'); inList = false; }
+  };
+  const inline = (s: string) =>
+    s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+     .replace(/`([^`]+)`/g, '<code>$1</code>');
+  for (const raw of lines) {
+    const l = raw.trimEnd();
+    if (l.startsWith('## ')) { flushPara(); closeList(); out.push(`<h2>${inline(l.slice(3))}</h2>`); continue; }
+    if (l.startsWith('### ')) { flushPara(); closeList(); out.push(`<h3>${inline(l.slice(4))}</h3>`); continue; }
+    if (l.startsWith('- ')) { flushPara(); if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${inline(l.slice(2))}</li>`); continue; }
+    if (l === '') { flushPara(); closeList(); continue; }
+    para.push(l);
+  }
+  flushPara();
+  closeList();
+  return out.join('\n');
+}
+
+/** 渲染 digest mount:当前 digest + 历史 list。 */
+function renderDigestMount(
+  mount: HTMLElement,
+  current: { markdown: string; paperCount: number; id: string; generatedAt: number; model: string } | null,
+  history: Array<{ id: string; paperCount: number; generatedAt: number }>,
+): void {
+  const cur = current
+    ? `
+      <article class="digest-article">
+        <header class="digest-article-head">
+          <span class="digest-date">${escapeHtml(current.id)}</span>
+          <span class="digest-stats">${current.paperCount} 篇 · 模型 ${escapeHtml(current.model)} · ${new Date(current.generatedAt).toLocaleString('zh-CN')}</span>
+        </header>
+        <div class="digest-body">${renderDigestMarkdown(current.markdown)}</div>
+      </article>
+    `
+    : `<p class="muted">还没有 digest。点上方「✨ 生成今日简报」。</p>`;
+  const hist = history.length > 1
+    ? `
+      <details class="digest-history">
+        <summary>历史(${history.length - 1} 份)</summary>
+        <ul>
+          ${history.filter((h) => !current || h.id !== current.id).slice(0, 10).map((h) => `
+            <li>
+              <button type="button" class="linklike" data-digest-open="${escapeHtml(h.id)}">${escapeHtml(h.id)}</button>
+              <span class="muted"> · ${h.paperCount} 篇</span>
+            </li>
+          `).join('')}
+        </ul>
+      </details>
+    `
+    : '';
+  mount.innerHTML = cur + hist;
+}
+
+/** 同步读 listDigests(避免 button click handler 里再 import 一遍) */
+function listDigestsSnapshot(libId: string): Array<{ id: string; paperCount: number; generatedAt: number }> {
+  const out: Array<{ id: string; paperCount: number; generatedAt: number }> = [];
+  const prefix = `dpr_library_digest_v1:${libId}:`;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith(prefix)) continue;
+    try {
+      const d = JSON.parse(localStorage.getItem(k) || '') as { id: string; paperCount: number; generatedAt: number; markdown: string };
+      if (d && d.markdown) out.push(d);
+    } catch { /* ignore */ }
+  }
+  out.sort((a, b) => (b.id || '').localeCompare(a.id || ''));
+  return out;
+}
+
 function fmtDateShort(ts: number): string {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -1341,6 +1430,7 @@ function renderUserLibraryDetail(): void {
     <nav class="library-wb-tabs" aria-label="tab 切换">
       <a class="lib-wb-tab active" href="#papers" data-tab="papers">📄 论文库 <span class="tab-count">${papers.length}</span></a>
       <a class="lib-wb-tab" href="#concepts" data-tab="concepts">🕸 概念库 <span class="tab-count">${topConcepts.length}</span></a>
+      <a class="lib-wb-tab" href="#digest" data-tab="digest">📰 每日简报</a>
       <a class="lib-wb-tab" href="#notes" data-tab="notes">📝 笔记 <span class="tab-count">—</span></a>
       <a class="lib-wb-tab" href="#govern" data-tab="govern">⚙️ 文献库配置 <span class="tab-count">P8a</span></a>
       <a class="back" href="${url('/libraries/')}">← 所有文献库</a>
@@ -1485,6 +1575,17 @@ function renderUserLibraryDetail(): void {
       <div id="lib-ingest-mount"></div>
     </section>
 
+    <section id="digest-panel" class="library-wb-panel" data-panel="digest">
+      <div class="wb-digest">
+        <div class="digest-header">
+          <h3>📰 每日简报</h3>
+          <p class="muted">基于 statement + 关键词 + inScope,聚合最近 7 天库内论文,LLM 生成中文解读。本地缓存 24h。</p>
+          <button type="button" class="btn btn-primary btn-sm" data-action="digest-generate" data-lib-id="${escapeHtml(lib.id)}">✨ 生成今日简报</button>
+        </div>
+        <div id="lib-digest-mount" data-lib-digest-mount></div>
+      </div>
+    </section>
+
     <section id="notes-panel" class="library-wb-panel" data-panel="notes">
       <div class="wb-notes">
         <p class="empty">
@@ -1506,7 +1607,7 @@ function renderUserLibraryDetail(): void {
   `;
 
   // tab 切换
-  const VALID_TABS = ['papers', 'concepts', 'notes', 'govern'] as const;
+  const VALID_TABS = ['papers', 'concepts', 'digest', 'notes', 'govern'] as const;
   type Tab = typeof VALID_TABS[number];
   function setActiveTab(tab: Tab) {
     mount.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
@@ -1517,7 +1618,7 @@ function renderUserLibraryDetail(): void {
     });
   }
   function syncFromHash() {
-    const m = window.location.hash.match(/^#(papers|concepts|notes|govern)$/);
+    const m = window.location.hash.match(/^#(papers|concepts|digest|notes|govern)$/);
     if (m) setActiveTab(m[1] as Tab);
   }
   mount.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
@@ -1615,6 +1716,37 @@ function renderUserLibraryDetail(): void {
       e.stopPropagation();
       const id = btn.dataset.libId || lib.id;
       openIngestPanel(id);
+    });
+  });
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="digest-generate"]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = btn.dataset.libId || lib.id;
+      const mount = document.getElementById('lib-digest-mount');
+      if (!mount) return;
+      mount.innerHTML = '<p class="muted"><span class="lib-spinner"></span> 正在生成 digest…</p>';
+      try {
+        const { generateDigest, listDigests } = await import('./library-digest');
+        const d = await generateDigest(id, allPapers);
+        renderDigestMount(mount, d, listDigests(id));
+      } catch (err) {
+        mount.innerHTML = `<p class="muted error">生成失败:${escapeHtml((err as Error).message)}</p>`;
+      }
+    });
+  });
+  // digest 历史里的「打开」按钮
+  mount.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const btn = t.closest<HTMLButtonElement>('[data-digest-open]');
+    if (!btn) return;
+    e.preventDefault();
+    const date = btn.dataset.digestOpen || '';
+    const id = lib.id;
+    import('./library-digest').then(({ loadCachedDigest }) => {
+      const d = loadCachedDigest(id, date);
+      const mount = document.getElementById('lib-digest-mount');
+      if (mount && d) renderDigestMount(mount, d, listDigestsSnapshot(id));
     });
   });
   mount.querySelector<HTMLButtonElement>('[data-action="delete"]')?.addEventListener('click', () => {
