@@ -1584,7 +1584,9 @@ function renderUserLibraryDetail(): void {
     <nav class="library-wb-tabs" aria-label="tab 切换">
       <a class="lib-wb-tab active" href="#papers" data-tab="papers">📄 论文库 <span class="tab-count">${papers.length}</span></a>
       <a class="lib-wb-tab" href="#concepts" data-tab="concepts">🕸 概念库 <span class="tab-count">${topConcepts.length}</span></a>
+      <a class="lib-wb-tab" href="#graph" data-tab="graph">🕸 图谱</a>
       <a class="lib-wb-tab" href="#digest" data-tab="digest">📰 每日简报</a>
+      <a class="lib-wb-tab" href="#chat" data-tab="chat">💬 文献对话</a>
       <a class="lib-wb-tab" href="#notes" data-tab="notes">📝 笔记 <span class="tab-count">—</span></a>
       <a class="lib-wb-tab" href="#govern" data-tab="govern">⚙️ 文献库配置 <span class="tab-count">P8a</span></a>
       <a class="back" href="${url('/libraries/')}">← 所有文献库</a>
@@ -1713,6 +1715,23 @@ function renderUserLibraryDetail(): void {
       <div id="lib-ingest-mount"></div>
     </section>
 
+    <section id="graph-panel" class="library-wb-panel" data-panel="graph">
+      <div class="wb-graph">
+        <h3>论文 × 概念 图谱</h3>
+        <p class="muted">内圈概念 / 外圈论文 / 边按 Jaccard 相似度。客户端渲染,基于库内成员 + 高频概念。</p>
+        <div id="wb-graph-svg-wrap" class="wb-graph-svg-wrap"></div>
+        <script type="application/json" id="library-graph-data-personal" data-graph-data-personal set:html=""></script>
+      </div>
+    </section>
+
+    <section id="chat-panel" class="library-wb-panel" data-panel="chat">
+      <div class="wb-chat">
+        <div class="chat-placeholder">
+          <h3>文献对话 · 加载中…</h3>
+        </div>
+      </div>
+    </section>
+
     <section id="digest-panel" class="library-wb-panel" data-panel="digest">
       <div class="wb-digest">
         <div class="digest-header">
@@ -1745,7 +1764,7 @@ function renderUserLibraryDetail(): void {
   `;
 
   // tab 切换
-  const VALID_TABS = ['papers', 'concepts', 'digest', 'notes', 'govern'] as const;
+  const VALID_TABS = ['papers', 'concepts', 'graph', 'digest', 'chat', 'notes', 'govern'] as const;
   type Tab = typeof VALID_TABS[number];
 
   // 虚拟滚动 init —— 把 papers[] 渲染成可见行,大幅降低 DOM 节点数
@@ -1798,17 +1817,69 @@ function renderUserLibraryDetail(): void {
     });
   }
   function syncFromHash() {
-    const m = window.location.hash.match(/^#(papers|concepts|digest|notes|govern)$/);
+    const m = window.location.hash.match(/^#(papers|concepts|graph|digest|chat|notes|govern)$/);
     if (m) setActiveTab(m[1] as Tab);
   }
   mount.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
     t.addEventListener('click', () => {
       const tab = (t.dataset.tab || '') as Tab;
-      if ((VALID_TABS as readonly string[]).includes(tab)) setActiveTab(tab);
+      if ((VALID_TABS as readonly string[]).includes(tab)) {
+        setActiveTab(tab);
+        if (tab === 'graph') void ensureGraphMounted();
+        if (tab === 'chat') void ensureChatMounted();
+      }
     });
   });
   window.addEventListener('hashchange', syncFromHash);
   syncFromHash();
+
+  // 切到 graph / chat 时挂载对应模块(lazy)
+  let graphMounted = false;
+  let chatMounted = false;
+  async function ensureGraphMounted(): Promise<void> {
+    if (graphMounted) return;
+    graphMounted = true;
+    // 注入图谱数据 JSON 给 mountLibraryGraph 读(它只查 #library-graph-data,
+    // 我们注入同名节点)
+    const dataNode = mount.querySelector<HTMLElement>('[data-graph-data-personal]');
+    if (dataNode && !dataNode.textContent) {
+      const topPapers = papers.slice(0, 80).map((p) => ({
+        id: p.canonicalArxivId,
+        title: p.title_zh || p.title_plain || p.title || p.id,
+        relevanceScore: typeof p.score === 'number' ? p.score : undefined,
+        concepts: (p.concepts || []).map((c) => c.slug).filter(Boolean),
+      }));
+      const topConceptsForGraph = topConcepts.slice(0, 6).map((c) => ({
+        slug: c.slug, displayName: c.display_name,
+      }));
+      dataNode.textContent = JSON.stringify({ papers: topPapers, concepts: topConceptsForGraph });
+      // 镜像到 #library-graph-data(id 名是 mountLibraryGraph 硬编码的)
+      let alias = document.getElementById('library-graph-data');
+      if (!alias) {
+        alias = document.createElement('script');
+        alias.id = 'library-graph-data';
+        alias.type = 'application/json';
+        document.body.appendChild(alias);
+      }
+      alias.textContent = dataNode.textContent;
+    }
+    try {
+      const { mountLibraryGraph } = await import('./library-workbench-mounts');
+      mountLibraryGraph();
+    } catch (e) {
+      console.warn('[user-lib] graph mount failed', e);
+    }
+  }
+  async function ensureChatMounted(): Promise<void> {
+    if (chatMounted) return;
+    chatMounted = true;
+    try {
+      const { mountLibraryChat } = await import('./library-workbench-mounts');
+      mountLibraryChat();
+    } catch (e) {
+      console.warn('[user-lib] chat mount failed', e);
+    }
+  }
 
   // 论文行点击高亮
   mount.querySelectorAll<HTMLAnchorElement>('.wb-paper-row').forEach((row) => {
