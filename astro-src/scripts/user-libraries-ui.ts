@@ -54,6 +54,153 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
+/** Ingest 面板入口。点击 Govern tab「启动 Ingest」按钮触发。
+ *  - 动态 import library-ingest 模块(避免冷启动 bundle 膨胀)
+ *  - 调 runIngest(),把候选列表渲染到 #lib-ingest-mount
+ *  - 每条候选三个动作:候选 / 纳入 / 跳过 */
+async function openIngestPanel(libId: string): Promise<void> {
+  const mount = document.getElementById('lib-ingest-mount');
+  if (!mount) {
+    showToast('找不到 ingest 容器', 'error');
+    return;
+  }
+  // 锁住按钮 + 显示 loading
+  mount.innerHTML = `
+    <div class="lib-ingest-panel">
+      <div class="lib-ingest-header">
+        <h3>🛰️ Ingest · 正在拉 arXiv 候选</h3>
+        <p class="muted">从 arXiv listing API 拉最近 30 天,LLM 批量打分。</p>
+      </div>
+      <div class="lib-ingest-progress"><span class="lib-spinner"></span><span data-ingest-status>准备中…</span></div>
+    </div>
+  `;
+  const statusEl = mount.querySelector<HTMLElement>('[data-ingest-status]');
+  const setStatus = (s: string) => { if (statusEl) statusEl.textContent = s; };
+
+  try {
+    setStatus('加载 ingest 模块…');
+    const { runIngest, persistCandidatesAsCandidate, commitCandidateAsIncluded } = await import('./library-ingest');
+
+    setStatus('拉 arXiv 候选…(可能 10-30s)');
+    const candidates = await runIngest(libId, { daysBack: 30, maxResults: 50, threshold: 0.45 });
+
+    if (candidates.length === 0) {
+      mount.innerHTML = `
+        <div class="lib-ingest-panel">
+          <h3>🛰️ Ingest 完成</h3>
+          <p class="muted">arXiv 在最近 30 天、当前关键词下没有命中 ≥ 0.45 的候选。</p>
+          <p class="muted">建议:放宽 inScope / 包括关键词,或拉长 daysBack。</p>
+        </div>
+      `;
+      return;
+    }
+
+    // 写候选状态(走 candidate,不直接进 paperIds)
+    persistCandidatesAsCandidate(libId, candidates);
+    showToast(`拉回 ${candidates.length} 篇候选(已写入 candidate 状态)`, 'ok');
+
+    // 渲染候选列表
+    mount.innerHTML = `
+      <div class="lib-ingest-panel">
+        <div class="lib-ingest-header">
+          <h3>🛰️ Ingest · 候选 ${candidates.length} 篇(score ≥ 0.45)</h3>
+          <p class="muted">按相关度倒序。每条点「✓ 纳入」加进 paperIds / 「⏭ 跳过」忽略 / 「🕐 留候选」保存为 candidate。</p>
+          <div class="lib-ingest-batch">
+            <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.7">✓ 批量纳入 ≥ 0.70</button>
+            <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.6">✓ 批量纳入 ≥ 0.60</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-ingest-batch="hide">关闭面板</button>
+          </div>
+        </div>
+        <div class="lib-ingest-list">
+          ${candidates.map((c, idx) => `
+            <div class="lib-ingest-row" data-cx="${escapeHtml(c.cx)}">
+              <div class="lib-ingest-meta">
+                <span class="lib-ingest-score s-${c.score >= 0.7 ? 'h' : c.score >= 0.55 ? 'm' : 'l'}">${c.score.toFixed(2)}</span>
+                <span class="lib-ingest-id">${escapeHtml(c.arxivId)}</span>
+                <span class="lib-ingest-date">${escapeHtml(c.date || '—')}</span>
+              </div>
+              <div class="lib-ingest-title">${escapeHtml(c.title)}</div>
+              <div class="lib-ingest-authors">${escapeHtml(c.authors.slice(0, 5).join(', '))}${c.authors.length > 5 ? ` +${c.authors.length - 5}` : ''}</div>
+              ${c.reason ? `<div class="lib-ingest-reason">${escapeHtml(c.reason)}</div>` : ''}
+              <div class="lib-ingest-actions">
+                <button type="button" class="btn btn-primary btn-sm" data-ingest-action="include" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">✓ 纳入</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-ingest-action="skip" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">⏭ 跳过</button>
+                <a class="btn btn-ghost btn-sm" href="https://arxiv.org/abs/${encodeURIComponent(c.arxivId.replace(/v\d+$/, ''))}" target="_blank" rel="noopener">🔗 arXiv</a>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    // 把 candidates 缓存到 dataset 上,供后续 button handler 读
+    mount.querySelector<HTMLElement>('.lib-ingest-panel')!.dataset.candidates = JSON.stringify(
+      candidates.map((c) => ({ cx: c.cx, arxivId: c.arxivId, score: c.score, reason: c.reason })),
+    );
+
+    // 行内动作
+    mount.querySelectorAll<HTMLButtonElement>('[data-ingest-action]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = btn.dataset.ingestAction;
+        const cx = btn.dataset.cx || '';
+        const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
+        const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
+        const cand = cached.find((x) => x.cx === cx);
+        if (!cand) return;
+        if (action === 'include') {
+          commitCandidateAsIncluded(libId, {
+            cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
+            title: '', authors: [], abstract: '', date: '', inLibrary: false,
+          });
+          showToast(`已纳入 ${cand.arxivId}`, 'ok');
+          btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
+        } else if (action === 'skip') {
+          btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
+        }
+      });
+    });
+
+    // 批量动作
+    mount.querySelectorAll<HTMLButtonElement>('[data-ingest-batch]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const action = btn.dataset.ingestBatch;
+        if (action === 'hide') {
+          mount.innerHTML = '';
+          return;
+        }
+        if (action === 'include-top') {
+          const thr = parseFloat(btn.dataset.threshold || '0.7');
+          const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
+          const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
+          let n = 0;
+          for (const cand of cached) {
+            if (cand.score < thr) break; // 倒序的,break 即可
+            commitCandidateAsIncluded(libId, {
+              cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
+              title: '', authors: [], abstract: '', date: '', inLibrary: false,
+            });
+            n++;
+          }
+          showToast(`批量纳入 ${n} 篇`, 'ok');
+          // 重渲(简单:重跑整个 ingest 面板)
+          renderUserLibraryDetail();
+          openIngestPanel(libId);
+        }
+      });
+    });
+  } catch (e) {
+    mount.innerHTML = `
+      <div class="lib-ingest-panel">
+        <h3>🛰️ Ingest 失败</h3>
+        <p class="muted error">${escapeHtml((e as Error).message || String(e))}</p>
+      </div>
+    `;
+    showToast(`Ingest 失败:${(e as Error).message}`, 'error');
+  }
+}
+
 /** 渲染 string[] 列表(govern tab 用);空数组 fallback 到 empty 文案。 */
 function renderList(items: string[] | undefined, empty: string): string {
   if (!items || items.length === 0) return `<em class="empty">${escapeHtml(empty)}</em>`;
@@ -1329,7 +1476,13 @@ function renderUserLibraryDetail(): void {
           想立刻按新方向给库内论文打分,
           <button type="button" class="linklike" data-action="rescore" data-lib-id="${escapeHtml(lib.id)}">点这里重打分</button>。
         </p>
+        <p class="lib-edit-hint lib-ingest-hint">
+          <strong>🛰️ Ingest</strong>:按当前 statement + 关键词去 arXiv 拉最近论文,LLM 给每篇打分,
+          让你挑哪些进库。
+          <button type="button" class="btn btn-primary btn-sm" data-action="ingest" data-lib-id="${escapeHtml(lib.id)}">▶ 启动 Ingest</button>
+        </p>
       </div>
+      <div id="lib-ingest-mount"></div>
     </section>
 
     <section id="notes-panel" class="library-wb-panel" data-panel="notes">
@@ -1454,6 +1607,14 @@ function renderUserLibraryDetail(): void {
       e.stopPropagation();
       showToast('正在按新方向给库内论文重打分 — 见 PapersTab', 'info');
       window.location.hash = '#papers';
+    });
+  });
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="ingest"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = btn.dataset.libId || lib.id;
+      openIngestPanel(id);
     });
   });
   mount.querySelector<HTMLButtonElement>('[data-action="delete"]')?.addEventListener('click', () => {
