@@ -66,6 +66,9 @@ def iter_paper_md_files():
             continue
         if p.name.startswith("_"):
             continue
+        # 种子文件不是论文(无 title/abstract,LLM 必然失败)
+        if p.name.startswith("topic-seeds-"):
+            continue
         out.append(p)
     return out
 
@@ -136,13 +139,32 @@ def call_librarian(url: str, key: str, model: str, title: str, abstract: str, fu
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        content = data["choices"][0]["message"]["content"]
-        content = _strip_think(content)
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, KeyError, TimeoutError) as e:
-        return f"__LLM_ERR__{type(e).__name__}: {e}"
+    # 重试:429 / 5xx / TimeoutError,指数退避(2/4/8s,最多 3 次)
+    last_err: str = ""
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+            content = _strip_think(content)
+            last_err = ""
+            break
+        except urllib.error.HTTPError as e:
+            last_err = f"__LLM_ERR__{type(e).__name__}: {e.code} {e.reason}"
+            if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+                import time as _t
+                _t.sleep(2 ** attempt)
+                continue
+            return last_err
+        except (urllib.error.URLError, json.JSONDecodeError, KeyError, TimeoutError) as e:
+            last_err = f"__LLM_ERR__{type(e).__name__}: {e}"
+            if attempt < 3:
+                import time as _t
+                _t.sleep(2 ** attempt)
+                continue
+            return last_err
+    if last_err:
+        return last_err
     # try parse JSON
     try:
         # response_format guarantees JSON object; tolerate list too
@@ -214,11 +236,20 @@ def _insert_into_body(body: str, article: str) -> str:
 
 
 def translate_one(md_path: Path, url: str, key: str, model: str) -> tuple[Path, str, str]:
-    """Returns (path, status, article_or_err). status in ('ok','skip','err')."""
+    """Returns (path, status, article_or_err). status in ('ok','skip','err').
+
+    跳过条件:body 已经包含完整的 5 节段(## 讨论与可借鉴点 或旧版 ## 结论)。
+    不能再单独信 wiki_compiled flag —— 旧版翻译时写过 flag 但 body
+    实际没插入的情况确实存在,需要用 body 真实内容判。"""
     text = md_path.read_text(encoding="utf-8")
     front, body = parse_frontmatter(text)
-    if front.get("wiki_compiled") is True and not front.get("_force_recompile"):
-        return (md_path, "skip", "already compiled")
+    if not front.get("_force_recompile"):
+        has_wiki = (
+            "## 讨论与可借鉴点" in (body or "")
+            or "## 结论" in (body or "")
+        )
+        if has_wiki:
+            return (md_path, "skip", "already compiled (body has 5 sections)")
     title, abstract, fulltext = extract_inputs(front, body)
     if not title and not abstract:
         return (md_path, "err", "no title/abstract")
@@ -244,10 +275,11 @@ def main():
 
     files = iter_paper_md_files()
     todo: list[Path] = []
+    skipped_body = 0
     for f in files:
         try:
             text = f.read_text(encoding="utf-8")
-            front, _ = parse_frontmatter(text)
+            front, body = parse_frontmatter(text)
         except Exception:
             continue
         if args.only_no_score and "score" not in front:
@@ -255,13 +287,18 @@ def main():
             continue
         if args.force:
             front["_force_recompile"] = True
-        if front.get("wiki_compiled") is True and not args.force:
+        # 跳过已翻译过的:看 body 里有没有「讨论与可借鉴点」或旧版的「结论」
+        # (旧版 translate_polaris.py 用过 `## 结论`/`## TLDR` 无冒号;
+        # wiki_compiled flag 不可靠 — 旧版写过 flag 但 body 未插入成功的也有)
+        if not args.force and ("## 讨论与可借鉴点" in (body or "")
+                                  or "## 结论" in (body or "")):
+            skipped_body += 1
             continue
         todo.append(f)
     if args.limit:
         todo = todo[: args.limit]
 
-    print(f"[translate] {len(files)} total / {len(todo)} to translate (concurrency={args.concurrency})")
+    print(f"[translate] {len(files)} total / {len(todo)} to translate (skipped by body={skipped_body}, concurrency={args.concurrency})")
 
     if args.dry_run:
         for f in todo[:10]:
