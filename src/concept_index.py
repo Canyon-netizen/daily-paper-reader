@@ -224,11 +224,15 @@ def rebuild(
     if min_appearances >= 1:
         os.makedirs(archive_path, exist_ok=True)
 
+    written: set[str] = set()
     for slug, paper_records in concept_to_papers.items():
         if len(paper_records) < min_appearances:
             continue
         md_path = os.path.join(archive_path, f"{slug}.md")
         _upsert_concept_page(md_path, slug, paper_records)
+        written.add(slug)
+
+    _prune_orphan_concept_pages(archive_path, written)
 
     # PR-5 v2: 写 _graph.json + _index.json (对齐 plan §14 PR 5)
     _write_concept_graph(archive_path, concept_to_papers)
@@ -312,29 +316,115 @@ def _write_concept_index(
         _json.dump(rows, f, ensure_ascii=False, indent=2)
 
 
+def _prune_orphan_concept_pages(archive_path: str, written: set[str]) -> None:
+    """删掉本轮没写、且已经不该存在的 <slug>.md。
+
+    背景:min_appearances 提高之后(或论文被删除后),旧阈值下建出来的
+    单篇概念页会永远留在盘上 —— rebuild 的循环 `continue` 跳过它们,既不更新
+    也不删除。实测残留 43 个,其中 31 个还带着 PR-5 v2 之前的污染 frontmatter
+    (display_name 是论文标题 + 未引号化 `: ` 导致 yaml ScannerError),
+    _heal_stale_frontmatter 也够不着。
+
+    保守起见只删「确实是本函数生成的」页:
+      - 必须是 wiki/concepts/ 直接子级的 .md
+      - 跳过下划线开头的产物(_index.json / _graph.json 之类)
+      - 必须带 `concept_id:` frontmatter —— 手写笔记没有这个字段,不会被误删
+
+    wiki/concepts/ 整体是 gitignored 的派生数据(git ls-files 为 0),
+    重跑即可完全重建,所以删除是安全且可逆的。
+    """
+    if not os.path.isdir(archive_path):
+        return
+    for name in os.listdir(archive_path):
+        if not name.endswith(".md") or name.startswith("_"):
+            continue
+        slug = name[: -len(".md")]
+        if slug in written:
+            continue
+        path = os.path.join(archive_path, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                head = f.read(400)
+        except OSError:
+            continue
+        # 只删本流水线生成的页;手写笔记不带 concept_id,原样保留。
+        if "concept_id:" not in head:
+            continue
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def _upsert_concept_page(
     md_path: str,
     slug: str,
     papers: List[Dict[str, Any]],
 ) -> None:
     """新建或更新 wiki/concepts/<slug>.md。"""
+    first = papers[0]
+    # PR-5 v2: 用 concept 的 display_name(透传自 paper frontmatter),不是 paper.title
+    display_name = first.get("display_name") or slug
     if not os.path.exists(md_path):
         # 新建:简单 frontmatter + 出处段 + 反向链接段
-        first = papers[0]
-        # PR-5 v2: 用 concept 的 display_name(透传自 paper frontmatter),不是 paper.title
-        display_name = first.get("display_name") or slug
         body = _render_concept_md(slug, display_name, papers)
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(body)
-    else:
-        # 更新:替换 ## 出处 / ## 反向链接 块
-        with open(md_path, "r", encoding="utf-8") as f:
-            text = f.read()
-        updated = _replace_block(text, "出处", _render_origin_section(papers))
-        updated = _replace_block(updated, "反向链接", _render_reverse_links_section(papers))
-        if updated != text:
-            with open(md_path, "w", encoding="utf-8") as f:
-                f.write(updated)
+        return
+
+    # 更新:替换 ## 出处 / ## 反向链接 块
+    with open(md_path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    # Stage 8 fix 只作用于「新建」分支,存量文件走这条 else 永远不会被修复 ——
+    # 实测 121/221 个存量 .md 的 frontmatter 仍因未引号化的 `: ` 抛 ScannerError,
+    # 且 display_name 还是 PR-5 v2 之前污染的论文标题。这里先把坏 frontmatter
+    # 整段重写成 safe_dump 版本,再走原本的 body 段替换。
+    healed = _heal_stale_frontmatter(text, slug, display_name, papers)
+
+    updated = _replace_block(healed, "出处", _render_origin_section(papers))
+    updated = _replace_block(updated, "反向链接", _render_reverse_links_section(papers))
+    # 与「读进来的原文」比,frontmatter-only 的修复也算 changed。
+    if updated != text:
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(updated)
+
+
+def _heal_stale_frontmatter(
+    text: str,
+    slug: str,
+    display_name: str,
+    papers: List[Dict[str, Any]],
+) -> str:
+    """存量 .md 的 frontmatter 若无法被 yaml 解析,就整段重写成 safe_dump 版本。
+
+    只在真的解析失败时改写,frontmatter 已经合法的文件原样返回 —— 避免每次
+    rebuild 都把所有文件标记成 changed。
+    """
+    import yaml  # type: ignore
+
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+    if not m:
+        return text
+    try:
+        yaml.safe_load(m.group(1))
+        return text  # 已合法,不动
+    except yaml.YAMLError:
+        pass
+
+    _validate_concept_labels(slug, display_name, papers)
+    fm = yaml.safe_dump(
+        {
+            "concept_id": slug,
+            "display_name": display_name,
+            "category": (papers[0].get("category") or "other"),
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    return f"---\n{fm}---\n" + text[m.end():]
 
 
 def _render_concept_md(slug: str, display_name: str, papers: List[Dict[str, Any]]) -> str:
@@ -379,10 +469,15 @@ def _first_h1_title(md: str) -> Optional[str]:
 
 def _validate_concept_labels(slug: str, display_name: str, papers: List[Dict[str, Any]]) -> None:
     """Stage 8 fail-loud 后置校验:产出 frontmatter 前再核一次。
-    触发条件(任一):display_name > 40 字符;display_name 与某论文标题相同
-    (则网格展示的就是论文标题而非概念名,已知 bug 修复)。
+
+    真正要挡的污染是「display_name 实际上是论文标题」(PR-5 v2 修过的 bug),
+    由下面的 title_set 精确判定。长度只是一个粗糙的兜底信号 ——
+    实测 1025 个概念名里 19 个合法名超过 40 字符,例如
+    `RLVR (Reinforcement Learning with Verifiable Rewards)`(53)、
+    `Centralized Training with Decentralized Execution`(48),
+    所以阈值放到 80:论文标题通常远长于此,而「术语 + 全称展开」放得下。
     """
-    if len(display_name) > 40:
+    if len(display_name) > 80:
         raise ValueError(
             f"concept {slug!r} display_name 太长 ({len(display_name)} 字符): "
             f"{display_name[:60]!r}..."
