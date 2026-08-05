@@ -29,10 +29,11 @@ import '../../styles/library-workbench.css';
  *  处理标题/段落/列表/代码/链接,够用。 */
 function renderWikiHtml(md: string): string {
   // 在调用方已用 escape 防御,这里直接进 markdown 渲染
-  // 跳过 wiki 的 ## TL;DR 段 —— 上面 tldr-card 已经显示过 raw TL;DR,
-  // 否则用户会看到 TL;DR 出现两次(语义重复)。从 ## 研究背景 / ## 方法 之类开始。
+  // 跳过 wiki 里所有 ## TL;DR 段 —— 上面 tldr-card 已经显示过 raw TL;DR,
+  // 否则用户会看到 TL;DR 出现 N 次(语义重复)。从 ## 研究背景 / ## 方法 之类开始。
+  // 老翻译批次可能重复写了 5 节,所以用 /g 去掉所有 TL;DR 块。
   const stripped = md.replace(
-    /^## TL;DR\s*\n+[\s\S]*?(?=\n## (研究背景与动机|背景|方法|实验|结果|讨论|缺点|结论))/m,
+    /^## TL;DR\s*\n+[\s\S]*?(?=\n## (研究背景与动机|背景|方法|实验|结果|讨论|缺点|结论))/gm,
     '',
   );
   return renderMarkdownBody(stripped);

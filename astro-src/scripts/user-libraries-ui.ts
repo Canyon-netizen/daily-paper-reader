@@ -380,12 +380,12 @@ function renderStatusBadge(status: string): string {
  *  Polaris 顺序:TL;DR / 研究背景与动机 / 方法 / 实验与结果 / 讨论与可借鉴点。
  *  不引外部 markdown 解析器 —— 标题 / 段落 / 列表 / **粗** / *斜* / `code` / [[wikilink]] 就够。
  *
- *  跳过 ## TL;DR 段 —— 详情面板已有 tldr-card(来自论文 frontmatter tldr)。
- *  否则用户会看到 TL;DR 出现两次。 */
+ *  跳过 wiki 里所有 ## TL;DR 段 —— 详情面板已有 tldr-card(来自论文 frontmatter tldr)。
+ *  否则用户会看到 TL;DR 出现 N 次(语义重复)。老翻译批次可能重复写了 5 节,
+ *  所以用 /g 去掉所有 TL;DR 块,从 ## 研究背景与动机 之类开始。 */
 function renderWikiMarkdown(md: string): string {
-  // 跳过 ## TL;DR 块直到下一个二级标题
   md = md.replace(
-    /^## TL;DR\s*\n+[\s\S]*?(?=\n## (研究背景与动机|背景|方法|实验|结果|讨论|缺点|结论))/m,
+    /^## TL;DR\s*\n+[\s\S]*?(?=\n## (研究背景与动机|背景|方法|实验|结果|讨论|缺点|结论))/gm,
     '',
   );
   const esc = md
