@@ -154,6 +154,17 @@ const tabTitle = plainZh || plainEn || id;
               {paper.title_zh && paper.title && paper.title !== paper.title_zh && (
                 <h2 class="paper-title-en" set:html={renderTitleHtml(paper.title)}></h2>
               )}
+
+              {/* 跨库视图:这篇论文所在的全部用户库。客户端 paper-cross-libraries.ts
+                  读 localStorage dpr_user_libraries_v1 后渲染。
+                  SSR 期间 localStorage 不可用 → mount hidden + 空内容;客户端 hydrate 时挂。*/}
+              <div
+                class="paper-cross-libraries"
+                data-paper-cross-libs
+                data-paper-canonical-id={paper.canonicalArxivId || ''}
+                hidden
+              ></div>
+
               <div class="paper-meta">
                 {paper.authors && (
                   <div class="meta-row">
@@ -432,6 +443,7 @@ const tabTitle = plainZh || plainEn || id;
     import '../../scripts/paper-highlights.ts';
     import '../../scripts/user-libraries-ui.ts';
     import '../../scripts/paper-compile-ui.ts';
+    import '../../scripts/paper-cross-libraries.ts';
 
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
     // 如果当前 mode 是 fulltext,paper-chat.ts 内部会触发 loadFulltextSkeleton。

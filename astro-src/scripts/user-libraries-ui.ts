@@ -18,15 +18,19 @@ import { onDprUserLibrariesChange } from '../lib/events';
 import {
   addLibraryAnchor,
   addPaperToLibrary,
+  bulkRemovePapersFromLibrary,
+  bulkSetPaperStatus,
   createLibrary,
   deleteLibrary,
   getUserLibrary,
   listLibrariesContainingPaper,
+  listLibrariesContainingPaperDetailed,
   listUserLibraries,
   removeLibraryAnchor,
   removeLibraryConceptOverride,
   removePaperFromLibrary,
   renameLibrary,
+  setLibraryArchived,
   setLibraryConceptOverride,
   setLibraryPaperMeta,
   setLibraryVisibility,
@@ -35,6 +39,7 @@ import {
   type LibraryAnchor,
   type LibraryHue,
   type LibraryPaperMeta,
+  type LibraryPaperStatus,
   type LibraryRubricItem,
   type UserLibrary,
   LIBRARY_HUES,
@@ -534,11 +539,19 @@ function renderUserLibraryCard(lib: UserLibrary): string {
 }
 
 function renderUserLibrariesSection(refs: SectionRefs): void {
-  const libs = listUserLibraries();
-  const counter = refs.counter;
-  if (counter) counter.textContent = `${libs.length} 个`;
+  const all = listUserLibraries();
+  // 归档过滤:active 库才进默认卡片墙(隐藏 archived 防止首页噪音)
+  const libs = all.filter((l) => l.definition?.cadence !== 'archived');
+  const archived = all.filter((l) => l.definition?.cadence === 'archived');
 
-  if (libs.length === 0) {
+  const counter = refs.counter;
+  if (counter) {
+    counter.textContent = archived.length > 0
+      ? `${libs.length} 个(${archived.length} 已归档)`
+      : `${libs.length} 个`;
+  }
+
+  if (libs.length === 0 && archived.length === 0) {
     if (refs.empty) {
       refs.empty.style.display = '';
       refs.grid.style.display = 'none';
@@ -561,6 +574,16 @@ function renderUserLibrariesSection(refs: SectionRefs): void {
   if (refs.empty) refs.empty.style.display = 'none';
   refs.grid.style.display = '';
   refs.grid.innerHTML = libs.map(renderUserLibraryCard).join('');
+  // 归档区(若有)
+  if (archived.length > 0) {
+    refs.grid.insertAdjacentHTML(
+      'beforeend',
+      `<details class="user-lib-archived">
+        <summary>📦 已归档库(${archived.length} 个)</summary>
+        <div class="user-lib-archived-grid">${archived.map(renderUserLibraryCard).join('')}</div>
+      </details>`,
+    );
+  }
 
   // 过滤:如果 section 配了 type filter,只显示匹配项
   if (refs.filter) {
@@ -1590,6 +1613,7 @@ function renderUserLibraryDetail(): void {
       <a class="lib-wb-tab" href="#digest" data-tab="digest">📰 每日简报</a>
       <a class="lib-wb-tab" href="#chat" data-tab="chat">💬 文献对话</a>
       <a class="lib-wb-tab" href="#notes" data-tab="notes">📝 笔记 <span class="tab-count">—</span></a>
+      <a class="lib-wb-tab" href="#activity" data-tab="activity">📜 活动 <span class="tab-count" data-activity-count>—</span></a>
       <a class="lib-wb-tab" href="#govern" data-tab="govern">⚙️ 文献库配置 <span class="tab-count">P8a</span></a>
       <a class="back" href="${url('/libraries/')}">← 所有文献库</a>
     </nav>
@@ -1606,13 +1630,31 @@ function renderUserLibraryDetail(): void {
             <a class="filter-pill" data-sort="date" href="#papers">📅 按时间</a>
             <a class="filter-pill active" data-sort="score" href="#papers">⭐ 按相关度</a>
           </div>
+          <div class="wb-papers-status">
+            <span class="sort-label">状态</span>
+            <a class="filter-pill active" data-status-filter="all" href="#papers">全部 ${papers.length}</a>
+            <a class="filter-pill" data-status-filter="candidate" href="#papers">🕐 候选 ${papers.filter((p) => lib.papers[p.canonicalArxivId]?.status === 'candidate').length}</a>
+            <a class="filter-pill" data-status-filter="scored" href="#papers">⭐ 已打分 ${papers.filter((p) => lib.papers[p.canonicalArxivId]?.status === 'scored').length}</a>
+            <a class="filter-pill" data-status-filter="included" href="#papers">✓ 纳入 ${papers.filter((p) => !lib.papers[p.canonicalArxivId]?.status || lib.papers[p.canonicalArxivId]?.status === 'included').length}</a>
+            <a class="filter-pill" data-status-filter="excluded" href="#papers">✗ 剔除 ${papers.filter((p) => lib.papers[p.canonicalArxivId]?.status === 'excluded').length}</a>
+            <a class="filter-pill" data-status-filter="trashed" href="#papers">🗑 回收 ${papers.filter((p) => lib.papers[p.canonicalArxivId]?.status === 'trashed').length}</a>
+          </div>
           ${papers.length === 0
             ? `<p class="empty" data-user-lib-empty-hint>
                 库内还没有论文。
                 <br />在论文详情页右上角点 <strong>+ 加进文献库</strong> 即可加入;
                 或点这里 <button type="button" class="btn btn-soft btn-sm" data-action="add-papers" data-lib-id="${escapeHtml(lib.id)}">去添加</button>。
               </p>`
-            : `<div class="wb-paper-rows-viewport" data-vlist-viewport data-vlist-host>
+            : `<div class="wb-bulk-bar" data-bulk-bar hidden>
+                <span class="wb-bulk-count" data-bulk-count>0</span> 已选 ·
+                <button type="button" class="btn btn-soft btn-sm" data-bulk-status="included">✓ 纳入</button>
+                <button type="button" class="btn btn-soft btn-sm" data-bulk-status="excluded">✗ 剔除</button>
+                <button type="button" class="btn btn-soft btn-sm" data-bulk-status="candidate">🕐 候选</button>
+                <button type="button" class="btn btn-danger btn-sm" data-bulk-status="trashed">🗑 回收站</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-bulk-remove>🚮 从库移除</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-bulk-clear>清空选择</button>
+              </div>
+              <div class="wb-paper-rows-viewport" data-vlist-viewport data-vlist-host>
                  <div data-vlist-spacer>
                    <div data-vlist-rows></div>
                  </div>
@@ -1725,6 +1767,13 @@ function renderUserLibraryDetail(): void {
           让你挑哪些进库。
           <button type="button" class="btn btn-primary btn-sm" data-action="ingest" data-lib-id="${escapeHtml(lib.id)}">▶ 启动 Ingest</button>
         </p>
+        <p class="lib-edit-hint">
+          <strong>📦 归档</strong>:把这个库移到归档区,不再参与日常浏览 / 候选拉取 / 摘要生成。
+          已纳论文保留,导出仍可用。
+          ${(lib.definition?.cadence === 'archived')
+            ? `<button type="button" class="btn btn-soft btn-sm" data-action="unarchive" data-lib-id="${escapeHtml(lib.id)}">↩ 取消归档</button>`
+            : `<button type="button" class="btn btn-soft btn-sm" data-action="archive" data-lib-id="${escapeHtml(lib.id)}">📦 归档此库</button>`}
+        </p>
       </div>
       <div id="lib-ingest-mount"></div>
     </section>
@@ -1757,6 +1806,14 @@ function renderUserLibraryDetail(): void {
       </div>
     </section>
 
+    <section id="activity-panel" class="library-wb-panel" data-panel="activity">
+      <div class="wb-activity">
+        <h3>📜 最近活动</h3>
+        <p class="muted">库的所有变更(创建 / 改名 / 加入论文 / 状态切换 / 配置 / 归档)按时间倒序。</p>
+        <div id="lib-activity-feed" data-lib-activity-feed></div>
+      </div>
+    </section>
+
     <section id="notes-panel" class="library-wb-panel" data-panel="notes">
       <div class="wb-notes">
         <p class="empty">
@@ -1778,7 +1835,7 @@ function renderUserLibraryDetail(): void {
   `;
 
   // tab 切换
-  const VALID_TABS = ['papers', 'concepts', 'graph', 'digest', 'chat', 'notes', 'govern'] as const;
+  const VALID_TABS = ['papers', 'concepts', 'graph', 'digest', 'chat', 'notes', 'activity', 'govern'] as const;
   type Tab = typeof VALID_TABS[number];
 
   // 虚拟滚动 init —— 把 papers[] 渲染成可见行,大幅降低 DOM 节点数
@@ -1802,8 +1859,10 @@ function renderUserLibraryDetail(): void {
                href="#paper-${escapeHtml(p.canonicalArxivId)}"
                data-paper-id="${escapeHtml(p.canonicalArxivId)}"
                data-vlist-idx="${i}"
+               data-cx="${escapeHtml(p.canonicalArxivId)}"
                ${typeof p.score === 'number' && p.score > 0 ? `data-score="${p.score}"` : ''}>
               <div class="row-head">
+                <input type="checkbox" class="wb-bulk-cb" data-bulk-toggle aria-label="批量选择" data-cx="${escapeHtml(p.canonicalArxivId)}" onclick="event.preventDefault(); event.stopPropagation();" />
                 <span class="arx">${escapeHtml(p.arxivId || '—')}</span>
                 ${p.date ? `<span>${escapeHtml(p.date.slice(5))}</span>` : ''}
                 <span class="year">${escapeHtml((p.date || '').slice(0, 4) || '—')}</span>
@@ -1831,7 +1890,7 @@ function renderUserLibraryDetail(): void {
     });
   }
   function syncFromHash() {
-    const m = window.location.hash.match(/^#(papers|concepts|graph|digest|chat|notes|govern)$/);
+    const m = window.location.hash.match(/^#(papers|concepts|graph|digest|chat|notes|activity|govern)$/);
     if (m) setActiveTab(m[1] as Tab);
   }
   mount.querySelectorAll<HTMLAnchorElement>('.lib-wb-tab').forEach((t) => {
@@ -1841,11 +1900,29 @@ function renderUserLibraryDetail(): void {
         setActiveTab(tab);
         if (tab === 'graph') void ensureGraphMounted();
         if (tab === 'chat') void ensureChatMounted();
+        if (tab === 'activity') void ensureActivityMounted();
       }
     });
   });
   window.addEventListener('hashchange', syncFromHash);
   syncFromHash();
+
+  // 切到 activity tab:渲染 feed
+  let activityMounted = false;
+  async function ensureActivityMounted(): Promise<void> {
+    if (activityMounted) return;
+    activityMounted = true;
+    const feed = mount.querySelector<HTMLElement>('[data-lib-activity-feed]');
+    if (!feed) return;
+    try {
+      const { renderLibraryActivity } = await import('./library-activity-render');
+      const n = renderLibraryActivity(feed, lib.id, 50);
+      const cnt = mount.querySelector<HTMLElement>('[data-activity-count]');
+      if (cnt) cnt.textContent = n > 0 ? String(n) : '·';
+    } catch (e) {
+      console.warn('[activity-feed] mount failed', e);
+    }
+  }
 
   // 切到 graph / chat 时挂载对应模块(lazy)
   let graphMounted = false;
@@ -1906,11 +1983,18 @@ function renderUserLibraryDetail(): void {
   // view 过滤(全部 / 今日)—— 改 items 后 vlist.setItems()
   let currentView: 'all' | 'today' = 'all';
   let currentSort: 'date' | 'score' = 'score';
+  let currentStatusFilter: 'all' | 'candidate' | 'scored' | 'included' | 'excluded' | 'trashed' = 'all';
+  function statusOf(p: PaperLite): string {
+    return (lib.papers[p.canonicalArxivId]?.status as string) || 'included';
+  }
   function applyPaperListFilter(): void {
     const today = new Date().toISOString().slice(0, 10);
     let items = papers;
     if (currentView === 'today') {
       items = items.filter((p) => p.date === today);
+    }
+    if (currentStatusFilter !== 'all') {
+      items = items.filter((p) => statusOf(p) === currentStatusFilter);
     }
     if (currentSort === 'score') {
       items = items.slice().sort((a, b) => {
@@ -1944,6 +2028,91 @@ function renderUserLibraryDetail(): void {
       currentSort = (p.dataset.sort === 'date' ? 'date' : 'score');
       applyPaperListFilter();
     });
+  });
+
+  // 状态过滤(candidate / scored / included / excluded / trashed)
+  mount.querySelectorAll<HTMLAnchorElement>('.wb-papers-status .filter-pill').forEach((p) => {
+    p.addEventListener('click', (e) => {
+      e.preventDefault();
+      mount.querySelectorAll('.wb-papers-status .filter-pill').forEach((b) => b.classList.toggle('active', b === p));
+      const v = p.dataset.statusFilter || 'all';
+      currentStatusFilter = (
+        v === 'candidate' || v === 'scored' || v === 'included' || v === 'excluded' || v === 'trashed'
+      ) ? v : 'all';
+      applyPaperListFilter();
+    });
+  });
+
+  // 批量选择(每行 wb-paper-row 加勾选框 + 顶部 bulk bar 显示)
+  // 极简交互:Ctrl/Cmd + click 行切换勾选;「全选」按钮走一遍当前可见 rows。
+  let bulkSelected = new Set<string>();
+  const bulkBar = mount.querySelector<HTMLElement>('[data-bulk-bar]');
+  const bulkCount = mount.querySelector<HTMLElement>('[data-bulk-count]');
+  function updateBulkBar(): void {
+    if (!bulkBar) return;
+    if (bulkSelected.size === 0) {
+      bulkBar.hidden = true;
+      return;
+    }
+    bulkBar.hidden = false;
+    if (bulkCount) bulkCount.textContent = String(bulkSelected.size);
+  }
+  // row 长按 / Ctrl-click 切换勾选(用普通 click 容易误触,改成 data-bulk-toggle)
+  // 用 checkbox 替代点行切换勾选,以免与详情锚点冲突。
+  // 简化:复用原 row click 行为,但添加一个额外的 ☐ chip(在 .row-head 末尾)。
+  // 由 mountLibraryWorkbenchPapers() 注入 —— 这里只挂事件代理:
+  mount.querySelectorAll<HTMLElement>('[data-bulk-toggle]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const cx = cb.dataset.cx || '';
+      if ((cb as HTMLInputElement).checked) bulkSelected.add(cx);
+      else bulkSelected.delete(cx);
+      updateBulkBar();
+    });
+  });
+  // bulk-bar 按钮
+  const statusBtnBind = (sel: string, status: LibraryPaperStatus): void => {
+    mount.querySelector<HTMLButtonElement>(sel)?.addEventListener('click', () => {
+      const ids = Array.from(bulkSelected);
+      if (ids.length === 0) return;
+      // 只有 trashed/excluded 才有 trashReason(included / candidate 不需要)
+      const opts: { trashReason?: string } = {};
+      if (status === 'trashed' || status === 'excluded') {
+        opts.trashReason = 'bulk';
+      }
+      const res = bulkSetPaperStatus(lib.id, ids, status, opts);
+      if (!res.ok) {
+        showToast(getApiResultMessage(res), 'error');
+      } else {
+        showToast(`已批量设 ${ids.length} 篇 → ${status}`, 'ok');
+        bulkSelected.clear();
+        updateBulkBar();
+        renderUserLibraryDetail();
+      }
+    });
+  };
+  statusBtnBind('[data-bulk-status="included"]', 'included');
+  statusBtnBind('[data-bulk-status="excluded"]', 'excluded');
+  statusBtnBind('[data-bulk-status="candidate"]', 'candidate');
+  statusBtnBind('[data-bulk-status="trashed"]', 'trashed');
+  mount.querySelector<HTMLButtonElement>('[data-bulk-remove]')?.addEventListener('click', () => {
+    const ids = Array.from(bulkSelected);
+    if (ids.length === 0) return;
+    const ok = window.confirm(`从「${lib.name}」批量移除 ${ids.length} 篇论文?\n\n论文不会从 docs 删除,只是从这库里移走。`);
+    if (!ok) return;
+    const res = bulkRemovePapersFromLibrary(lib.id, ids);
+    if (!res.ok) {
+      showToast(getApiResultMessage(res), 'error');
+    } else {
+      showToast(`已批量移出 ${ids.length} 篇`, 'ok');
+      bulkSelected.clear();
+      updateBulkBar();
+      renderUserLibraryDetail();
+    }
+  });
+  mount.querySelector<HTMLButtonElement>('[data-bulk-clear]')?.addEventListener('click', () => {
+    bulkSelected.clear();
+    updateBulkBar();
+    mount.querySelectorAll<HTMLInputElement>('[data-bulk-toggle]').forEach((cb) => (cb.checked = false));
   });
 
   // 概念 category 过滤
@@ -2045,6 +2214,38 @@ function renderUserLibraryDetail(): void {
       e.stopPropagation();
       const id = btn.dataset.libId || lib.id;
       openIngestPanel(id);
+    });
+  });
+
+  // 归档 / 取消归档
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="archive"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ok = window.confirm(`把「${lib.name}」归档?\n\n归档后,库不会出现在首页 / 卡片墙,不能 ingest / digest;已纳论文保留,导出仍可用。`);
+      if (!ok) return;
+      const id = btn.dataset.libId || lib.id;
+      const res = setLibraryArchived(id, true);
+      if (!res.ok) {
+        showToast(getApiResultMessage(res), 'error');
+      } else {
+        showToast('已归档', 'ok');
+        renderUserLibraryDetail();
+      }
+    });
+  });
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="unarchive"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = btn.dataset.libId || lib.id;
+      const res = setLibraryArchived(id, false);
+      if (!res.ok) {
+        showToast(getApiResultMessage(res), 'error');
+      } else {
+        showToast('已恢复', 'ok');
+        renderUserLibraryDetail();
+      }
     });
   });
   mount.querySelectorAll<HTMLButtonElement>('[data-action="digest-generate"]').forEach((btn) => {

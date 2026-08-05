@@ -26,6 +26,8 @@ import { canonicalArxivId } from '../arxiv';
 import { emitDprUserLibrariesChange } from '../events';
 import type { DprUserLibrariesChangeReason } from '../events';
 import { STORAGE_KEYS } from '../storage';
+import { appendLibraryActivity } from './activity-log';
+import type { LibraryActivityDetail } from './activity-log';
 import type {
   LibraryAnchor,
   LibraryConceptOverride,
@@ -155,7 +157,7 @@ function sanitizeDefinition(
   };
   return {
     statement: typeof d.statement === 'string' ? d.statement.slice(0, 500) : fallback.statement,
-    cadence: d.cadence === 'daily' || d.cadence === 'weekly' || d.cadence === 'monthly' ? d.cadence : 'manual',
+    cadence: d.cadence === 'daily' || d.cadence === 'weekly' || d.cadence === 'monthly' || d.cadence === 'archived' ? d.cadence : 'manual',
     anchors: sanitizeAnchors(d.anchors),
     keywords: {
       arxivCategories: sanitizeCategories(rawKw.arxivCategories ?? fallback.categories),
@@ -293,6 +295,96 @@ function isEmptyLibrary(l: UserLibrary): boolean {
   const hasStatement = typeof l.statement === 'string' && l.statement.trim().length > 0;
   const hasPapers = Array.isArray(l.paperIds) && l.paperIds.length > 0;
   return !hasName && !hasStatement && !hasPapers;
+}
+
+/** reason → 中文一行描述。落 activity log 用。
+ *  重点:**只描述事实**,不引诱(用户在「最近活动」面板看到的字面)。 */
+function activityMessage(reason: DprUserLibrariesChangeReason, next: UserLibrary | null): string {
+  switch (reason) {
+    case 'create':
+      return `创建文献库「${next?.name || '?'}」`;
+    case 'rename':
+      return `改名「${next?.name || '?'}」`;
+    case 'statement':
+      return `更新方向描述`;
+    case 'hue':
+      return `换主题色`;
+    case 'delete':
+      return '删除文献库';
+    case 'addPaper':
+      return '加入 1 篇论文';
+    case 'removePaper':
+      return '移出 1 篇论文';
+    case 'addPaper-bulk':
+      return `批量加入论文`;
+    case 'removePaper-bulk':
+      return '批量移出论文';
+    case 'definition':
+      return '更新 P8a LibraryDefinition';
+    case 'visibility':
+      return `可见性 → ${next?.visibility || 'personal'}`;
+    case 'archive':
+      return (next?.definition?.cadence === 'archived') ? '归档文献库' : '取消归档';
+    case 'anchor-add':
+      return '添加锚点论文';
+    case 'anchor-remove':
+      return '删除锚点论文';
+    case 'paper-meta':
+      return '更新论文元数据';
+    case 'paper-status-bulk':
+      return '批量设置论文状态';
+    case 'paper-meta-remove':
+      return '清除论文元数据';
+    case 'concept-override':
+      return '概念改名 / 排除';
+    case 'concept-override-remove':
+      return '恢复概念默认';
+    case 'sync':
+      return 'Gist 同步完成';
+    case 'reset':
+      return '重置全部文献库';
+    default:
+      return String(reason);
+  }
+}
+
+/** 把 reason + 上下文喂给 activity log。 */
+function appendLibraryActivityFromReason(
+  libId: string,
+  reason: DprUserLibrariesChangeReason,
+  next: UserLibrary | null,
+  prev: UserLibrary | undefined,
+): void {
+  if (reason === 'sync' || reason === 'reset') {
+    // 这两个不进 per-lib(已批量发生,真值在 lib 自身);append 一次 root-level 概览。
+    appendLibraryActivity(libId, reason as string, activityMessage(reason, next), {
+      prevPaperCount: prev?.paperIds.length ?? 0,
+      nextPaperCount: next?.paperIds.length ?? 0,
+    });
+    return;
+  }
+  const msg = activityMessage(reason, next);
+  let detail: LibraryActivityDetail;
+  if (reason === 'addPaper-bulk' || reason === 'removePaper-bulk') {
+    detail = {
+      added: next && prev ? Math.max(0, next.paperIds.length - prev.paperIds.length) : 0,
+      removed: prev && next ? Math.max(0, prev.paperIds.length - next.paperIds.length) : 0,
+      prevCount: prev?.paperIds.length ?? 0,
+      nextCount: next?.paperIds.length ?? 0,
+    };
+  } else if (reason === 'rename' && prev && next) {
+    detail = { from: prev.name, to: next.name };
+  } else if (reason === 'hue' && prev && next) {
+    detail = { from: prev.hue, to: next.hue };
+  } else if (reason === 'visibility' && next) {
+    detail = { visibility: next.visibility };
+  } else if (reason === 'paper-meta' && prev && next) {
+    // paper-meta 不在 commit() 里直接发,来自 setLibraryPaperMeta — 这分支不会进
+    detail = undefined;
+  } else {
+    detail = undefined;
+  }
+  appendLibraryActivity(libId, reason, msg, detail);
 }
 
 /** 名字 / statement 长度校验。Polaris 强调 statement 必填;本仓库额外要求
@@ -440,6 +532,13 @@ function commit(
   const res = persist(doc);
   if (!res.ok) return res;
 
+  // 落一份活动日志(fire-and-forget;失败不抛)
+  try {
+    appendLibraryActivityFromReason(id, reason, next, prev);
+  } catch {
+    /* activity log 不是关键路径 */
+  }
+
   emitDprUserLibrariesChange(emitTarget(), { ids: [id], reason });
   return { ok: true, changed: true };
 }
@@ -476,6 +575,54 @@ export function listLibrariesContainingPaper(canonicalId: string): string[] {
   for (const [id, lib] of Object.entries(libraries)) {
     if (lib.paperIds.includes(cid)) out.push(id);
   }
+  return out;
+}
+
+/** 给定论文 id,返回它所在全部 library 的精简信息(给论文详情页 cross-lib 卡片用)。
+ *
+ *  返回对象按 visibility / name 排序:
+ *   1. public 在前(用户愿意公开分享的库优先)
+ *   2. 其余按 name 字典序。
+ *
+ *  不在 lib.paperIds[] 的库不进结果 —— "candidate 候选" 仅在 lib.papers{} 表
+ *  里,membership 没建立的不算(用户没确认的论文不展示库)。 */
+export function listLibrariesContainingPaperDetailed(canonicalId: string): Array<{
+  id: string;
+  name: string;
+  statement: string;
+  hue: string;
+  visibility: 'personal' | 'pending' | 'public';
+  archived: boolean;
+}> {
+  const cid = canonicalArxivId(canonicalId);
+  if (!cid) return [];
+  const { libraries } = loadUserLibraries();
+  const out: Array<{
+    id: string;
+    name: string;
+    statement: string;
+    hue: string;
+    visibility: 'personal' | 'pending' | 'public';
+    archived: boolean;
+  }> = [];
+  for (const lib of Object.values(libraries)) {
+    if (!lib.paperIds.includes(cid)) continue;
+    out.push({
+      id: lib.id,
+      name: lib.name,
+      statement: lib.statement,
+      hue: lib.hue,
+      visibility: lib.visibility || 'personal',
+      archived: lib.definition?.cadence === 'archived',
+    });
+  }
+  out.sort((a, b) => {
+    if (a.visibility !== b.visibility) {
+      const order = { public: 0, pending: 1, personal: 2 } as const;
+      return order[a.visibility] - order[b.visibility];
+    }
+    return a.name.localeCompare(b.name);
+  });
   return out;
 }
 
@@ -582,9 +729,20 @@ export function renameLibrary(
 export function deleteLibrary(id: string): WriteResult {
   const doc = loadUserLibraries();
   if (!doc.libraries[id]) return { ok: true, changed: false };
+  const libSnapshot = doc.libraries[id];
   delete doc.libraries[id];
   const res = persist(doc);
   if (!res.ok) return res;
+  try {
+    appendLibraryActivity(id, 'delete', `删除文献库「${libSnapshot.name}」`, {
+      prevPaperCount: libSnapshot.paperIds.length,
+    });
+    // 删除同时清掉对应 activity 条目(不留尸)
+    // —— 引入即防止与 create 后又被合并的子项产生幽灵记录
+    // 这里不主动 purge,留一份「我曾经创建过这个库」的痕迹(用户可手动清空)。
+  } catch {
+    /* swallow */
+  }
   emitDprUserLibrariesChange(emitTarget(), { ids: [id], reason: 'delete' });
   return { ok: true, changed: true };
 }
@@ -609,6 +767,132 @@ export function removePaperFromLibrary(libraryId: string, arxivId: string): Writ
     entry.paperIds.splice(idx, 1);
   });
 }
+
+/**
+ * 批量加论文(Polaris 批量 API 的 client 版)。
+ * - 去重保留顺序,空 / 无效 id 静默忽略。
+ * - 仅触发 **一次**事件 reason='addPaper-bulk',listener 据此重绘整库。
+ */
+export function bulkAddPapersToLibrary(libraryId: string, arxivIds: ReadonlyArray<string>): WriteResult {
+  if (!Array.isArray(arxivIds) || arxivIds.length === 0) return { ok: true, changed: false };
+  // 先归一化并去重(保留首次出现)
+  const seen = new Set<string>();
+  const cids: string[] = [];
+  for (const raw of arxivIds) {
+    const cid = canonicalArxivId(raw);
+    if (!cid || seen.has(cid)) continue;
+    seen.add(cid);
+    cids.push(cid);
+  }
+  if (cids.length === 0) return { ok: true, changed: false };
+  return commit(libraryId, 'addPaper-bulk', (entry) => {
+    const existing = new Set(entry.paperIds);
+    let added = 0;
+    for (const cid of cids) {
+      if (existing.has(cid)) continue;
+      entry.paperIds.push(cid);
+      existing.add(cid);
+      added++;
+    }
+    if (added === 0) return false;
+  });
+}
+
+/**
+ * 批量从库内移除论文(Polaris `DELETE /libraries/{id}/papers` 批量版的 client)。
+ * - 同时清掉对应 paperId 在 lib.papers 里的元数据,不留垃圾。
+ * - 未命中 id 静默忽略。
+ */
+export function bulkRemovePapersFromLibrary(
+  libraryId: string,
+  arxivIds: ReadonlyArray<string>,
+): WriteResult {
+  if (!Array.isArray(arxivIds) || arxivIds.length === 0) return { ok: true, changed: false };
+  const toRemove = new Set<string>();
+  for (const raw of arxivIds) {
+    const cid = canonicalArxivId(raw);
+    if (cid) toRemove.add(cid);
+  }
+  if (toRemove.size === 0) return { ok: true, changed: false };
+  return commit(libraryId, 'removePaper-bulk', (entry) => {
+    const beforeLen = entry.paperIds.length;
+    const next = entry.paperIds.filter((cid) => !toRemove.has(cid));
+    if (next.length === beforeLen) return false;
+    entry.paperIds = next;
+    // 同步清掉 papers{} 表里那几行的元数据 —— 召回过一次,不该留尸。
+    if (entry.papers) {
+      const pNext = { ...entry.papers };
+      for (const cid of toRemove) delete pNext[cid];
+      entry.papers = pNext;
+    }
+  });
+}
+
+/**
+ * 批量设置论文状态 (Polaris `POST /libraries/{id}/papers/bulk-status` 镜像)。
+ *
+ * 用途:用户在工作台 PapersTab 多选 → 批量点「✓ 纳入 / ✗ 剔除 / 🗑 回收站 /
+ * 🕐 留候选」。一次事件,统一重绘。
+ *
+ * 选项 trashReason 只在 status='excluded' / 'trashed' 时用得上,其它可空。
+ *
+ * 注意:**不会**自动加进 paperIds[] —— 这与 setLibraryPaperMeta 行为一致,
+ * 候选(candidate)状态可能 paperIds 里没有。
+ */
+export function bulkSetPaperStatus(
+  libraryId: string,
+  arxivIds: ReadonlyArray<string>,
+  status: LibraryPaperStatus,
+  opts: { trashReason?: string } = {},
+): WriteResult {
+  if (!Array.isArray(arxivIds) || arxivIds.length === 0) return { ok: true, changed: false };
+  const cids: string[] = [];
+  for (const raw of arxivIds) {
+    const cid = canonicalArxivId(raw);
+    if (cid) cids.push(cid);
+  }
+  if (cids.length === 0) return { ok: true, changed: false };
+  return commit(libraryId, 'paper-status-bulk', (entry) => {
+    const papers = { ...(entry.papers || {}) };
+    let changed = 0;
+    for (const cid of cids) {
+      const cur = papers[cid] || { status: 'included' as LibraryPaperStatus, updatedAt: 0 };
+      if (cur.status === status) continue;
+      const next: LibraryPaperMeta = { ...cur, status };
+      if (opts.trashReason) next.trashReason = opts.trashReason.slice(0, 80);
+      papers[cid] = next;
+      changed++;
+    }
+    if (changed === 0) return false;
+    entry.papers = papers;
+  });
+}
+
+/**
+ * 整库归档 / 取消归档。
+ *
+ * 实现:沿用 `library.definition.cadence` 的 'archived' 值,不引新字段。
+ * 行为:归档后,该库不在 /libraries/ 默认卡片墙出现(传 `includeArchived: true`
+ * 才显示)、不参与筛选、不能 digest / ingest。可以 export。
+ */
+export function setLibraryArchived(libraryId: string, archived: boolean): WriteResult {
+  return commit(libraryId, 'archive', (entry) => {
+    const def = entry.definition || defaultLibraryDefinition(entry.statement);
+    const currentlyArchived = def.cadence === 'archived';
+    if (currentlyArchived === archived) return false;
+    entry.definition = {
+      ...def,
+      cadence: archived ? 'archived' : (def.cadence === 'archived' ? 'manual' : def.cadence),
+    };
+  });
+}
+
+/** 读:library 是否已归档。归档的库不进首页 / 卡片墙(UI 层过滤)。 */
+export function isLibraryArchived(libraryId: string): boolean {
+  const lib = getUserLibrary(libraryId);
+  return !!(lib?.definition?.cadence === 'archived');
+}
+
 
 /** 改 hue。 */
 export function setLibraryHue(libraryId: string, hue: LibraryHue): WriteResult {
@@ -707,7 +991,7 @@ export function setLibraryPaperMeta(
 ): WriteResult {
   const cid = canonicalArxivId(arxivId);
   if (!cid) return { ok: false, reason: 'invalid' };
-  return commit(libraryId, 'paper-meta', (entry) => {
+  const result = commit(libraryId, 'paper-meta', (entry) => {
     const cur = entry.papers[cid] || { status: 'included' as LibraryPaperStatus, updatedAt: 0 };
     const next: LibraryPaperMeta = { ...cur, ...patch };
     if (
@@ -719,6 +1003,28 @@ export function setLibraryPaperMeta(
     ) return false;
     entry.papers = { ...entry.papers, [cid]: next };
   });
+  // activity log:setLibraryPaperMeta 频繁被 LLM scoring 调用,不写日志(spam)。
+  // 只有「用户主动」操作(status / trashReason 变化 / tldrNote 编辑)才 log;
+  // 这里检测关键字段变更 → 用户改的判定。
+  if (result.ok && result.changed) {
+    const lib = getUserLibrary(libraryId);
+    const meta = lib?.papers[cid];
+    if (meta && (patch.status || patch.trashReason || (patch.tldrNote !== undefined && meta.tldrNote))) {
+      const parts: string[] = [];
+      if (patch.status) parts.push(`状态→${patch.status}`);
+      if (patch.trashReason) parts.push(`原因:${patch.trashReason}`);
+      if (patch.tldrNote !== undefined && meta.tldrNote) parts.push('编辑本库 TL;DR');
+      if (parts.length > 0) {
+        try {
+          appendLibraryActivity(libraryId, 'paper-meta', parts.join(' / '), {
+            cx: cid,
+            status: meta.status,
+          });
+        } catch { /* ignore */ }
+      }
+    }
+  }
+  return result;
 }
 
 /** 批量打分(LLM batch 跑完一次,把所有结果一次性 commit)。 */
