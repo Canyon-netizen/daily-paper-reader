@@ -22,7 +22,6 @@ import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
 import { applyPaperFilters } from './paper-filter';
 import { canonicalArxivId } from './arxiv';
-import type { ConceptRef } from './types/concept';
 import {
   parseFrontmatter,
   parseFigureList,

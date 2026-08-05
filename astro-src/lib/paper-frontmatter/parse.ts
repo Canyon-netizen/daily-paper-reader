@@ -68,6 +68,29 @@ export function normalizeDate(v: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * score 字段统一到 0–1 区间。
+ *
+ * 历史上存在两套写法并存(2026-08 实测 464 篇 0–1 / 62 篇 legacy):
+ *   - legacy:`score: 8.0`(0–10 整数刻度,早期 4.llm_refine_papers 写入)
+ *   - 现行:`score: 0.8`(0–1,src/4_5_batch_score.py:write_frontmatter 写入)
+ *
+ * 两者混在一起时 /papers/ 的「相关度」排序会把 legacy 论文整体顶到前面
+ * (8.0 > 任何 0–1 分),相关度阈值过滤也会全部放行。这里在解析边界一次性
+ * 归一化,让下游(paper-filter 排序 / 库工作台 score-ring / 详情页 pill)
+ * 只需面对单一量纲。
+ *
+ * 归一化规则:> 1 视为 0–10 刻度,除以 10;其余原样保留。非数字 / NaN
+ * → undefined(缺分论文,排序时按 0 兜底,不伪装成 0 分论文)。
+ */
+export function normalizeScore(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+  if (v < 0) return 0;
+  const n = v > 1 ? v / 10 : v;
+  // legacy 10.0 → 1.0;更大的脏数据钳到 1,避免 score-ring 画出 > 满环。
+  return n > 1 ? 1 : n;
+}
+
 /** categories 4-dim 规范化:输入 unknown,经过 buildCategories 走白名单。 */
 export function normalizeCategories(raw: unknown): Categories {
   if (!raw || typeof raw !== 'object') {
@@ -98,6 +121,7 @@ export function parseFrontmatter(
     const data: PaperFrontmatter = {
       ...raw,
       date: normalizeDate(raw.date),
+      score: normalizeScore(raw.score),
       categories: normalizeCategories(raw.categories),
       concepts: normalizeConceptList(raw.concepts),
     };

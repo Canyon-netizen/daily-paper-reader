@@ -71,6 +71,19 @@ function flattenCategories(c) {
   return out;
 }
 
+/** score 归一到 0–1,缺分 → 0。
+ *
+ *  必须与 lib/paper-frontmatter/parse.ts:normalizeScore 保持同一规则:
+ *  legacy `score: 8.0`(0–10 刻度)与现行 `score: 0.8`(0–1)混存,不归一会让
+ *  BM25 打分里的 `c` 字段量纲不一致。此处是 .mjs 构建脚本,无法 import 那份
+ *  .ts,规则改动时两边必须同步。
+ */
+function normalizeScore(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return 0;
+  const n = v > 1 ? v / 10 : v;
+  return n > 1 ? 1 : n;
+}
+
 /** 标题轻量剥 TeX 标记 —— settings "已隐藏论文" 面板已经在用,这里再借一次。 */
 function stripTitleMarkupLite(value) {
   let text = String(value || '');
@@ -183,7 +196,7 @@ async function main() {
       k: concepts,
       g: flattenCategories(d.categories),
       d: d.date || '',
-      c: typeof d.score === 'number' && Number.isFinite(d.score) ? d.score : 0,
+      c: normalizeScore(d.score),
     });
   }
 
