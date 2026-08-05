@@ -24,6 +24,7 @@
 import { showToast } from './toast';
 import { canonicalArxivId } from '../lib/arxiv';
 import { loadSettings } from './settings';
+import { recordUsage } from '../lib/llm-budget';
 import {
   addPaperToLibrary,
   batchSetLibraryPaperMeta,
@@ -213,6 +214,11 @@ async function scoreCandidatesWithLLM(
         throw new Error(`LLM HTTP ${resp.status}: ${errText.slice(0, 200)}`);
       }
       const data = await resp.json();
+      // Record token usage
+      const usage = data?.usage;
+      if (usage) {
+        recordUsage(libId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+      }
       let content = data.choices?.[0]?.message?.content || '';
       // strip <think>
       content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();

@@ -19,6 +19,7 @@ import { showToast } from './toast';
 import { loadSettings } from './settings';
 import { canonicalArxivId } from '../lib/arxiv';
 import { getUserLibrary, batchSetLibraryPaperMeta } from '../lib/user-libraries';
+import { recordUsage } from '../lib/llm-budget';
 import type { UserLibrary } from '../lib/user-libraries';
 
 const LLM_BATCH = 30;
@@ -101,6 +102,11 @@ export async function rescoreLibrary(
         throw new Error(`LLM HTTP ${resp.status}: ${errText.slice(0, 200)}`);
       }
       const data = await resp.json();
+      // Record token usage
+      const usage = data?.usage;
+      if (usage) {
+        recordUsage(libId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+      }
       let content = (data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       const start = content.indexOf('{');
       const end = content.lastIndexOf('}');

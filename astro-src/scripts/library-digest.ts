@@ -17,6 +17,7 @@
 import { showToast } from './toast';
 import { loadSettings } from './settings';
 import { getUserLibrary } from '../lib/user-libraries';
+import { recordUsage } from '../lib/llm-budget';
 import type { UserLibrary } from '../lib/user-libraries';
 
 export interface LibraryDigest {
@@ -164,6 +165,11 @@ export async function generateDigest(
       throw new Error(`LLM HTTP ${resp.status}: ${errText.slice(0, 200)}`);
     }
     const data = await resp.json();
+    // Record token usage
+    const usage = data?.usage;
+    if (usage) {
+      recordUsage(libId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
+    }
     content = data.choices?.[0]?.message?.content || '';
     content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
   } catch (e) {

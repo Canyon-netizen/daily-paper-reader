@@ -10,6 +10,7 @@
 
 import type { LLMConfig } from '../../scripts/settings';
 import type { CallChatOptions, ChatResponse } from './types';
+import { recordUsage } from '../llm-budget';
 
 const DEEPSEEK_RE = /^https?:\/\/api\.deepseek\.com/i;
 /** 窄正则:`reasoner | reasoning | r1`。历史 4 处 caller(paper-analyzer 1224/1468
@@ -55,11 +56,23 @@ export async function callChatCompletion(
   }
   const raw = await res.json();
   const choice = raw?.choices?.[0];
-  return {
+  const response: ChatResponse = {
     content: choice?.message?.content ?? '',
     finishReason: choice?.finish_reason ?? '',
     raw,
     isDeepSeek,
     reasoningDisabled: isDeepSeek && isReasoning,
   };
+
+  // Record token usage if available
+  const usage = raw?.usage;
+  if (usage) {
+    const promptTokens = usage.prompt_tokens ?? 0;
+    const completionTokens = usage.completion_tokens ?? 0;
+    if (promptTokens > 0 || completionTokens > 0) {
+      recordUsage(opts.libraryId ?? 'global', promptTokens, completionTokens);
+    }
+  }
+
+  return response;
 }

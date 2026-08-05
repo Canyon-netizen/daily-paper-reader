@@ -158,6 +158,7 @@ const selectedPaper = papers[0];
       <a class="lib-wb-tab" href="#notes" data-tab="notes">📝 笔记 <span class="tab-count">—</span></a>
       <a class="lib-wb-tab" href="#govern" data-tab="govern">⚙️ 文献库配置</a>
       <a class="lib-wb-tab" href="#ingest" data-tab="ingest">📥 建库与同步</a>
+      <a class="lib-wb-tab" href="#dupes" data-tab="dupes">🗂️ 重复</a>
       <a class="back" href={base + '/libraries/'}>← 所有文献库</a>
     </nav>
 
@@ -490,7 +491,7 @@ const selectedPaper = papers[0];
     {/* ===== 文献库配置 tab(GovernanceTab) =====
         阶段 2:静态展示 name / description / hue / curator。
         阶段 4:扩展 NewLibraryModal 把 statement / hue 写入用户库 schema。 */}
-    <section id="govern-panel" class="library-wb-panel" data-panel="govern">
+    <section id="govern-panel" class="library-wb-panel" data-panel="govern" data-library-id={lib.id}>
       <div class="wb-govern">
         <h3>文献库基础信息</h3>
         <dl class="govern-dl">
@@ -511,6 +512,20 @@ const selectedPaper = papers[0];
           <dt>入库方式</dt>
           <dd>公共库(从 docs/papers/** frontmatter 派生,无写路径)</dd>
         </dl>
+
+        <h3>本月 LLM 用量</h3>
+        <dl class="govern-dl">
+          <dt>已用 tokens</dt>
+          <dd id="llm-usage-used">加载中...</dd>
+          <dt>预算设置</dt>
+          <dd id="llm-usage-budget">
+            <input type="number" id="llm-budget-input" placeholder="无限制" min="0" step="1000" style="width:120px" />
+            <button type="button" id="llm-budget-set" class="export-btn">设置预算</button>
+          </dd>
+          <dt>剩余</dt>
+          <dd id="llm-usage-remaining">-</dd>
+        </dl>
+        <p><button type="button" id="llm-usage-reset" class="export-btn">重置本月用量</button></p>
       </div>
     </section>
 
@@ -528,6 +543,13 @@ const selectedPaper = papers[0];
           <li id="wb-ingest-status" class="wb-ingest-status"></li>
         </ul>
         <p class="empty">同步底层由 <code>astro-src/lib/user-libraries/gist.ts</code> 处理(零信任 R/W 合并,见 8f2a 提交)。</p>
+      </div>
+    </section>
+
+    {/* ===== 重复检测 tab ===== */}
+    <section id="dupes-panel" class="library-wb-panel" data-panel="dupes">
+      <div class="wb-dupes" id="dupes-container">
+        <p class="loading">正在检测重复...</p>
       </div>
     </section>
 
@@ -552,16 +574,155 @@ const selectedPaper = papers[0];
     import { initLibraryExportButtons } from '../../scripts/export-bridge';
     import '../../scripts/library-workbench-actions.ts';
     import { mountLibraryGraph, mountLibraryChat } from '../../scripts/library-workbench-mounts';
+    import { findDuplicateGroups, duplicateStats, type DuplicateGroup } from '../../lib/library-duplicates';
+    import { getCurrentSummary, clearMonth, setMonthlyBudget, getCurrentMonth } from '../../lib/llm-budget';
     initLibraryExportButtons();
 
-    // PR 阶段 2:8 tab 切换(PapersTab / ConceptsTab / Graph / Digest / Chat / Notes / Govern / Ingest)
+    // LLM 用量显示
+    function updateLlmUsageDisplay(): void {
+      const panel = document.getElementById('govern-panel');
+      const libId = panel?.dataset.libraryId;
+      if (!libId) return;
+
+      const summary = getCurrentSummary(libId);
+      const usedEl = document.getElementById('llm-usage-used');
+      const remainingEl = document.getElementById('llm-usage-remaining');
+      const budgetInput = document.getElementById('llm-budget-input') as HTMLInputElement;
+
+      if (summary) {
+        if (usedEl) usedEl.textContent = `${summary.usedTokens.toLocaleString()} tokens`;
+        if (remainingEl) {
+          if (summary.remainingTokens !== null) {
+            remainingEl.textContent = summary.isExhausted ? '已用尽' : `${summary.remainingTokens.toLocaleString()} tokens`;
+          } else {
+            remainingEl.textContent = '无限制';
+          }
+        }
+        if (budgetInput && summary.monthlyBudget !== null) {
+          budgetInput.value = String(summary.monthlyBudget);
+        }
+      } else {
+        if (usedEl) usedEl.textContent = '0 tokens';
+        if (remainingEl) remainingEl.textContent = '-';
+      }
+    }
+
+    // 初始化 LLM 用量显示
+    updateLlmUsageDisplay();
+
+    // 重置按钮
+    document.getElementById('llm-usage-reset')?.addEventListener('click', () => {
+      const panel = document.getElementById('govern-panel');
+      const libId = panel?.dataset.libraryId;
+      if (!libId) return;
+      if (!confirm('确定要重置本月 LLM 用量吗?')) return;
+      clearMonth(libId, getCurrentMonth());
+      updateLlmUsageDisplay();
+    });
+
+    // 设置预算按钮
+    document.getElementById('llm-budget-set')?.addEventListener('click', () => {
+      const panel = document.getElementById('govern-panel');
+      const libId = panel?.dataset.libraryId;
+      const input = document.getElementById('llm-budget-input') as HTMLInputElement;
+      if (!libId || !input) return;
+      const budget = input.value ? parseInt(input.value, 10) : 0;
+      setMonthlyBudget(libId, getCurrentMonth(), budget);
+      updateLlmUsageDisplay();
+    });
+
+    // 从 SSR 注入的 papers 数据中提取(页面 render 时已经把 papers 序列化到 DOM)
+    // 使用 data-cx 属性获取论文 canonicalArxivId 列表
+    const getPapersData = (): any[] => {
+      const dataEl = document.getElementById('library-wb-data');
+      if (!dataEl) return [];
+      try {
+        return JSON.parse(dataEl.dataset.cx || '[]').map((id: string) => ({
+          canonicalArxivId: id,
+          arxivId: id,
+        }));
+      } catch { return []; }
+    };
+
+    // 渲染重复检测结果
+    let dupesRendered = false;
+    async function renderDupesTab(): Promise<void> {
+      if (dupesRendered) return;
+      dupesRendered = true;
+
+      const container = document.getElementById('dupes-container');
+      if (!container) return;
+
+      // 动态 import paper.ts 获取 listPapers
+      const paperModule = await import('../../lib/paper');
+      const allPapers = await paperModule.listPapers({ dedup: false });
+      const groups = findDuplicateGroups(allPapers);
+      const stats = duplicateStats(groups);
+
+      if (groups.length === 0) {
+        container.innerHTML = `
+          <h3>重复检测</h3>
+          <p class="empty">未检测到重复论文。</p>
+          <p class="empty">版本簇: ${stats.versionCluster} 组<br>跨 ID 标题重复: ${stats.crossIdTitle} 组</p>`;
+        return;
+      }
+
+      const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      const renderGroup = (g: DuplicateGroup, idx: number) => {
+        const reasonLabel = g.reason === 'version-cluster' ? '版本簇' : '跨ID标题重复';
+        const reasonClass = g.reason === 'version-cluster' ? 'chip-version' : 'chip-title';
+        const filesHtml = g.files.map((f, i) => `
+          <li class="dupe-file">
+            <span class="dupe-path">${escapeHtml(f.relPath)}</span>
+            <span class="dupe-ver">v${f.version}</span>
+            <span class="dupe-date">${f.date || '—'}</span>
+            ${g.reason === 'version-cluster' ? `<button type="button" class="btn btn-soft btn-sm btn-mark-cleanup" data-group="${idx}" data-canonical="${escapeHtml(f.canonicalId)}">标记清理</button>` : ''}
+          </li>
+        `).join('');
+
+        return `
+          <div class="dupe-group" data-reason="${g.reason}">
+            <div class="dupe-header">
+              <span class="dupe-key">${escapeHtml(g.groupKey)}</span>
+              <span class="dupe-count">${g.files.length} 文件</span>
+              <span class="chip ${reasonClass}">${reasonLabel}</span>
+            </div>
+            <ul class="dupe-files">${filesHtml}</ul>
+          </div>`;
+      };
+
+      container.innerHTML = `
+        <h3>重复检测</h3>
+        <p class="dupe-summary">共 ${groups.length} 组重复,版本簇 ${stats.versionCluster} 组,跨ID标题 ${stats.crossIdTitle} 组</p>
+        <div class="dupe-list">
+          ${groups.map((g, i) => renderGroup(g, i)).join('')}
+        </div>`;
+
+      // 绑定"标记清理"按钮事件
+      container.querySelectorAll<HTMLButtonElement>('.btn-mark-cleanup').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const canonicalId = btn.dataset.canonical || '';
+          const groupIdx = parseInt(btn.dataset.group || '0', 10);
+          const group = groups[groupIdx];
+          if (!group || group.reason !== 'version-cluster') return;
+          const plan = group.files.map(f => `rm docs/papers/${f.relPath}.md`).join('\n');
+          if (confirm(`确定要清理 ${canonicalId} 的 ${group.files.length} 个旧版本吗?\n\n清理计划:\n${plan}`)) {
+            console.log('[dupes] Cleanup plan:', plan);
+            alert('清理功能待实现,请手动执行上述命令');
+          }
+        });
+      });
+    }
+
+    // PR 阶段 2:8 tab 切换(PapersTab / ConceptsTab / Graph / Digest / Chat / Notes / Govern / Ingest / Dupes)
     // 注:hash 路由沿用 :target + JS 切 active class 模式,无 JS 也能切。
     type Tab =
       | 'papers' | 'concepts' | 'graph' | 'digest'
-      | 'chat' | 'notes' | 'govern' | 'ingest';
+      | 'chat' | 'notes' | 'govern' | 'ingest' | 'dupes';
     const VALID: Tab[] = [
       'papers', 'concepts', 'graph', 'digest',
-      'chat', 'notes', 'govern', 'ingest',
+      'chat', 'notes', 'govern', 'ingest', 'dupes',
     ];
 
     function setActiveTab(tab: Tab) {
@@ -574,6 +735,8 @@ const selectedPaper = papers[0];
       // 阶段 4:tab 切到 graph / chat 时按需挂载客户端内容(只挂一次)
       if (tab === 'graph') mountLibraryGraph();
       if (tab === 'chat') mountLibraryChat();
+      // 切到 dupes 时渲染重复检测结果
+      if (tab === 'dupes') void renderDupesTab();
       // 通知阶段 4 客户端:切到 graph 时可挂载 SVG,切到 chat 时挂载 panel 等
       try {
         document.dispatchEvent(new CustomEvent('dpr:library-tab', { detail: { tab } }));
@@ -581,7 +744,7 @@ const selectedPaper = papers[0];
     }
 
     function syncFromHash() {
-      const m = window.location.hash.match(/^#(papers|concepts|graph|digest|chat|notes|govern|ingest)$/);
+      const m = window.location.hash.match(/^#(papers|concepts|graph|digest|chat|notes|govern|ingest|dupes)$/);
       if (m) setActiveTab(m[1] as Tab);
     }
 

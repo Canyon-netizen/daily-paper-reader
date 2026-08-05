@@ -26,6 +26,8 @@ export interface CallChatOptions {
    *  - topic-search 旧实现:  `/reasoner|reasoning|r1|think/i`(宽)
    *  默认窄;宽者通过 `REASONING_MODEL_PATTERN_WIDE` 显式传。 */
   reasoningModelPattern?: RegExp;
+  /** 用于 LLM token 用量追踪的 libraryId。不传时记到 'global'。 */
+  libraryId?: string;
 }
 
 /** callChatCompletion 的返回值。 */

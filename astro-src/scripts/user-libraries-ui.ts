@@ -37,6 +37,7 @@ import {
   updateLibraryDefinition,
   defaultLibraryDefinition,
   type LibraryAnchor,
+  type LibraryConceptOverride,
   type LibraryHue,
   type LibraryPaperMeta,
   type LibraryPaperStatus,
@@ -1711,7 +1712,7 @@ function renderUserLibraryDetail(): void {
         <div class="wb-paper-detail" id="wb-detail-pane">
           ${papers.length === 0
             ? '<p class="empty">没有可显示的论文</p>'
-            : papers.map((p, i) => renderPaperDetailBody(p, i, lib.papers[p.canonicalArxivId])).join('')}
+            : papers.map((p, i) => renderPaperDetailBody(p, i, lib.papers[p.canonicalArxivId], lib.conceptOverrides)).join('')}
         </div>
       </div>
     </section>
@@ -1736,7 +1737,7 @@ function renderUserLibraryDetail(): void {
               const excluded = !!ov.exclude;
               return `
               <div class="wb-concepts-card${excluded ? ' cc-excluded' : ''}" data-cat="${escapeHtml(c.category)}" data-slug="${escapeHtml(c.slug)}">
-                <a class="cc-name" href="${url('/wiki/concepts/' + c.slug + '/')}">${escapeHtml(displayName)}</a>
+                <a class="cc-name" href="${url('/wiki/concepts/' + (ov.canonicalSlug || c.slug) + '/')}">${escapeHtml(displayName)}</a>
                 <div class="cc-meta"><span>×${c.n} 篇</span></div>
                 <p class="cc-cat">${escapeHtml(c.category)}</p>
                 <div class="cc-actions">
@@ -1744,6 +1745,9 @@ function renderUserLibraryDetail(): void {
                   ${excluded
                     ? `<button type="button" class="btn btn-soft btn-sm" data-action="cc-unexclude" data-slug="${escapeHtml(c.slug)}">↩ 恢复</button>`
                     : `<button type="button" class="btn btn-soft btn-sm" data-action="cc-exclude" data-slug="${escapeHtml(c.slug)}">⊘ 排除</button>`}
+                  ${ov.canonicalSlug
+                    ? `<button type="button" class="btn btn-soft btn-sm" data-action="cc-unrelink" data-slug="${escapeHtml(c.slug)}">↺ 取消合并</button>`
+                    : `<button type="button" class="btn btn-soft btn-sm" data-action="cc-relink" data-slug="${escapeHtml(c.slug)}">🔗 合并到</button>`}
                   ${(ov.displayName || ov.exclude) ? `<button type="button" class="btn btn-ghost btn-sm" data-action="cc-reset" data-slug="${escapeHtml(c.slug)}">↺ 默认</button>` : ''}
                 </div>
                 ${ov.note ? `<p class="cc-note">📝 ${escapeHtml(ov.note)}</p>` : ''}
@@ -2222,6 +2226,34 @@ function renderUserLibraryDetail(): void {
     });
   });
 
+  // 概念 relink(合并到另一个 slug)
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="cc-relink"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slug = btn.dataset.slug || '';
+      const v = window.prompt(`合并概念到另一个 slug(只在本库生效)\n\n当前 slug: ${slug}\n目标 slug:`, slug);
+      if (v === null) return;
+      const t = v.trim();
+      if (!t || t === slug) return;
+      if (t.length > 64) { showToast('目标 slug 不能超过 64 个字符', 'error'); return; }
+      if (/\s/.test(t)) { showToast('目标 slug 不能包含空白字符', 'error'); return; }
+      const res = setLibraryConceptOverride(lib.id, slug, { canonicalSlug: t });
+      if (!res.ok) showToast(getApiResultMessage(res), 'error');
+      else { showToast(`已合并到「${t}」`, 'ok'); renderUserLibraryDetail(); }
+    });
+  });
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="cc-unrelink"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const slug = btn.dataset.slug || '';
+      const res = setLibraryConceptOverride(lib.id, slug, { canonicalSlug: '' });
+      if (!res.ok) showToast(getApiResultMessage(res), 'error');
+      else { showToast('已取消合并', 'ok'); renderUserLibraryDetail(); }
+    });
+  });
+
   // 顶部按钮(编辑 / 删除)
   mount.querySelectorAll<HTMLButtonElement>('[data-action="edit"]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
@@ -2438,7 +2470,7 @@ function injectExportDataAttrs(mount: HTMLElement, libId: string, paperIds: stri
   carrier.id = 'library-wb-data';
 }
 
-function renderPaperDetailBody(p: PaperLite, i: number, meta: LibraryPaperMeta | undefined): string {
+function renderPaperDetailBody(p: PaperLite, i: number, meta: LibraryPaperMeta | undefined, conceptOverrides?: Record<string, LibraryConceptOverride>): string {
   const statusLabel = meta ? renderStatusBadge(meta.status) : '';
   const relevanceScore = typeof meta?.relevanceScore === 'number' ? meta.relevanceScore : null;
   return `
@@ -2521,13 +2553,16 @@ function renderPaperDetailBody(p: PaperLite, i: number, meta: LibraryPaperMeta |
       ${p.concepts && p.concepts.length > 0 ? (() => {
         const limit = 12;
         const overflow = p.concepts.length > limit;
+        const displayConcepts = overflow ? p.concepts.slice(0, limit) : p.concepts;
         return `
           <details class="detail-section" open=${p.concepts.length <= limit}>
             <summary>概念 · ${p.concepts.length} 个</summary>
             <div class="concepts-chips">
-              ${(overflow ? p.concepts.slice(0, limit) : p.concepts).map((c) => `
-                <a class="cc" href="${url('/wiki/concepts/' + c.slug + '/')}">${escapeHtml(c.display_name)}</a>
-              `).join('')}
+              ${displayConcepts.map((c) => {
+                const ov = conceptOverrides?.[c.slug];
+                const targetSlug = ov?.canonicalSlug || c.slug;
+                return `<a class="cc" href="${url('/wiki/concepts/' + targetSlug + '/')}">${escapeHtml(c.display_name)}</a>`;
+              }).join('')}
               ${overflow ? `<span class="cc cc-overflow">+${p.concepts.length - limit} 个</span>` : ''}
             </div>
           </details>
