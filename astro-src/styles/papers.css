@@ -730,3 +730,62 @@
     line-height: 1.55;
   }
 }
+
+/* === 跨文献库 chip 横条(论文详情页下方) ===
+   由 astro-src/scripts/paper-cross-libraries.ts 客户端挂载,
+   显示这篇论文所在的全部用户库。 */
+.paper-cross-libraries {
+  margin: 1.25rem 0 0.75rem 0;
+  padding: 0.75rem 1rem;
+  background: var(--bg-elev, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.paper-cross-libraries .cl-header {
+  font-weight: 600;
+  color: var(--fg-muted);
+  margin-bottom: 0.5rem;
+}
+.paper-cross-libraries .cl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.paper-cross-libraries .cl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  text-decoration: none;
+  border-left: 3px solid currentColor;
+  background: var(--bg-paper, #fff);
+  color: var(--fg);
+  transition: all 0.15s ease;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
+}
+.paper-cross-libraries .cl-chip:hover {
+  border-color: var(--accent, #2563eb);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+.paper-cross-libraries .cl-vis {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+.paper-cross-libraries .cl-arch {
+  font-size: 0.85rem;
+  opacity: 0.6;
+}
+
+/* hue 颜色 —— 与 lib/user-libraries/types.ts:LIBRARY_HUES 一致 */
+.hue-orange   { color: #ea580c; }
+.hue-cyan     { color: #0891b2; }
+.hue-purple   { color: #7c3aed; }
+.hue-emerald  { color: #059669; }
+.hue-amber    { color: #d97706; }
+.hue-rose     { color: #e11d48; }
+.hue-sky      { color: #0284c7; }

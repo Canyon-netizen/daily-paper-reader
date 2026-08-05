@@ -36,11 +36,14 @@ export {
   listUserLibraries,
   listUserLibraryPaperIds,
   listLibrariesContainingPaper,
+  listLibrariesContainingPaperDetailed,
   createLibrary,
   renameLibrary,
   deleteLibrary,
   addPaperToLibrary,
   removePaperFromLibrary,
+  bulkAddPapersToLibrary,
+  bulkRemovePapersFromLibrary,
   setLibraryHue,
   updateLibraryDefinition,
   setLibraryVisibility,
@@ -48,12 +51,15 @@ export {
   removeLibraryAnchor,
   setLibraryPaperMeta,
   batchSetLibraryPaperMeta,
+  bulkSetPaperStatus,
   removeLibraryPaperMeta,
   getLibraryPaperMeta,
   listLibraryPaperMetas,
   setLibraryConceptOverride,
   removeLibraryConceptOverride,
   getLibraryConceptDisplay,
+  setLibraryArchived,
+  isLibraryArchived,
   replaceUserLibraries,
   clearUserLibraries,
 } from './store';
@@ -67,3 +73,14 @@ export {
 } from './gist';
 
 export type { SerializedLibrariesBlock } from './gist';
+
+export {
+  appendLibraryActivity,
+  listLibraryActivity,
+  listAllActivity,
+  purgeLibraryActivity,
+  clearLibraryActivity,
+  formatActivityTime,
+} from './activity-log';
+
+export type { LibraryActivity, LibraryActivityDetail } from './activity-log';

@@ -92,8 +92,13 @@ export interface LibraryDefinition {
    *  显示时优先 statement,fallback definition.statement。 */
   statement: string;
   /** 期望的同步频率 label(例如 "daily" / "weekly" / "manual")。Polaris
-   *  真正用 cron 调 voyage;DPR 只是 UI label,不调度。 */
-  cadence: 'manual' | 'daily' | 'weekly' | 'monthly';
+   *  真正用 cron 调 voyage;DPR 只是 UI label,不调度。
+   *
+   *  `'archived'` 是新增的兜底值 —— 表示这个库被用户整体归档(不再参与日常
+   *  浏览 / 导出 / 候选拉取)。Polaris 用 status 字段管这事;本仓库已经在
+   *  schema 里占好 cadence 这一格,语义独立、避免再加一列做迁移。
+   */
+  cadence: 'manual' | 'daily' | 'weekly' | 'monthly' | 'archived';
   /** 锚点论文。命中即给高分(Polaris: anchors 内的论文强制 included)。 */
   anchors: LibraryAnchor[];
   /** 关键词规则。空 = 不按关键词过滤。 */

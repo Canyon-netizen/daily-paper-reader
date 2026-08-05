@@ -55,7 +55,13 @@ export interface DprBulkSelectionChangeDetail {
 }
 
 /** 用户文献库写入的原因标签。listener 可以据此决定重绘粒度
- * (例如 'addPaper' 只需刷新该 library 的成员行,'create' / 'sync' 需要整表重排)。 */
+ * (例如 'addPaper' 只需刷新该 library 的成员行,'create' / 'sync' 需要整表重排)。
+ *
+ * v3 扩展:
+ *   - `addPaper-bulk` / `removePaper-bulk` 合并替代 N 次单条 addPaper/removePaper
+ *   - `paper-status-bulk` 批量设置论文状态机(Polaris 同步版)
+ *   - `archive` 整库归档(不删除,但 home card 隐藏)
+ */
 export type DprUserLibrariesChangeReason =
   | 'create'
   | 'rename'
@@ -63,15 +69,19 @@ export type DprUserLibrariesChangeReason =
   | 'delete'
   | 'addPaper'
   | 'removePaper'
+  | 'addPaper-bulk'
+  | 'removePaper-bulk'
   | 'sync'
   | 'reset'
   | 'hue'
   | 'definition'
   | 'visibility'
+  | 'archive'
   | 'anchor-add'
   | 'anchor-remove'
   | 'paper-meta'
   | 'paper-meta-remove'
+  | 'paper-status-bulk'
   | 'concept-override'
   | 'concept-override-remove';
 
