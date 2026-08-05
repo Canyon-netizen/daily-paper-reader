@@ -378,8 +378,16 @@ function renderStatusBadge(status: string): string {
 /** 极简 markdown → HTML(Digest 显示用,不需要 fig/table 替换)。 */
 /** 渲染 Polaris 风格 wiki 5 节中文 markdown 为 HTML(简化版)。
  *  Polaris 顺序:TL;DR / 研究背景与动机 / 方法 / 实验与结果 / 讨论与可借鉴点。
- *  不引外部 markdown 解析器 —— 标题 / 段落 / 列表 / **粗** / *斜* / `code` / [[wikilink]] 就够。 */
+ *  不引外部 markdown 解析器 —— 标题 / 段落 / 列表 / **粗** / *斜* / `code` / [[wikilink]] 就够。
+ *
+ *  跳过 ## TL;DR 段 —— 详情面板已有 tldr-card(来自论文 frontmatter tldr)。
+ *  否则用户会看到 TL;DR 出现两次。 */
 function renderWikiMarkdown(md: string): string {
+  // 跳过 ## TL;DR 块直到下一个二级标题
+  md = md.replace(
+    /^## TL;DR\s*\n+[\s\S]*?(?=\n## (研究背景与动机|背景|方法|实验|结果|讨论|缺点|结论))/m,
+    '',
+  );
   const esc = md
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
