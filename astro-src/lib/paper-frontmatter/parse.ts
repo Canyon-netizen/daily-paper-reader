@@ -167,3 +167,36 @@ export function extractWikiArticle(body: string): string | null {
   const end = endMatch ? startMatch.index + 1 + endMatch.index : body.length;
   return body.slice(startMatch.index, end).trim();
 }
+
+/**
+ * translate_polaris.py 写出的 5 节中文解读必须全 5 节都在才算「完整」:
+ *   ## TL;DR
+ *   ## 研究背景与动机
+ *   ## 方法
+ *   ## 实验与结果
+ *   ## 讨论与可借鉴点
+ *
+ * extractWikiArticle() 只校验 ## TL;DR 起始,容忍老版 4 节翻译(## TLDR/## 动机/
+ * 方法/结果/结论)与不完整 body,这是向后兼容的需要。
+ *
+ * extractWikiArticleStrict() 是「完整版」:5 节标题必须全在 body 段内,否则 null。
+ * 用于:
+ *   - paper.ts readPaper 的 wikiContent fallback 链:strict 优先,strict 不行才退化
+ *   - daily workflow translate 完之后的完整性校验
+ *
+ * 不要在这里做强字符 / 长度校验 —— 那是 translate_polaris.py:_validate_article 的职责,
+ * Python 端拒收低质量 LLM 输出。本函数只校验结构(5 个 ## 标题),不评估内容质量。
+ */
+const REQUIRED_WIKI_HEADINGS = [
+  '## TL;DR',
+  '## 研究背景与动机',
+  '## 方法',
+  '## 实验与结果',
+  '## 讨论与可借鉴点',
+] as const;
+
+export function extractWikiArticleStrict(body: string): string | null {
+  const wiki = extractWikiArticle(body);
+  if (!wiki) return null;
+  return REQUIRED_WIKI_HEADINGS.every((h) => wiki.includes(h)) ? wiki : null;
+}

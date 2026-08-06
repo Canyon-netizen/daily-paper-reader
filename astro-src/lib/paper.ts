@@ -27,6 +27,7 @@ import {
   parseFigureList,
   loadFiguresFromAssetMeta,
   extractWikiArticle,
+  extractWikiArticleStrict,
 } from './paper-frontmatter';
 
 const EXCLUDED_DIRS = new Set(['tutorial', 'assets', 'plans']);
@@ -188,8 +189,10 @@ export async function readPaper(id: string): Promise<Paper | null> {
     isBroken: false,
     figures,
     tables: parseFigureList(parsed.data.tables_json),
-    // Polaris 5 节中文解读(translate_polaris.py 写入),undefined = 旧论文没编译过
-    wikiContent: extractWikiArticle(parsed.body) || undefined,
+    // Polaris 5 节中文解读(translate_polaris.py 写入),undefined = 旧论文没编译过。
+// 优先用 strict 版(5 节齐全才显示),退到老 4 节 / 不完整版本 —— workbench
+// 详情面板 / library 工作台就地展示 wiki,严格优先避免展示「半截翻译」。
+wikiContent: extractWikiArticleStrict(parsed.body) || extractWikiArticle(parsed.body) || undefined,
   };
 }
 

@@ -14,6 +14,7 @@ export {
   normalizeScore,
   normalizeCategories,
   extractWikiArticle,
+  extractWikiArticleStrict,
 } from './parse';
 
 export {
