@@ -55,6 +55,13 @@ jobs:
           lfs: true
           fetch-depth: 0
 
+      - name: Capture pre-run commit
+        # 翻译 step 用来 diff「本次 run 新加 vs 历史」的论文集;
+        # translate_polaris 自己会 skip 已 5 节齐全的,所以这个 SHA 实际上
+        # 只是个日志标记 + 备用 anchor(2026-08 起翻译是按 body 内容判断,
+        # 不依赖 commit range)。
+        run: echo "PREV_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Load secrets from Gist
         env:
           DPR_GIST_ID: ${{ secrets.DPR_GIST_ID }}
@@ -293,6 +300,48 @@ jobs:
           git fetch origin "$branch"
           git merge --no-ff "origin/$branch" -m "Merge origin/$branch into workflow branch"
           git push origin HEAD:"$branch"
+
+      - name: Translate new papers (5 sections)
+        # daily pipeline 的最后一环:对 docs/papers/* 跑 translate_polaris,
+        # 给新加论文补 5 节中文解读。translate_polaris 自己会 skip 已 5 节
+        # 齐全的(看 body 含 ## 讨论与可借鉴点),所以全量扫一遍也是 idempotent。
+        #
+        # 故意不 fail-fast:论文进库是优先目标,翻译失败不应阻塞 paper pipeline
+        # 的推送。下次 daily cron 自然重试(429 / timeout 都能恢复)。
+        #
+        # concurrency=4 是 CI 友好值 —— 本地 16 在 GitHub Actions 容易撞 429
+        # (memory note: PR 5 concept_extract_silent_failures 提到过)。
+        env:
+          LLM_API_KEY: ${{ env.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ env.LLM_BASE_URL }}
+          LLM_MODEL: ${{ env.LLM_MODEL }}
+        run: |
+          echo "PREV_COMMIT=${PREV_COMMIT:-<unset>}"
+          python -m src.translate_polaris --concurrency 4 || \
+            echo "[daily-translate] translate_polaris 退出非零,部分论文未补齐,下次 pipeline 重试"
+
+      - name: Commit translation results
+        # 沿用现有「Commit results」的 commit 模式 —— 只 stage docs/papers/,
+        # 翻译没改任何东西就跳过 commit。如果有增量,作为第三个 daily commit
+        # 落地([chore] daily translate (5 sections))。
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="${GITHUB_REF_NAME:-main}"
+
+          # 只 stage 翻译可能改的目录;config snapshot 那一份不动,
+          # 避免本步骤把上一次「Commit results」没推成功的部分又拉回来。
+          git reset --quiet
+          git add docs/papers
+          if ! git diff --cached --quiet; then
+            echo "  -> commit: daily translate (5 sections)"
+            git commit -m "[chore] daily translate (5 sections)"
+            git fetch origin "$branch"
+            git merge --no-ff "origin/$branch" -m "Merge origin/$branch into workflow branch"
+            git push origin HEAD:"$branch"
+          else
+            echo "  -> no translation changes; skipping commit"
+          fi
 
       - name: Trigger Cloudflare Pages rebuild
         # 用 .github/actions/ping-cf-pages-deploy-hook,缺失 secret 硬失败
