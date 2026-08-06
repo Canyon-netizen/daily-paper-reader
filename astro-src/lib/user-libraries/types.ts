@@ -118,6 +118,17 @@ export interface LibraryDefinition {
   outOfScope: string[];
   /** 库要回答的研究问题(LLM ingest 时当 prompt 上下文)。 */
   questions: string[];
+  /** ingest 相关度阈值(0-1),LLM 打分低于此值的论文不入库。默认 0.5。
+   *
+   *  - schemaVersion 仍是 4:旧库没这个字段就 fallback 到 0.5(无破坏性);
+   *  - 数值在 [0, 1] 之外会被 sanitizeDefinition clamp + 兜底;
+   *  - 设置成 1 = 仅收 1.0 分;设置成 0 = 不过滤。
+   *
+   *  对齐 Polaris direction_libraries 的「打分门槛」概念(其值存在
+   *  library_definition.rubric 里的同等位置;DPR 用独立字段表达,
+   *  因为 rubric 是多维细则,不混单一阈值)。
+   */
+  relevanceThreshold?: number;
 }
 
 /** 锚点论文 = 已知与本库方向高度相关的「种子论文」。Polaris 强制 included。 */
@@ -247,6 +258,7 @@ export function defaultLibraryDefinition(statement: string): LibraryDefinition {
     inScope: [],
     outOfScope: [],
     questions: [],
+    relevanceThreshold: 0.5,
   };
 }
 

@@ -169,7 +169,18 @@ function sanitizeDefinition(
     inScope: sanitizeSentences(d.inScope, 8, 80),
     outOfScope: sanitizeSentences(d.outOfScope, 8, 80),
     questions: sanitizeSentences(d.questions, 8, 200),
+    // 数值字段必须 clamp + 兜底:旧 v4 doc 没有这个 key → 0.5;
+    // 用户塞 'abc' / NaN / -0.3 / 1.5 也回到 [0,1] 合法区间。
+    relevanceThreshold: clamp01(d.relevanceThreshold, 0.5),
   };
+}
+
+/** 把 v 钳到 [0,1],无效输入 fallback 到 defaultVal。 */
+function clamp01(v: unknown, defaultVal: number): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return defaultVal;
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
 }
 
 /** 锚点列表清洗:kind 必须是 arxiv/doi/free;value 1-200 字;note 1-100 字。 */

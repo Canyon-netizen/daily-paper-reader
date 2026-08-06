@@ -90,13 +90,17 @@ async function openIngestPanel(libId: string): Promise<void> {
     const { runIngest, persistCandidatesAsCandidate, commitCandidateAsIncluded } = await import('./library-ingest');
 
     setStatus('拉 arXiv 候选…(可能 10-30s)');
-    const candidates = await runIngest(libId, { daysBack: 30, maxResults: 50, threshold: 0.45 });
+    // 阈值优先取库的 relevanceThreshold,未设置时 fallback 到 0.5。
+    // 不再用硬编码 0.45 —— Polaris 风格是「每个库各自设阈值」,否则
+    // 用户既不能在 Govern 调,也不知道为什么某个候选被滤掉。
+    const threshold = lib.definition?.relevanceThreshold ?? 0.5;
+    const candidates = await runIngest(libId, { daysBack: 30, maxResults: 50, threshold });
 
     if (candidates.length === 0) {
       mount.innerHTML = `
         <div class="lib-ingest-panel">
           <h3>🛰️ Ingest 完成</h3>
-          <p class="muted">arXiv 在最近 30 天、当前关键词下没有命中 ≥ 0.45 的候选。</p>
+          <p class="muted">arXiv 在最近 30 天、当前关键词下没有命中 ≥ ${threshold.toFixed(2)} 的候选。</p>
           <p class="muted">建议:放宽 inScope / 包括关键词,或拉长 daysBack。</p>
         </div>
       `;
@@ -1008,6 +1012,8 @@ function closeModal(modal: HTMLElement): void {
   if (visSel) visSel.value = 'personal';
   const cadSel = modal.querySelector<HTMLSelectElement>('[data-modal-cadence]');
   if (cadSel) cadSel.value = 'manual';
+  const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
+  if (thresholdInput) thresholdInput.value = '0.5';
 }
 
 /** 同一 modal 节点在不同打开轮次复用同一组 controls;
@@ -1063,6 +1069,9 @@ function fillModalFromLibrary(modal: HTMLElement, lib: UserLibrary): void {
   const cadSel = modal.querySelector<HTMLSelectElement>('[data-modal-cadence]');
   const def = lib.definition || defaultLibraryDefinition(lib.statement);
   if (cadSel) cadSel.value = def.cadence;
+  // 编辑模式回填:已有值优先,没有就 0.5
+  const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
+  if (thresholdInput) thresholdInput.value = String(def.relevanceThreshold ?? 0.5);
 
   // P8a 字段
   const goalsTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-goals]');
@@ -1229,6 +1238,11 @@ function setupNewLibraryModal(): void {
     // 新字段
     const visibility = (form.querySelector<HTMLSelectElement>('[data-modal-visibility]')?.value as 'personal' | 'pending' | 'public') || 'personal';
     const cadence = (form.querySelector<HTMLSelectElement>('[data-modal-cadence]')?.value as 'manual' | 'daily' | 'weekly' | 'monthly') || 'manual';
+    // 把 [0,1] 之外的脏输入钳到合法区间,非数字 fallback 0.5(兜底)
+    const thresholdRaw = Number(form.querySelector<HTMLInputElement>('[data-modal-threshold]')?.value);
+    const relevanceThreshold = !Number.isFinite(thresholdRaw)
+      ? 0.5
+      : Math.max(0, Math.min(1, thresholdRaw));
     const goals = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-goals]')?.value || '', 3, 200);
     const inScope = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-in-scope]')?.value || '', 8, 80);
     const outOfScope = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-out-of-scope]')?.value || '', 8, 80);
@@ -1260,6 +1274,7 @@ function setupNewLibraryModal(): void {
           inScope,
           outOfScope,
           questions,
+          relevanceThreshold,
         });
         if (!r2.ok) {
           showToast(getApiResultMessage(r2) || '保存失败', 'error');
@@ -1301,6 +1316,7 @@ function setupNewLibraryModal(): void {
           inScope,
           outOfScope,
           questions,
+          relevanceThreshold,
         },
       });
       if (!res.ok || !res.id) {
@@ -1771,6 +1787,11 @@ function renderUserLibraryDetail(): void {
               pending: '申请公开(请求中)',
               public: '公开(已发布)',
             }[lib.visibility || 'personal'])}</span>
+          </dd>
+          <dt>入库相关度阈值</dt>
+          <dd class="mono">
+            ≥ ${(lib.definition?.relevanceThreshold ?? 0.5).toFixed(2)}
+            <span class="muted">(LLM 打分低于此值的论文不入库)</span>
           </dd>
           <dt>同步节奏</dt>
           <dd>${escapeHtml((lib.definition?.cadence || 'manual'))}</dd>

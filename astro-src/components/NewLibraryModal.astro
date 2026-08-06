@@ -109,6 +109,22 @@
             </select>
             <div class="lib-field-hint">纯 label,无服务端 cron。</div>
           </div>
+          <div class="lib-field">
+            <label class="lib-field-label" for="new-lib-relevance-threshold">入库相关度阈值</label>
+            <input
+              id="new-lib-relevance-threshold"
+              type="number"
+              class="lib-input"
+              data-modal-threshold
+              min="0"
+              max="1"
+              step="0.05"
+              value="0.5"
+            />
+            <div class="lib-field-hint">
+              LLM 打分 &lt; 此值的论文不入库(0 = 不过滤,1 = 仅收 1.0 分)。默认 0.5。
+            </div>
+          </div>
         </div>
 
         {/* P8a definition 字段:goals / inScope / outOfScope / questions
