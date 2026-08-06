@@ -115,11 +115,79 @@ def _rank_ideas_without_debate(ideas: List[Dict[str, Any]]) -> List[Dict[str, An
     return out
 
 
+def normalize_idea_title(title: str) -> str:
+    """plan §4.2 PR-B 验收 1:deterministic dedup —— 先规范化文本/slug。
+
+    规则:小写 + 移除非 alphanumeric + collapse whitespace + 截断 80 字符。
+    这样 'RL × Atari' / 'rl × atari ' / 'RL×Atari' 都会被合并成一个 key。
+    """
+    import re as _re
+    s = title.lower()
+    s = _re.sub(r"[^a-z0-9 ]+", " ", s)
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s[:80]
+
+
+def dedup_ideas(ideas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按 normalize_idea_title 去重,保留首次出现的 idea。
+
+    plan §4.2 PR-B 验收 1:「对候选做 deterministic dedup:先规范化文本/slug,
+    再可选 embedding similarity」。这里只做文本规范化(无 embedding 依赖),
+    后续可加 semantic dedup(目前真盘 0 个候选真重复,纯文本 dedup 已够用)。
+    """
+    seen: set[str] = set()
+    out: List[Dict[str, Any]] = []
+    for idea in ideas:
+        key = normalize_idea_title(str(idea.get("title", "")))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(idea)
+    return out
+
+
+def _evidence_ref(source: str, detail: Any) -> Dict[str, Any]:
+    """plan §4.2 PR-B 验收 2:evidence 改为结构化 {kind, ref, snippet}。
+
+    老 evidence 是 [{source, detail}];这里改字段名对齐 plan,但保留 source
+    与 detail 作为补充字段,旧 caller 不会崩(只是 detail 现在只是
+    fallback 显示)。
+    """
+    # kind ∈ {paper, concept, limitation, trend, survey_gap}
+    kind_map = {
+        "concept_holes": "paper",
+        "limitations": "limitation",
+        "trends": "trend",
+        "survey_gap": "survey_gap",
+    }
+    kind = kind_map.get(source, "paper")
+    # ref:如果是 paper/concept 给 id,否则给 source 类别
+    if isinstance(detail, dict):
+        ref = (
+            detail.get("paper_id")
+            or detail.get("id")
+            or detail.get("concept")
+            or detail.get("source", source)
+        )
+        snippet = (
+            detail.get("excerpt")
+            or detail.get("description")
+            or detail.get("summary")
+            or ""
+        )
+    else:
+        ref = source
+        snippet = str(detail or "")
+    return {"kind": kind, "ref": str(ref), "snippet": str(snippet)[:500], "source": source, "detail": detail}
+
+
 def _generate_ideas(signals: Dict[str, List[Any]], session_id: str) -> List[Dict[str, Any]]:
-    """把 4 路确定性信号组装成 Idea 列表。
+    """把 4 路确定性信号组装成 Idea 列表(plan §4.2 PR-B structured evidence)。
 
     每个 Idea 字段对齐 Polaris Idea 模型(精简版):
         id / title / depth / goal / evidence / signals / parent_session_id
+    evidence 现在是 list[{kind, ref, snippet, source, detail}](_evidence_ref 产出),
+    caller 可以按 kind 过滤渲染,而不是再 split detail 字符串。
     """
     ideas: List[Dict[str, Any]] = []
 
@@ -132,7 +200,7 @@ def _generate_ideas(signals: Dict[str, List[Any]], session_id: str) -> List[Dict
             "title": f"{method} × {problem}",
             "depth": "sketch",
             "goal": f"探索 {method} 在 {problem} 上的应用空白",
-            "evidence": [{"source": "concept_holes", "detail": hole}],
+            "evidence": [_evidence_ref("concept_holes", hole)],
             "signals": ["concept_holes"],
             "parent_session_id": session_id,
         })
@@ -145,7 +213,7 @@ def _generate_ideas(signals: Dict[str, List[Any]], session_id: str) -> List[Dict
             "title": f"Trend: {concept}",
             "depth": "sketch",
             "goal": f"跟进 {concept} 方向的新论文",
-            "evidence": [{"source": "trend", "detail": trend}],
+            "evidence": [_evidence_ref("trends", trend)],
             "signals": ["trends"],
             "parent_session_id": session_id,
         })
@@ -158,7 +226,7 @@ def _generate_ideas(signals: Dict[str, List[Any]], session_id: str) -> List[Dict
             "title": f"Limit: {_truncate(excerpt, 40)}",
             "depth": "sketch",
             "goal": "针对识别出的论文不足提出改进思路",
-            "evidence": [{"source": "limitation", "detail": excerpt}],
+            "evidence": [_evidence_ref("limitations", excerpt)],
             "signals": ["limitations"],
             "parent_session_id": session_id,
         })
@@ -170,7 +238,7 @@ def _generate_ideas(signals: Dict[str, List[Any]], session_id: str) -> List[Dict
             "title": f"Survey gap: {_truncate(str(gap), 40)}",
             "depth": "sketch",
             "goal": "探索综述覆盖不足的子方向",
-            "evidence": [{"source": "survey_gap", "detail": gap}],
+            "evidence": [_evidence_ref("survey_gap", gap)],
             "signals": ["survey_gap"],
             "parent_session_id": session_id,
         })
@@ -213,18 +281,22 @@ def run_topic_v2(session_id: str | None = None,
         config={"docs_dir": "."},   # 仓库根即 docs_dir
     )
 
-    # 3. 信号 → Idea 列表
+    # 3. 信号 → Idea 列表(plan §4.2 PR-B:deterministic dedup)
     raw_ideas = _generate_ideas(signals, session_id)
+    deduped_ideas = dedup_ideas(raw_ideas)
+    # 把 dedup 数量差写进 session,UI 可显示「本轮 X 个候选 → Y 个去重后」
+    raw_count = len(raw_ideas)
+    deduped_count = len(deduped_ideas)
 
     # 4. 跑 Elo 辩论 —— judge_llm_call=None → 跳过 debate(plan §4.2 PR-A)。
     if judge_llm_call is None:
         # 不调 run_debate,不污染 ELO 排序,显式 degraded。
-        ranked_ideas = _rank_ideas_without_debate(raw_ideas)
+        ranked_ideas = _rank_ideas_without_debate(deduped_ideas)
         debate_status = "not_configured"
         used_tokens = 0
     else:
         ranked_ideas = run_debate(
-            ideas=raw_ideas,
+            ideas=deduped_ideas,
             judge_llm_call=judge_llm_call,
             rounds=DEFAULT_ROUNDS,
         )
@@ -239,6 +311,9 @@ def run_topic_v2(session_id: str | None = None,
         "personas": DEFAULT_PERSONAS if judge_llm_call is not None else [],
         "rounds": DEFAULT_ROUNDS if judge_llm_call is not None else 0,
         "status": debate_status,
+        # plan §4.2 PR-B 验收 1:显式记 dedup 数量,UI 可显示
+        "raw_idea_count": raw_count,
+        "deduped_idea_count": deduped_count,
     }
     _save_session(session)
 
