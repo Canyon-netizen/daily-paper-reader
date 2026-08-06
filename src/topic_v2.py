@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.idea_signals import collect_signals
-from src.elo_debate import run_debate
+from src.elo_debate import run_debate, ELO_INITIAL
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +92,27 @@ def _new_session_id() -> str:
 
 def _truncate(text: str, max_len: int = 30) -> str:
     return text[:max_len] + ("..." if len(text) > max_len else "")
+
+
+def _rank_ideas_without_debate(ideas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """judge_llm_call=None 时的退化排序。
+
+    把 ELO 设为初始值,debate_log 留空 list,显式标 status='not_configured'
+    让 UI 区分「排序失败」与「没排」(plan §4.2 PR-A 验收 1 「默认没有 judge
+    时不会产生虚假的 Elo 排名」)。
+    """
+    out: List[Dict[str, Any]] = []
+    for i in ideas:
+        out.append({
+            **i,
+            "elo_rating": i.get("elo_rating", ELO_INITIAL),
+            "matches": 0,
+            "wins": 0,
+            "debate_log": [],
+            "debate_status": "not_configured",
+        })
+    # 输入已有序(确定性信号排序);保持顺序即可,不去碰 ELO
+    return out
 
 
 def _generate_ideas(signals: Dict[str, List[Any]], session_id: str) -> List[Dict[str, Any]]:
@@ -168,10 +189,17 @@ def run_topic_v2(session_id: str | None = None,
     Args:
         session_id: 可选外部传入 session id;None 时从 session 读或新建。
         judge_llm_call: 可选 LLM judge callable (a, b) -> {"winner": "a"|"b"|"tie"}。
-                       传 None 时退化为随机/stub(用于离线批处理/测试)。
+                       传 None 时 **不再伪装成 tie**(plan §4.2 PR-A 「stub_judge
+                       退场,no judge 时显式 degraded」):返回的 session.debate_progress
+                       包含 status='not_configured',ideas 按 ELO_INITIAL 顺序
+                       返回,debate_log 全空。
 
     Returns:
         更新后的 session dict,含 `debate_progress.ideas`(排序后)。
+        `debate_progress.status` 字段:
+          - 'completed': 正常完成,所有 match 跑过 judge
+          - 'not_configured': judge_llm_call=None,debate 跳过
+          - 'partial': 部分 match 因 LLM 错误 / 配额 / malformed 失败
     """
     # 1. 加载 session
     session = _load_session()
@@ -188,26 +216,29 @@ def run_topic_v2(session_id: str | None = None,
     # 3. 信号 → Idea 列表
     raw_ideas = _generate_ideas(signals, session_id)
 
-    # 4. 跑 Elo 辩论
-    #   judge_llm_call=None 时,所有 match 走 "tie" 路径,ideas 仅按当前 elo 排序。
-    #   实际使用需要传 callable (生产环境: 调用 `resolveRoute('topic.debate')`)。
-    def stub_judge(a, b):
-        # 默认随机裁决,但保持接口与 run_debate 一致
-        return {"winner": "tie", "reason": "no LLM judge configured"}
-
-    ranked_ideas = run_debate(
-        ideas=raw_ideas,
-        judge_llm_call=judge_llm_call or stub_judge,
-        rounds=DEFAULT_ROUNDS,
-    )
+    # 4. 跑 Elo 辩论 —— judge_llm_call=None → 跳过 debate(plan §4.2 PR-A)。
+    if judge_llm_call is None:
+        # 不调 run_debate,不污染 ELO 排序,显式 degraded。
+        ranked_ideas = _rank_ideas_without_debate(raw_ideas)
+        debate_status = "not_configured"
+        used_tokens = 0
+    else:
+        ranked_ideas = run_debate(
+            ideas=raw_ideas,
+            judge_llm_call=judge_llm_call,
+            rounds=DEFAULT_ROUNDS,
+        )
+        debate_status = "completed"
+        used_tokens = -1  # run_debate 内部已计数,但没暴露给 caller
 
     # 5. 写回 session
     session["debate_progress"] = {
         "session_id": session_id,
         "ideas": ranked_ideas,
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "personas": DEFAULT_PERSONAS,
-        "rounds": DEFAULT_ROUNDS,
+        "personas": DEFAULT_PERSONAS if judge_llm_call is not None else [],
+        "rounds": DEFAULT_ROUNDS if judge_llm_call is not None else 0,
+        "status": debate_status,
     }
     _save_session(session)
 
