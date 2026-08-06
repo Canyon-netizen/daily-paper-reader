@@ -180,8 +180,17 @@ def search_semantic_scholar(
     rate_limit_per_min: int = 100,
     retry_max: int = 5,
     sleep_fn: Any = time.sleep,
-) -> list[dict]:
-    """Step 2: S2 API。遇 429 指数退避(1/2/4/8/16s)。"""
+) -> tuple[list[dict], bool]:
+    """Step 2: S2 API。遇 429 指数退避(1/2/4/8/16s)。
+
+    返回 (hits, network_ok):
+      - network_ok=True:成功调了 API,可能 0 hits 也算 OK(没找到)
+      - network_ok=False:网络 / 解析失败,plan §4.3 「network outage 不应
+        标记为 fabricated」
+
+    历史:之前直接返 list,failure → [] 容易被 caller 误判为「fabricated」。
+    现在 caller 必须看 network_ok 显式区分「远程确认没有」与「根本没调通」。
+    """
     url = (
         "https://api.semanticscholar.org/graph/v1/paper/search?"
         f"query={urllib.parse.quote(title)}&limit=5&fields=title,year"
@@ -197,21 +206,24 @@ def search_semantic_scholar(
                 return [
                     {"title": h.get("title", ""), "year": h.get("year")}
                     for h in data.get("data", [])
-                ]
+                ], True
         except urllib.error.HTTPError as e:
             last_err = str(e)
             if e.code == 429 and attempt < retry_max - 1:
                 sleep_fn(2**attempt)
                 continue
-            return []
+            return [], False
         except Exception as e:
             last_err = str(e)
-            return []
-    return []
+            return [], False
+    return [], False
 
 
-def search_openalex(title: str, year: int | None = None) -> list[dict]:
-    """Step 3: OpenAlex fallback(polite pool 含 mailto UA)"""
+def search_openalex(title: str, year: int | None = None) -> tuple[list[dict], bool]:
+    """Step 3: OpenAlex fallback(polite pool 含 mailto UA)。
+
+    同上,返回 (hits, network_ok) 二元组。
+    """
     url = (
         "https://api.openalex.org/works?"
         f"search={urllib.parse.quote(title)}&per_page=5"
@@ -228,9 +240,9 @@ def search_openalex(title: str, year: int | None = None) -> list[dict]:
             return [
                 {"title": h.get("title", ""), "year": h.get("publication_year")}
                 for h in data.get("results", [])
-            ]
+            ], True
     except Exception:
-        return []
+        return [], False
 
 
 def _year_within_tolerance(hit_year: int | None, ref_year: int | None) -> int:
@@ -241,23 +253,26 @@ def _year_within_tolerance(hit_year: int | None, ref_year: int | None) -> int:
 
 
 def check_citation_existence(citation: dict, library_papers: list[dict]) -> tuple[str, dict | None]:
-    """plan §6 三源核查。
+    """plan §4.3 双轴 evidence 模型 + 三源核查。
 
     返回 (existence, match_info):
-      - existence ∈ {"exact", "minor", "fabricated"}
+      - existence ∈ {"exact", "minor", "fabricated", "not_checked"}
       - match_info 含 source/title/year/similarity/year_tolerance
+
+    「not_checked」语义(plan §4.3 验收 2):网络不可用时,远程两源全部失败,
+    不应判定 fabricated —— 把 fabricated 留给「远程确认找不到」的情况。
     """
     title = citation["title"]
     year = citation.get("year")
 
-    # Step 1 — 库内
+    # Step 1 — 库内(本地,不需要网络)
     lib = search_library(title, year, library_papers)
     if lib:
         return "exact", lib
 
     # Step 2 — S2
-    s2_hits = search_semantic_scholar(title, year)
-    if s2_hits:
+    s2_hits, s2_ok = search_semantic_scholar(title, year)
+    if s2_ok and s2_hits:
         best = max(s2_hits, key=lambda h: _similarity(title, h.get("title", "")))
         sim = _similarity(title, best.get("title", ""))
         if sim >= EXACT_SIMILARITY and _year_within_tolerance(best.get("year"), year) <= YEAR_TOLERANCE:
@@ -270,8 +285,8 @@ def check_citation_existence(citation: dict, library_papers: list[dict]) -> tupl
             }
 
     # Step 3 — OpenAlex fallback
-    oa_hits = search_openalex(title, year)
-    if oa_hits:
+    oa_hits, oa_ok = search_openalex(title, year)
+    if oa_ok and oa_hits:
         best = max(oa_hits, key=lambda h: _similarity(title, h.get("title", "")))
         sim = _similarity(title, best.get("title", ""))
         if sim >= MINOR_SIMILARITY:
@@ -283,6 +298,12 @@ def check_citation_existence(citation: dict, library_papers: list[dict]) -> tupl
                 "year_tolerance": _year_within_tolerance(best.get("year"), year),
             }
 
+    # 区分:远程两源都网络挂了 → not_checked;都 OK 但 0 hits → fabricated
+    if not s2_ok and not oa_ok:
+        return "not_checked", {
+            "source": "none",
+            "reason": "remote APIs unreachable; cannot verify",
+        }
     return "fabricated", None
 
 
@@ -292,17 +313,37 @@ def check_citation_existence(citation: dict, library_papers: list[dict]) -> tupl
 
 
 def review_passed(summary: dict, citations: list[dict]) -> bool:
-    """plan §6 review_passed 简化版:无 fabricated AND supported/checked >= 0.6"""
+    """plan §4.3 review_passed 双轴模型。
+
+    规则:
+      1. 有任何 fabricated → False(已知出错)
+      2. not_checked 不算 pass 也不算 fail —— 它是「网络挂了,这次没查」
+      3. support check 跑过的部分(supported + partial + unsupported)中,
+         supported 占比 ≥ PASS_RATING/10 才算 pass
+
+    与历史的差异:之前 `if checked == 0: return True` 把「没跑 support」
+    当作 pass —— 这是 plan §4.3 验收 4「把 fabricated 与 unsupported 分别
+    计数,pass 逻辑明确为无 fabricated + checked support 达标,不把 minor
+    直接当 support」里要修的 bug。
+    """
     has_fabricated = any(c.get("existence") == "fabricated" for c in citations)
     if has_fabricated:
         return False
+    # 支持性轴:只统计 support check 实际跑过的部分,not_checked 不算分母
     checked = (
         summary.get("supported", 0)
         + summary.get("partial", 0)
         + summary.get("unsupported", 0)
     )
     if checked == 0:
-        return True  # 没跑 support check 视为通过
+        # 没跑 support check → 保守视为 pass,但要求 existence 全 exact
+        # (无 fabricated / minor / not_checked)
+        not_passable = (
+            summary.get("fabricated", 0)
+            + summary.get("not_checked", 0)
+            + summary.get("minor", 0)
+        )
+        return not_passable == 0
     return summary.get("supported", 0) / checked >= PASS_RATING / 10
 
 
@@ -341,10 +382,10 @@ def run_guard(md_path: str | Path, config: dict | None = None) -> dict:
         "exact": sum(1 for c in checked if c["existence"] == "exact"),
         "minor": sum(1 for c in checked if c["existence"] == "minor"),
         "fabricated": sum(1 for c in checked if c["existence"] == "fabricated"),
+        "not_checked": sum(1 for c in checked if c["existence"] == "not_checked"),
         "supported": 0,
         "partial": 0,
         "unsupported": 0,
-        "not_checked": len(checked),
     }
     passed = review_passed(summary, checked)
 
