@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from src.source_config import (
@@ -20,6 +21,11 @@ from src.pipeline_v2 import (
     checkpoint_write as pipeline_checkpoint_write,
     list_pending as pipeline_list_pending,
 )
+
+try:
+    from src.validate import verify as pipeline_verify
+except Exception:  # pragma: no cover - 兼容 validate 模块未注入
+    pipeline_verify = None
 
 try:
     import yaml  # type: ignore
@@ -76,10 +82,11 @@ def run_step_with_checkpoint(
       2. 写 running(attempts 累加)
       3. 调 run_step,捕获 CalledProcessError 写 failed
       4. 出口写 succeeded 或 failed
+      5. succeeded 时调 verify() 写 verdict(PR-2 接线,默认关闭)
 
     main.py 已在 step 0–6 的 10 个调用点全部走 run_step_with_checkpoint,
     默认 enabled=False 与旧 cron 行为完全一致;打开 config.yaml.pipeline.
-    checkpoints.enabled 即可启用跳过 / 重跑 / 失败留痕。
+    checkpoints.enabled 即可启用跳过 / 重跑 / 失败留痕 + verdict 校验。
     """
     if not enabled:
         run_step(step_name, args, env=env)
@@ -114,6 +121,11 @@ def run_step_with_checkpoint(
     try:
         run_step(step_name, args, env=env)
         elapsed_ms = int((time.time() - start) * 1000)
+        # PR-2: verify() 在 succeeded 出口调用,把 verdict 写进 checkpoint。
+        # default off: pipeline_verify is None 或 contract 缺失时不调,
+        # verdict 留 None —— 与 plan §3.3 「rubric 未实现时不制造 false pass」
+        # 一致。
+        verdict = _compute_verdict(step_id, archive_dir, exit_code=0)
         pipeline_checkpoint_write(
             archive_dir,
             step_id,
@@ -128,11 +140,17 @@ def run_step_with_checkpoint(
                 "error": None,
                 "attempts": 1,
             },
+            verdict=verdict,
         )
         return True
     except subprocess.CalledProcessError as exc:
         # 仿照 main.py:798-825 fetch 失败的 sentinel 风格:失败也要写盘留痕
         elapsed_ms = int((time.time() - start) * 1000)
+        # 失败出口:verify() 会因为 observation.error 短路,不需要再传 artifact
+        verdict = _compute_verdict(
+            step_id, archive_dir, exit_code=exc.returncode,
+            error=str(exc.stderr or f"returncode={exc.returncode}")[-500:],
+        )
         pipeline_checkpoint_write(
             archive_dir,
             step_id,
@@ -149,6 +167,7 @@ def run_step_with_checkpoint(
                 ),
                 "attempts": 1,
             },
+            verdict=verdict,
         )
         raise
 
@@ -177,6 +196,96 @@ def _checkpoint_archive_dir() -> str:
     if not date_token:
         date_token = datetime.now(timezone.utc).strftime("%Y%m%d")
     return os.path.join(ROOT_DIR, "archive", date_token)
+
+
+# PR-2: Validate 合同加载(plan §3.3)。每个 sub-step 在 contract 目录里有
+# 一份 schema.json,定义 required_keys / min_count / exit_code / artifact
+# key。verdict 在 checkpoint succeeded 之后写,失败时仍可参考 exit_code
+# 短路(verify() 自身已做 observation.error 短路)。
+_VALIDATE_CONTRACTS_DIR = os.path.join(ROOT_DIR, "src", "validate", "contracts")
+_VALIDATE_CONTRACT_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _load_validate_contract(step_id: str) -> dict[str, Any] | None:
+    """按 step_id 找 src/validate/contracts/<step_id>.schema.json,缓存。
+
+    找不到返 None(没合同的 step 不验,但仍写 checkpoint verdict=None)。
+    JSON 损坏返 None + warning,不抛 —— validate 是 best-effort,
+    与 checkpoint 落盘解耦。
+    """
+    if step_id in _VALIDATE_CONTRACT_CACHE:
+        return _VALIDATE_CONTRACT_CACHE[step_id]
+    path = Path(_VALIDATE_CONTRACTS_DIR) / f"{step_id}.schema.json"
+    if not path.exists():
+        return None
+    try:
+        contract = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[WARN] contract {step_id} 加载失败: {exc}", flush=True)
+        return None
+    _VALIDATE_CONTRACT_CACHE[step_id] = contract
+    return contract
+
+
+def _resolve_validate_artifact(
+    contract: dict[str, Any], step_id: str, archive_dir: str
+) -> tuple[Path | None, dict[str, Any] | None]:
+    """contract 里的 `artifact_exists.key` 是 template 字符串
+    (e.g. archive/${RUN_DATE}/raw/arxiv_papers_${RUN_DATE}.json)。
+
+    这里只解析 `${RUN_DATE}` → 当前 archive_dir 的 basename。verdict
+    只关心 output_path 是否存在 + 是否能解析,不解额外的 scheme。
+    """
+    checks = contract.get("checks", [])
+    template: str | None = None
+    for c in checks:
+        if c.get("kind") == "artifact_exists":
+            template = c.get("key")
+            break
+    if not template:
+        return None, None
+    date_token = Path(archive_dir).name
+    resolved = template.replace("${RUN_DATE}", date_token)
+    if not os.path.isabs(resolved):
+        resolved = os.path.join(ROOT_DIR, resolved)
+    return Path(resolved), None
+
+
+def _compute_verdict(
+    step_id: str,
+    archive_dir: str,
+    *,
+    exit_code: int,
+    error: str | None = None,
+) -> dict[str, Any] | None:
+    """调 verify() 得 verdict 写进 checkpoint。
+
+    关闭 / 缺失合同 / 异常时返 None(verdict=None),与
+    src/pipeline_v2/checkpoint.py 兼容(verdict 是 optional 字段)。
+    plan §3.3 「rubric 未实现时不会制造 false pass」:rubric_enabled
+    默认 false,verify() 不会调 LLM。
+    """
+    if pipeline_verify is None:
+        return None
+    contract = _load_validate_contract(step_id)
+    if contract is None:
+        return None
+    output_path, _ = _resolve_validate_artifact(contract, step_id, archive_dir)
+    observation = {"error": error} if error else None
+    try:
+        return pipeline_verify(
+            step_id,
+            output_path=output_path,
+            exit_code=exit_code,
+            acceptance=contract,
+            observation=observation,
+        )
+    except Exception as exc:
+        # verify() 自身 bug 也不能阻断 checkpoint 落盘 —— plan §3.3
+        # 「deterministic fail 不会发起额外 LLM 调用」—— verdict 失败
+        # 走 None 兜底,UI 显示「未校验」。
+        print(f"[WARN] verify({step_id}) 抛异常: {exc}", flush=True)
+        return None
 
 
 def load_gist_env() -> None:
