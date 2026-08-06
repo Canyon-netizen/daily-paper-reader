@@ -70,17 +70,16 @@ def run_step_with_checkpoint(
 ) -> bool:
     """若 enabled=False → 退化到原始 run_step()(不破坏现有调用);否则 checkpoint 包裹。
 
-    PR-1 引入的薄壳。计划:默认 pipeline.checkpoints.enabled=False 时
-    此函数等同于 run_step,但仍返回 bool(原 run_step 返 None)。
-    enabled=True 时:
+    默认 pipeline.checkpoints.enabled=False 时此函数等同于 run_step,但
+    仍返回 bool(原 run_step 返 None)。enabled=True 时:
       1. checkpoint_read;若 status=succeeded → [SKIP] 日志 + 返 True
       2. 写 running(attempts 累加)
       3. 调 run_step,捕获 CalledProcessError 写 failed
       4. 出口写 succeeded 或 failed
 
-    现有 main.py:761-897 的 6 个 run_step() 调用**保持不变**(默认 enabled=False
-    即走原行为);启用 checkpoints 时,把 caller 改成调 run_step_with_checkpoint
-    即可,不影响 API 兼容。
+    main.py 已在 step 0–6 的 10 个调用点全部走 run_step_with_checkpoint,
+    默认 enabled=False 与旧 cron 行为完全一致;打开 config.yaml.pipeline.
+    checkpoints.enabled 即可启用跳过 / 重跑 / 失败留痕。
     """
     if not enabled:
         run_step(step_name, args, env=env)
@@ -165,6 +164,19 @@ def pipeline_checkpoints_enabled(config: dict[str, Any] | None = None) -> bool:
         return bool(cfg.get("pipeline", {}).get("checkpoints", {}).get("enabled", False))
     except Exception:
         return False
+
+
+def _checkpoint_archive_dir() -> str:
+    """run_step_with_checkpoint 默认落盘目录。
+
+    优先用环境变量 DPR_RUN_DATE_TOKEN(run_date_token 已经从 main() 传过来);
+    都没有则用 archive/<today>。日常 daily workflow 不传 DPR_RUN_DATE_TOKEN,
+    每天一份独立 archive,符合 plan §5 「每个 cron run 独立 checkpoints 子树」。
+    """
+    date_token = os.environ.get("DPR_RUN_DATE_TOKEN")
+    if not date_token:
+        date_token = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return os.path.join(ROOT_DIR, "archive", date_token)
 
 
 def load_gist_env() -> None:
@@ -826,6 +838,12 @@ def main() -> None:
         print(f"[TRACE] 启用论文追踪: {', '.join(trace_ids)}", flush=True)
 
     archive_dir = os.path.join(ROOT_DIR, "archive", run_date_token)
+    # PR-1: 把 archive_dir 通过 env 暴露给 run_step_with_checkpoint,
+    # 让 helper 知道 checkpoint 落盘位置(每个 cron run 独立子目录)。
+    os.environ.setdefault("DPR_RUN_DATE_TOKEN", run_date_token)
+    # PR-1: 一次性读 checkpoint enabled 开关,避免 10 处 call site 重复 load yaml。
+    _checkpoint_on = pipeline_checkpoints_enabled()
+    _checkpoint_archive = _checkpoint_archive_dir()
     raw_path = os.path.join(archive_dir, "raw", f"arxiv_papers_{run_date_token}.json")
     bm25_path = os.path.join(
         archive_dir,
@@ -848,9 +866,15 @@ def main() -> None:
     )
 
     if args.run_enrich:
-        run_step(
+        run_step_with_checkpoint(
             "Step 0 - enrich config",
             [python, os.path.join(SRC_DIR, "0.enrich_config_queries.py")],
+            step_id="0.enrich_config_queries",
+            archive_dir=_checkpoint_archive,
+            enabled=_checkpoint_on,
+            seq=1,
+            rank=0,
+            sub_rank=0,
         )
 
     # 判断是否跳过 Step 1（全量数据拉取）
@@ -875,7 +899,7 @@ def main() -> None:
         # silent fail (subprocess exit 1 + commit step skip) 升级为
         # observable fail (commit 一个空 + status 文件)。
         try:
-            run_step(
+            run_step_with_checkpoint(
                 "Step 1 - fetch arxiv",
                 [
                     python,
@@ -883,6 +907,12 @@ def main() -> None:
                     *(["--days", str(args.fetch_days)] if args.fetch_days is not None else []),
                     *(["--ignore-seen"] if args.fetch_ignore_seen else []),
                 ],
+                step_id="1.fetch_arxiv",
+                archive_dir=_checkpoint_archive,
+                enabled=_checkpoint_on,
+                seq=2,
+                rank=1,
+                sub_rank=0,
             )
         except subprocess.CalledProcessError as exc:
             sentinel_dir = os.path.dirname(raw_path)
@@ -914,13 +944,19 @@ def main() -> None:
             )
     if trace_ids:
         print_trace_retrieval("RAW", raw_path, trace_ids)
-    run_step(
+    run_step_with_checkpoint(
         "Step 2.1 - BM25",
         [python, os.path.join(SRC_DIR, "2.1.retrieval_papers_bm25.py")],
+        step_id="2.1.retrieval_papers_bm25",
+        archive_dir=_checkpoint_archive,
+        enabled=_checkpoint_on,
+        seq=3,
+        rank=2,
+        sub_rank=1,
     )
     if trace_ids:
         print_trace_retrieval("BM25", bm25_path, trace_ids)
-    run_step(
+    run_step_with_checkpoint(
         "Step 2.2 - Embedding",
         [
             python,
@@ -930,12 +966,24 @@ def main() -> None:
             "--batch-size",
             str(args.embedding_batch_size),
         ],
+        step_id="2.2.retrieval_papers_embedding",
+        archive_dir=_checkpoint_archive,
+        enabled=_checkpoint_on,
+        seq=4,
+        rank=2,
+        sub_rank=2,
     )
     if trace_ids:
         print_trace_retrieval("EMBEDDING", embedding_path, trace_ids)
-    run_step(
+    run_step_with_checkpoint(
         "Step 2.3 - RRF",
         [python, os.path.join(SRC_DIR, "2.3.retrieval_papers_rrf.py")],
+        step_id="2.3.retrieval_papers_rrf",
+        archive_dir=_checkpoint_archive,
+        enabled=_checkpoint_on,
+        seq=5,
+        rank=2,
+        sub_rank=3,
     )
     if trace_ids:
         print_trace_retrieval("RRF", rrf_path, trace_ids)
@@ -948,29 +996,47 @@ def main() -> None:
         )
         prepare_rerank_fallback(rrf_path, rerank_path)
     else:
-        run_step(
+        run_step_with_checkpoint(
             "Step 3 - Rerank",
             [python, os.path.join(SRC_DIR, "3.rank_papers.py")],
+            step_id="3.rank_papers",
+            archive_dir=_checkpoint_archive,
+            enabled=_checkpoint_on,
+            seq=6,
+            rank=3,
+            sub_rank=0,
         )
     if trace_ids:
         print_trace_retrieval("RERANK", rerank_path, trace_ids)
-    run_step(
+    run_step_with_checkpoint(
         "Step 4 - LLM refine",
         [python, os.path.join(SRC_DIR, "4.llm_refine_papers.py")],
+        step_id="4.llm_refine_papers",
+        archive_dir=_checkpoint_archive,
+        enabled=_checkpoint_on,
+        seq=7,
+        rank=4,
+        sub_rank=0,
     )
     if trace_ids:
         print_trace_llm("LLM", llm_path, trace_ids)
-    run_step(
+    run_step_with_checkpoint(
         "Step 5 - Select",
         [
             python,
             os.path.join(SRC_DIR, "5.select_papers.py"),
             *(["--modes", "skims"] if use_skims_mode else []),
         ],
+        step_id="5.select_papers",
+        archive_dir=_checkpoint_archive,
+        enabled=_checkpoint_on,
+        seq=8,
+        rank=5,
+        sub_rank=0,
     )
     if trace_ids:
         print_trace_recommend("RECOMMEND", recommend_path, trace_ids)
-    run_step(
+    run_step_with_checkpoint(
         "Step 6 - Generate Docs",
         [
             python,
@@ -982,6 +1048,12 @@ def main() -> None:
                 else []
             ),
         ],
+        step_id="6.generate_docs",
+        archive_dir=_checkpoint_archive,
+        enabled=_checkpoint_on,
+        seq=9,
+        rank=6,
+        sub_rank=0,
     )
 
 
