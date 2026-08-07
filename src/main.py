@@ -27,6 +27,15 @@ try:
 except Exception:  # pragma: no cover - 兼容 validate 模块未注入
     pipeline_verify = None
 
+from src._provenance import build_provenance, capture_input_hashes
+from src._failure_taxonomy import (
+    classify_subprocess_error,
+    format_failure_reason,
+    EXECUTION_ERROR,
+    VALIDATION_ERROR,
+    DEGRADED,
+)
+
 try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover
@@ -101,6 +110,15 @@ def run_step_with_checkpoint(
     step_type = step_id.split(".")[-1]
     started_iso = datetime.now(timezone.utc).isoformat()
 
+    # PR-3: 每次 checkpoint 写盘都附 provenance(code_version / config_hash /
+    # model_route / provider_model / input_artifacts)。让 caller 回溯
+    # 「这个 step 跑的时候用的是什么模型 + 配置」。
+    provenance = build_provenance(
+        stage=step_id,
+        provider_model=os.environ.get("LLM_MODEL"),
+        input_artifacts=capture_input_hashes(_step_input_artifacts(step_id, archive_dir)),
+    )
+
     # 2. 写 running
     pipeline_checkpoint_write(
         archive_dir,
@@ -114,6 +132,7 @@ def run_step_with_checkpoint(
             "started_at": started_iso,
             "attempts": 1,
         },
+        provenance=provenance,
     )
 
     # 3. 调原始 run_step
@@ -139,17 +158,21 @@ def run_step_with_checkpoint(
                 "elapsed_ms": elapsed_ms,
                 "error": None,
                 "attempts": 1,
+                "failure_kind": None,
             },
             verdict=verdict,
+            provenance=provenance,
         )
         return True
     except subprocess.CalledProcessError as exc:
         # 仿照 main.py:798-825 fetch 失败的 sentinel 风格:失败也要写盘留痕
         elapsed_ms = int((time.time() - start) * 1000)
+        failure_kind = classify_subprocess_error(exc.returncode, exc.stderr)
+        err_detail = (exc.stderr or "")[-500:] if exc.stderr else f"returncode={exc.returncode}"
         # 失败出口:verify() 会因为 observation.error 短路,不需要再传 artifact
         verdict = _compute_verdict(
             step_id, archive_dir, exit_code=exc.returncode,
-            error=str(exc.stderr or f"returncode={exc.returncode}")[-500:],
+            error=format_failure_reason(failure_kind, err_detail),
         )
         pipeline_checkpoint_write(
             archive_dir,
@@ -162,12 +185,12 @@ def run_step_with_checkpoint(
             observation={
                 "started_at": started_iso,
                 "elapsed_ms": elapsed_ms,
-                "error": (
-                    (exc.stderr or "")[-500:] if exc.stderr else f"returncode={exc.returncode}"
-                ),
+                "error": err_detail,
+                "failure_kind": failure_kind,
                 "attempts": 1,
             },
             verdict=verdict,
+            provenance=provenance,
         )
         raise
 
@@ -183,6 +206,36 @@ def pipeline_checkpoints_enabled(config: dict[str, Any] | None = None) -> bool:
         return bool(cfg.get("pipeline", {}).get("checkpoints", {}).get("enabled", False))
     except Exception:
         return False
+
+
+def _step_input_artifacts(step_id: str, archive_dir: str) -> list[Path]:
+    """每个 step 的「关键输入文件」,供 provenance.input_artifacts 落 hash。
+
+    这些文件如果改过 → checkpoint 重跑时 input hash 变了,即可发现
+    「同一个 step 在不同 archive 下产物为何不同」。
+    """
+    raw = Path(archive_dir) / "raw" / "arxiv_papers.json"  # 兜底猜测
+    # 各 step 用 _checkpoint_archive_dir() 派生路径; archive_dir 通常是
+    # ROOT/archive/<run_date_token>/,下面 raw/filtered/rank/recommend 目录都有
+    # 但具体文件名含 run_date_token,这里用通配或预先定义。
+    base = Path(archive_dir)
+    candidates: list[Path] = []
+    if step_id.startswith("1."):
+        # fetch 直接产出 raw
+        candidates += list((base / "raw").glob("*.json"))
+    elif step_id.startswith("2."):
+        # 检索三步吃 raw
+        candidates += list((base / "raw").glob("*.json"))
+    elif step_id.startswith("3."):
+        candidates += list((base / "filtered").glob("*.json"))
+    elif step_id.startswith("4."):
+        candidates += list((base / "filtered").glob("*.json"))
+    elif step_id.startswith("5."):
+        candidates += list((base / "rank").glob("*.json"))
+    elif step_id.startswith("6."):
+        candidates += list((base / "recommend").glob("*.json"))
+    # 0 (enrich) 没有 archive 产物 → 空 list
+    return candidates
 
 
 def _checkpoint_archive_dir() -> str:
