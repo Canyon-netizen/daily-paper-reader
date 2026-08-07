@@ -583,7 +583,20 @@ prompt_packs:
 # 零破坏：默认 enabled: false，老 cron 行为不变。
 # 开启后每个 sub-step 出口插入 verify() → verdict 写进 checkpoint。
 # failure_handling: abort / mark_needs_review / clamp
+# ============================================================================
+# PR-1: Pipeline Checkpoint (plans/pr-plans/pr-1-checkpoint.md §5)
+# ============================================================================
+# 零破坏：默认 enabled: false，老 cron 行为不变（直接 subprocess.run）。
+# 开启后每个 sub-step 包到 run_step_with_checkpoint()，写 archive/<date>/.checkpoints/<step_id>.json。
+# 第二次 cron 跑同一 archive 目录时，已 succeeded 的 sub-step 自动 [SKIP]。
+# 删除或损坏某个 .checkpoints/<step>.json 文件 → 只重跑该 step，其他不受影响。
+# crash / GitHub Actions kill 也会留半成品 .json，next run 会按 status=running 续 attempts。
 pipeline:
+  checkpoints:
+    enabled: false
+    # 缺省 archive_dir 与 daily pipeline 的 ROOT/archive/<run_date_token>/ 一致;
+    # run_step_with_checkpoint 自动从环境变量 DPR_RUN_DATE_TOKEN 派生,
+    # 没设就 fallback 到 archive/<today>。
   validate:
     enabled: false
     contracts_dir: "src/validate/contracts"
