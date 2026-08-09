@@ -12,6 +12,10 @@ docs/papers/<YYYY>/<MM>/<DD>/<arxiv-id>-<slug>.{md,txt}
 
 `<YYYY>/<MM>/<DD>` 三段都来自 markdown frontmatter 的 `date: YYYY-MM-DD` 字段。bioRxiv 文件名内嵌 `YYYY-MM-DD` 也可直接提。
 
+> 💡 **YYYY/MM/DD 路径同时驱动两个系统**：
+> - URL slug：`/papers/<arxiv-id>-<slug>/`（不暴露中间层级）
+> - 首页日历格：DailyCalendar 按 `YYYY/MM` 栅格展示当月论文，同一日多篇论文并入同一格子
+
 > ⚠️ **arXiv id 的 YYMM 前缀不等于发表月**。例如 `2607.00083v1` 文件名 YYMM=2607，但
 > 真实 frontmatter `date` 是 `2026-06-30`，应进 `2026/06/30/`，不是 `2026/07/01/`。
 > 这是 commit 3166d40 (按 YYMM 分桶) 留下的历史 bug，引入 DD 子目录时一并修正。
@@ -78,3 +82,25 @@ docs/papers/<YYYY>/<MM>/<DD>/<arxiv-id>-<slug>.{md,txt}
 3. 是否同步更新 `docs/_sidebar.md`？（pipeline 自动维护，但手工新增的论文要去 sidebar 注册）
 4. `node astro-src/scripts/build-arxiv-index.mjs` 跑过且索引文件无意外增量？
 5. `npm run build` 是否成功？
+
+## 7. DailyCalendar 日历视图
+
+首页 `/` 及 `docs/_home_notice.md` 嵌入的日历组件（commit `b9d350a4`）：
+
+- **数据源**：SSR 阶段调用 `listPapers({sortBy:'date', dedup:true})`，由 `defaultPaperRepository` 返回论文列表。
+- **分桶逻辑**：按 `frontmatter.date`（论文**发表日**，非入库日）分到 `YYYY/MM` 栅格，同一日多篇并入同一格子。
+- **多版本处理**：同一 arxiv-id 多版本（`v1`/`v2`/...）自动取最新版本的 `date`（`v` 越大越新）。
+- **前端组件**：`astro-src/components/DailyCalendar.astro`，样式在 `astro-src/styles/daily-calendar.css`。
+
+> ⚠️ 注意：`docs/papers/<YYYY>/<MM>/<DD>/` 目录名是**入库日**（pipeline 执行日期），与日历展示的**发表日**（frontmatter `date`）是不同的口径。日历按发表日聚合是预期行为。
+
+## 8. 个人图书馆入库阈值（relevanceThreshold）
+
+`LibraryDefinition.relevanceThreshold`（commit `e7842dfc`）控制论文入库个人图书馆的**分数门限**：
+
+- **默认值**：`0.5`（定义在 `astro-src/lib/user-libraries/types.ts:261`）。
+- **生效位置**：`astro-src/scripts/user-libraries-ui.ts:runIngest(opts.threshold)` → `opts.threshold` 来自 `lib.definition.relevanceThreshold`。
+- **过滤逻辑**：论文得分 `score` 低于阈值时 **不进入** `library_papers`，仅高于或等于阈值的论文被收录。
+- **用途**：让用户为不同图书馆设置不同宽松度——例如「精读库」阈值设高（0.8+），「泛读库」设低（0.3）。
+
+阈值在新建/编辑图书馆时由用户配置，存储在 `LibraryDefinition.definition.relevanceThreshold` 字段。

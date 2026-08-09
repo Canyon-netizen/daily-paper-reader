@@ -106,18 +106,97 @@ def resolve_embed_device(args: argparse.Namespace, torch_module=None) -> None:
 # Subprocess helpers
 # =============================================================================
 
-def run_step(label: str, args: Sequence[str], cwd: Optional[str] = None) -> None:
-    """Run a subprocess with PYTHONPATH=ROOT_DIR so `from src.X` resolves.
+# 默认软失败匹配标记(Supabase 401 / 凭据轮换场景)
+DEFAULT_SOFT_FAIL_MARKERS: tuple[str, ...] = (
+    "Invalid API key",
+    "HTTP 401",
+    "401 Unauthorized",
+    "401",
+)
 
-    Logs the command, then delegates to subprocess.run with check=True.
+
+def _is_soft_fail_marker_match(text: str, markers: Sequence[str]) -> bool:
+    """检查 text 是否包含任一 marker(大小写不敏感,空 markers 永远命中)。
+
+    空 markers 视为「全部软失败」——给会议 init 的「先跳过 sync, 改天补」场景用。
+    """
+    if not markers:
+        return True
+    lower = (text or "").lower()
+    return any(str(m).lower() in lower for m in markers if m)
+
+
+def run_step(
+    label: str,
+    args: Sequence[str],
+    cwd: Optional[str] = None,
+    *,
+    soft_fail: bool = False,
+    soft_fail_markers: Optional[Sequence[str]] = None,
+) -> None:
+    """Run a subprocess with PYTHONPATH=ROOT_DIR so ``from src.X`` resolves.
+
+    ``soft_fail=True`` 时,若子进程退出非零且 stderr/stdout 含任一
+    ``soft_fail_markers``(默认是 Supabase 401 / "Invalid API key" / "HTTP 401"
+    三种),则只写一条 WARNING 到 stderr,不再抛 CalledProcessError —— 这样
+    GHA cron 不会因为一次性凭据轮换把已经 fetch 好的 raw archive 丢掉,
+    下次重跑(sync 步骤)即可。
+
+    ``soft_fail_markers`` 不传 → 走默认集合。传空 tuple () → 任何非零都吞掉。
+    传非空 tuple → 只吞包含任一 marker 的失败。
+
+    Child stdout/stderr 通过 capture_output=True + text=True 抓到本地,
+    再原样 print 回 stdout,这样 GHA log panel 既能看 child 输出,
+    又能在 child 失败时拿到完整 stderr 给 CalledProcessError。
     """
     print(f"[INFO] {label}: {' '.join(args)}", flush=True)
     env = {**os.environ, "PYTHONPATH": ROOT_DIR}
-    subprocess.run(
+    # capture_output + text: 拿到 child stdout/stderr 再由我们自己 print,
+    # 这样 GHA log 仍能看到(若用 check=True 默认捕获,GHA 不会显示 child log)。
+    completed = subprocess.run(
         list(args),
-        check=True,
+        check=False,
         env=env,
         cwd=cwd or ROOT_DIR,
+        capture_output=True,
+        text=True,
+    )
+    # 把 child 输出原样回流到 parent,GHA 不会因为 capture_output 看不到。
+    if completed.stdout:
+        print(completed.stdout, end="", flush=True)
+    if completed.stderr:
+        # stderr 直接 print(无 end='\n' 时 subprocess 会自带尾换行)
+        print(completed.stderr, end="", flush=True)
+    if completed.returncode == 0:
+        return
+    # 失败路径:拼出 combined 文本做 marker 匹配(stdout+stderr 都算)
+    combined = (completed.stdout or "") + "\n" + (completed.stderr or "")
+    if soft_fail:
+        markers = (
+            list(soft_fail_markers)
+            if soft_fail_markers is not None
+            else list(DEFAULT_SOFT_FAIL_MARKERS)
+        )
+        if _is_soft_fail_marker_match(combined, markers):
+            # 把命中 marker 的原始行附在 WARN 末尾,方便排查("到底是 401 还是 quota")
+            matched_line = ""
+            for line in (completed.stdout or "").splitlines() + (completed.stderr or "").splitlines():
+                if any(str(m).lower() in line.lower() for m in markers if m):
+                    matched_line = line.strip()[:300]
+                    break
+            sys.stderr.write(
+                f"[WARN] {label} 软失败(returncode={completed.returncode}, "
+                f"matched soft-fail marker);raw archive 已保留,下次重跑 sync。\n"
+                f"  marker: {matched_line}\n"
+            )
+            sys.stderr.flush()
+            return
+    # 默认硬失败:显式抛 CalledProcessError 以兼容历史 caller 的 try/except。
+    raise subprocess.CalledProcessError(
+        returncode=completed.returncode,
+        cmd=list(args),
+        output=completed.stdout,
+        stderr=completed.stderr,
     )
 
 

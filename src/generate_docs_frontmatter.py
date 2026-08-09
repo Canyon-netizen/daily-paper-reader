@@ -72,6 +72,15 @@ def _parse_simple_yaml_list(raw: str) -> List[str]:
 def _parse_front_matter(md_text: str) -> Dict[str, Any]:
     """
     简易解析 Markdown 文件中的 YAML front matter，优先提取 metadata。
+
+    支持 folded quoted scalars:一行以单/双引号起头但没在同行闭合时,
+    会继续读后续的「以空白起头 + 闭合引号」续行,合并成一个字符串
+    (YAML 行为:folded scalar 用空格连接)。例::
+
+        title: 'LatentSkill: From In-Context Textual Skills to
+          LLM Agents'
+
+    → title = "LatentSkill: From In-Context Textual Skills to LLM Agents"
     """
     text = (md_text or "").lstrip()
     if not text.startswith("---"):
@@ -80,15 +89,19 @@ def _parse_front_matter(md_text: str) -> Dict[str, Any]:
     end = text.find("\n---", 3)
     if end == -1:
         return {}
-    block = text[3:end].strip()
+    block = text[3:end]
     meta: Dict[str, Any] = {}
-    for line in block.split("\n"):
-        line = line.strip()
-        if not line or line.startswith("#"):
+    lines = block.split("\n")
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        i += 1
+        if not stripped or stripped.startswith("#"):
             continue
-        if ":" not in line:
+        if ":" not in stripped:
             continue
-        key, raw = line.split(":", 1)
+        key, raw = stripped.split(":", 1)
         key = key.strip()
         if not key:
             continue
@@ -97,7 +110,33 @@ def _parse_front_matter(md_text: str) -> Dict[str, Any]:
             meta[key] = ""
             continue
 
-        val: Any = raw
+        # folded quoted scalar:同行未闭合,继续读缩进续行直到引号闭合
+        if raw[0] in ('"', "'") and not (len(raw) >= 2 and raw[-1] == raw[0]):
+            quote = raw[0]
+            buf = [raw[1:]]
+            closed = False
+            while i < len(lines):
+                cont = lines[i]
+                i += 1
+                # 续行必须以空白起头(folded 的标准折叠)
+                if not (cont and cont[0] in (" ", "\t")):
+                    # 退回一行,外层 while 会再处理它
+                    i -= 1
+                    break
+                cont_stripped = cont.strip()
+                if cont_stripped.endswith(quote):
+                    buf.append(cont_stripped[:-1])
+                    closed = True
+                    break
+                buf.append(cont_stripped)
+            raw = " ".join(part.strip() for part in buf if part is not None)
+            if closed:
+                # 闭合的 quoted scalar → 走统一解引号流程
+                val: Any = raw.replace("\\n", "\n").replace('\\"', '"').replace("\\'", "'").replace("\\\\", "\\")
+                meta[key] = val
+                continue
+
+        val = raw
         lowered = raw.lower()
         if lowered in ("null", "~", "none"):
             val = ""

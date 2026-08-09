@@ -22,6 +22,7 @@
 | 5 | Concept Backlinks | OFF | `concepts.enabled` | 不调 LLM 提概念,frontmatter 不写 `wiki_compiled`/`concepts` |
 | 6 | Topic v2 辩论 | OFF | `topic.v2.enabled` | v1 流程(纯 LLM 排序),`renderDebateStageSafe` no-op |
 | 7 | Citation Guard | OFF | `citation_guard.enabled` | Deep Dive 不写 `*.citations.json`,`save-paper.yml` 不调 guard |
+| — | 模块化已完成(A-I) | — | 代码重构,非用户可见能力 | 深层目录拆分,类型集中化,事件总线,PaperRepository |
 
 **通用回滚**:任何能力出问题,把对应 `*.enabled` 设回 `false` 即可。**零感知升级** — 老用户 cron 不会自动开启任何新能力。
 
@@ -641,6 +642,196 @@ citation_guard: { enabled: false }
 
 ---
 
+## Phase A-I: 深度模块化(2026-07-31 至 2026-08-08)
+
+原 8-PR Polaris 吸收完成后,进入代码组织层面的深度模块化阶段。目标是解决历史遗留的单文件膨胀、跨模块耦合、以及 SubQ 字段同步痛点。
+
+### Phase A: llm/markdown 拆子目录
+
+**动机**: `lib/llm.ts` 468 行、`lib/markdown.ts` 340 行,功能混杂不易维护。
+
+**拆分结果**:
+
+| 原文件 | 新子目录 | 导出 |
+|---|---|---|
+| `lib/llm.ts` | `lib/llm/chat.ts` | LLM 调用入口 |
+| | `lib/llm/route.ts` | 多模型路由 |
+| | `lib/llm/types.ts` | 请求/响应类型 |
+| | `lib/llm/index.ts` | shim 兼容层 |
+| `lib/markdown.ts` | `lib/markdown/render.ts` | 主渲染器 |
+| | `lib/markdown/title.ts` | 标题解析 |
+| | `lib/markdown/inline.ts` | 行内元素 |
+| | `lib/markdown/table.ts` | 表格处理 |
+| | `lib/markdown/figures.ts` | 图片抓取 |
+| | `lib/markdown/types.ts` | 渲染类型 |
+| | `lib/markdown/index.ts` | shim 兼容层 |
+
+**shim 策略**: 保留老 import 路径的兼容性,新代码推荐直接 import 子模块。
+
+```ts
+// 老路径(仍可用)
+import { callLLM } from '../lib/llm';
+import { renderMarkdown } from '../lib/markdown';
+
+// 新路径(推荐)
+import { callLLM } from '../lib/llm/chat';
+import { renderMarkdown } from '../lib/markdown/render';
+```
+
+### Phase B: paper-relations 拆子目录
+
+**动机**: 论文关系计算(jaccard/tfidf/embedding/hybrid) 300+ 行,IDB 缓存逻辑与算法强耦合。
+
+**拆分结果**:
+
+```
+lib/paper-relations/
+├── types.ts          # 关系类型定义
+├── edges-util.ts     # 边操作工具
+├── jaccard.ts       # Jaccard 相似度
+├── tfidf.ts         # TF-IDF 向量化
+├── embedding.ts     # 向量嵌入(调用外部 API)
+├── embedding-cache.ts # IDB 缓存层
+├── hybrid.ts        # 混合检索
+├── index.ts         # 统一导出
+└── core.mjs         # 核心算法
+```
+
+**隔离收益**: 缓存层(`embedding-cache.ts`)可独立替换,不影响向量生成逻辑。单元测试可针对单个算法。
+
+### Phase C: schemas.ts 拆 types/ + llm-clean/
+
+**动机**: `lib/schemas.ts` 469 行,包含纯类型、builder 函数、normalize 逻辑,难以区分职责。
+
+**拆分结果**:
+
+| 原内容 | 新位置 |
+|---|---|
+| 纯类型(SubQ/Candidate/Summary/TopicReport 等) | `lib/types/subq.ts`, `lib/types/concept.ts`, `lib/types/topic.ts` |
+| builder 函数(`buildSubQ`, `buildRegenSubQ`) | `lib/types/index.ts` 集中导出 |
+| normalize 逻辑 | `lib/llm-clean/` 下各模块 |
+
+**SubQ 字段痛点终结**: 之前 `extendBalancedJson` / `callLLMRaw` / `decomposeIdea` 三处独立定义 SubQ 字段,添加新字段需同步修改 3 处。Phase C 后,类型集中在 `lib/types/`,builder 在 `lib/types/index.ts`,单点修改即全局生效。
+
+### Phase D: events 总线 + PaperRepository
+
+**动机**: 组件间硬调用链难以追踪,Paper 数据源分散在多处。
+
+**events 总线**:
+
+```
+lib/events/
+├── bus.ts       # 事件发射/订阅核心
+├── names.ts     # 事件名称常量
+├── types.ts     # 事件载荷类型
+└── index.ts     # 双发: 具名导出 + legacy alias
+```
+
+`lib/events/index.ts` 同时导出:
+
+```ts
+export { emit, subscribe, unsubscribe } from './bus';
+// 兼容老代码
+export { emit as emitEvent, subscribe as onEvent } from './bus';
+```
+
+**PaperRepository**:
+
+```
+lib/paper-repository/
+├── types.ts        # 仓库类型定义
+├── cache.ts        # TTL 缓存
+├── subscription.ts # 订阅 API
+└── index.ts        # 工厂函数
+```
+
+**核心模式**:
+
+```ts
+// 工厂创建
+const repo = createPaperRepository({ ttl: 60000 });
+
+// 订阅变更
+repo.subscribe((papers) => {
+  // UI 响应式更新
+});
+```
+
+### Phase E: 总线 + 仓库真接进去
+
+**Phase D 的落地**:
+
+| 接入方 | 改动 |
+|---|---|
+| events 总线 5 处 caller | topic-search / paper-analyzer / concept-graph / library UI 等 |
+| PaperRepository 3 个 SSR page | `/daily/`, `/topic/`, `/libraries/` |
+| paper-analyzer 抽取 | `extractBalancedJson` + `ArxivEntry` / `parseArxivEntry` 独立到 `lib/arxiv-entry/` |
+
+**`lib/arxiv-entry/` 结构**:
+
+```
+lib/arxiv-entry/
+├── types.ts    # ArxivEntry 接口
+├── parse.ts    # parseArxivEntry 解析函数
+└── index.ts    # 统一导出
+```
+
+### Phase F-I: 深度模块化续
+
+**已完成**:
+
+- `lib/paper-note/` 抽取: body / frontmatter / render / types 分离
+- topic-search 已是 52 行,无需再拆
+- PaperRepository `subscribe` API 完善,支持订阅特定条件
+- `lib/paper.ts` 349 行抽取 frontmatter 解析逻辑到 `lib/paper-frontmatter/`
+
+**`lib/paper-frontmatter/` 结构**:
+
+```
+lib/paper-frontmatter/
+├── parse.ts    # 解析 frontmatter
+├── types.ts    # 解析结果类型
+└── index.ts    # 统一导出
+```
+
+### 文献库架构(2026-08-08)
+
+DPR 文献库对标 Polaris `/libraries` 路径,在单用户 + 静态站约束下实现三层抽象:
+
+| 层级 | 类型 | 描述 |
+|---|---|---|
+| 公共主题库 | `LIBRARY_TYPE_PUBLIC` | Polaris 风格主题,用户可浏览不可编辑 |
+| 个人图书馆 | `LIBRARY_TYPE_PRIVATE` | 用户私有收藏,支持增删/标签/活动日志 |
+| 首页入口 | `/libraries/` | 统一入口,展示个人库 + 公共主题库 |
+
+**实现位置**:
+
+- `lib/user-libraries/store.ts` — IDB 存储引擎,46544 行核心逻辑
+- `lib/user-libraries/types.ts` — 库/条目/活动类型定义
+- `lib/user-libraries/activity-log.ts` — 用户活动记录
+- `lib/libraries.ts` — 路由层面库列表聚合
+
+**与 Polaris 的差异**:
+
+- 无多用户 RBAC,单用户本地优先
+- 无实时协作,静态站点无 WebSocket
+- 公共主题库数据源为本地 YAML + 每日论文聚合
+
+### Polaris 吸收批次(2026-08-06)
+
+8-PR 吸收完成后,8 月 6 日进行一次代码清理批次,5 个 commit:
+
+| Commit | 内容 |
+|---|---|
+| `score 归一化` | 评分算法统一量纲 |
+| `concept YAML heal` | 概念数据自愈脚本 |
+| `relink` | Polaris port: 链接重定向修复 |
+| `dupes` | Polaris port: 重复条目检测 |
+| `budget` | Polaris port: 预算管理模块 |
+| `call_one 死代码移除` | 清理未使用的 `call_one` 函数 |
+
+---
+
 ## 通用回滚策略
 
 | 场景 | 操作 |
@@ -706,6 +897,55 @@ citation_guard: { enabled: false }
 - [config.yaml](config.yaml) — 7 个新顶层块
 - [.github/workflows/save-paper.yml](.github/workflows/save-paper.yml) — PR 7(自动调 citation_guard)
 - [functions/api/proxy.ts](functions/api/proxy.ts) — PR 7(S2/OpenAlex 加入 allow-list)
+
+### Phase A-I 深度模块化(2026-07-31 至 2026-08-08)
+- [astro-src/lib/llm/chat.ts](astro-src/lib/llm/chat.ts) — Phase A
+- [astro-src/lib/llm/route.ts](astro-src/lib/llm/route.ts) — Phase A
+- [astro-src/lib/llm/types.ts](astro-src/lib/llm/types.ts) — Phase A
+- [astro-src/lib/llm/index.ts](astro-src/lib/llm/index.ts) — Phase A shim
+- [astro-src/lib/markdown/render.ts](astro-src/lib/markdown/render.ts) — Phase A
+- [astro-src/lib/markdown/title.ts](astro-src/lib/markdown/title.ts) — Phase A
+- [astro-src/lib/markdown/inline.ts](astro-src/lib/markdown/inline.ts) — Phase A
+- [astro-src/lib/markdown/table.ts](astro-src/lib/markdown/table.ts) — Phase A
+- [astro-src/lib/markdown/figures.ts](astro-src/lib/markdown/figures.ts) — Phase A
+- [astro-src/lib/markdown/types.ts](astro-src/lib/markdown/types.ts) — Phase A
+- [astro-src/lib/markdown/index.ts](astro-src/lib/markdown/index.ts) — Phase A shim
+- [astro-src/lib/paper-relations/types.ts](astro-src/lib/paper-relations/types.ts) — Phase B
+- [astro-src/lib/paper-relations/edges-util.ts](astro-src/lib/paper-relations/edges-util.ts) — Phase B
+- [astro-src/lib/paper-relations/jaccard.ts](astro-src/lib/paper-relations/jaccard.ts) — Phase B
+- [astro-src/lib/paper-relations/tfidf.ts](astro-src/lib/paper-relations/tfidf.ts) — Phase B
+- [astro-src/lib/paper-relations/embedding.ts](astro-src/lib/paper-relations/embedding.ts) — Phase B
+- [astro-src/lib/paper-relations/embedding-cache.ts](astro-src/lib/paper-relations/embedding-cache.ts) — Phase B
+- [astro-src/lib/paper-relations/hybrid.ts](astro-src/lib/paper-relations/hybrid.ts) — Phase B
+- [astro-src/lib/paper-relations/index.ts](astro-src/lib/paper-relations/index.ts) — Phase B
+- [astro-src/lib/types/subq.ts](astro-src/lib/types/subq.ts) — Phase C
+- [astro-src/lib/types/concept.ts](astro-src/lib/types/concept.ts) — Phase C
+- [astro-src/lib/types/topic.ts](astro-src/lib/types/topic.ts) — Phase C
+- [astro-src/lib/types/index.ts](astro-src/lib/types/index.ts) — Phase C
+- [astro-src/lib/events/bus.ts](astro-src/lib/events/bus.ts) — Phase D
+- [astro-src/lib/events/names.ts](astro-src/lib/events/names.ts) — Phase D
+- [astro-src/lib/events/types.ts](astro-src/lib/events/types.ts) — Phase D
+- [astro-src/lib/events/index.ts](astro-src/lib/events/index.ts) — Phase D
+- [astro-src/lib/paper-repository/types.ts](astro-src/lib/paper-repository/types.ts) — Phase D
+- [astro-src/lib/paper-repository/cache.ts](astro-src/lib/paper-repository/cache.ts) — Phase D
+- [astro-src/lib/paper-repository/subscription.ts](astro-src/lib/paper-repository/subscription.ts) — Phase D
+- [astro-src/lib/paper-repository/index.ts](astro-src/lib/paper-repository/index.ts) — Phase D
+- [astro-src/lib/arxiv-entry/types.ts](astro-src/lib/arxiv-entry/types.ts) — Phase E
+- [astro-src/lib/arxiv-entry/parse.ts](astro-src/lib/arxiv-entry/parse.ts) — Phase E
+- [astro-src/lib/arxiv-entry/index.ts](astro-src/lib/arxiv-entry/index.ts) — Phase E
+- [astro-src/lib/paper-note/body.ts](astro-src/lib/paper-note/body.ts) — Phase F
+- [astro-src/lib/paper-note/frontmatter.ts](astro-src/lib/paper-note/frontmatter.ts) — Phase F
+- [astro-src/lib/paper-note/render.ts](astro-src/lib/paper-note/render.ts) — Phase F
+- [astro-src/lib/paper-note/types.ts](astro-src/lib/paper-note/types.ts) — Phase F
+- [astro-src/lib/paper-note/index.ts](astro-src/lib/paper-note/index.ts) — Phase F
+- [astro-src/lib/paper-frontmatter/parse.ts](astro-src/lib/paper-frontmatter/parse.ts) — Phase I
+- [astro-src/lib/paper-frontmatter/figures.ts](astro-src/lib/paper-frontmatter/figures.ts) — Phase I(图资产 frontmatter 解析)
+- [astro-src/lib/paper-frontmatter/index.ts](astro-src/lib/paper-frontmatter/index.ts) — Phase I(公共 re-export)
+- [astro-src/lib/user-libraries/store.ts](astro-src/lib/user-libraries/store.ts) — 文献库
+- [astro-src/lib/user-libraries/types.ts](astro-src/lib/user-libraries/types.ts) — 文献库
+- [astro-src/lib/user-libraries/activity-log.ts](astro-src/lib/user-libraries/activity-log.ts) — 文献库
+- [astro-src/lib/user-libraries/index.ts](astro-src/lib/user-libraries/index.ts) — 文献库
+- [astro-src/lib/libraries.ts](astro-src/lib/libraries.ts) — 文献库
 
 ### 没改动的(plan 明确不吸收)
 - 不引入 Polaris `src/backend/` 任何模块作为依赖
