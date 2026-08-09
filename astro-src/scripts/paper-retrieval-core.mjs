@@ -114,10 +114,13 @@ export function collectSection(blocks, startIdx, maxChars) {
 // ---------------------------------------------------------------------------
 
 const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'of', 'to', 'and', 'in', 'on', 'for', 'is', 'are',
-  'with', 'that', 'this', 'as', 'by', 'we', 'our', 'it', 'be',
+  'the', 'an', 'of', 'to', 'and', 'in', 'on', 'for', 'is', 'are',
+  'with', 'that', 'this', 'as', 'by', 'we', 'our', 'be',
   '的', '了', '在', '是', '和', '与', '或', '把', '被',
 ]);
+// 注意:故意剔除 'a' / 'it' / 'i' 等单字母 token;
+// 测试契约要求 query = '学 A' 时,A 不被当停用词丢掉(PureCjkShortQueryTest.test_mixed_cjk_latin_query_not_flagged)。
+// 单字母词在 BM25 评分里权重低(DF 高),但匹配仍是有意义的信号。
 
 /**
  * 把查询切成有意义 token(过滤停用词 + 长度 < 2)。
