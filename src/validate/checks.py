@@ -205,10 +205,7 @@ def _judge_rubric(
     output_payload: Optional[Dict[str, Any]]
 ) -> Tuple[bool, str]:
     """
-    Evaluate LLM rubric checks (placeholder implementation).
-
-    In the real implementation, this would call an LLM to evaluate
-    the output against the rubric. For now, we return a placeholder.
+    Evaluate LLM rubric checks against the output payload.
 
     Args:
         rubric_checks: List of rubric check specifications
@@ -217,11 +214,43 @@ def _judge_rubric(
     Returns:
         Tuple of (passed: bool, reason: str)
     """
-    # Placeholder implementation - in reality this would call an LLM
-    # For now, we assume rubric passes if we can parse the payload
     if output_payload is None:
         return False, "[llm_rubric] Cannot evaluate: no JSON payload"
+    if not rubric_checks:
+        return True, "[llm_rubric] No rubric checks defined, skipping"
 
-    # For PR-2, we default to passing the rubric check
-    # Real implementation would involve LLM call based on rubric template
-    return True, "[llm_rubric] Rubric evaluation passed (placeholder)"
+    # Build prompt for LLM evaluation
+    prompt = (
+        "You are evaluating whether the following JSON output satisfies a rubric.\n"
+        f"Output JSON: {json.dumps(output_payload, ensure_ascii=False)}\n"
+        f"Rubric checks: {json.dumps(rubric_checks, ensure_ascii=False)}\n\n"
+        "Reply ONLY with JSON of the form {\"passed\": <true|false>, \"reason\": \"<one-sentence justification>\"}."
+    )
+
+    try:
+        from src.llm_router import get_llm_router
+        router = get_llm_router()
+        response = router.call(
+            "validate.rubric",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+        # Extract content from response (handle both dict and raw response formats)
+        content = ""
+        if isinstance(response, dict):
+            choices = response.get("choices", [])
+            if choices:
+                msg = choices[0].get("message", {})
+                content = msg.get("content", "") or ""
+        if not content:
+            return False, "[llm_rubric] Empty LLM response"
+
+        result = json.loads(content)
+        passed = bool(result.get("passed", False))
+        reason = str(result.get("reason", "")) or "[llm_rubric] Empty reason"
+        return passed, f"[llm_rubric] {reason}"
+    except json.JSONDecodeError as e:
+        return False, f"[llm_rubric] Failed to parse LLM response: {e}"
+    except Exception as e:
+        # Fail loud — do not silently pass
+        return False, f"[llm_rubric] LLM call failed: {type(e).__name__}: {e}"
