@@ -45,10 +45,50 @@ def swiss_pairs(ideas: list[dict]) -> list[tuple[dict, dict]]:
 
 
 def run_match_persona(persona: dict, a: dict, b: dict, round_n: int, call=None) -> str:
-    """Run one persona argument through an injected call, if supplied."""
-    if call is None:
-        return f"以{persona['name']}视角比较两个研究想法。"
-    return call(persona, a, b, round_n)
+    """Run one persona argument through an injected call, or LLM if none provided."""
+    if call is not None:
+        return call(persona, a, b, round_n)
+
+    # Handle both dict and string persona forms (for test compatibility)
+    if isinstance(persona, str):
+        name = persona
+        stance = ""
+    else:
+        name = persona.get("name", "?")
+        stance = persona.get("stance", "")
+
+    # Build prompt (Chinese, matching DEFAULT_PERSONAS stance style)
+    prompt = (
+        f"你是 {name}。{stance}\n\n"
+        f"请用 3-5 句话,从你独特的视角,比较以下两个研究想法并给出你的论据(本轮第 {round_n} 轮)。\n\n"
+        f"想法 A: {a.get('title', '?')}\n"
+        f"目标: {a.get('goal', '')}\n"
+        f"信号: {', '.join(a.get('signals', []))}\n\n"
+        f"想法 B: {b.get('title', '?')}\n"
+        f"目标: {b.get('goal', '')}\n"
+        f"信号: {', '.join(b.get('signals', []))}\n\n"
+        "直接输出你的论据,不要前缀说明。"
+    )
+
+    try:
+        from src.llm_router import get_llm_router
+        router = get_llm_router()
+        response = router.call(
+            "elo.debate",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        # Extract content from response
+        text = ""
+        if isinstance(response, dict):
+            choices = response.get("choices", [])
+            if choices:
+                msg = choices[0].get("message", {})
+                text = msg.get("content", "") or ""
+        if not text or not text.strip():
+            return f"[{name} 立场未能生成: 空响应]"
+        return text.strip()
+    except Exception as e:
+        return f"[{name} 立场未能生成: {type(e).__name__}: {e}]"
 
 
 def judge_debate(a: dict, b: dict, judge_llm_call) -> str:
@@ -99,12 +139,12 @@ def run_match(
         for debate_round in range(1, rounds + 1):
             # Pro (正方)
             round_n += 1
-            content = run_match_persona(pro, a, b, round_n, call=lambda *_: "TODO: LLM call")
+            content = run_match_persona(pro, a, b, round_n)
             transcript.append({"persona": pro_name, "side": "pro", "round": round_n, "content": content})
 
             # Con (反方)
             round_n += 1
-            content = run_match_persona(con, a, b, round_n, call=lambda *_: "TODO: LLM call")
+            content = run_match_persona(con, a, b, round_n)
             transcript.append({"persona": con_name, "side": "con", "round": round_n, "content": content})
 
         # Judge -- call raw judge_llm_call so exceptions propagate to run_match's try/except.
