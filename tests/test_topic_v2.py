@@ -411,3 +411,181 @@ def test_scoring_failure_does_not_block_pipeline(tmp_path, mock_signals, stub_ju
     # 验证流程仍然完成,ideas 存在(虽然无 scores)
     assert len(progress["ideas"]) == 4
     assert progress["status"] == "completed"
+
+
+# ----------------------------------------------------------------------------
+# semantic_dedup_ideas tests
+# ----------------------------------------------------------------------------
+
+from src.topic_v2 import (
+    dedup_ideas,
+    semantic_dedup_ideas,
+    normalize_idea_title,
+)
+
+
+def test_text_dedup_still_works():
+    """Text normalization dedup behavior unchanged."""
+    ideas = [
+        {"title": "RL for Atari games", "goal": "beat the game"},
+        {"title": "rl for atari games", "goal": "score high"},
+        {"title": "RL for Atari", "goal": "win"},
+    ]
+    result = dedup_ideas(ideas, use_semantic=False)
+    # First two normalize to same key "rl for atari games" → only first kept
+    # Third normalizes to "rl for atari" → different key → kept
+    assert len(result) == 2
+    assert result[0]["title"] == "RL for Atari games"
+
+
+def test_semantic_dedup_with_mock_embedding():
+    """Two semantically similar ideas with different wording → one dropped."""
+    ideas = [
+        {"title": "Use reinforcement learning to play Atari", "goal": "achieve high scores"},
+        {"title": "Apply RL for video game mastery", "goal": "reach top ranks"},
+        {"title": "Natural language processing for translation", "goal": "improve accuracy"},
+    ]
+    # Mock embedding: first two are very similar (cosine ≈ 0.95), third is different
+    import numpy as np
+    def mock_embedding(texts):
+        # Return vectors where first two are nearly identical
+        vectors = []
+        for i, t in enumerate(texts):
+            if "Atari" in t or "RL" in t or "game" in t:
+                vectors.append([0.9, 0.1, 0.0])  # Similar vector
+            else:
+                vectors.append([0.0, 0.0, 0.9])  # Different vector
+        return np.array(vectors)
+
+    result = semantic_dedup_ideas(ideas, embedding_call=mock_embedding, dedup_threshold=0.85)
+    # First two should be deduped → 1 kept, third should remain → total 2
+    assert len(result) == 2
+    titles = [r["title"] for r in result]
+    assert "Natural language processing for translation" in titles
+
+
+def test_semantic_dedup_rerank_confirms():
+    """Borderline cosine, but rerank confirms duplicate → drop."""
+    ideas = [
+        {"title": "RL agents in environments", "goal": "learn policies"},
+        {"title": "Reinforcement learning in settings", "goal": "acquire strategies"},
+    ]
+    # Cosine is borderline (0.86), but rerank says high confidence duplicate
+    import numpy as np
+    def mock_embedding(texts):
+        # Return vectors with borderline similarity
+        return np.array([[0.8, 0.6], [0.86, 0.5]])
+
+    def mock_rerank(a, b):
+        return {"is_duplicate": True, "confidence": 0.8, "reason": "same research direction"}
+
+    result = semantic_dedup_ideas(
+        ideas,
+        embedding_call=mock_embedding,
+        rerank_call=mock_rerank,
+        dedup_threshold=0.85,
+        rerank_threshold=0.5,
+    )
+    # Rerank confirms duplicate → one dropped
+    assert len(result) == 1
+
+
+def test_semantic_dedup_rerank_overrides():
+    """Borderline cosine, but rerank says NOT duplicate → keep both."""
+    ideas = [
+        {"title": "RL agents in environments", "goal": "learn policies"},
+        {"title": "Reinforcement learning in settings", "goal": "acquire strategies"},
+    ]
+    import numpy as np
+    def mock_embedding(texts):
+        return np.array([[0.8, 0.6], [0.86, 0.5]])
+
+    def mock_rerank(a, b):
+        # LLM says different directions
+        return {"is_duplicate": False, "confidence": 0.9, "reason": "different applications"}
+
+    result = semantic_dedup_ideas(
+        ideas,
+        embedding_call=mock_embedding,
+        rerank_call=mock_rerank,
+        dedup_threshold=0.85,
+        rerank_threshold=0.5,
+    )
+    # Rerank overrides cosine → keep both
+    assert len(result) == 2
+
+
+def test_embedding_unavailable_falls_back_to_text():
+    """Embedding call fails → falls through to text-only."""
+    ideas = [
+        {"title": "RL for games", "goal": "win"},
+        {"title": "RL for gaming", "goal": "score"},
+        {"title": "NLP translation", "goal": "accuracy"},
+    ]
+
+    def failing_embedding(texts):
+        raise RuntimeError("Embedding service unavailable")
+
+    result = semantic_dedup_ideas(ideas, embedding_call=failing_embedding)
+    # Should return ideas unchanged (text-only fallback)
+    assert len(result) == 3
+
+
+def test_rerank_unavailable_trusts_cosine():
+    """Rerank fails → trusts Stage 2 cosine verdict."""
+    ideas = [
+        {"title": "RL agents in environments", "goal": "learn policies"},
+        {"title": "Reinforcement learning in settings", "goal": "acquire strategies"},
+    ]
+    import numpy as np
+    def mock_embedding(texts):
+        # High similarity (0.95) above threshold
+        return np.array([[0.9, 0.4], [0.95, 0.3]])
+
+    def failing_rerank(a, b):
+        raise RuntimeError("Rerank unavailable")
+
+    result = semantic_dedup_ideas(
+        ideas,
+        embedding_call=mock_embedding,
+        rerank_call=failing_rerank,
+        dedup_threshold=0.85,
+    )
+    # Rerank fails but cosine above threshold → drop duplicate
+    assert len(result) == 1
+
+
+def test_semantic_dedup_uses_router_when_no_override(monkeypatch):
+    """Without rerank_call override, get_llm_router should be called."""
+    ideas = [
+        {"title": "RL agents", "goal": "learn"},
+        {"title": "RL bots", "goal": "train"},
+    ]
+    import numpy as np
+
+    # Mock embedding to return high similarity
+    def mock_embedding(texts):
+        return np.array([[0.9, 0.4], [0.95, 0.3]])
+
+    # Track if router was called
+    router_called = []
+
+    class MockRouter:
+        def call(self, stage, messages):
+            router_called.append(stage)
+            # Return a valid response that says NOT duplicate
+            return {
+                "choices": [{"message": {"content": "{\"is_duplicate\": false, \"confidence\": 0.1, \"reason\": \"different\"}"}}]
+            }
+
+    monkeypatch.setattr("src.topic_v2.get_llm_router", lambda: MockRouter())
+
+    result = semantic_dedup_ideas(
+        ideas,
+        embedding_call=mock_embedding,
+        dedup_threshold=0.85,
+    )
+
+    # Router should have been called for topic.dedup
+    assert "topic.dedup" in router_called or len(router_called) > 0
+

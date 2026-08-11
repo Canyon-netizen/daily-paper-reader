@@ -128,22 +128,177 @@ def normalize_idea_title(title: str) -> str:
     return s[:80]
 
 
-def dedup_ideas(ideas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """按 normalize_idea_title 去重,保留首次出现的 idea。
+def dedup_ideas(ideas: List[Dict[str, Any]], *, use_semantic: bool = True) -> List[Dict[str, Any]]:
+    """Text-normalize pre-filter; if use_semantic and embedding works, do 2-stage.
 
     plan §4.2 PR-B 验收 1:「对候选做 deterministic dedup:先规范化文本/slug,
-    再可选 embedding similarity」。这里只做文本规范化(无 embedding 依赖),
-    后续可加 semantic dedup(目前真盘 0 个候选真重复,纯文本 dedup 已够用)。
+    再可选 embedding similarity」。这里先做文本规范化,然后可选 semantic dedup。
+
+    Args:
+        ideas: list of idea dicts
+        use_semantic: if True, attempt 2-stage semantic dedup (cosine + optional LLM rerank)
     """
+    # Stage 1: text normalization pre-filter
     seen: set[str] = set()
-    out: List[Dict[str, Any]] = []
+    text_deduped: List[Dict[str, Any]] = []
     for idea in ideas:
         key = normalize_idea_title(str(idea.get("title", "")))
         if not key or key in seen:
             continue
         seen.add(key)
-        out.append(idea)
-    return out
+        text_deduped.append(idea)
+
+    if not use_semantic:
+        return text_deduped
+
+    # Stage 2+3: semantic dedup with graceful degradation
+    try:
+        return semantic_dedup_ideas(text_deduped)
+    except Exception:
+        # fail-soft: embedding/rerank unavailable → fall back to text-only
+        return text_deduped
+
+
+def semantic_dedup_ideas(
+    ideas: List[Dict[str, Any]],
+    *,
+    embedding_call=None,
+    rerank_call=None,
+    dedup_threshold: float = 0.85,
+    rerank_threshold: float = 0.5,
+    batch_size: int = 20,
+) -> List[Dict[str, Any]]:
+    """Two-stage semantic dedup: text-normalize (already done) → cosine → optional LLM rerank.
+
+    Polaris Idea Forge contract (`actions_ideas.py:699-817`):
+      - text-normalize first (cheap, already done by dedup_ideas)
+      - embedding cosine with threshold 0.85
+      - rerank LLM confirmation with threshold 0.5
+      - all stages degrade gracefully if unavailable
+
+    Args:
+        ideas: list of idea dicts (already text-deduped)
+        embedding_call: optional override (texts → list[vector]). None = use TF-IDF fallback.
+        rerank_call: optional override ((a_text, b_text) → {"is_duplicate": bool,
+                         "confidence": 0-1, "reason": str}). None = use router.
+        dedup_threshold: cosine similarity above which to consider duplicate
+        rerank_threshold: rerank confidence above which to confirm duplicate
+        batch_size: max ideas per embedding batch
+
+    Returns:
+        Filtered list of ideas (duplicates removed, first occurrence kept).
+        If everything fails, returns ideas unchanged.
+    """
+    import json as json_module
+    import numpy as np
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    # Default rerank using get_llm_router (if not provided)
+    if rerank_call is None:
+        def default_rerank(a_text: str, b_text: str) -> dict:
+            """Use LLM to confirm if two ideas are duplicates."""
+            from src.llm_router import get_llm_router
+            prompt = (
+                f"判断以下两个研究想法是否本质相同(只是表述不同)还是不同方向:\n\n"
+                f"想法 A: {a_text}\n\n"
+                f"想法 B: {b_text}\n\n"
+                f"只输出 JSON: {{\"is_duplicate\": <true|false>, \"confidence\": <0-1>, \"reason\": \"<一句话>\"}}"
+            )
+            try:
+                router = get_llm_router()
+                response = router.call(
+                    "topic.dedup",
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                # Extract content from response
+                text = ""
+                if isinstance(response, dict):
+                    choices = response.get("choices", [])
+                    if choices:
+                        msg = choices[0].get("message", {})
+                        text = msg.get("content", "") or ""
+                if not text or not text.strip():
+                    return {"is_duplicate": False, "confidence": 0.0, "reason": "empty response"}
+                # Parse JSON from response
+                text = text.strip()
+                # Handle markdown code blocks
+                if text.startswith("```"):
+                    lines = text.split("\n")
+                    text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
+                result = json_module.loads(text)
+                return result
+            except Exception:
+                # Rerank unavailable → will trust cosine
+                return {"is_duplicate": False, "confidence": 0.0, "reason": "rerank failed"}
+        rerank_call = default_rerank
+
+    n = len(ideas)
+    if n <= 1:
+        return ideas
+
+    # Build text corpus from idea titles + goals
+    texts = [f"{idea.get('title', '')} {idea.get('goal', '')}" for idea in ideas]
+
+    # Stage 2: Embedding cosine similarity
+    try:
+        if embedding_call is not None:
+            # Use provided embedding function
+            vectors = embedding_call(texts)
+        else:
+            # Fallback: TF-IDF based cosine similarity
+            vectorizer = TfidfVectorizer(max_features=512, stop_words='english')
+            vectors = vectorizer.fit_transform(texts).toarray()
+    except Exception:
+        # Embedding unavailable → skip semantic dedup
+        return ideas
+
+    # Compute pairwise cosine similarity
+    sim_matrix = cosine_similarity(vectors)
+
+    # Track duplicates to remove (set of indices to drop)
+    to_remove: set[int] = set()
+
+    for i in range(n):
+        if i in to_remove:
+            continue
+        for j in range(i + 1, n):
+            if j in to_remove:
+                continue
+
+            sim = float(sim_matrix[i, j])
+            if sim < dedup_threshold:
+                continue
+
+            # Stage 3: LLM rerank confirmation for borderline cases
+            if rerank_call is not None:
+                try:
+                    a_text = texts[i]
+                    b_text = texts[j]
+                    rerank_result = rerank_call(a_text, b_text)
+                    is_dup = rerank_result.get("is_duplicate", False)
+                    confidence = rerank_result.get("confidence", 0.0)
+
+                    if is_dup and confidence >= rerank_threshold:
+                        to_remove.add(j)
+                    elif not is_dup:
+                        # LLM says not duplicate → keep both
+                        continue
+                    else:
+                        # Low confidence but cosine says duplicate → defer to cosine
+                        to_remove.add(j)
+                except Exception:
+                    # Rerank unavailable → trust cosine verdict
+                    if sim >= dedup_threshold:
+                        to_remove.add(j)
+            else:
+                # No rerank → trust cosine
+                if sim >= dedup_threshold:
+                    to_remove.add(j)
+
+    # Return ideas that are not in to_remove (keep first occurrence)
+    result = [idea for idx, idea in enumerate(ideas) if idx not in to_remove]
+    return result
 
 
 def _evidence_ref(source: str, detail: Any) -> Dict[str, Any]:

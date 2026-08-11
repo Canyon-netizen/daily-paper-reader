@@ -7,9 +7,11 @@
 - judge persona 产 `{"winner": "a"|"b", "reason": "..."}`
 - Elo K=32 更新
 - per-match 失败隔离:返 `{"failed": <error>}` 不 abort 整个 debate
-- budget_tokens 预算控制
+- budget_tokens 预算控制 (with BudgetGuard wrapup support)
 """
 from __future__ import annotations
+
+from src.budget_guard import BudgetGuard
 
 ELO_K = 32
 ELO_INITIAL = 1200
@@ -221,14 +223,21 @@ def run_debate(
     matches = {i["id"]: 0 for i in ideas}
     wins = {i["id"]: 0 for i in ideas}
     debate_log = {i["id"]: [] for i in ideas}
-    used_tokens = 0
+
+    # Use BudgetGuard for thread-safe budget tracking with wrapup support
+    guard = BudgetGuard(cap_tokens=budget_tokens, mode="wrapup")
+    wrapup_match_used = False  # allow ONE wrapup match after budget exceeded
 
     for a, b in swiss_pairs(sorted(ideas, key=lambda i: -elo[i["id"]])):
-        # Budget check BEFORE running match (don't waste budget on a match we can't process)
-        if used_tokens + TOKENS_PER_MATCH_CALL > budget_tokens:
-            break
+        # Budget check BEFORE running match
+        if guard.exceeded:
+            # Budget hit — in wrapup mode, allow ONE more match for cleanup
+            if not wrapup_match_used:
+                wrapup_match_used = True
+            else:
+                break  # no more wrapup budget
         match = run_match(a, b, personas, rounds, judge_llm_call)
-        used_tokens += TOKENS_PER_MATCH_CALL
+        guard.consume(TOKENS_PER_MATCH_CALL)
 
         if match["failed"]:
             # 记录失败但继续
