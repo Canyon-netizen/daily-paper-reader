@@ -60,6 +60,8 @@ if not args.force and ("## 讨论与可借鉴点" in (body or "")
 
 ### 6. Polaris 能力对照表(还未 ship 的)
 
+> 完整 13 项差异与字段映射见 [`docs/library-architecture.md` §8](library-architecture.md#8-与-polaris-的明确差异)。本节只列还没 ship 的能力。
+
 | 能力 | DPR 状态 | 实现难度 |
 |---|---|---|
 | 公共库 chat tab | 中 | - |
@@ -68,8 +70,13 @@ if not args.force and ("## 讨论与可借鉴点" in (body or "")
 | Per-paper relevance 详细 reason | 已 ship | - |
 | Library visibility admin approval | 单人站无 admin | - |
 | `getStaticPaths` vN 版本去重 | **已 ship**(`canonicalArxivId`) | - |
-| Polariscitation figures/formulas 共享 | 各自存,浪费空间 | 高 |
-| LLM `prompt-pack.ts` 的 `library.compile` 包 | | - |
+| Polaris citation figures/formulas 共享 | 各自存,浪费空间 | 高 |
+| LLM `prompt-pack.ts` 的 `library.compile` 包 |  | - |
+| Library tag UI（Polaris 休眠中，DPR 未实现） | 不做（一致 Polaris 休眠策略） | - |
+| 概念跨库合并 UI（`LibraryConceptOverride.canonicalSlug` 已定义） | 字段在，UI 缺「🔗 合并到」按钮 | 中 |
+| `library.compile` skill pack（manifest + 加载） | 无；当前 digest 用硬编码 `SCORE_SYSTEM_PROMPT` | 中 |
+| 后台 ingest 编排（Voyage agent） | 不做（架构差异，cron 够用） | - |
+| pgvector / chunk embedding 检索 | 不做（架构差异，全文检索够用） | - |
 
 ### 7. ConceptRelink 跨库合并 UI
 

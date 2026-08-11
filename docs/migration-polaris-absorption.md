@@ -794,28 +794,39 @@ lib/paper-frontmatter/
 └── index.ts    # 统一导出
 ```
 
-### 文献库架构(2026-08-08)
+### 文献库架构(2026-08-08 → 2026-08-11 权威化)
 
-DPR 文献库对标 Polaris `/libraries` 路径,在单用户 + 静态站约束下实现三层抽象:
+> ⚠️ 本节只是历史脉络;**当前权威架构文档见 [`docs/library-architecture.md`](library-architecture.md)**。
+> 任何与 library-architecture.md 冲突的描述,以新文档为准。
 
-| 层级 | 类型 | 描述 |
+DPR 文献库对标 Polaris `/libraries` 路径,在单用户 + 静态站约束下实现**三层存储 + 一个聚合入口**:
+
+| 层级 | DPR 实现 | Polaris 对应 |
 |---|---|---|
-| 公共主题库 | `LIBRARY_TYPE_PUBLIC` | Polaris 风格主题,用户可浏览不可编辑 |
-| 个人图书馆 | `LIBRARY_TYPE_PRIVATE` | 用户私有收藏,支持增删/标签/活动日志 |
-| 首页入口 | `/libraries/` | 统一入口,展示个人库 + 公共主题库 |
+| **公共主题库**(只读) | `lib/libraries.ts:LIBRARIES` 硬编码 7 个,tags 派生成员 | `direction_libraries` (is_public=true, lab-wide) |
+| **用户自建文献库** | `lib/user-libraries/` — `UserLibrary` 含 statement / rubric / anchors / papers{} / conceptOverrides{} / visibility | `direction_libraries` (personal) + `library_papers` |
+| **单篇论文用户态** | `lib/user-library/` — `UserPaperState` 含 starred / readingStatus / note / trash / relevanceScore / tldr / concepts | `user_library_entries` + `paper_user_meta` + `paper_notes` |
+| **首页聚合入口** | `/libraries/` + `DailyCalendar` SSR 派生 | `direction_libraries` 列表 + `daily_feed_entries` |
 
 **实现位置**:
 
-- `lib/user-libraries/store.ts` — IDB 存储引擎,46544 行核心逻辑
-- `lib/user-libraries/types.ts` — 库/条目/活动类型定义
-- `lib/user-libraries/activity-log.ts` — 用户活动记录
-- `lib/libraries.ts` — 路由层面库列表聚合
+- `lib/user-libraries/store.ts` — `UserLibrary` CRUD + commit 漏斗
+- `lib/user-libraries/types.ts` — `UserLibrary` / `LibraryDefinition` / `LibraryPaperMeta` / `LibraryConceptOverride`
+- `lib/user-libraries/activity-log.ts` — 活动日志
+- `lib/user-library/store.ts` — `UserPaperState` CRUD + softDelete / restore / purge
+- `lib/libraries.ts` — 公共主题库硬编码清单(7 个)
 
-**与 Polaris 的差异**:
+**修正记录**:
+
+- 旧版表格里 `LIBRARY_TYPE_PUBLIC` / `LIBRARY_TYPE_PRIVATE` 是 **aspirational 描述**,代码里没有这两个常量;DPR 用 `UserLibrary.visibility = 'personal' \| 'pending' \| 'public'` 和硬编码 `LIBRARIES` 区分公共/私有,**不要再引用这两个常量名**。
+- 三层抽象扩展为四层(增加"单篇论文用户态"),因为 `lib/user-library/` 与 `lib/user-libraries/` 是两个独立模块,不能合并。
+
+**与 Polaris 的差异(高层)**:
 
 - 无多用户 RBAC,单用户本地优先
 - 无实时协作,静态站点无 WebSocket
-- 公共主题库数据源为本地 YAML + 每日论文聚合
+- 公共主题库数据源为本地 YAML + frontmatter tag 派生
+- 完整 13 项差异见 library-architecture.md §8
 
 ### Polaris 吸收批次(2026-08-06)
 

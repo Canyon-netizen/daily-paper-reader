@@ -94,13 +94,15 @@ docs/papers/<YYYY>/<MM>/<DD>/<arxiv-id>-<slug>.{md,txt}
 
 > ⚠️ 注意：`docs/papers/<YYYY>/<MM>/<DD>/` 目录名是**入库日**（pipeline 执行日期），与日历展示的**发表日**（frontmatter `date`）是不同的口径。日历按发表日聚合是预期行为。
 
-## 8. 个人图书馆入库阈值（relevanceThreshold）
+## 8. 用户自建文献库入库阈值（relevanceThreshold）
 
-`LibraryDefinition.relevanceThreshold`（commit `e7842dfc`）控制论文入库个人图书馆的**分数门限**：
+`LibraryDefinition.relevanceThreshold`（commit `e7842dfc`）控制论文入库用户自建文献库的**分数门限**：
 
-- **默认值**：`0.5`（定义在 `astro-src/lib/user-libraries/types.ts:261`）。
-- **生效位置**：`astro-src/scripts/user-libraries-ui.ts:runIngest(opts.threshold)` → `opts.threshold` 来自 `lib.definition.relevanceThreshold`。
-- **过滤逻辑**：论文得分 `score` 低于阈值时 **不进入** `library_papers`，仅高于或等于阈值的论文被收录。
-- **用途**：让用户为不同图书馆设置不同宽松度——例如「精读库」阈值设高（0.8+），「泛读库」设低（0.3）。
+- **默认值**：`0.5`（定义在 `astro-src/lib/user-libraries/types.ts:261`，由 `defaultLibraryDefinition()` 兜底）。
+- **生效位置**：`astro-src/scripts/library-ingest.ts` 拉取 arXiv 候选 + `scorePaperRelevance()` 打分时；`opts.threshold` 来自 `library.definition.relevanceThreshold`。
+- **过滤逻辑**：论文得分 `score` 低于阈值时仅标记为 `candidate` 状态、**不进入** `LibraryPaperMeta.status = 'included'`；高于或等于阈值的论文可被 `commitCandidateAsIncluded()` 提交。
+- **用途**：让用户为不同文献库设置不同宽松度——例如「精读库」阈值设高（0.8+），「泛读库」设低（0.3）。
 
-阈值在新建/编辑图书馆时由用户配置，存储在 `LibraryDefinition.definition.relevanceThreshold` 字段。
+阈值在新建/编辑文献库时由用户配置，存储在 `LibraryDefinition.definition.relevanceThreshold` 字段。
+
+> 📚 **完整文献库架构**（公共主题库 + 用户自建文献库 + 单篇论文用户态 + Daily feed 聚合 / 与 Polaris `direction_libraries` / `library_papers` / `user_library_entries` / `daily_feed_entries` 的逐字段映射 / 13 项与 Polaris 的差异）见 [`docs/library-architecture.md`](library-architecture.md)。本文档专注**路径规范**，那一层抽象不在此展开。
