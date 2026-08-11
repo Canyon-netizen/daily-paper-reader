@@ -1,0 +1,87 @@
+{
+  "version": 2,
+  "extractor": "pdf-caption-crop",
+  "figures": [
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-001.webp",
+      "caption": "Figure 1: The information-conditioned view of dynamic reward shaping (Eq. 2–3). The upper loop is ordinary reinforcement learning on the shaped reward R′",
+      "page": 11,
+      "index": 1,
+      "width": 1440,
+      "height": 976,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-002.webp",
+      "caption": "Figure 2: The C1–C4 mechanism classes, organised around a single question: how does the mech- anism relate to the task reward R? C1 keeps R present and adds to it; C2 substitutes a revised object for R; C3 redistributes task information across time, conserving the trajectory return, or relabels the goal or target under which a transition is scored, which does not in general conserve it; C4 leaves R untouched and acts elsewhere in the learning system. Guarantee inheritance follows this structure: C1 is the direct application domain of the potential-based invariance theorems in this taxonomy, while a C2 or C3 construction can establish an analogous preservation result only through a separate explicit equivalence or proof of its own (as for Dense Reward for Free in Table 3).",
+      "page": 12,
+      "index": 2,
+      "width": 1440,
+      "height": 1599,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-003.webp",
+      "caption": "Figure 3: The guarantee-class ladder of Section 3.3. Horizontal position is not a second independent variable; it encodes the same descending strength as vertical position, staggered so that the classes read as a staircase rather than a stacked list. The blue/red divide is the one that matters opera- tionally: G1–G3 rest on a proof about the construction itself, while G4 and G5 rest on, respectively, an objective-aware selection procedure and no formal check at all. Method examples are illustrative, drawn from Table 3; ∗marks a C2–C4 method whose guarantee is its own criterion rather than a reward-shaping invariance result, and ‡, set in grey italics, marks a guarantee reported as claimed by its source rather than independently verified by this review, so that a claimed placement is visually distinct from an audited one (Table 3).",
+      "page": 24,
+      "index": 3,
+      "width": 1440,
+      "height": 987,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-004.webp",
+      "caption": "Figure 4: The three classifying dimensions of Section 3. A method is located by one value (or a small set of values) on each axis; the shaded path shows a worked example, bootstrapped shaping [Adamczyk et al., 2025]. The dimensions are designed to be largely independent, so their combina- tions define a design space; sparsely populated regions of this space are as informative as the dense ones (Section 3.5, Figure 5).",
+      "page": 24,
+      "index": 4,
+      "width": 1440,
+      "height": 1806,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-005.webp",
+      "caption": "Figure 5: Distribution over temporal signature and guarantee class of the C1 entries of Table 3, that is, of dynamic reward shaping proper. C2–C4 methods are excluded because their guaran- tee classes are not reward-shaping invariance claims, and the four S entries are excluded because their shaping functions are not parametrically revised (Section 2.2); the static reference row is also excluded. Two further C1, T2, G1 entries, GRM and VLM-guided potentials, are excluded because this review has not independently verified their guarantee claim (marked ‡ in Table 3); the T2, G1 cell reports the six entries this review can stand behind. Twenty-one entries remain. A method carrying a combined temporal or setting-dependent guarantee label is counted in each cell it spans. Three features are visible. Exact optimality preservation occurs only under experience-driven adaptation. Performance-driven adaptation, the category that explicitly selects shaping against a measured reference-performance criterion, never coincides with it in this set. And interaction-driven adaptation does not appear as additive shaping among the included methods: it is realised as re- ward replacement or as policy-level guidance, both outside C1. These are properties of the reviewed set and not proofs of impossibility; they may reflect the scope and composition of the literature considered here. †One T2 entry, dynamic potential-based advice, originally claimed G1 but its in- variance argument was subsequently shown incorrect (Section 4.4); it is counted here under G5, the guarantee that currently survives scrutiny, not under the class originally claimed for it.",
+      "page": 29,
+      "index": 5,
+      "width": 1440,
+      "height": 1143,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-006.webp",
+      "caption": "Figure 6: A conceptual map of prominent lines of development in dynamic reward shaping: from hand-crafted engineering, through the provably safe but static potential-based construction, to signals that are learned, meta-optimised, elicited from people, and finally generated or corrected by the agent and by external models. This is a simplified companion to Figure 7, which gives the three- thread account with the results that mark each transition; neither figure claims that earlier stages have stopped being used, only that each stage is where selected examples of newer development appear.",
+      "page": 40,
+      "index": 6,
+      "width": 1440,
+      "height": 514,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-007.webp",
+      "caption": "Figure 8: A practical pipeline from task to deployment. Stage 1 characterises the task along the axes used in Table 5; Stage 2 turns that characterisation into a family and an expected guarantee class using the figures introduced earlier in the review; Stage 3 applies the implementation safeguards of Section 5.4; Stage 4 applies the evaluation protocol of Section 8. The pipeline does not remove judgement from the process, but it fixes the order in which questions should be asked.",
+      "page": 45,
+      "index": 7,
+      "width": 1440,
+      "height": 489,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-008.webp",
+      "caption": "Figure 9: Replay, the index pairing of Eq. 6, and three properties that are frequently conflated. P1 is a property of the shaped decision problem, P2 of the stored data, and P3 of the optimisation. They are logically independent. Option (A) secures P1 and P2 but not P3: reconstructing the shaping term exactly preserves the identity along the chronological trajectory, whereas a replay batch is a set of transitions drawn from many potential epochs and does not form that trajectory, so the critic still faces a moving target. Option (B) recomputes both the departure and arrival term of a stored transition under the current Φm; this is an instance of the static construction of Theorem 1 evaluated at m rather than a violation of it, so P1 as defined for the dynamic pairing does not apply, but the original historical reward is lost (P2 fails) and Φm itself keeps changing, so the learner faces a sequence of distinct static problems rather than one stationary target (P3 fails). This differs from mismatching a stale departure term against a freshly recomputed arrival term, which does break the telescoping identity outright and is not a legitimate storage option at all (Remark 2). Options (C) and (D) trade sample reuse, or an explicit approximation error, for a bounded version of all three. Rate limiting does not itself establish P1: if the paired potentials are stored exactly, P1 holds regardless of the rate, and if they are not, rate limiting only bounds the mismatch. No option in this set secures all three without cost, and the table is offered as a statement of the trade-off rather than as a recommendation. The reviewed literature did not identify a controlled study that isolates which trade-off dominates in practice. On-policy learners do not face this replay-storage choice, although other potential-update choices still apply.",
+      "page": 48,
+      "index": 8,
+      "width": 1440,
+      "height": 1167,
+      "extractor": "pdf-caption-crop"
+    },
+    {
+      "url": "assets/figures/arxiv/2608.08158v1/fig-009.webp",
+      "caption": "Figure 10: The thirteen open directions below, placed by how theoretical versus practical the question is (horizontal) and how confined to the standard single-agent setting versus how systemic and cross-paradigm it is (vertical). Placement is qualitative and intended to reveal grouping, not to support numerical comparison between items. Item 3 sits outside every shaded cluster because it is the connective pattern between them rather than a member of any one group.",
+      "page": 57,
+      "index": 9,
+      "width": 1440,
+      "height": 1247,
+      "extractor": "pdf-caption-crop"
+    }
+  ]
+}
