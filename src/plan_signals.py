@@ -30,13 +30,13 @@ DEFAULT_SIGNALS: list[SignalAction] = [
         name="citation_guard_fabricated",
         predicate=lambda out: out.get("summary", {}).get("fabricated", 0) > 0,
         action="skip_next",
-        action_arg="4.llm_refine_papers",  # skip the step that consumes citations
+        action_arg="concept_extract",  # skip concept extraction if citations are fabricated
     ),
     SignalAction(
         name="concepts_empty",
         predicate=lambda out: out.get("concept_count", 1) == 0,
         action="skip_next",
-        action_arg="wiki-render",
+        action_arg="wiki_render",  # skip wiki rendering if no concepts extracted
     ),
     SignalAction(
         name="validation_failed",

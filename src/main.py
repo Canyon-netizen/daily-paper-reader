@@ -896,6 +896,393 @@ def print_trace_recommend(stage: str, path: str, trace_ids: list[str]) -> None:
         )
 
 
+# =============================================================================
+# Data-driven pipeline plan with plan_signals wiring
+# =============================================================================
+# Step IDs must match plan_signals.DEFAULT_SIGNALS action_arg values for signal
+# skipping to work correctly.
+PIPELINE_PLAN: list[dict] = [
+    {"step_id": "0.enrich_config_queries", "wrapup": False},
+    {"step_id": "1.fetch_arxiv", "wrapup": False},
+    {"step_id": "2.1.retrieval_papers_bm25", "wrapup": False},
+    {"step_id": "2.2.retrieval_papers_embedding", "wrapup": False},
+    {"step_id": "2.3.retrieval_papers_rrf", "wrapup": False},
+    {"step_id": "3.rank_papers", "wrapup": False},
+    {"step_id": "4.llm_refine_papers", "wrapup": False},
+    {"step_id": "5.select_papers", "wrapup": False},
+    {"step_id": "6.generate_docs", "wrapup": False},
+    # Extended steps for signal targets (may not have full implementation yet)
+    {"step_id": "citation_guard", "wrapup": False},
+    {"step_id": "concept_extract", "wrapup": False},
+    {"step_id": "wiki_render", "wrapup": True},  # wrapup=True for final step
+]
+
+
+def _step_enrich_config_queries(config: dict) -> dict:
+    """Step 0: enrich_config_queries wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+
+    try:
+        run_step_with_checkpoint(
+            "Step 0 - enrich config",
+            [python, os.path.join(src_dir, "0.enrich_config_queries.py")],
+            step_id="0.enrich_config_queries",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=1,
+            rank=0,
+            sub_rank=0,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_fetch_arxiv(config: dict) -> dict:
+    """Step 1: fetch_arxiv wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+    fetch_days = config.get("fetch_days")
+    fetch_ignore_seen = config.get("fetch_ignore_seen", False)
+
+    try:
+        run_step_with_checkpoint(
+            "Step 1 - fetch arxiv",
+            [
+                python,
+                os.path.join(src_dir, "maintain", "fetchers", "fetch_arxiv.py"),
+                *(["--days", str(fetch_days)] if fetch_days is not None else []),
+                *(["--ignore-seen"] if fetch_ignore_seen else []),
+            ],
+            step_id="1.fetch_arxiv",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=2,
+            rank=1,
+            sub_rank=0,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_bm25_retrieval(config: dict) -> dict:
+    """Step 2.1: BM25 retrieval wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+
+    try:
+        run_step_with_checkpoint(
+            "Step 2.1 - BM25",
+            [python, os.path.join(src_dir, "2.1.retrieval_papers_bm25.py")],
+            step_id="2.1.retrieval_papers_bm25",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=3,
+            rank=2,
+            sub_rank=1,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_embedding_retrieval(config: dict) -> dict:
+    """Step 2.2: Embedding retrieval wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+    embedding_device = config.get("embedding_device", "cpu")
+    embedding_batch_size = config.get("embedding_batch_size", 8)
+
+    try:
+        run_step_with_checkpoint(
+            "Step 2.2 - Embedding",
+            [
+                python,
+                os.path.join(src_dir, "2.2.retrieval_papers_embedding.py"),
+                "--device",
+                str(embedding_device),
+                "--batch-size",
+                str(embedding_batch_size),
+            ],
+            step_id="2.2.retrieval_papers_embedding",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=4,
+            rank=2,
+            sub_rank=2,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_rrf_retrieval(config: dict) -> dict:
+    """Step 2.3: RRF retrieval wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+
+    try:
+        run_step_with_checkpoint(
+            "Step 2.3 - RRF",
+            [python, os.path.join(src_dir, "2.3.retrieval_papers_rrf.py")],
+            step_id="2.3.retrieval_papers_rrf",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=5,
+            rank=2,
+            sub_rank=3,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_rank_papers(config: dict) -> dict:
+    """Step 3: Rerank papers wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+    rrf_path = config.get("rrf_path")
+    rerank_path = config.get("rerank_path")
+
+    # Check if we should skip rerank
+    skip_rerank, rerank_base = should_skip_rerank()
+    if skip_rerank:
+        print(
+            f"[INFO] Step 3 - Rerank 已跳过：当前主 LLM base 不属于柏拉图/BLT，"
+            f"缺少稳定 /rerank 能力。base={rerank_base}",
+            flush=True,
+        )
+        if rrf_path and rerank_path:
+            prepare_rerank_fallback(rrf_path, rerank_path)
+        return {"status": "skipped", "reason": "rerank_not_supported"}
+
+    try:
+        run_step_with_checkpoint(
+            "Step 3 - Rerank",
+            [python, os.path.join(src_dir, "3.rank_papers.py")],
+            step_id="3.rank_papers",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=6,
+            rank=3,
+            sub_rank=0,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_llm_refine(config: dict) -> dict:
+    """Step 4: LLM refine wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+
+    try:
+        run_step_with_checkpoint(
+            "Step 4 - LLM refine",
+            [python, os.path.join(src_dir, "4.llm_refine_papers.py")],
+            step_id="4.llm_refine_papers",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=7,
+            rank=4,
+            sub_rank=0,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_select_papers(config: dict) -> dict:
+    """Step 5: Select papers wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+    use_skims_mode = config.get("use_skims_mode", False)
+
+    try:
+        run_step_with_checkpoint(
+            "Step 5 - Select",
+            [
+                python,
+                os.path.join(src_dir, "5.select_papers.py"),
+                *(["--modes", "skims"] if use_skims_mode else []),
+            ],
+            step_id="5.select_papers",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=8,
+            rank=5,
+            sub_rank=0,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_generate_docs(config: dict) -> dict:
+    """Step 6: Generate docs wrapper."""
+    python = config.get("python", sys.executable)
+    src_dir = config.get("src_dir", SRC_DIR)
+    checkpoint_on = config.get("checkpoint_on", False)
+    checkpoint_archive = config.get("checkpoint_archive", _checkpoint_archive_dir())
+    use_skims_mode = config.get("use_skims_mode", False)
+    sidebar_date_label = config.get("sidebar_date_label")
+
+    try:
+        run_step_with_checkpoint(
+            "Step 6 - Generate Docs",
+            [
+                python,
+                os.path.join(src_dir, "6.generate_docs.py"),
+                *(["--mode", "skims"] if use_skims_mode else []),
+                *(
+                    ["--sidebar-date-label", sidebar_date_label]
+                    if sidebar_date_label
+                    else []
+                ),
+            ],
+            step_id="6.generate_docs",
+            archive_dir=checkpoint_archive,
+            enabled=checkpoint_on,
+            seq=9,
+            rank=6,
+            sub_rank=0,
+        )
+        return {"status": "succeeded"}
+    except Exception as e:
+        return {"status": "failed", "error": str(e)}
+
+
+def _step_citation_guard(config: dict) -> dict:
+    """Citation guard step - placeholder for future implementation."""
+    # This step would check for fabricated citations
+    # Currently not implemented in the main pipeline
+    return {"status": "not_implemented", "summary": {"fabricated": 0}}
+
+
+def _step_concept_extract(config: dict) -> dict:
+    """Concept extraction step - placeholder for future implementation."""
+    # This step would extract concepts from papers
+    # Currently not implemented in the main pipeline
+    return {"status": "not_implemented", "concept_count": 0}
+
+
+def _step_wiki_render(config: dict) -> dict:
+    """Wiki render step - placeholder for future implementation."""
+    # This step would render wiki output
+    # Currently not implemented in the main pipeline
+    return {"status": "not_implemented"}
+
+
+# Map step_id to step function
+STEP_FUNCTIONS: dict[str, callable] = {
+    "0.enrich_config_queries": _step_enrich_config_queries,
+    "1.fetch_arxiv": _step_fetch_arxiv,
+    "2.1.retrieval_papers_bm25": _step_bm25_retrieval,
+    "2.2.retrieval_papers_embedding": _step_embedding_retrieval,
+    "2.3.retrieval_papers_rrf": _step_rrf_retrieval,
+    "3.rank_papers": _step_rank_papers,
+    "4.llm_refine_papers": _step_llm_refine,
+    "5.select_papers": _step_select_papers,
+    "6.generate_docs": _step_generate_docs,
+    "citation_guard": _step_citation_guard,
+    "concept_extract": _step_concept_extract,
+    "wiki_render": _step_wiki_render,
+}
+
+
+def run_pipeline(config: dict) -> dict:
+    """Run the data-driven pipeline plan with signal-based branching.
+
+    Args:
+        config: Configuration dict with keys:
+            - python: Python executable path
+            - src_dir: Source directory path
+            - checkpoint_on: Whether checkpoints are enabled
+            - checkpoint_archive: Archive directory for checkpoints
+            - fetch_days: Number of days to fetch
+            - fetch_ignore_seen: Whether to ignore seen papers
+            - embedding_device: Device for embedding
+            - embedding_batch_size: Batch size for embedding
+            - use_skims_mode: Whether to use skims mode
+            - sidebar_date_label: Sidebar date label
+            - rrf_path: Path to RRF output
+            - rerank_path: Path to rerank output
+
+    Returns:
+        {"plan": [...], "outputs": {step_id: output}, "signals_fired": [...]}
+    """
+    from src.plan_signals import evaluate_signals, apply_signal, DEFAULT_SIGNALS
+
+    # Build the plan list with step functions
+    plan_with_fns = [
+        {**step, "fn": STEP_FUNCTIONS.get(step["step_id"])}
+        for step in PIPELINE_PLAN
+    ]
+
+    # Filter to only steps that have implementations
+    remaining_plan = [s for s in plan_with_fns if s["fn"] is not None]
+
+    outputs: dict[str, dict] = {}
+    signals_fired: list[dict] = []
+
+    while remaining_plan:
+        step = remaining_plan.pop(0)
+        step_id = step["step_id"]
+        step_fn = step["fn"]
+
+        try:
+            output = step_fn(config)
+        except Exception as e:
+            output = {"error": str(e), "failed": True, "status": "failed"}
+
+        outputs[step_id] = output
+
+        # Evaluate plan signals
+        for signal in evaluate_signals(output, DEFAULT_SIGNALS):
+            signals_fired.append({
+                "step": step_id,
+                "signal": signal.name,
+                "action": signal.action,
+                "action_arg": signal.action_arg,
+            })
+            # Apply signal to remaining plan
+            remaining_step_ids = apply_signal(
+                signal, [s["step_id"] for s in remaining_plan]
+            )
+            # Rebuild remaining_plan with full step dicts
+            remaining_plan = [
+                s for s in plan_with_fns
+                if s["step_id"] in remaining_step_ids and s["fn"] is not None
+            ]
+            if not remaining_plan:
+                break
+
+    return {
+        "plan": PIPELINE_PLAN,
+        "outputs": outputs,
+        "signals_fired": signals_fired,
+    }
+
+
 def main() -> None:
     # Gist loader 注入的 env 写到 $GITHUB_ENV 文件,Python 进程启动时不
     # 会自动读。手动加载到 os.environ,让 subprocess.run 启动子进程时
