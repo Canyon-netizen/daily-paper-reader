@@ -219,35 +219,207 @@ def limitation_excerpts(docs_dir: str) -> list:
 
 
 # ============================================================================
-# 4. survey_gap -- Polaris LLM-driven; DPR v1 leaves it deterministic-empty
+# 4. survey_gap -- Polaris LLM-driven gap analysis
 # ============================================================================
 
-def survey_gap(arxiv_search, window_days: int = 365) -> list:
-    """Via injected arxiv_search callable; None/unavailable -> [].
+import json
+from datetime import datetime, timedelta
 
-    Polaris uses LLM here. DPR v1 keeps this purely deterministic and uses
-    the other 3 signals + concept_paper_map as research-gap hints instead.
+# Default window for recent papers in archive
+DEFAULT_SURVEY_GAP_WINDOW_DAYS = 7
+# Max papers to include in LLM prompt (token limit)
+MAX_PAPERS_FOR_LLM = 30
+
+
+def _load_recent_papers(archive_dir: str, window_days: int = 7) -> list[dict]:
+    """Load recent papers from date-bucketed archive JSON files.
+
+    Returns list of {"id": str, "title": str, "abstract": str}.
     """
-    if arxiv_search is None:
+    from pathlib import Path
+
+    root = Path(archive_dir)
+    if not root.exists():
         return []
+
+    cutoff = datetime.now() - timedelta(days=window_days)
+    papers = []
+
+    # Walk archive/YYYYMMDD/recommend/*.json files
+    for json_file in root.rglob("recommend/*.json"):
+        # Extract date from directory name (e.g., archive/20260810/recommend/...)
+        parent_name = json_file.parent.parent.name
+        try:
+            # Handle both YYYYMMDD and YYYYMMDD-YYYYMMDD formats
+            date_str = parent_name.split("-")[0]
+            file_date = datetime.strptime(date_str, "%Y%m%d")
+        except ValueError:
+            continue
+
+        if file_date < cutoff:
+            continue
+
+        try:
+            data = json.loads(json_file.read_text(encoding="utf-8"))
+            # Handle both "deep_dive" list and "papers" list formats
+            paper_list = data.get("deep_dive", []) or data.get("papers", [])
+            for p in paper_list:
+                papers.append({
+                    "id": p.get("id", ""),
+                    "title": p.get("title", ""),
+                    "abstract": p.get("abstract", ""),
+                })
+        except (json.JSONDecodeError, OSError):
+            continue
+
+    return papers[:MAX_PAPERS_FOR_LLM]
+
+
+def survey_gap(
+    *,
+    archive_dir=".",
+    docs_dir=".",
+    config=None,
+    arxiv_search=None,
+    llm_call=None,
+    max_gaps: int = 5,
+) -> list[dict]:
+    """Plan §3.2: LLM-driven survey gap detection from corpus.
+
+    Strategy:
+      1. If `arxiv_search` callable provided, use it to find recent survey-style papers
+         and their stated open problems (Polaris GAP_SYSTEM_PROMPT pattern).
+      2. Else, extract a sample of recent paper abstracts/titles from `archive_dir`
+         (date-bucketed) and ask LLM to identify recurring under-covered sub-topics.
+      3. Fall back to "not_checked" with empty list if LLM unavailable or fails.
+
+    Args:
+        llm_call: optional override (callable → dict). If None, uses
+                  `get_llm_router().call("topic.survey_gap", ...)`.
+        max_gaps: cap on number of gaps to return (save tokens).
+
+    Returns:
+        list of {"title": str, "description": str, "source": "arxiv"|"corpus"}
+        Empty list if no inputs or LLM unavailable — caller treats empty as
+        "no gap found" (NOT failure).
+    """
+    # Gather papers from available sources
+    papers: list[dict] = []
+    arxiv_raw_results = None  # Store for backward compat fallback
+
+    # Priority 1: arxiv_search (backward compat, Polaris pattern)
+    if arxiv_search is not None:
+        try:
+            arxiv_result = arxiv_search("survey OR review", window_days=365)
+            if isinstance(arxiv_result, list):
+                papers.extend(arxiv_result)
+                arxiv_raw_results = arxiv_result  # Save for fallback
+        except Exception:
+            pass
+
+    # Priority 2: archive_dir date-bucketed JSONs
+    if not papers:
+        papers = _load_recent_papers(archive_dir, window_days=DEFAULT_SURVEY_GAP_WINDOW_DAYS)
+
+    if not papers:
+        return []
+
+    # Build papers summary for LLM
+    papers_summary = "\n".join(
+        f"- {p.get('title', 'Untitled')[:200]}\n  {p.get('abstract', '')[:300]}"
+        for p in papers[:MAX_PAPERS_FOR_LLM]
+    )
+
+    # Determine LLM callable
+    llm = llm_call
+    llm_available = True
+    if llm is None:
+        try:
+            from src.llm_router import get_llm_router
+
+            router = get_llm_router()
+
+            def _default_call(stage: str, messages: list[dict]) -> dict:
+                return router.call(stage, messages)
+
+            llm = _default_call
+        except Exception:
+            # No LLM available
+            llm_available = False
+
+    # If no LLM available, fall back to returning arxiv_search results (backward compat)
+    if not llm_available:
+        if arxiv_raw_results is not None:
+            return arxiv_raw_results
+        return []
+
+    # Build LLM prompt and call
+    prompt = (
+        f"你是综述缺口分析员。从以下近期论文列表中,识别 {max_gaps} 个被现有综述覆盖不足的子方向。\n\n"
+        f"论文列表:\n{papers_summary}\n\n"
+        '每个缺口请输出 JSON:\n{"title": "<子方向标题>", "description": "<一句话说明覆盖不足的具体方面>"}\n\n'
+        "只输出 JSON 数组,无前缀说明。"
+    )
+
+    # LLM fallback: if LLM call fails, return arxiv results (backward compat) or empty
+    fallback_result = arxiv_raw_results if arxiv_raw_results is not None else []
+
     try:
-        result = arxiv_search("survey OR review", window_days=window_days)
-        return result if isinstance(result, list) else []
+        response = llm("topic.survey_gap", [{"role": "user", "content": prompt}])
+        # Extract content from response (support both dict and string)
+        if isinstance(response, dict):
+            content = response.get("content", "")
+            if not content and "choices" in response:
+                content = response["choices"][0].get("message", {}).get("content", "")
+        else:
+            content = str(response)
+
+        # Parse JSON array from content
+        # Handle cases where response includes markdown code blocks
+        import re
+
+        json_match = re.search(r"\[[\s\S]*\]", content)
+        if json_match:
+            gaps = json.loads(json_match.group())
+            if isinstance(gaps, list):
+                # Validate and normalize structure
+                result = []
+                for g in gaps:
+                    if isinstance(g, dict) and "title" in g and "description" in g:
+                        result.append({
+                            "title": g["title"],
+                            "description": g["description"],
+                            "source": "corpus",
+                        })
+                return result[:max_gaps]
+        return fallback_result
+
     except Exception:
-        return []
+        # LLM call failed — return backward compat result (arxiv or empty)
+        return fallback_result
 
 
 # ============================================================================
 # Top-level collect_signals -- aligned with Polaris forge.collect_signals
 # ============================================================================
 
-def collect_signals(archive_dir: str, config: dict | None = None) -> dict:
+def collect_signals(
+    archive_dir: str,
+    config: dict | None = None,
+    llm_call=None,
+) -> dict:
     """Aggregate 4 signals -> `{signal_name: [items]}` shape.
 
     Optional config keys:
       - docs_dir: override archive_dir (default archive_dir)
       - hole_top_concepts / hole_max_pairs / trend_window_days / trend_max
       - arxiv_search: callable(survey_query, window_days)
+      - survey_window_days: window for survey_gap archive lookup
+      - max_gaps: max gaps to request from LLM
+
+    Args:
+        llm_call: optional LLM callable for survey_gap signal.
+                  If None, survey_gap will try to use get_llm_router().
     """
     cfg = config or {}
     docs_dir = cfg.get("docs_dir", archive_dir)
@@ -263,7 +435,14 @@ def collect_signals(archive_dir: str, config: dict | None = None) -> dict:
             cfg.get("trend_max", TREND_MAX),
         ),
         "limitations": limitation_excerpts(docs_dir),
-        "survey_gap": survey_gap(cfg.get("arxiv_search"), cfg.get("survey_window_days", 365)),
+        "survey_gap": survey_gap(
+            archive_dir=archive_dir,
+            docs_dir=docs_dir,
+            config=cfg,
+            arxiv_search=cfg.get("arxiv_search"),
+            llm_call=llm_call,
+            max_gaps=cfg.get("max_gaps", 5),
+        ),
     }
 
 
