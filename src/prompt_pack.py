@@ -12,6 +12,12 @@
     后续修改 active.<target> 不会影响已落盘的 checkpoint(plan §4.1 「修改 active
     pack 后,已写入 checkpoint 的 run 仍使用旧 hash」)。
 
+First-drive snapshot contract (Polaris engine.py:243-260):
+  - snapshot_for_run() captures immutable copy at run start
+  - lock_snapshot_into_checkpoint() writes to checkpoint (idempotent)
+  - resolve_pack() reads from snapshot first, falls back to current
+  - Mid-run pack edits are detected via content hash, snapshot wins
+
 注:本模块不引入新依赖。pack 目录与 manifest 必须已在仓库内/磁盘上。
 不存在的 pack 走 graceful fallback(视为 None,等同 hardcoded)。
 """
@@ -107,6 +113,150 @@ class Pack:
         }
 
 
+def snapshot_for_run(packs: list[dict]) -> dict:
+    """Take an immutable snapshot of prompt packs for a run start.
+
+    Args:
+        packs: List of pack dicts (each from Pack.snapshot()).
+
+    Returns:
+        {
+            "version": 1,
+            "snapshotted_at": iso8601,
+            "packs": [
+                {
+                    "pack_id": str,
+                    "version": str,
+                    "kind": str,  # guidance/rubric/persona/workflow
+                    "content_hash": str,  # sha256 of body
+                    "body": str,  # actual prompt body, frozen
+                    "targets": list[str],
+                },
+                ...
+            ],
+        }
+
+    The snapshot is hash-addressed — same content produces same hash.
+    Caller should write this snapshot to run checkpoint at start.
+    """
+    import copy
+    from datetime import datetime, timezone
+
+    return {
+        "version": 1,
+        "snapshotted_at": datetime.now(timezone.utc).isoformat(),
+        "packs": copy.deepcopy(packs),  # deep copy for immutability
+    }
+
+
+def is_first_drive(checkpoint: dict | None) -> bool:
+    """True if checkpoint doesn't yet have a prompt pack snapshot.
+
+    Args:
+        checkpoint: The checkpoint dict (or None/empty).
+
+    Returns:
+        True if this is the first drive and no prompt_packs snapshot exists.
+    """
+    if not checkpoint:
+        return True
+    return "prompt_packs" not in checkpoint
+
+
+def lock_snapshot_into_checkpoint(checkpoint: dict, packs: list[dict]) -> dict:
+    """First-drive: lock packs into checkpoint. Idempotent — won't overwrite.
+
+    Args:
+        checkpoint: The checkpoint dict to write to.
+        packs: List of pack dicts (each from Pack.snapshot()).
+
+    Returns:
+        The (possibly updated) checkpoint dict.
+
+    Raises:
+        ValueError: If packs already locked AND hash mismatches
+        (mid-run edit detected — caller decides abort or warn).
+    """
+    if "prompt_packs" in checkpoint:
+        # Already locked — check for hash mismatch (mid-run edit)
+        existing = checkpoint["prompt_packs"]
+        new_snapshot = snapshot_for_run(packs)
+        existing_hashes = {p["content_hash"] for p in existing.get("packs", [])}
+        new_hashes = {p["content_hash"] for p in new_snapshot.get("packs", [])}
+        if existing_hashes != new_hashes:
+            raise ValueError(
+                "Mid-run pack edit detected: checkpoint already has prompt_packs "
+                f"with different content hashes. Existing: {existing_hashes}, "
+                f"New: {new_hashes}"
+            )
+        # Idempotent — same hashes, don't overwrite
+        return checkpoint
+
+    # First drive — lock it in
+    checkpoint = dict(checkpoint)  # don't mutate input
+    checkpoint["prompt_packs"] = snapshot_for_run(packs)
+    return checkpoint
+
+
+def resolve_pack(
+    checkpoint: dict | None,
+    pack_id: str,
+    current_packs: list[dict],
+) -> dict | None:
+    """Resolve pack from snapshot (preferred) or fall back to current.
+
+    Used by Helm action when running a step:
+      1. Check checkpoint['prompt_packs'] for pack_id
+      2. If found and hash matches current → use snapshot body
+      3. If found and hash MISMATCHES current → warn (mid-run edit), use snapshot
+      4. If not found in snapshot → use current packs (caller forgot to snapshot)
+
+    Args:
+        checkpoint: The checkpoint dict (or None).
+        pack_id: The pack_id to resolve.
+        current_packs: List of current pack dicts (from Pack.snapshot()).
+
+    Returns:
+        The resolved pack dict, or None if not found.
+    """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    if not checkpoint or "prompt_packs" not in checkpoint:
+        # No snapshot — fall back to current
+        for p in current_packs:
+            if p.get("pack_id") == pack_id:
+                return p
+        return None
+
+    snapshot = checkpoint["prompt_packs"]
+    snapshot_packs = snapshot.get("packs", [])
+
+    # Find pack in snapshot
+    for snap_p in snapshot_packs:
+        if snap_p.get("pack_id") == pack_id:
+            # Found in snapshot — check hash against current
+            for curr_p in current_packs:
+                if curr_p.get("pack_id") == pack_id:
+                    if curr_p.get("content_hash") != snap_p.get("content_hash"):
+                        logger.warning(
+                            f"Mid-run pack edit detected for {pack_id}: "
+                            f"snapshot hash={snap_p.get('content_hash')}, "
+                            f"current hash={curr_p.get('content_hash')}. "
+                            f"Using snapshot (run started with this version)."
+                        )
+                    return snap_p
+            # Snapshot has pack but current doesn't — return snapshot
+            return snap_p
+
+    # Not in snapshot — fall back to current
+    for p in current_packs:
+        if p.get("pack_id") == pack_id:
+            return p
+    return None
+
+
 def _validate_manifest(manifest: Dict[str, Any]) -> None:
     """轻量 JSON-Schema 风格校验 —— 不依赖 jsonschema,只检查 plan §7 必填字段。
 
@@ -200,4 +350,9 @@ __all__ = [
     "TARGET_BUDGET_CHARS",
     "load_active_pack",
     "inject_into_prompt",
+    # First-drive snapshot contract
+    "snapshot_for_run",
+    "is_first_drive",
+    "lock_snapshot_into_checkpoint",
+    "resolve_pack",
 ]
