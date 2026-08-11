@@ -591,3 +591,42 @@ def test_semantic_dedup_uses_router_when_no_override(monkeypatch):
     # Router should have been called for topic.dedup
     assert "topic.dedup" in router_called or len(router_called) > 0
 
+
+# ----------------------------------------------------------------------------
+# Idea lifecycle promotion
+# ----------------------------------------------------------------------------
+
+def test_run_topic_v2_returns_promoted_ideas(tmp_path, mock_signals, stub_judge, monkeypatch):
+    """End-to-end: run_topic_v2 should populate session['promoted_ideas']."""
+    from src import topic_v2
+    monkeypatch.setattr(topic_v2, "collect_signals", lambda *a, **kw: mock_signals)
+
+    # Mock score_ideas to return high scores so promotion can succeed
+    def mock_score(ideas, llm_call=None, *, max_ideas=20):
+        scored = []
+        for i in ideas:
+            scored.append({
+                **i,
+                "scores": {"novelty": 8, "feasibility": 7, "operability": 7, "impact": 8},
+                "score_rationale": {"novelty": "test", "feasibility": "test", "operability": "test", "impact": "test"},
+            })
+        return scored
+
+    monkeypatch.setattr(topic_v2, "score_ideas", mock_score)
+
+    result = run_topic_v2(session_id="promote_test", judge_llm_call=stub_judge)
+
+    # promoted_ideas should be present in session
+    assert "promoted_ideas" in result
+    # With stub_judge (a always wins), at least one idea should have high elo
+    # and be promoted if it meets thresholds
+    promoted = result["promoted_ideas"]
+    # All ideas should have status field after auto_promote
+    ideas = result["debate_progress"]["ideas"]
+    for idea in ideas:
+        assert "status" in idea
+    # If promotion succeeded, promoted list should have ideas with status=promoted
+    if promoted:
+        for p in promoted:
+            assert p["status"] == "promoted"
+

@@ -25,6 +25,7 @@ from typing import Any, Dict, List
 
 from src.idea_signals import collect_signals
 from src.elo_debate import run_debate, ELO_INITIAL
+from src.idea_lifecycle import auto_promote_ideas
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +618,9 @@ def run_topic_v2(session_id: str | None = None,
         debate_status = "completed"
         used_tokens = -1  # run_debate 内部已计数,但没暴露给 caller
 
+    # 4b. Auto-promote ideas through lifecycle (sketch → candidate → under_review → promoted)
+    promoted_ideas, ranked_ideas = auto_promote_ideas(ranked_ideas)
+
     # 5. 写回 session
     session["debate_progress"] = {
         "session_id": session_id,
@@ -629,6 +633,8 @@ def run_topic_v2(session_id: str | None = None,
         "raw_idea_count": raw_count,
         "deduped_idea_count": deduped_count,
     }
+    # Expose promoted ideas separately for UI
+    session["promoted_ideas"] = promoted_ideas
     _save_session(session)
 
     # 6. 写 archive/<session_id>/debate/idea_<id>.json
