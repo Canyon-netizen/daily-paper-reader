@@ -230,7 +230,7 @@ def semantic_dedup_ideas(
                 return result
             except Exception:
                 # Rerank unavailable → will trust cosine
-                return {"is_duplicate": False, "confidence": 0.0, "reason": "rerank failed"}
+                raise RuntimeError("Rerank failed")
         rerank_call = default_rerank
 
     n = len(ideas)

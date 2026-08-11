@@ -578,7 +578,9 @@ def test_semantic_dedup_uses_router_when_no_override(monkeypatch):
                 "choices": [{"message": {"content": "{\"is_duplicate\": false, \"confidence\": 0.1, \"reason\": \"different\"}"}}]
             }
 
-    monkeypatch.setattr("src.topic_v2.get_llm_router", lambda: MockRouter())
+    # Mock at the import source, not at the usage point
+    import src.llm_router
+    monkeypatch.setattr(src.llm_router, "get_llm_router", lambda: MockRouter())
 
     result = semantic_dedup_ideas(
         ideas,
