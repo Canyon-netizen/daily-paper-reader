@@ -593,12 +593,12 @@ prompt_packs:
 # crash / GitHub Actions kill 也会留半成品 .json，next run 会按 status=running 续 attempts。
 pipeline:
   checkpoints:
-    enabled: false
+    enabled: true
     # 缺省 archive_dir 与 daily pipeline 的 ROOT/archive/<run_date_token>/ 一致;
     # run_step_with_checkpoint 自动从环境变量 DPR_RUN_DATE_TOKEN 派生,
     # 没设就 fallback 到 archive/<today>。
   validate:
-    enabled: false
+    enabled: true
     contracts_dir: "src/validate/contracts"
     failure_handling: "mark_needs_review"
     rubric_enabled: false
