@@ -91,7 +91,7 @@ def _new_session_id() -> str:
 # ---------------------------------------------------------------------------
 
 def _truncate(text: str, max_len: int = 30) -> str:
-    return text[:max_len] + ("..." if len(text) > max_len else "")
+    return text[:max_len] + ("理由" if len(text) > max_len else "")
 
 
 def _rank_ideas_without_debate(ideas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -179,6 +179,154 @@ def _evidence_ref(source: str, detail: Any) -> Dict[str, Any]:
         ref = source
         snippet = str(detail or "")
     return {"kind": kind, "ref": str(ref), "snippet": str(snippet)[:500], "source": source, "detail": detail}
+
+
+
+def score_ideas(
+    ideas: list[dict],
+    llm_call=None,
+    *,
+    max_ideas: int = 20,
+) -> list[dict]:
+    """Score each idea on four dimensions + rationale via LLM.
+
+    Polaris Idea Forge contract: each idea gets 0-10 score per dim + text rationale.
+    DPR simplification: do this in ONE batched LLM call (not per-idea) to save cost.
+
+    Args:
+        ideas: list of idea dicts from _generate_ideas
+        llm_call: optional override (callable taking prompt → dict response).
+                   If None, uses get_llm_router().call("topic.score", ...)
+        max_ideas: cap ideas to score in one batch (saves tokens)
+
+    Returns:
+        Same list, with each idea enriched with:
+            - scores: {"novelty": 0-10, "feasibility": 0-10,
+                       "operability": 0-10, "impact": 0-10}
+            - score_rationale: {"novelty": str, "feasibility": str,
+                                "operability": str, "impact": str}
+
+        If LLM fails or returns malformed JSON for an idea, that idea's scores
+        stay as None and rationale as "" — do NOT silently fabricate.
+    """
+    if not ideas:
+        return ideas
+
+    # Deep copy to avoid mutating original
+    result = [dict(i) for i in ideas]
+
+    # Initialize default scores fields for all ideas
+    for idea in result:
+        idea["scores"] = None
+        idea["score_rationale"] = {"novelty": "", "feasibility": "", "operability": "", "impact": ""}
+
+    # Prepare batch input
+    ideas_to_score = result[:max_ideas]
+    batch_input = [
+        {"id": i["id"], "title": i["title"], "goal": i["goal"], "signals": i.get("signals", [])}
+        for i in ideas_to_score
+    ]
+
+    # Build prompt
+    prompt = (
+        "你是研究想法评审员。请对以下候选研究想法按 4 个维度评分(0-10 分)并给出简短理由。\n\n"
+        "4 个维度:\n"
+        "- novelty (新颖性): 与现有工作的差异化程度\n"
+        "- feasibility (可行性): 技术上能否实现,数据/算力是否可达\n"
+        "- operability (可操作性): 实验设计是否清晰,基线/消融是否可执行\n"
+        "- impact (影响力): 若成功,对领域推进 / 实际应用的贡献\n\n"
+        f"候选想法列表(JSON):\n{json.dumps(batch_input, ensure_ascii=False, indent=2)}\n\n"
+        '只输出 JSON 数组,每个元素对应一个想法:\n'
+        '[\n'
+        '  {"id": "<idea id>", "scores": {"novelty": 7, "feasibility": 5, "operability": 6, "impact": 8}, '
+        '"score_rationale": {"novelty": "理由", "feasibility": "理由", "operability": "理由", "impact": "理由"}},\n'
+        '  ...\n'
+        ']'
+    )
+
+    # Call LLM
+    try:
+        if llm_call is not None:
+            raw_response = llm_call(prompt)
+        else:
+            from src.llm_router import get_llm_router
+            router = get_llm_router()
+            response = router.call(
+                "topic.score",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            # Extract content from response
+            text = ""
+            if isinstance(response, dict):
+                choices = response.get("choices", [])
+                if choices:
+                    msg = choices[0].get("message", {})
+                    text = msg.get("content", "") or ""
+            if not text or not text.strip():
+                # LLM 返回空,所有 idea 保持无 scores
+                return result
+            raw_response = text
+    except Exception:
+        # LLM 调用失败,所有 idea 保持无 scores
+        return result
+
+    # Parse JSON response
+    try:
+        # Try to extract JSON from potential markdown code blocks
+        json_str = raw_response.strip()
+        if json_str.startswith("```"):
+            # Strip markdown code block
+            lines = json_str.split("\n")
+            json_str = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        parsed = json.loads(json_str)
+        if not isinstance(parsed, list):
+            return result
+    except (json.JSONDecodeError, Exception):
+        # Parse 失败,所有 idea 保持无 scores
+        return result
+
+    # Build lookup for quick access
+    score_map: dict[str, dict] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        idea_id = item.get("id")
+        if not idea_id:
+            continue
+
+        scores = item.get("scores", {})
+        if not isinstance(scores, dict):
+            continue
+
+        # Validate and clamp scores to 0-10
+        validated_scores = {}
+        for dim in ("novelty", "feasibility", "operability", "impact"):
+            val = scores.get(dim)
+            if isinstance(val, (int, float)):
+                validated_scores[dim] = max(0, min(10, round(val)))
+            else:
+                validated_scores[dim] = 0
+
+        rationale = item.get("score_rationale", {})
+        if not isinstance(rationale, dict):
+            rationale = {}
+
+        score_map[idea_id] = {
+            "scores": validated_scores,
+            "score_rationale": {
+                dim: str(rationale.get(dim, "")) for dim in ("novelty", "feasibility", "operability", "impact")
+            },
+        }
+
+    # Apply scores to result
+    for idea in result:
+        idea_id = idea.get("id")
+        if idea_id in score_map:
+            idea["scores"] = score_map[idea_id]["scores"]
+            idea["score_rationale"] = score_map[idea_id]["score_rationale"]
+        # else: keep default scores=None, rationale=""
+
+    return result
 
 
 def _generate_ideas(signals: Dict[str, List[Any]], session_id: str) -> List[Dict[str, Any]]:
@@ -288,15 +436,26 @@ def run_topic_v2(session_id: str | None = None,
     raw_count = len(raw_ideas)
     deduped_count = len(deduped_ideas)
 
+    # 4 维评分(Polaris Idea Forge contract)—— 默认开,失败不阻塞主线
+    try:
+        scored_ideas = score_ideas(deduped_ideas, llm_call=None)
+        if all(i.get("scores") is None for i in scored_ideas):
+            # LLM 全失败,保持原 deduped_ideas(避免下游拿不到 idea)
+            ranked_ideas_input = deduped_ideas
+        else:
+            ranked_ideas_input = scored_ideas
+    except Exception:
+        ranked_ideas_input = deduped_ideas  # fail-soft
+
     # 4. 跑 Elo 辩论 —— judge_llm_call=None → 跳过 debate(plan §4.2 PR-A)。
     if judge_llm_call is None:
         # 不调 run_debate,不污染 ELO 排序,显式 degraded。
-        ranked_ideas = _rank_ideas_without_debate(deduped_ideas)
+        ranked_ideas = _rank_ideas_without_debate(ranked_ideas_input)
         debate_status = "not_configured"
         used_tokens = 0
     else:
         ranked_ideas = run_debate(
-            ideas=deduped_ideas,
+            ideas=ranked_ideas_input,
             judge_llm_call=judge_llm_call,
             rounds=DEFAULT_ROUNDS,
         )
