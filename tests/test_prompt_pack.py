@@ -660,5 +660,113 @@ class TestFirstDriveSnapshot(unittest.TestCase):
         self.assertIsNone(result)
 
 
+# ----------------------------------------------------------------------------
+# Integration: prompt_pack + _provenance
+# ----------------------------------------------------------------------------
+
+class TestPromptPackProvenanceIntegration(unittest.TestCase):
+    """Integration: prompt_pack snapshot locked → _provenance records it.
+
+    Verifies:
+    1. lock_snapshot_into_checkpoint records provenance
+    2. Reference is the locked snapshot (not a fresh load)
+    3. build_provenance uses the locked snapshot correctly
+    """
+
+    def test_lock_snapshot_records_provenance_reference(self):
+        """Locking snapshot and recording provenance should reference locked snapshot."""
+        import sys
+        import os
+
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+        from prompt_pack import lock_snapshot_into_checkpoint, snapshot_for_run
+        from _provenance import build_provenance
+
+        packs = [
+            {
+                "pack_id": "testpack",
+                "version": "2026-08-01",
+                "kind": "guidance",
+                "content_hash": "abc123def456",
+                "body": "Test body content for provenance",
+                "targets": ["refine"],
+            }
+        ]
+
+        # Lock snapshot into checkpoint
+        checkpoint = lock_snapshot_into_checkpoint({}, packs)
+
+        # Verify checkpoint has prompt_packs
+        self.assertIn("prompt_packs", checkpoint)
+        self.assertIn("packs", checkpoint["prompt_packs"])
+
+        # Verify the locked snapshot is in checkpoint
+        locked_packs = checkpoint["prompt_packs"]["packs"]
+        self.assertEqual(len(locked_packs), 1)
+        self.assertEqual(locked_packs[0]["pack_id"], "testpack")
+        self.assertEqual(locked_packs[0]["content_hash"], "abc123def456")
+
+        # Now simulate a "fresh load" that would have different body
+        current_packs = [
+            {
+                "pack_id": "testpack",
+                "version": "2026-08-01",
+                "kind": "guidance",
+                "content_hash": "abc123def456",  # Same hash
+                "body": "DIFFERENT BODY - this is a fresh load",  # Different body!
+                "targets": ["refine"],
+            }
+        ]
+
+        # resolve_pack should use the locked snapshot, not the fresh load
+        from prompt_pack import resolve_pack
+        resolved = resolve_pack(checkpoint, "testpack", current_packs)
+
+        # The body should be from the LOCKED snapshot, not the fresh load
+        self.assertEqual(resolved["body"], "Test body content for provenance")
+        self.assertNotEqual(resolved["body"], "DIFFERENT BODY - this is a fresh load")
+
+        # Now build_provenance with this checkpoint
+        prov = build_provenance(
+            stage="test.stage",
+            provider_model="test-model",
+            checkpoint=checkpoint,
+            input_artifacts=[],
+        )
+
+        # Provenance should reference the locked snapshot
+        self.assertIn("prompt_pack_snapshot", prov)
+        self.assertIsNotNone(prov["prompt_pack_snapshot"])
+
+        # The snapshot should have the locked packs
+        snap = prov["prompt_pack_snapshot"]
+        self.assertIn("packs", snap)
+        self.assertEqual(len(snap["packs"]), 1)
+        self.assertEqual(snap["packs"][0]["content_hash"], "abc123def456")
+
+    def test_provenance_raises_without_locked_snapshot(self):
+        """build_provenance should raise RuntimeError when checkpoint not locked (fail-loud)."""
+        import sys
+        import os
+
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+        from _provenance import build_provenance
+
+        # Empty checkpoint (not locked)
+        checkpoint = {}
+
+        # Should raise RuntimeError per fail-loud principle
+        with self.assertRaises(RuntimeError) as ctx:
+            build_provenance(
+                stage="test.stage",
+                provider_model="test-model",
+                checkpoint=checkpoint,
+                input_artifacts=[],
+            )
+
+        self.assertIn("unlocked checkpoint", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

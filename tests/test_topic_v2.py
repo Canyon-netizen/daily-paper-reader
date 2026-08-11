@@ -592,6 +592,64 @@ def test_semantic_dedup_uses_router_when_no_override(monkeypatch):
     assert "topic.dedup" in router_called or len(router_called) > 0
 
 
+def test_semantic_dedup_uses_router_embedding(monkeypatch):
+    """semantic_dedup_ideas uses embed_texts from llm_router by default."""
+    ideas = [
+        {"title": "Use reinforcement learning to play Atari", "goal": "achieve high scores"},
+        {"title": "Apply RL for video game mastery", "goal": "reach top ranks"},
+        {"title": "Natural language processing for translation", "goal": "improve accuracy"},
+    ]
+    import numpy as np
+
+    # Mock embed_texts to return similar vectors for first two, different for third
+    def mock_embed_texts(texts):
+        # First two contain "Atari" or "RL" or "game" → similar
+        # Third contains "NLP" → different
+        vectors = []
+        for t in texts:
+            if "Atari" in t or "RL" in t or "game" in t:
+                vectors.append([0.9, 0.1, 0.0])
+            else:
+                vectors.append([0.0, 0.0, 0.9])
+        return vectors
+
+    # Mock embed_texts in llm_router module
+    import src.llm_router
+    monkeypatch.setattr(src.llm_router, "embed_texts", mock_embed_texts)
+
+    # Call without embedding_call override → should use router's embed_texts
+    result = semantic_dedup_ideas(ideas, dedup_threshold=0.85)
+
+    # First two should be deduped → 1 kept, third should remain → total 2
+    assert len(result) == 2
+    titles = [r["title"] for r in result]
+    assert "Natural language processing for translation" in titles
+
+
+def test_semantic_dedup_falls_back_when_not_implemented(monkeypatch):
+    """semantic_dedup_ideas returns original ideas when embed_texts raises NotImplementedError."""
+    ideas = [
+        {"title": "Idea A", "goal": "Goal A"},
+        {"title": "Idea B", "goal": "Goal B"},
+    ]
+
+    # Mock embed_texts to raise NotImplementedError
+    def mock_embed_texts(texts):
+        raise NotImplementedError("No embedding configured")
+
+    import src.llm_router
+    monkeypatch.setattr(src.llm_router, "embed_texts", mock_embed_texts)
+
+    # Without embedding_call override → should use router's embed_texts
+    # NotImplementedError should cause fallback to text-only (return original ideas)
+    result = semantic_dedup_ideas(ideas, dedup_threshold=0.85)
+
+    # Should return ideas unchanged when embedding fails
+    assert len(result) == 2
+    assert result[0]["title"] == "Idea A"
+    assert result[1]["title"] == "Idea B"
+
+
 # ----------------------------------------------------------------------------
 # Idea lifecycle promotion
 # ----------------------------------------------------------------------------
@@ -629,4 +687,66 @@ def test_run_topic_v2_returns_promoted_ideas(tmp_path, mock_signals, stub_judge,
     if promoted:
         for p in promoted:
             assert p["status"] == "promoted"
+
+
+# ----------------------------------------------------------------------------
+# Integration: topic_v2 + idea_lifecycle
+# ----------------------------------------------------------------------------
+
+def test_run_topic_v2_idea_lifecycle_flow(tmp_path, mock_signals, stub_judge, monkeypatch):
+    """Integration: run_topic_v2 end-to-end with idea_lifecycle promotion.
+
+    Verifies:
+    1. Ideas go through sketch → candidate → under_review
+    2. promoted_ideas contains only those passing promotion gates
+    3. Ideas failing gates stay at under_review with promotion_error
+    """
+    from src import topic_v2
+    monkeypatch.setattr(topic_v2, "collect_signals", lambda *a, **kw: mock_signals)
+
+    # Mock score_ideas to return varied scores (some pass gates, some fail)
+    def mock_score(ideas, llm_call=None, *, max_ideas=20):
+        scored = []
+        for i, idea in enumerate(ideas):
+            # First idea gets high scores (passes gates)
+            # Second idea gets low scores (fails gates)
+            if i == 0:
+                scores = {"novelty": 9, "feasibility": 8, "operability": 8, "impact": 9}
+            else:
+                scores = {"novelty": 3, "feasibility": 2, "operability": 2, "impact": 3}
+            scored.append({
+                **idea,
+                "scores": scores,
+                "score_rationale": {"novelty": "test", "feasibility": "test", "operability": "test", "impact": "test"},
+            })
+        return scored
+
+    monkeypatch.setattr(topic_v2, "score_ideas", mock_score)
+
+    result = run_topic_v2(session_id="lifecycle_test", judge_llm_call=stub_judge)
+
+    # Verify promoted_ideas exists and contains only promoted ideas
+    assert "promoted_ideas" in result
+    promoted = result["promoted_ideas"]
+
+    # Verify ideas have status field (lifecycle tracking)
+    ideas = result["debate_progress"]["ideas"]
+    for idea in ideas:
+        assert "status" in idea, f"Idea {idea.get('id')} missing status field"
+
+    # Verify sketch → candidate → under_review progression
+    # Ideas start at sketch, after scoring become candidate, after debate become under_review
+    statuses = [idea.get("status") for idea in ideas]
+    # All ideas should have progressed beyond sketch
+    assert all(s != "sketch" for s in statuses), "Ideas should progress beyond sketch"
+
+    # promoted_ideas should only contain ideas with status=promoted
+    if promoted:
+        for p in promoted:
+            assert p["status"] == "promoted", f"Promoted idea {p.get('id')} should have status=promoted"
+
+    # Ideas that don't pass gates should stay at under_review with promotion_error
+    failed_promotion = [idea for idea in ideas if idea.get("promotion_error")]
+    for idea in failed_promotion:
+        assert idea["status"] == "under_review", "Failed promotion ideas should be at under_review"
 
