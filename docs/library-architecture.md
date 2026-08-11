@@ -70,7 +70,7 @@ flowchart TD
 | 存储 | `localStorage['dpr_user_libraries_v1']`（也 Gist 备份，序列化见 `gist.ts`） |
 | Schema | `UserLibrariesDoc`（`schemaVersion: 4`），`libraries: Record<libraryId, UserLibrary>` |
 | 字段对照 | 见 §4 数据模型对照表 |
-| 候选状态 | `LibraryPaperMeta.status`: `candidate` / `included` / `excluded`（简化 Polaris 的 `candidate → scored/excluded → fetched → compiled`） |
+| 候选状态 | `LibraryPaperStatus`（5 态）：`candidate`（LLM 未打分，刚被 ingest 拉进来）→ `scored`（LLM 已打分，等用户确认）→ `included`（用户接受 / 原本就在 `paperIds[]`）/ `excluded`（用户 / 打分剔除）；`trashed` 是回收站软标记（与 `excluded` 区别：`trashed` 仍计入 library_papers，GC 不会回收；`excluded` 同样保留 membership 不会被 GC） |
 | visibility | `'personal'` / `'pending'` / `'public'` —— DPR 单人站无 admin，'public' 等同于 Gist 公开 |
 | 关键 API | `createLibrary` / `addPaperToLibrary` / `bulkAddPapersToLibrary` / `bulkSetPaperStatus` / `setLibraryVisibility` / `addLibraryAnchor` / `setLibraryConceptOverride` / `getLibraryConceptDisplay` |
 | 活动日志 | `activity-log.ts` —— 用户 add / remove / status change 等动作留痕 |
@@ -122,7 +122,7 @@ flowchart TD
 | `direction_libraries.is_public` | `UserLibrary.visibility = 'personal' \| 'pending' \| 'public'` | 单人站无 admin |
 | `direction_libraries.definition`（JSONB） | `UserLibrary.definition: LibraryDefinition`（含 statement / cadence / anchors / keywords / rubric / goals / inScope / outOfScope / questions / relevanceThreshold） | DPR 拍平成 JSON 字段而非 JSONB 列 |
 | `library_papers.*` | `UserLibrary.papers: Record<canonicalArxivId, LibraryPaperMeta>` | 含 status / relevanceScore / relevanceReason / tldrNote / trashReason / updatedAt |
-| `library_papers.status` | `LibraryPaperMeta.status`: `'candidate' \| 'included' \| 'excluded'` | 简化 Polaris 5 态 |
+| `library_papers.status` | `LibraryPaperStatus`: `'candidate' \| 'scored' \| 'included' \| 'excluded' \| 'trashed'` | 5 态机；Polaris 5 态 + DPR 多了 `trashed` 软删 |
 | `library_papers.trash_reason` | `LibraryPaperMeta.trashReason?: string` | 与 status 联动 |
 | `paper_tags` + `paper_tag_links` | frontmatter `tags`（LLM 生成 + 人工） | DPR 没有 library 维度的 tag（休眠中，参 Polaris 文档） |
 | `user_paper_tags` | `dpr_user_tags_v1`（在 `scripts/settings.ts` 管理） | 跨论文全局 |
@@ -206,7 +206,7 @@ DPR 三个集合的 trash 实现分别对应 Polaris 的三种：
 | 2 | **后台 ingest 任务编排** | `wiki_bootstrap` / `wiki_ingest` Voyage | cron pipeline 一把梭（`src/3-7.*.py`） | 架构侧 |
 | 3 | **论文级向量检索** | pgvector + `paper_vectors` | 无；全文检索靠 Astro pagefind + frontmatter 全文搜索 | 架构侧 |
 | 4 | **chunk embedding** | `paper_chunk_vectors` | 无 | 架构侧 |
-| 5 | **`library_papers` 5 态状态机** | candidate → scored/excluded → fetched → compiled | DPR 简化为 `candidate` / `included` / `excluded` | 简化 |
+| 5 | **`library_papers` 状态机** | candidate → scored/excluded → fetched → compiled | DPR 也是 5 态 (`candidate → scored → included/excluded` + `trashed` 软删)，但 LLM 评分与 commit 在前端跑而非后台任务 | 一致 |
 | 6 | **`wiki_compile` 共享 wiki** | 每篇论文一份 `paper_wikis`，所有库共享 | 已经是每篇论文一份 markdown，天然共享 | 一致 |
 | 7 | **概念全局唯一 slug** | `concepts.slug` UNIQUE | `assets/concepts/<slug>.md` 文件名约定，靠人不出错 | 文档侧 |
 | 8 | **`library.compile` prompt pack** | skill 系统 + manifest.json | 无；digest 用硬编码 prompt（`SCORE_SYSTEM_PROMPT`） | 代码侧（TODO） |
@@ -258,3 +258,4 @@ DPR 三个集合的 trash 实现分别对应 Polaris 的三种：
 
 - `docs/migration-polaris-absorption.md` §"文献库架构" — 历史脉络（本文件是其权威化结果）
 - `docs/TODO-future-work.md` §6 — Polaris 能力对照表
+- `docs/concepts-system.md` — 概念子系统说明（候选门控、7 类别、跨库共享等）
