@@ -2,12 +2,14 @@
 
 对齐 Polaris paper_review.py::check_citation_existence + review_passed:
 - 三态存在性分类: exact / minor / fabricated
+- 支持轴: supported / partial / unsupported (需 --run-support-check 开启)
 - PASS_RATING = 6.0 → 简化为 (no fabricated) AND (supported / checked >= 0.6)
 - 默认 run_support_check: false,只跑 existence 三源核查,不调 LLM
 
 CLI 入口:
     python -m citation_guard docs/papers/.../<id>-slug.md
     python -m citation_guard docs/papers/.../<id>-slug.md --library library.json
+    python -m citation_guard docs/papers/.../<id>-slug.md --run-support-check --paper-fulltext paper.txt
 
 写出 <md>.citations.json,退出码:
     0  pass
@@ -307,6 +309,98 @@ def check_citation_existence(citation: dict, library_papers: list[dict]) -> tupl
     return "fabricated", None
 
 
+def _extract_claim_context(md_text: str, marker: str, window: int = 200) -> str:
+    """Find marker in md body, return ±window chars around it."""
+    # marker like "[1]" -> escape for regex
+    escaped = re.escape(marker)
+    m = re.search(escaped, md_text)
+    if not m:
+        return ""
+    pos = m.start()
+    start = max(0, pos - window)
+    end = min(len(md_text), pos + window)
+    return md_text[start:end]
+
+
+def check_citation_support(
+    citation: dict,
+    claim_context: str,
+    paper_abstract_or_fulltext: str | None,
+    call=None,
+) -> str:
+    """Return "supported" | "partial" | "unsupported" | "not_checked".
+
+    Uses injected `call` if provided (test seam), else routes through
+    `get_llm_router().call("cite.guard", ...)`. If no LLM is configured or
+    it fails, returns "not_checked" (do NOT silently mis-classify).
+
+    Args:
+        citation: {marker, title, year} from extract_citations
+        claim_context: 1-3 sentence snippet of paper text around the [N] marker
+        paper_abstract_or_fulltext: optional abstract/fulltext to ground the
+            judgment — used as the "evidence to check against". If None, return
+            "not_checked" (can't judge without the paper text).
+        call: optional override (callable taking prompt → dict response)
+    """
+    if not paper_abstract_or_fulltext:
+        return "not_checked"
+
+    prompt = f'''你是引用核查员。论文正文片段说:
+
+"""
+{claim_context}
+"""
+
+正文引用了 [{citation['marker']}] 「{citation['title']}」({citation.get('year') or '?'}).
+
+该论文的摘要/全文:
+"""
+{paper_abstract_or_fulltext}
+"""
+
+请判断该引用是否支持正文陈述:
+- "supported": 论文明确支持正文的陈述
+- "partial": 论文部分支持,但范围 / 条件与正文不一致
+- "unsupported": 论文与正文陈述矛盾,或正文夸大了论文结论
+
+只输出 JSON: {{"support": "<supported|partial|unsupported>", "reason": "<一句话>"}}'''
+
+    try:
+        if call is not None:
+            resp = call(prompt)
+            # Direct dict response from injected call
+            if isinstance(resp, dict):
+                support = resp.get("support", "")
+                if support in ("supported", "partial", "unsupported"):
+                    return support
+        else:
+            from src.llm_router import get_llm_router
+
+            router = get_llm_router()
+            resp = router.call(
+                "cite.guard",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+            )
+            # Extract content from response
+            content = ""
+            if hasattr(resp, "choices") and resp.choices:
+                content = resp.choices[0].message.content or ""
+            elif isinstance(resp, dict):
+                content = resp.get("content", "") or ""
+            if content:
+                # Parse JSON from content
+                import json
+
+                data = json.loads(content)
+                support = data.get("support", "")
+                if support in ("supported", "partial", "unsupported"):
+                    return support
+    except Exception:
+        pass
+    return "not_checked"
+
+
 # -----------------------------------------------------------------------------
 # review_passed (plan §6)
 # -----------------------------------------------------------------------------
@@ -377,15 +471,45 @@ def run_guard(md_path: str | Path, config: dict | None = None) -> dict:
             }
         )
 
+    # Support check: gated by config flag, requires paper_fulltext
+    run_support_check = config.get("run_support_check", False)
+    paper_fulltext = config.get("paper_fulltext")
+    support_call = config.get("support_call")  # For testing: inject LLM call function
+    if not paper_fulltext:
+        # Try loading from file path
+        fulltext_path = config.get("paper_fulltext_path")
+        if fulltext_path and Path(fulltext_path).exists():
+            paper_fulltext = Path(fulltext_path).read_text(encoding="utf-8")
+
+    support_counts = {"supported": 0, "partial": 0, "unsupported": 0, "not_checked": 0}
+    if run_support_check and paper_fulltext:
+        # Only check citations with existence in {exact, minor}
+        eligible = [c for c in checked if c["existence"] in ("exact", "minor")]
+        # Respect MAX_SUPPORT_CHECKS limit
+        to_check = eligible[:MAX_SUPPORT_CHECKS]
+        for c in to_check:
+            claim_ctx = _extract_claim_context(md_text, c["marker"])
+            support = check_citation_support(
+                citation={"marker": c["marker"], "title": c["raw_text"], "year": None},
+                claim_context=claim_ctx,
+                paper_abstract_or_fulltext=paper_fulltext,
+                call=support_call,
+            )
+            c["support"] = support
+            support_counts[support] = support_counts.get(support, 0) + 1
+        # Remaining eligible citations (not checked due to limit) stay not_checked
+        remaining = len(eligible) - len(to_check)
+        support_counts["not_checked"] = support_counts.get("not_checked", 0) + remaining
+
     summary = {
         "total": len(checked),
         "exact": sum(1 for c in checked if c["existence"] == "exact"),
         "minor": sum(1 for c in checked if c["existence"] == "minor"),
         "fabricated": sum(1 for c in checked if c["existence"] == "fabricated"),
         "not_checked": sum(1 for c in checked if c["existence"] == "not_checked"),
-        "supported": 0,
-        "partial": 0,
-        "unsupported": 0,
+        "supported": support_counts.get("supported", 0),
+        "partial": support_counts.get("partial", 0),
+        "unsupported": support_counts.get("unsupported", 0),
     }
     passed = review_passed(summary, checked)
 
@@ -408,11 +532,25 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="DPR Citation Guard")
     parser.add_argument("md_path", help="Path to the markdown file to scan")
     parser.add_argument("--library", help="Optional path to library JSON", default=None)
+    parser.add_argument(
+        "--run-support-check",
+        action="store_true",
+        help="Enable LLM support axis check (supported/partial/unsupported)",
+    )
+    parser.add_argument(
+        "--paper-fulltext",
+        help="Path to paper fulltext/abstract for support check",
+    )
     args = parser.parse_args(argv)
 
     config: dict = {}
     if args.library and Path(args.library).exists():
         config["library_papers"] = json.loads(Path(args.library).read_text(encoding="utf-8"))
+
+    if args.run_support_check:
+        config["run_support_check"] = True
+    if args.paper_fulltext:
+        config["paper_fulltext_path"] = args.paper_fulltext
 
     md_path = Path(args.md_path)
     if not md_path.exists():
@@ -430,6 +568,10 @@ def main(argv: list[str] | None = None) -> int:
         f"[citation_guard] {md_path.name} pass={result['pass']} "
         f"total={s['total']} exact={s['exact']} minor={s['minor']} fabricated={s['fabricated']}"
     )
+    if s.get("supported", 0) or s.get("partial", 0) or s.get("unsupported", 0):
+        print(
+            f"  support: supported={s['supported']} partial={s['partial']} unsupported={s['unsupported']}"
+        )
     if not result["pass"]:
         if s["fabricated"] > 0:
             return 2
