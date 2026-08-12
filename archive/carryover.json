@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-11T21:42:13.084656+00:00",
-  "updated_date": "20260811",
+  "generated_at": "2026-08-12T21:46:26.007282+00:00",
+  "updated_date": "20260812",
   "carryover_days": 9,
   "tag_states": {
     "RLG": {
@@ -9,27 +9,105 @@
       "items": []
     },
     "RL": {
-      "updated_date": "20260811",
+      "updated_date": "20260812",
       "carryover_days": 9,
       "items": []
     },
     "game ai": {
-      "updated_date": "20260811",
+      "updated_date": "20260812",
       "carryover_days": 9,
       "items": []
     },
     "intervention": {
-      "updated_date": "20260811",
+      "updated_date": "20260812",
       "carryover_days": 9,
-      "items": []
+      "items": [
+        {
+          "id": "2608.04904v2",
+          "source": "arxiv",
+          "title": "Strengthening Target-Language Features: SAE-Based Steering for Multilingual Inference",
+          "abstract": "Multilingual large language models exhibit substantial performance differences across languages, while existing adaptation methods often require parameter updates and considerable multilingual training data. We propose an inference-time multilingual steering method that uses pretrained sparse autoencoders to identify and strengthen target-language-related features. Using multilingual parallel sentences, we compare SAE activations across languages and select a small number of layer-specific features associated with each target language. These features are decoded into steering signals and injected into the model's hidden states without additional training. Experiments with Gemma-3-12B-it show average accuracy improvements of 10.9 percentage points on XCOPA, 5.3 points on XNLI, and 1.9 points on MGSM.",
+          "authors": [
+            "Hongsheng Wang",
+            "Philipp Koehn"
+          ],
+          "primary_category": "cs.CL",
+          "categories": [
+            "cs.CL"
+          ],
+          "published": "2026-08-05T14:32:14+00:00",
+          "link": "https://arxiv.org/pdf/2608.04904v2",
+          "tags": [
+            "keyword:self distillation",
+            "query:intervention"
+          ],
+          "llm_score": 8.0,
+          "llm_evidence_en": "SAE-based steering intervenes on LLM hidden states via target-language feature vectors",
+          "llm_evidence_cn": "基于SAE特征的向量干预以强化大模型目标语言行为",
+          "llm_evidence": "基于SAE特征的向量干预以强化大模型目标语言行为",
+          "canonical_evidence": "基于SAE特征的向量干预以强化大模型目标语言行为",
+          "llm_tldr_en": "This paper uses pretrained sparse autoencoders to identify and strengthen target-language features in LLM hidden states, performing inference-time steering without additional training.",
+          "llm_tldr_cn": "本文利用预训练稀疏自编码器定位并增强大语言模型隐状态中与目标语言相关的特征,以推理时向量干预方式显著提升多语言推理准确率。",
+          "llm_tldr": "本文利用预训练稀疏自编码器定位并增强大语言模型隐状态中与目标语言相关的特征,以推理时向量干预方式显著提升多语言推理准确率。",
+          "llm_tags": [
+            "query:intervention"
+          ],
+          "matched_query_tag": "query:intervention",
+          "matched_query_text": "vector space intervention techniques for language models",
+          "matched_requirement_id": "req-25",
+          "selection_source": "carryover_cache",
+          "paper_id": "2608.04904v2",
+          "carry_days": 1
+        },
+        {
+          "id": "2608.05611v1",
+          "source": "arxiv",
+          "title": "FOCUS: Decoupling Expert Personas in LLMs to Enhance Domain Expert Capabilities",
+          "abstract": "Large Language Models (LLMs) can exhibit diverse personas, and activating expert personas has been shown to improve domain expertise and task accuracy. However, existing persona control methods often suffer from cross-domain coupling, which may lead to overly aggressive behavior in high-caution domains such as healthcare, or excessive conservatism in risk-sensitive domains such as financial trading. To address this issue, we propose FOCUS (\\textbf{\\underline{F}}ine-tuning with \\textbf{\\underline{O}}rthogonal \\textbf{\\underline{C}}ontrol for \\textbf{\\underline{U}}ncoupled persona\\textbf{\\underline{S}}). FOCUS first automatically extracts expert persona vectors from LLMs, then applies orthogonal decomposition to decouple domain-specific expert personas, and finally introduces an expert gating module to adaptively control persona activation according to task contexts. With a two-stage training strategy and a gated selection regularizer, the model learns to activate appropriate personas for both single-domain and cross-domain tasks. Experiments on financial, legal, medical, and cross-domain benchmarks show that FOCUS improves task accuracy and outperforms existing persona control methods. Our code is available at \\href{https://anonymous.4open.science/r/openpersona-48F4}{this url}.",
+          "authors": [
+            "Guanyu Wang",
+            "Zidi Zhang",
+            "Xu Chu"
+          ],
+          "primary_category": "cs.CL",
+          "categories": [
+            "cs.CL",
+            "cs.LG"
+          ],
+          "published": "2026-08-06T05:13:59+00:00",
+          "link": "https://arxiv.org/pdf/2608.05611v1",
+          "tags": [
+            "keyword:game ai",
+            "query:game ai",
+            "query:self distillation"
+          ],
+          "llm_score": 8.0,
+          "llm_evidence_en": "extracts persona vectors and applies orthogonal decomposition to decouple expert behavior in LLMs",
+          "llm_evidence_cn": "提取大模型专家人设向量并通过正交分解解耦领域专家能力",
+          "llm_evidence": "提取大模型专家人设向量并通过正交分解解耦领域专家能力",
+          "canonical_evidence": "提取大模型专家人设向量并通过正交分解解耦领域专家能力",
+          "llm_tldr_en": "Introduces FOCUS, a framework that extracts expert persona vectors from LLMs and decouples them via orthogonal decomposition to enhance domain-specific capabilities without cross-domain coupling.",
+          "llm_tldr_cn": "本文提出FOCUS框架，通过自动提取大语言模型中的专家人设向量并施加正交分解以解耦领域专家能力，在医疗、金融等高风险领域显著降低跨域耦合，提升任务准确率。",
+          "llm_tldr": "本文提出FOCUS框架，通过自动提取大语言模型中的专家人设向量并施加正交分解以解耦领域专家能力，在医疗、金融等高风险领域显著降低跨域耦合，提升任务准确率。",
+          "llm_tags": [
+            "query:intervention"
+          ],
+          "matched_query_tag": "query:intervention",
+          "matched_query_text": "vector space intervention techniques for language models",
+          "matched_requirement_id": "req-25",
+          "selection_source": "carryover_cache",
+          "paper_id": "2608.05611v1",
+          "carry_days": 1
+        }
+      ]
     },
     "MAS": {
-      "updated_date": "20260811",
+      "updated_date": "20260812",
       "carryover_days": 9,
       "items": []
     },
     "self distillation": {
-      "updated_date": "20260811",
+      "updated_date": "20260812",
       "carryover_days": 9,
       "items": []
     }
