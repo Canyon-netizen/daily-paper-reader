@@ -1,6 +1,6 @@
 {
-  "generated_at": "2026-08-12T21:46:26.007282+00:00",
-  "updated_date": "20260812",
+  "generated_at": "2026-08-13T21:43:30.824100+00:00",
+  "updated_date": "20260813",
   "carryover_days": 9,
   "tag_states": {
     "RLG": {
@@ -9,46 +9,54 @@
       "items": []
     },
     "RL": {
-      "updated_date": "20260812",
+      "updated_date": "20260813",
       "carryover_days": 9,
       "items": []
     },
     "game ai": {
-      "updated_date": "20260812",
+      "updated_date": "20260813",
       "carryover_days": 9,
       "items": []
     },
     "intervention": {
-      "updated_date": "20260812",
+      "updated_date": "20260813",
       "carryover_days": 9,
       "items": [
         {
-          "id": "2608.04904v2",
+          "id": "2608.09928v1",
           "source": "arxiv",
-          "title": "Strengthening Target-Language Features: SAE-Based Steering for Multilingual Inference",
-          "abstract": "Multilingual large language models exhibit substantial performance differences across languages, while existing adaptation methods often require parameter updates and considerable multilingual training data. We propose an inference-time multilingual steering method that uses pretrained sparse autoencoders to identify and strengthen target-language-related features. Using multilingual parallel sentences, we compare SAE activations across languages and select a small number of layer-specific features associated with each target language. These features are decoded into steering signals and injected into the model's hidden states without additional training. Experiments with Gemma-3-12B-it show average accuracy improvements of 10.9 percentage points on XCOPA, 5.3 points on XNLI, and 1.9 points on MGSM.",
+          "title": "Multimodal Model Diffing for Feature Discovery and Control",
+          "abstract": "Multimodal Large Language Models (MLLMs) exhibit strong visual understanding, yet the internal features that cause these behaviors remain difficult to identify, audit, or control. While applicable to post-hoc inspection, hidden states that are decomposed into interpretable feature directions using sparse autoencoders (SAEs) neither readily isolate which features are changed by multimodal training, nor are they directly useful for targeted control. We introduce MMDiff, a multimodal model-diffing framework that trains multimodal SAEs and turns them into feature-level interfaces for discovering and controlling multimodal behavior. MMDiff supports three uses: (i) feature isolation, by diffing a base-LM SAE against its multimodal-adapted counterpart to identify features altered by multimodal training; (ii) task-specific feature detection, via per-token contrastive firing analysis that isolates causal features; and (iii) feature-level control, by causally removing or steering the discovered feature directions. We train multimodal SAEs for three MLLM families, LLaVA-MORE, PaliGemma 2, and InternVL3.5, and evaluate on visual-spatial understanding, multimodal safety, and OCR. MMDiff discovers sparse, causally specific features whose removal selectively degrades target behaviors by an average of 12% on spatial tasks and 17% on OCR, and reduces attack success rate by 24% on multimodal safety attacks, with no impact on VQA performance. Steering these features improves spatial and OCR accuracy by +3.6% and +1.8% on average over a standard single-layer steering baseline. These results show that multimodal SAEs can serve not only as interpretability tools, but as mechanisms for auditing, steering, and controlling MLLMs behavior toward safer and more capable generations.",
           "authors": [
-            "Hongsheng Wang",
-            "Philipp Koehn"
+            "Hunar Batra",
+            "Lachin Naghashyar",
+            "Ashkan Khakzar",
+            "Philip Torr",
+            "Christian Schroeder de Witt",
+            "Constantin Venhoff",
+            "Ronald Clark"
           ],
-          "primary_category": "cs.CL",
+          "primary_category": "cs.CV",
           "categories": [
-            "cs.CL"
+            "cs.CV",
+            "cs.AI",
+            "cs.CL",
+            "cs.LG"
           ],
-          "published": "2026-08-05T14:32:14+00:00",
-          "link": "https://arxiv.org/pdf/2608.04904v2",
+          "published": "2026-08-10T17:59:30+00:00",
+          "link": "https://arxiv.org/pdf/2608.09928v1",
           "tags": [
             "keyword:self distillation",
             "query:intervention"
           ],
           "llm_score": 8.0,
-          "llm_evidence_en": "SAE-based steering intervenes on LLM hidden states via target-language feature vectors",
-          "llm_evidence_cn": "基于SAE特征的向量干预以强化大模型目标语言行为",
-          "llm_evidence": "基于SAE特征的向量干预以强化大模型目标语言行为",
-          "canonical_evidence": "基于SAE特征的向量干预以强化大模型目标语言行为",
-          "llm_tldr_en": "This paper uses pretrained sparse autoencoders to identify and strengthen target-language features in LLM hidden states, performing inference-time steering without additional training.",
-          "llm_tldr_cn": "本文利用预训练稀疏自编码器定位并增强大语言模型隐状态中与目标语言相关的特征,以推理时向量干预方式显著提升多语言推理准确率。",
-          "llm_tldr": "本文利用预训练稀疏自编码器定位并增强大语言模型隐状态中与目标语言相关的特征,以推理时向量干预方式显著提升多语言推理准确率。",
+          "llm_evidence_en": "discovers feature directions in multimodal LLMs for targeted behavior control",
+          "llm_evidence_cn": "发现多模态大模型中的特征方向以实现定向行为干预",
+          "llm_evidence": "发现多模态大模型中的特征方向以实现定向行为干预",
+          "canonical_evidence": "发现多模态大模型中的特征方向以实现定向行为干预",
+          "llm_tldr_en": "Introduces a multimodal model-diffing framework that uses sparse autoencoders to discover and exploit feature directions for controlling multimodal LLM behavior.",
+          "llm_tldr_cn": "本文提出多模态模型差分框架，通过稀疏自编码器差分基础LM与其多模态版本，发现可解释特征方向并将其作为干预接口以控制大语言模型行为。",
+          "llm_tldr": "本文提出多模态模型差分框架，通过稀疏自编码器差分基础LM与其多模态版本，发现可解释特征方向并将其作为干预接口以控制大语言模型行为。",
           "llm_tags": [
             "query:intervention"
           ],
@@ -56,58 +64,18 @@
           "matched_query_text": "vector space intervention techniques for language models",
           "matched_requirement_id": "req-25",
           "selection_source": "carryover_cache",
-          "paper_id": "2608.04904v2",
-          "carry_days": 1
-        },
-        {
-          "id": "2608.05611v1",
-          "source": "arxiv",
-          "title": "FOCUS: Decoupling Expert Personas in LLMs to Enhance Domain Expert Capabilities",
-          "abstract": "Large Language Models (LLMs) can exhibit diverse personas, and activating expert personas has been shown to improve domain expertise and task accuracy. However, existing persona control methods often suffer from cross-domain coupling, which may lead to overly aggressive behavior in high-caution domains such as healthcare, or excessive conservatism in risk-sensitive domains such as financial trading. To address this issue, we propose FOCUS (\\textbf{\\underline{F}}ine-tuning with \\textbf{\\underline{O}}rthogonal \\textbf{\\underline{C}}ontrol for \\textbf{\\underline{U}}ncoupled persona\\textbf{\\underline{S}}). FOCUS first automatically extracts expert persona vectors from LLMs, then applies orthogonal decomposition to decouple domain-specific expert personas, and finally introduces an expert gating module to adaptively control persona activation according to task contexts. With a two-stage training strategy and a gated selection regularizer, the model learns to activate appropriate personas for both single-domain and cross-domain tasks. Experiments on financial, legal, medical, and cross-domain benchmarks show that FOCUS improves task accuracy and outperforms existing persona control methods. Our code is available at \\href{https://anonymous.4open.science/r/openpersona-48F4}{this url}.",
-          "authors": [
-            "Guanyu Wang",
-            "Zidi Zhang",
-            "Xu Chu"
-          ],
-          "primary_category": "cs.CL",
-          "categories": [
-            "cs.CL",
-            "cs.LG"
-          ],
-          "published": "2026-08-06T05:13:59+00:00",
-          "link": "https://arxiv.org/pdf/2608.05611v1",
-          "tags": [
-            "keyword:game ai",
-            "query:game ai",
-            "query:self distillation"
-          ],
-          "llm_score": 8.0,
-          "llm_evidence_en": "extracts persona vectors and applies orthogonal decomposition to decouple expert behavior in LLMs",
-          "llm_evidence_cn": "提取大模型专家人设向量并通过正交分解解耦领域专家能力",
-          "llm_evidence": "提取大模型专家人设向量并通过正交分解解耦领域专家能力",
-          "canonical_evidence": "提取大模型专家人设向量并通过正交分解解耦领域专家能力",
-          "llm_tldr_en": "Introduces FOCUS, a framework that extracts expert persona vectors from LLMs and decouples them via orthogonal decomposition to enhance domain-specific capabilities without cross-domain coupling.",
-          "llm_tldr_cn": "本文提出FOCUS框架，通过自动提取大语言模型中的专家人设向量并施加正交分解以解耦领域专家能力，在医疗、金融等高风险领域显著降低跨域耦合，提升任务准确率。",
-          "llm_tldr": "本文提出FOCUS框架，通过自动提取大语言模型中的专家人设向量并施加正交分解以解耦领域专家能力，在医疗、金融等高风险领域显著降低跨域耦合，提升任务准确率。",
-          "llm_tags": [
-            "query:intervention"
-          ],
-          "matched_query_tag": "query:intervention",
-          "matched_query_text": "vector space intervention techniques for language models",
-          "matched_requirement_id": "req-25",
-          "selection_source": "carryover_cache",
-          "paper_id": "2608.05611v1",
+          "paper_id": "2608.09928v1",
           "carry_days": 1
         }
       ]
     },
     "MAS": {
-      "updated_date": "20260812",
+      "updated_date": "20260813",
       "carryover_days": 9,
       "items": []
     },
     "self distillation": {
-      "updated_date": "20260812",
+      "updated_date": "20260813",
       "carryover_days": 9,
       "items": []
     }
