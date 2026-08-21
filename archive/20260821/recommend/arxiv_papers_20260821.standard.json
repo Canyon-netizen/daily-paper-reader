@@ -1,0 +1,1227 @@
+{
+  "mode": "standard",
+  "generated_at": "2026-08-21T21:13:15.886680+00:00",
+  "stats": {
+    "mode": "standard",
+    "tag_count": 5,
+    "deep_divecandidates": 35,
+    "deep_cap": 10,
+    "deep_selected": 13,
+    "quick_candidates": 64,
+    "quick_skim_target": 15,
+    "quick_selected": 15
+  },
+  "deep_dive": [
+    {
+      "id": "2608.12764v1",
+      "source": "arxiv",
+      "title": "Beyond Outcome Rewards: Step-Level Self-Distilled Policy Optimization for Deep Search Agents",
+      "abstract": "Deep search agents operate over trajectories spanning dozens of steps, yet standard reinforcement learning provides only a single outcome reward per trajectory, which is far too sparse for effective credit assignment. On-policy self-distillation (OPSD) addresses this by using the model's own logits as dense token-level teachers, but extending it to search agents introduces a fundamental tension: the teacher, having access to privileged information such as the correct answer, produces a distribution that differs systematically from the student's exploration-based reasoning, and naive distillation causes the student to inherit this information asymmetry rather than learn better search strategies. We resolve this tension through two contributions. First, we construct Evidence Anchors, which are concise, step-level evidence snippets extracted from the web, as privileged information that captures key reasoning steps without revealing the entire answer path. Second, we propose Step-Level Self-Distilled Policy Optimization (SSPO), which converts teacher-student disagreement into step-level advantage weights within GRPO, applied exclusively to incorrect trajectories. This design decouples what to update from how much to update: the outcome reward determines the direction of policy change, while the teacher modulates its magnitude at each step. Correct trajectories are left untouched, preserving their diversity. On Qwen3-8B, SSPO consistently outperforms GRPO across BrowseComp, GAIA, and FRAMES, surpassing or matching GRPO trained with twice as many gradient steps while adding only about 5 percent overhead per step from a single additional forward pass.",
+      "authors": [
+        "Haoze Wu",
+        "Chuqiao Kuang",
+        "Tianyi Zhuang",
+        "Xiaoguang Li"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG",
+        "cs.AI"
+      ],
+      "published": "2026-08-13T03:13:18+00:00",
+      "link": "https://arxiv.org/pdf/2608.12764v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "keyword:self distillation",
+        "query:MAS",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "on-policy self-distillation for deep search agents resolving reward sparsity",
+      "llm_evidence_cn": "深度搜索智能体中在线自蒸馏策略优化方法",
+      "llm_evidence": "深度搜索智能体中在线自蒸馏策略优化方法",
+      "canonical_evidence": "深度搜索智能体中在线自蒸馏策略优化方法",
+      "llm_tldr_en": "The paper proposes step-level on-policy self-distillation for deep search agents to overcome sparse outcome rewards, addressing information asymmetry between teacher and student in long-horizon search.",
+      "llm_tldr_cn": "本文针对深度搜索智能体中结果奖励过于稀疏的问题，提出逐步在线自蒸馏策略优化方法，缓解教师与学生间的信息不对称，为长程任务的强化学习与自蒸馏提供密集学习信号。",
+      "llm_tldr": "本文针对深度搜索智能体中结果奖励过于稀疏的问题，提出逐步在线自蒸馏策略优化方法，缓解教师与学生间的信息不对称，为长程任务的强化学习与自蒸馏提供密集学习信号。",
+      "llm_tags": [
+        "query:self-distillation"
+      ],
+      "matched_query_tag": "query:self-distillation",
+      "matched_query_text": "self distillation methods where models learn from themselves",
+      "matched_requirement_id": "req-23",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.12957v1",
+      "source": "arxiv",
+      "title": "I-SDPO: Instance-Level Adaptive Self-Distillation Policy Optimization",
+      "abstract": "Group Relative Policy Optimization (GRPO) learns from reward differences within a rollout group, but receives no useful relative signal when every sampled response is incorrect. Privileged self-distillation can fill this gap with dense token supervision, yet applying it throughout training creates a different failure mode: the teacher is a biased, low-variance surrogate for the reward objective, so persistent imitation can oppose reward-improving updates after the policy becomes capable of producing successful trajectories. We introduce I-SDPO (Instance-Level Adaptive Self-Distillation Policy Optimization), which treats teacher reliance as capability-dependent. I-SDPO makes one routing decision per input instance and shares it across that instance's rollout group: all-incorrect groups use a privileged self-distillation objective, whereas any-success groups remain intact for GRPO. This design uses imitation only where group-relative rewards are uninformative. A local analysis characterizes when teacher and reward directions align and shows that a non-vanishing biased distillation weight induces an optimization bias floor. The routing rule automatically reduces the expected distillation rate as success probability rises, withdrawing teacher influence without a hand-designed schedule. On SciKnowEval, I-SDPO obtains the best result in all four scientific domains and improves average mean@16 accuracy from 56.67% with GRPO to 70.31%, with a maximum domain gain of 18.24 points.",
+      "authors": [
+        "Yubo Zhang",
+        "Xinhong Ma",
+        "Zezhong Tan",
+        "Ziqiang Dong"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG",
+        "cs.CL"
+      ],
+      "published": "2026-08-13T08:37:24+00:00",
+      "link": "https://arxiv.org/pdf/2608.12957v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:self distillation",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "Instance-Level Adaptive Self-Distillation Policy Optimization where model learns from itself",
+      "llm_evidence_cn": "实例级自适应自蒸馏策略优化，模型从自身蒸馏中学习",
+      "llm_evidence": "实例级自适应自蒸馏策略优化，模型从自身蒸馏中学习",
+      "canonical_evidence": "实例级自适应自蒸馏策略优化，模型从自身蒸馏中学习",
+      "llm_tldr_en": "I-SDPO introduces capability-dependent self-distillation for GRPO-style policy optimization, routing per instance to balance reward learning and teacher imitation.",
+      "llm_tldr_cn": "本文提出I-SDPO，一种面向GRPO风格策略优化的能力依赖型自蒸馏方法，按实例粒度进行路由，平衡奖励学习与教师模仿之间的关系。",
+      "llm_tldr": "本文提出I-SDPO，一种面向GRPO风格策略优化的能力依赖型自蒸馏方法，按实例粒度进行路由，平衡奖励学习与教师模仿之间的关系。",
+      "llm_tags": [
+        "query:self-distillation"
+      ],
+      "matched_query_tag": "query:self-distillation",
+      "matched_query_text": "self distillation methods where models learn from themselves",
+      "matched_requirement_id": "req-23",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.13040v1",
+      "source": "arxiv",
+      "title": "Latent On-Policy Self-Distillation",
+      "abstract": "Enabling agents to learn from experience and internalize it into their policy has become a central problem in self-evolving AI. On-policy self-distillation (OPSD) offers an effective pathway by using a privileged self-teacher to provide dense supervision on the student's own trajectories; however, existing methods still rely heavily on designer-specified privileged artifacts (e.g., answers, feedback, skills, or trajectories), limiting the end-to-end learnability and scalability required for continual self-improvement. In this work, we introduce Latent On-Policy Self-Distillation (LOPD), which, rather than proposing another hand-crafted OPSD variant with a newly prescribed form of privileged context, makes the teacher's privileged context itself learnable end-to-end from experience. Technically, LOPD retrieves relevant experiences and composes them into continuous latent tokens that condition a self-teacher, while the student generates trajectories from the task and interaction history and receives dense token-level supervision at every visited prefix. We further introduce a privileged-margin objective to stabilize and regulate the learning of latent context. Empirically, LOPD demonstrates (I) strong performance, outperforming RLVR and representative OPSD methods including OPSD, SDPO, and Skill-SD across both agentic tool use and code generation; and (II) high learning efficiency, surpassing GRPO and Skill-SD with less than 30% of their rollout budget. Ablation studies further provide direct evidence that making privileged context learnable is necessary for realizing these gains. Together, these results position LOPD as a step toward a more scalable and self-directed paradigm for agent evolution.",
+      "authors": [
+        "Guibin Zhang",
+        "Jiayang Lyu",
+        "Ran Sun",
+        "Xinlei Yu",
+        "Haoyu Zhao",
+        "Qibing Ren",
+        "Shuicheng Yan"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG",
+        "cs.CL"
+      ],
+      "published": "2026-08-13T10:05:51+00:00",
+      "link": "https://arxiv.org/pdf/2608.13040v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "keyword:self distillation",
+        "query:MAS",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "Latent on-policy self-distillation makes teacher context learnable",
+      "llm_evidence_cn": "提出潜在在线自蒸馏，使教师特权上下文可端到端学习",
+      "llm_evidence": "提出潜在在线自蒸馏，使教师特权上下文可端到端学习",
+      "canonical_evidence": "提出潜在在线自蒸馏，使教师特权上下文可端到端学习",
+      "llm_tldr_en": "LOPD introduces a learnable latent privileged context for on-policy self-distillation, removing the need for hand-crafted teacher artifacts in self-evolving agents.",
+      "llm_tldr_cn": "本文提出Latent On-Policy Self-Distillation方法，核心创新在于将教师的特权上下文由人工设计改为端到端从经验中学习，使自演化智能体摆脱对外部标注或技能的依赖，从而显著提升自蒸馏方法的可扩展性与通用性。",
+      "llm_tldr": "本文提出Latent On-Policy Self-Distillation方法，核心创新在于将教师的特权上下文由人工设计改为端到端从经验中学习，使自演化智能体摆脱对外部标注或技能的依赖，从而显著提升自蒸馏方法的可扩展性与通用性。",
+      "llm_tags": [
+        "query:self-distillation:composite"
+      ],
+      "matched_query_tag": "query:self-distillation:composite",
+      "matched_query_text": "Papers central to 自蒸馏相关论文检索, especially work that connects or combines: self-distillation neural network; knowledge distillation model compression; self-supervised representation learning; self distillation methods where models learn from themselves.",
+      "matched_requirement_id": "req-composite-self-distillation",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.14945v1",
+      "source": "arxiv",
+      "title": "Trust Is Not Enough: Influence Calibration for On-Policy Self-Distillation in Agentic RL",
+      "abstract": "On-policy self-distillation (OPSD) gives language agents dense token-level supervision from a privileged self-teacher on the policy's own trajectories. Existing methods allocate this supervision mainly by teacher trust, but trust does not reveal whether emphasizing a token supports the current policy objective. We call this the trust-utility mismatch and introduce Influence Calibration for Self-Distillation (ICSD). For each supervised token, ICSD measures the first-order response of its importance-weighted RL surrogate contribution to a teacher-directed output perturbation. Batch-adaptive calibration converts this non-stationary signal into a bounded allocation weight while preserving the original auxiliary-loss mass within each action turn. These detached weights affect only the distillation loss and require no additional model pass. Across ALFWorld, WebShop, and Search-QA, ICSD improves all matched aggregate metrics over trust-only allocation under Group Relative Policy Optimization (GRPO) and Group-in-Group Policy Optimization (GiGPO), across two model families spanning 1.5B to 7B. At 7B, it reaches 96.1% ALFWorld success and a WebShop score of 93.1. Frozen-batch analyses show that ICSD reduces teacher-supported mass assigned to objective-opposed tokens from 60.1% to 37.8% and raises cosine compatibility with the RL gradient by 0.192. A companion repository is avail- able at https://github.com/lanqz7766/Influence-Calibration-for-On-Policy-Self-Distillation-in-Agentic-RL.",
+      "authors": [
+        "Qizhen Lan",
+        "Xi Xiao",
+        "Xiangchen Guan",
+        "Mengchen Fan",
+        "Moule Lin",
+        "Jung Im Choi",
+        "Lijing Zhu"
+      ],
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CL"
+      ],
+      "published": "2026-08-14T23:56:38+00:00",
+      "link": "https://arxiv.org/pdf/2608.14945v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:self distillation",
+        "query:MAS",
+        "query:RL",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "on-policy self-distillation in agentic RL with influence calibration",
+      "llm_evidence_cn": "在智能体强化学习中提出基于影响校准的在线自蒸馏方法",
+      "llm_evidence": "在智能体强化学习中提出基于影响校准的在线自蒸馏方法",
+      "canonical_evidence": "在智能体强化学习中提出基于影响校准的在线自蒸馏方法",
+      "llm_tldr_en": "This paper identifies a trust-utility mismatch in on-policy self-distillation for language agents and proposes Influence Calibration for Self-Distillation (ICSD), which uses first-order RL surrogate response to allocate token-level teacher supervision more effectively.",
+      "llm_tldr_cn": "本文揭示了在面向语言智能体的在线自蒸馏中，仅依据教师置信度分配监督信号会导致效用错配的问题，并提出影响校准自蒸馏方法，通过一阶强化学习替代函数响应来衡量每个被监督标记对当前策略目标的贡献，从而将非平稳的影响信号转化为有界的批自适应分配权重，同时保留原有辅助损失总量。该方法在多个智能体强化学习基准上验证了有效性，表明影响校准显著优于单纯依赖信任度的基线。",
+      "llm_tldr": "本文揭示了在面向语言智能体的在线自蒸馏中，仅依据教师置信度分配监督信号会导致效用错配的问题，并提出影响校准自蒸馏方法，通过一阶强化学习替代函数响应来衡量每个被监督标记对当前策略目标的贡献，从而将非平稳的影响信号转化为有界的批自适应分配权重，同时保留原有辅助损失总量。该方法在多个智能体强化学习基准上验证了有效性，表明影响校准显著优于单纯依赖信任度的基线。",
+      "llm_tags": [
+        "query:self-distillation"
+      ],
+      "matched_query_tag": "query:self-distillation",
+      "matched_query_text": "self distillation methods where models learn from themselves",
+      "matched_requirement_id": "req-23",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.15146v1",
+      "source": "arxiv",
+      "title": "PureTD: Reinforcement Learning for Backgammon Money Games with No Evaluation-time Search",
+      "abstract": "We revisit Tesauro's TD-Gammon for backgammon money games in the setting of no evaluation-time search. Both checker play and cube action (use of the doubling cube) are learned from scratch via self-play reinforcement learning (RL), with minimal hand-coded logic and no expert features. In this setting, we demonstrate that pure self-play RL suffices to train models that reach near-state-of-the-art playing strength. Specifically, for cubeful money games, our search-free model evaluates faster and is substantially stronger than the open-source engines GNU Backgammon and Open Sage running a one-move (1-ply) look-ahead search.",
+      "authors": [
+        "Alexander L. Strehl"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG"
+      ],
+      "published": "2026-08-15T09:46:03+00:00",
+      "link": "https://arxiv.org/pdf/2608.15146v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "self-play reinforcement learning for backgammon game AI",
+      "llm_evidence_cn": "自博弈强化学习训练西洋双陆棋游戏AI",
+      "llm_evidence": "自博弈强化学习训练西洋双陆棋游戏AI",
+      "canonical_evidence": "自博弈强化学习训练西洋双陆棋游戏AI",
+      "llm_tldr_en": "PureTD revisits TD-Gammon and shows that pure self-play reinforcement learning, without evaluation-time search, can train near-state-of-the-art backgammon money-game agents.",
+      "llm_tldr_cn": "PureTD重访TD-Gammon,证明在无评估期搜索的设定下,纯自博弈强化学习即可训练出接近最先进水平的西洋双陆棋(含加倍立方)博弈智能体。",
+      "llm_tldr": "PureTD重访TD-Gammon,证明在无评估期搜索的设定下,纯自博弈强化学习即可训练出接近最先进水平的西洋双陆棋(含加倍立方)博弈智能体。",
+      "llm_tags": [
+        "query:game-ai"
+      ],
+      "matched_query_tag": "query:game-ai",
+      "matched_query_text": "game AI reinforcement learning approaches",
+      "matched_requirement_id": "req-18",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.15339v1",
+      "source": "arxiv",
+      "title": "Learning Sequential Mobility Choice: A Review of Route and Activity Choice through Inverse Reinforcement and Imitation Learning",
+      "abstract": "Route and activity choice are connected levels of a common sequential mobility decision problem: activity choice determines what people do, where, and when, while route choice governs how they move between activities. This review develops a unified framework connecting transportation choice modeling with inverse reinforcement learning (IRL) and imitation learning (IL). Under explicit assumptions, recursive logit, logit dynamic discrete choice, and maximum-entropy IRL share a soft Bellman representation, while trajectory occupancies and network flows satisfy related conservation laws. However, utility, reward, policy, occupancy, constraints, and observation errors remain different estimands with different behavioral and counterfactual interpretations. We review constrained and inverse-constrained learning, occupancy-ratio and DICE methods, incomplete and mixed-quality demonstrations, graph and sequence learning, transfer, data fusion, multi-agent choice, and large language models. Our central message is that machine learning adds the greatest value when embedded within a behaviorally disciplined framework: exact transitions enforce feasibility, structured rewards preserve interpretable trade-offs, observation models address heterogeneous data sources, and network or equilibrium solvers produce coherent system outcomes. Such hybrid models can improve scalability and prediction without sacrificing behavioral identification or policy relevance.",
+      "authors": [
+        "Tien Mai"
+      ],
+      "primary_category": "econ.EM",
+      "categories": [
+        "econ.EM"
+      ],
+      "published": "2026-08-15T17:45:20+00:00",
+      "link": "https://arxiv.org/pdf/2608.15339v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "review of inverse reinforcement learning and imitation learning",
+      "llm_evidence_cn": "综述逆向强化学习与模仿学习",
+      "llm_evidence": "综述逆向强化学习与模仿学习",
+      "canonical_evidence": "综述逆向强化学习与模仿学习",
+      "llm_tldr_en": "This review unifies route and activity choice under inverse reinforcement learning and imitation learning, showing recursive logit, dynamic discrete choice, and max-ent IRL share a soft Bellman representation.",
+      "llm_tldr_cn": "本文综述了路径与活动选择建模与逆向强化学习、模仿学习的统一框架，指出递归logit、动态离散选择与最大熵IRL共享软贝尔曼表示。",
+      "llm_tldr": "本文综述了路径与活动选择建模与逆向强化学习、模仿学习的统一框架，指出递归logit、动态离散选择与最大熵IRL共享软贝尔曼表示。",
+      "llm_tags": [
+        "query:rl"
+      ],
+      "matched_query_tag": "query:rl",
+      "matched_query_text": "reinforcement learning theory and algorithms",
+      "matched_requirement_id": "req-1",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.16072v1",
+      "source": "arxiv",
+      "title": "Learn What's Left, Not What's Mastered: Saturation Aware Advantage Reweighting for Multi-Reward Policy Optimization",
+      "abstract": "Reinforcement learning (RL) with group-relative advantages has become the de facto standard for post-training language model reasoners. However, when optimizing multiple reward objectives, existing methods typically scalarize the reward vector with a fixed weighted sum before group-wise standardization. We show that this design leads to two fundamental problems: rollouts with distinct reward profiles can receive identical advantages, and all objectives are optimized with fixed relative weights regardless of their current level of saturation. As a result, training continues to allocate gradient budget to already-solved objectives instead of focusing on those with greater remaining headroom. We introduce \\textbf{Saturation Aware Advantage Reweighting for Multi-Reward Policy Optimization} (SA-MRPO), which standardizes each reward objective independently and adaptively discounts its contribution according to a batch-level estimate of objective saturation. This dynamically reallocates optimization effort toward under-optimized objectives while empirically maintaining performance on those that are already well satisfied. We further show that saturation-aware reweighting can reverse the sign of an update, rather than merely rescale its magnitude. Across mathematical reasoning with two- and three-objective reward combinations, SA-MRPO improves the harder correctness objective over GDPO in 12 of 15 benchmark comparisons, with gains of up to $5\\%$ on AIME24. On adaptive reasoning it improves accuracy on all five benchmarks, by $3.8\\%$ on average and up to $9.2 \\%$ on AMC23, and on coding benchmarks it improves pass rate by up to $2.3\\%$, while in all settings maintaining the easier objectives near their already satisfied levels.",
+      "authors": [
+        "Yixuan Wang",
+        "Yifei Chen",
+        "Haichao Zhang",
+        "Haozheng Luo",
+        "Xander Wu",
+        "Jie Ni",
+        "Yun Fu",
+        "Nuno Vasconcelos",
+        "Yijiang Li"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG",
+        "cs.AI"
+      ],
+      "published": "2026-08-17T04:07:50+00:00",
+      "link": "https://arxiv.org/pdf/2608.16072v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:self distillation",
+        "query:MAS",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "RL policy optimization for language model post-training",
+      "llm_evidence_cn": "面向语言模型后训练的强化学习策略优化",
+      "llm_evidence": "面向语言模型后训练的强化学习策略优化",
+      "canonical_evidence": "面向语言模型后训练的强化学习策略优化",
+      "llm_tldr_en": "Introduces saturation-aware advantage reweighting for multi-reward RL post-training of language models, fixing fixed-weight scalarization issues so optimization focuses on unsolved objectives.",
+      "llm_tldr_cn": "针对多奖励语言模型后训练中固定加权和标量化造成已收敛目标持续占用训练预算的问题，提出饱和感知优势重加权方法，动态将优化资源集中于尚有改进空间的目标，从而在多目标语言模型推理强化学习场景中显著提升整体策略优化效率与均衡性。",
+      "llm_tldr": "针对多奖励语言模型后训练中固定加权和标量化造成已收敛目标持续占用训练预算的问题，提出饱和感知优势重加权方法，动态将优化资源集中于尚有改进空间的目标，从而在多目标语言模型推理强化学习场景中显著提升整体策略优化效率与均衡性。",
+      "llm_tags": [
+        "query:rl:composite"
+      ],
+      "matched_query_tag": "query:rl:composite",
+      "matched_query_text": "Papers central to 强化学习相关论文检索, especially work that connects or combines: reinforcement learning theory and algorithms; 强化学习研究现状与前沿进展; reinforcement learning algorithm design and theoretical analysis; deep reinforcement learning applications in complex environments.",
+      "matched_requirement_id": "req-composite-rl",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.16798v1",
+      "source": "arxiv",
+      "title": "ClawGym II: Exploring Black-Box RL on Agent Harness",
+      "abstract": "Agent harnesses have substantially improved performance on long-horizon tasks by coordinating agent interactions with the environment. However, reinforcement learning through complex harnesses remains largely unexplored, as scaling such training to long-horizon agent tasks introduces fundamental challenges. In this work, we present a unified black-box RL framework for stable and scalable optimization of general agents through complex harnesses. Concretely, we first build a sandbox-based execution infrastructure that isolates task environments and harnesses within temporary sandboxes for large-scale concurrent rollouts. We then decouple policy optimization from opaque harness execution and place a serving proxy at the model boundary to capture model calls. To reconstruct multi-turn trajectories and improve training efficiency, we organize the captured calls into prefix trees and further adapt both critic-based PPO and critic-free GRPO to optimize over the recovered tree structure. Meanwhile, we maintain training-inference consistency throughout the optimization process. Finally, we introduce mix-harness training, allowing a single model to be jointly optimized by heterogeneous harnesses. With Qwen3-30A3B, black-box RL improves Pass@1 on ClawGym-Bench by 9.98 and 14.81 points through OpenClaw and Claude Code, respectively, while remaining stable over 200-400 optimization steps. Moreover, the framework yields consistent gains on more challenging tasks such as JobBench and OfficeQA. Overall, our framework enables effective, stable, and scalable optimization of general agents through black-box harnesses, supporting unified training across heterogeneous execution systems.",
+      "authors": [
+        "Huatong Song",
+        "Fei Bai",
+        "Ming Yang",
+        "Renyuan Li",
+        "Jia Deng",
+        "Jujie He",
+        "Zhange Zhang",
+        "Daixuan Cheng",
+        "Yan Xing",
+        "Qi Yun",
+        "Xuxing Chen",
+        "Danyang Li",
+        "Feng Chang",
+        "Chuan Hao",
+        "Ran Tao",
+        "Jian Yang",
+        "Bryan Dai",
+        "Wayne Xin Zhao",
+        "Mingjie Tang",
+        "Ji-Rong Wen"
+      ],
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL",
+        "cs.AI",
+        "cs.LG"
+      ],
+      "published": "2026-08-17T16:53:03+00:00",
+      "link": "https://arxiv.org/pdf/2608.16798v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "black-box RL framework for training general agents through complex harnesses",
+      "llm_evidence_cn": "面向智能体的黑盒强化学习训练框架",
+      "llm_evidence": "面向智能体的黑盒强化学习训练框架",
+      "canonical_evidence": "面向智能体的黑盒强化学习训练框架",
+      "llm_tldr_en": "Proposes a unified black-box RL framework that enables stable and scalable reinforcement learning training of general agents operating within complex execution harnesses.",
+      "llm_tldr_cn": "提出统一的黑盒强化学习框架，通过沙盒化基础设施与服务代理解耦策略优化与框架执行，实现对复杂智能体框架的稳定可扩展训练。",
+      "llm_tldr": "提出统一的黑盒强化学习框架，通过沙盒化基础设施与服务代理解耦策略优化与框架执行，实现对复杂智能体框架的稳定可扩展训练。",
+      "llm_tags": [
+        "query:rl"
+      ],
+      "matched_query_tag": "query:rl",
+      "matched_query_text": "reinforcement learning theory and algorithms",
+      "matched_requirement_id": "req-1",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.18271v1",
+      "source": "arxiv",
+      "title": "Rethinking Privileged Information in On-Policy Self-Distillation",
+      "abstract": "On-policy self-distillation (OPSD) trains a student on its own responses using token-level supervision from the same model conditioned on privileged reference information. We investigate whether performance gains from OPSD show that the student learned the information in the reference or instead reflect recovery of reasoning behavior already present in the base model. We perform OPSD experiments on science and mathematics datasets using Qwen3 models ranging from 1.7B to 8B. Our analysis framework separates the supervision induced by the reference from the supervision provided by the teacher without the reference and measures how each aligns with changes in the student's predictions. The correct reference does not provide a consistent performance benefit across teacher generation modes, model sizes, and training datasets. Students can improve without the correct reference, and a solution from another problem can outperform the correct solution on several mathematical reasoning benchmarks. The student's predictions align more strongly with the base model's thinking behavior than with the supervision induced by the reference, but controls constructed from other problems reproduce much of both alignments. Moreover, stronger alignment attributable to the correct reference does not reliably coincide with a greater performance benefit from the reference. Performance gains and distributional alignment alone therefore cannot determine how privileged reference information contributes to student learning in OPSD.",
+      "authors": [
+        "Samyak Shrestha",
+        "Alexander Tessier"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG"
+      ],
+      "published": "2026-08-18T19:42:16+00:00",
+      "link": "https://arxiv.org/pdf/2608.18271v1",
+      "tags": [
+        "keyword:self distillation",
+        "query:RL",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "On-policy self-distillation student learns from itself",
+      "llm_evidence_cn": "策略内自蒸馏中学生模型从自身学习",
+      "llm_evidence": "策略内自蒸馏中学生模型从自身学习",
+      "canonical_evidence": "策略内自蒸馏中学生模型从自身学习",
+      "llm_tldr_en": "Investigates whether on-policy self-distillation gains come from learning new information or recovering base-model reasoning, finding the latter dominates.",
+      "llm_tldr_cn": "研究策略内自蒸馏中特权参考信息对学生模型性能提升的实际来源，通过在Qwen3多规模模型上的系统实验分离参考信号与教师信号的贡献，揭示自蒸馏收益主要来自恢复基础模型已有推理行为而非真正习得新信息，这对自蒸馏方法的理解和设计具有重要指导意义。",
+      "llm_tldr": "研究策略内自蒸馏中特权参考信息对学生模型性能提升的实际来源，通过在Qwen3多规模模型上的系统实验分离参考信号与教师信号的贡献，揭示自蒸馏收益主要来自恢复基础模型已有推理行为而非真正习得新信息，这对自蒸馏方法的理解和设计具有重要指导意义。",
+      "llm_tags": [
+        "query:self-distillation"
+      ],
+      "matched_query_tag": "query:self-distillation",
+      "matched_query_text": "self distillation methods where models learn from themselves",
+      "matched_requirement_id": "req-23",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.18682v1",
+      "source": "arxiv",
+      "title": "RTPO: Reverse-Turn Policy Optimization for Stabilizing Agentic RL Training",
+      "abstract": "Training multi-turn agentic workflows with reinforcement learning (RL) enables large language models to perform complex reasoning, use external tools, and conduct iterative search beyond single-turn settings. Yet multi-turn RL training remains highly unstable, often causing severe performance degradation as the number of turns increases. Through theoretical analysis, we identify three tightly coupled sources of instability: rollout-training context mismatch, weak turn-level credit assignment under sparse terminal rewards, and asynchronous policy drift when short and long trajectories are optimized under different policy versions. We show that these issues share a common structural origin in flattened trajectory optimization and address them through a unified reverse-turn formulation. We propose Reverse-Turn Policy Optimization (RTPO), which organizes multi-turn rollouts as sparse reverse trees and performs turn-level policy updates in temporal reverse order, aligning each decision with its downstream continuation. RTPO enables causally consistent turn-level credit assignment and on-policy continuation to control asynchronous drift. We provide theoretical guarantees showing that RTPO eliminates context mismatch and asynchronous drift under the proposed turn-level formulation, reduces credit bias, and converges to recursive optimality. Experiments on multi-turn agentic RL benchmarks show that RTPO improves upon trajectory- and turn-level baselines by 21.50% and 10.76%, respectively, highlighting its potential to support more stable training for tool-using agents.",
+      "authors": [
+        "Yugu Li",
+        "Jimmy Cao",
+        "Jianglin Qiao",
+        "Siyi Hu"
+      ],
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI"
+      ],
+      "published": "2026-08-19T08:33:01+00:00",
+      "link": "https://arxiv.org/pdf/2608.18682v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "theoretical analysis and algorithm design for stabilizing RL training in multi-turn agentic settings",
+      "llm_evidence_cn": "强化学习训练的理论分析与算法设计，针对多轮智能体场景",
+      "llm_evidence": "强化学习训练的理论分析与算法设计，针对多轮智能体场景",
+      "canonical_evidence": "强化学习训练的理论分析与算法设计，针对多轮智能体场景",
+      "llm_tldr_en": "The paper theoretically diagnoses and stabilizes multi-turn agentic RL training via Reverse-Turn Policy Optimization.",
+      "llm_tldr_cn": "本文从理论上系统分析多轮智能体强化学习训练不稳定的根源，并提出反向轮次策略优化方法以稳定多轮LLM智能体的RL训练。",
+      "llm_tldr": "本文从理论上系统分析多轮智能体强化学习训练不稳定的根源，并提出反向轮次策略优化方法以稳定多轮LLM智能体的RL训练。",
+      "llm_tags": [
+        "query:rl"
+      ],
+      "matched_query_tag": "query:rl",
+      "matched_query_text": "reinforcement learning algorithm design and theoretical analysis",
+      "matched_requirement_id": "req-3",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.19197v1",
+      "source": "arxiv",
+      "title": "SPADE: Self-Play in Adaptive Synthetic Executable Environments",
+      "abstract": "Continuous self-improvement requires an ever-expanding pool of self-generated, diverse, adaptive goals. For language agents, existing training environment pools (hand-curated, statically synthesized, or frozen-verifier) keep the goal distribution fixed as the learner scales. We introduce SPADE (Self-Play in Adaptive Synthetic Executable Environments), a self-play RL framework in which a single LLM plays two roles: an Environment Designer that writes complete, long-horizon training environments as executable code with an OpenAI Gym-style reset()/step() interface, and a Reasoning Agent that learns to act in them. Each is a stateful, multi-turn environment (state transitions, reward functions, and verification code), so one interface spans reasoning problems and multi-step agentic tool use. The Reasoning Agent's regret is estimated using the gap between its reward with and without privileged hints; in optimizing this regret signal the Environment Designer learns to target environments at the edge of the agent's capabilities while keeping them feasible. Through extensive experimentation, we find several components critical to success: grounding the Environment Designer on documents sampled from a large pretraining corpus, and giving it an accumulated environment memory. Scaling to 30B-parameter models, SPADE improves over the strongest fixed-environment baseline by +5.3 on average across eight held-out math, science, code, and reasoning benchmarks, and lifts the tool-use setting by +5.7 on BFCL-v4 multi-turn and +13.9 on ACEBench-Agent; on the games setting, the margin over the strongest baseline grows with model scale. By making environment design itself a learnable component, SPADE takes a concrete step toward open-ended self-improvement.",
+      "authors": [
+        "Bo Liu",
+        "Simon Yu",
+        "Yiding Jiang",
+        "Ao Qu",
+        "Andrew Zhao",
+        "Zichen Liu",
+        "Junsu Kim",
+        "Zijian Zhou",
+        "Seungone Kim",
+        "Tongzheng Ren",
+        "Mickel Liu",
+        "Hanfei Yu",
+        "Zhaorun Chen",
+        "Weiyan Shi",
+        "Paul Pu Liang",
+        "Luke Zettlemoyer",
+        "Yejin Choi",
+        "Natasha Jaques"
+      ],
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL",
+        "cs.AI"
+      ],
+      "published": "2026-08-19T17:58:56+00:00",
+      "link": "https://arxiv.org/pdf/2608.19197v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "self-play RL framework with Environment Designer and Reasoning Agent using Gym-style interfaces",
+      "llm_evidence_cn": "自博弈强化学习框架，环境设计器与推理智能体采用 Gym 接口",
+      "llm_evidence": "自博弈强化学习框架，环境设计器与推理智能体采用 Gym 接口",
+      "canonical_evidence": "自博弈强化学习框架，环境设计器与推理智能体采用 Gym 接口",
+      "llm_tldr_en": "SPADE is a self-play RL framework where one LLM alternately designs executable Gym-style training environments and acts as a reasoning agent, enabling adaptive continual self-improvement for language agents.",
+      "llm_tldr_cn": "SPADE 提出自博弈强化学习框架，让单一大语言模型同时充当环境设计器和推理智能体，通过生成可执行训练环境实现语言智能体持续自适应自我提升，对长视野推理与可扩展训练环境构建具有重要意义。",
+      "llm_tldr": "SPADE 提出自博弈强化学习框架，让单一大语言模型同时充当环境设计器和推理智能体，通过生成可执行训练环境实现语言智能体持续自适应自我提升，对长视野推理与可扩展训练环境构建具有重要意义。",
+      "llm_tags": [
+        "query:rl"
+      ],
+      "matched_query_tag": "query:rl",
+      "matched_query_text": "reinforcement learning theory and algorithms",
+      "matched_requirement_id": "req-1",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.19842v1",
+      "source": "arxiv",
+      "title": "SAPO: Single-Rollout Autoregressive Policy Optimization for Agentic Reinforcement Learning",
+      "abstract": "Agentic reinforcement learning (RL) has become a critical stage in the post-training of large language models. Existing critic-free, group-relative methods estimate policy advantages from multiple rollouts, avoiding the substantial memory overhead of conventional proximal policy optimization (PPO) and achieving strong performance on long-horizon interactive tasks. Despite their success, recent studies revealed three limitations: (1) Lack explicit value generalization and effective temporal credit assignment; (2) Suffer from potential advantage collapse in long-horizon complex tasks; (3) Require a costly trade-off between sampling budget and policy performance. In this work, we propose Single-rollout Autoregressive Policy Optimization (SAPO), a low-memory and compute-efficient framework in which the policy and value functions share a single autoregressive backbone. SAPO exploits the autoregressive structure of LLMs to produce policy and value predictions at distinct causal boundaries with shared parameters, while independently optimizing the PPO objectives and auxiliary on-policy SARSA objectives. To robustly estimate the contribution of each turn, we further introduce a trajectory-level generalized advantage estimator that combines lambda-returns with batch normalization. Experiments across ALFWorld and WebShop with Qwen2.5-1.5B/7B show that SAPO trains stably and outperforms PPO and GRPO by mean +15.1 and +12.1 percentage points, respectively, while eliminating the memory cost of a separate critic model and reducing per-iteration runtime by 33.2% over PPO.",
+      "authors": [
+        "Dayang Liang",
+        "Lang Feng",
+        "Bo An",
+        "Yunlong Liu"
+      ],
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI"
+      ],
+      "published": "2026-08-20T09:43:47+00:00",
+      "link": "https://arxiv.org/pdf/2608.19842v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "keyword:self distillation",
+        "query:MAS",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "new reinforcement learning algorithm (SAPO) for policy optimization in long-horizon agentic tasks",
+      "llm_evidence_cn": "针对长时序智能体任务的策略优化新强化学习算法SAPO",
+      "llm_evidence": "针对长时序智能体任务的策略优化新强化学习算法SAPO",
+      "canonical_evidence": "针对长时序智能体任务的策略优化新强化学习算法SAPO",
+      "llm_tldr_en": "SAPO introduces a single-rollout autoregressive policy optimization algorithm that improves long-horizon agentic reinforcement learning by addressing advantage collapse and reducing sampling cost.",
+      "llm_tldr_cn": "SAPO提出了一种单轨迹自回归策略优化算法，通过缓解优势塌缩并降低采样成本来提升长时序智能体强化学习的性能。",
+      "llm_tldr": "SAPO提出了一种单轨迹自回归策略优化算法，通过缓解优势塌缩并降低采样成本来提升长时序智能体强化学习的性能。",
+      "llm_tags": [
+        "query:rl"
+      ],
+      "matched_query_tag": "query:rl",
+      "matched_query_text": "reinforcement learning algorithm design and theoretical analysis",
+      "matched_requirement_id": "req-3",
+      "selection_source": "fresh_fetch"
+    },
+    {
+      "id": "2608.20016v1",
+      "source": "arxiv",
+      "title": "Emergence of cooperation: A reputation-modulated reinforcement learning",
+      "abstract": "Reputation is widely recognized as a key mechanism for sustaining cooperation. However, most existing game-theoretic models treat reputation primarily as an external factor that modulates payoffs, interaction structures, or strategy update rules. In many social contexts, though, reputation operates primarily as information -- it shapes how individuals interpret their own experiences and assess the behavior of others. To bridge this gap, we propose a spatial prisoner's dilemma game grounded in the reinforcement learning paradigm, in which agents equipped with Q-learning integrate both individual and social information via a locally defined reputation metric to guide their decisions. Our results reveal that reputation-modulated learning significantly promotes the emergence of cooperative behavior, and we observe a discontinuous phase transition from full cooperation to full defection as the temptation increases. Cooperation spreads through the nucleation of cooperative clusters, whereas the disintegration of these clusters drives the system into an absorbing state of complete defection. Overall, this study demonstrates that reputation facilitates cooperation not only by providing direct incentives but also by reshaping the social information landscape that agents rely on for learning and adaptation.",
+      "authors": [
+        "Chenyang Zhao",
+        "Jiqiang Zhang",
+        "Li Chen",
+        "Yong Zou"
+      ],
+      "primary_category": "physics.soc-ph",
+      "categories": [
+        "physics.soc-ph",
+        "cond-mat.dis-nn",
+        "nlin.AO",
+        "q-bio.PE",
+        "stat.ML"
+      ],
+      "published": "2026-08-20T13:27:41+00:00",
+      "link": "https://arxiv.org/pdf/2608.20016v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 9.0,
+      "llm_evidence_en": "Multi-agent Q-learning in spatial prisoner's dilemma with reputation-modulated cooperation",
+      "llm_evidence_cn": "多智能体Q学习在空间囚徒困境中以声誉调制促进合作涌现",
+      "llm_evidence": "多智能体Q学习在空间囚徒困境中以声誉调制促进合作涌现",
+      "canonical_evidence": "多智能体Q学习在空间囚徒困境中以声誉调制促进合作涌现",
+      "llm_tldr_en": "This paper studies how cooperation emerges in spatial prisoner's dilemma games through a reputation-modulated reinforcement learning framework where Q-learning agents integrate individual and social information via local reputation metrics.",
+      "llm_tldr_cn": "本文提出基于声誉调制的强化学习框架，在空间囚徒困境博弈中让配备Q学习的智能体通过局部声誉度量整合个体与社会信息，揭示声誉机制如何显著促进合作涌现，深化对多智能体合作学习动力学的理解。",
+      "llm_tldr": "本文提出基于声誉调制的强化学习框架，在空间囚徒困境博弈中让配备Q学习的智能体通过局部声誉度量整合个体与社会信息，揭示声誉机制如何显著促进合作涌现，深化对多智能体合作学习动力学的理解。",
+      "llm_tags": [
+        "query:mas"
+      ],
+      "matched_query_tag": "query:mas",
+      "matched_query_text": "multi-agent reinforcement learning",
+      "matched_requirement_id": "req-9",
+      "selection_source": "fresh_fetch"
+    }
+  ],
+  "quick_skim": [
+    {
+      "id": "2608.12917v1",
+      "source": "arxiv",
+      "title": "Towards Socially Compliant Navigation in Deep Reinforcement Learning via Proxemics-Based Reward Modeling",
+      "abstract": "Developing effective robot navigation methods in crowded environments is essential for real-world applications. Although recent deep reinforcement learning (DRL) methods have improved navigation performance in crowded environments, they often focus primarily on task-centric objectives and underrepresent social compliance objectives. In this paper, we introduce a novel proxemics-based reward formulation for DRL social navigation that provides a dense, interpretable social learning signal while maintaining navigation efficiency. Our approach models each human's personal space as a radial Gaussian-mixture field derived from Hall's proxemics theory and computes a robot-centric local cost over the robot's field of view. We integrate the proposed reward into established DRL navigation methods and evaluate it in simulation across multiple crowd scenarios, reward baselines, and crowd densities using both navigation metrics and social metrics. Results show that the proposed reward consistently improves social metrics in simulation while maintaining competitive navigation performance relative to the compared reward models.",
+      "authors": [
+        "Takieddine Soualhi",
+        "Jacques Saraydaryan",
+        "Laetitia Matignon"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG",
+        "cs.RO"
+      ],
+      "published": "2026-08-13T07:59:23+00:00",
+      "link": "https://arxiv.org/pdf/2608.12917v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 8.0,
+      "llm_evidence_en": "Deep reinforcement learning for navigation in crowded environments",
+      "llm_evidence_cn": "深度强化学习应用于拥挤环境导航",
+      "llm_evidence": "深度强化学习应用于拥挤环境导航",
+      "canonical_evidence": "深度强化学习应用于拥挤环境导航",
+      "llm_tldr_en": "Introduces a proxemics-based dense reward formulation for deep reinforcement learning social navigation that encodes personal-space constraints while preserving navigation efficiency.",
+      "llm_tldr_cn": "本文针对深度强化学习社交导航中社会合规目标不足的问题，提出一种基于人际关系距离学的稠密奖励设计，将行人个人空间建模为高斯混合场，使机器人在拥挤环境中既能高效导航又遵守社交规范。",
+      "llm_tldr": "本文针对深度强化学习社交导航中社会合规目标不足的问题，提出一种基于人际关系距离学的稠密奖励设计，将行人个人空间建模为高斯混合场，使机器人在拥挤环境中既能高效导航又遵守社交规范。",
+      "llm_tags": [
+        "query:rl"
+      ],
+      "matched_query_tag": "query:rl",
+      "matched_query_text": "deep reinforcement learning applications in complex environments",
+      "matched_requirement_id": "req-4",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "8plus"
+    },
+    {
+      "id": "2608.13535v1",
+      "source": "arxiv",
+      "title": "Joint Communication-Control Strategy Optimization with Partially Nested Information Structures: The Linear-Quadratic Case",
+      "abstract": "In this paper, we formalize a joint communication-control strategy optimization (JCCO) problem in multi-agent linear systems with quadratic costs, under the common-information-based (CIB) framework from decentralized stochastic control. For computational tractability, we focus on such JCCO problems with partially nested (PN) information structures (ISs). In particular, with a baseline communication protocol that leads to a PN IS, we establish a series of conditions under which the partial nestedness is preserved under the (additional) communication strategies to be optimized, while violating them may cause nonlinearity of the optimal strategies in general, with open-loop communication strategies. We then develop a dynamic-programming-based approach to compute the optimal control strategies of JCCO with open-loop communication strategies, which yields a set of closed-form Riccati Equations. As a byproduct of independent interest, such an approach also offers a way to solve decentralized linear-quadratic control with PN ISs and output feedback, under the CIB framework. Finally, we extend such an approach to JCCOs with closed-loop communication strategies, yielding a more tractable dynamic program than an infinite-dimensional CIB-belief-based one.",
+      "authors": [
+        "Haoyi You",
+        "Kaiqing Zhang"
+      ],
+      "primary_category": "eess.SY",
+      "categories": [
+        "eess.SY",
+        "cs.MA",
+        "math.OC"
+      ],
+      "published": "2026-08-13T17:51:44+00:00",
+      "link": "https://arxiv.org/pdf/2608.13535v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 7.0,
+      "llm_evidence_en": "multi-agent joint communication-control optimization with coordination",
+      "llm_evidence_cn": "多智能体通信控制联合优化",
+      "llm_evidence": "多智能体通信控制联合优化",
+      "canonical_evidence": "多智能体通信控制联合优化",
+      "llm_tldr_en": "The paper formalizes joint communication-control optimization in multi-agent systems under partially nested information structures for linear-quadratic costs.",
+      "llm_tldr_cn": "本文在去中心化随机控制框架下形式化多智能体通信控制联合优化问题，建立保持部分嵌套性的条件，为多智能体协调机制与决策规划提供理论工具。",
+      "llm_tldr": "本文在去中心化随机控制框架下形式化多智能体通信控制联合优化问题，建立保持部分嵌套性的条件，为多智能体协调机制与决策规划提供理论工具。",
+      "llm_tags": [
+        "query:mas"
+      ],
+      "matched_query_tag": "query:mas",
+      "matched_query_text": "agent coordination mechanisms",
+      "matched_requirement_id": "req-7",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "7"
+    },
+    {
+      "id": "2608.12626v1",
+      "source": "arxiv",
+      "title": "LLMs Are Not Good Strategists, Yet Memory-Enhanced Agency Boosts Reasoning",
+      "abstract": "Strategic reasoning in Large Language Models (LLMs) within long-horizon environments is often limited by inconsistent subgoals. In these settings, finite attention resources prevent the model from maintaining strategic coherence over thousands of steps. This limitation leads to strategic drift, where localized decisions fail to sustain a coherent trajectory across reasoning. To address this, we introduce EpicStar, a framework that enables agents to learn memory as policy to tackle long-horizon reasoning. Specifically, the agent maintains a bank of successful past episodes as a heuristic alongside a working memory to track short-term environmental changes. During inference, a dynamic gating mechanism determines whether to execute a retrieved action directly or to perform new reasoning through a contextual fusion of the retrieved episodes and current working memory. Utilizing StarCraft II as the testbed, we evaluated EpicStar against diverse opponent styles. It significantly outperforms baseline methods, achieving higher win rates while consuming an order of magnitude fewer tokens, and it maintains this advantage consistently across difficulty levels and opponent strategies. Our findings provide compelling evidence that structured cross-episode memory is essential for enabling LLM agents to perform robust, long-term strategic execution in dynamic, autonomous settings.",
+      "authors": [
+        "Yi Wu",
+        "Zhimin Hu"
+      ],
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL",
+        "cs.AI",
+        "cs.MA"
+      ],
+      "published": "2026-08-12T22:17:24+00:00",
+      "link": "https://arxiv.org/pdf/2608.12626v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 6.0,
+      "llm_evidence_en": "learns memory as policy for long-horizon reasoning agents, bridging RL and LLM agents",
+      "llm_evidence_cn": "将记忆建模为策略以应对长视野推理，融合强化学习与 LLM 智能体",
+      "llm_evidence": "将记忆建模为策略以应对长视野推理，融合强化学习与 LLM 智能体",
+      "canonical_evidence": "将记忆建模为策略以应对长视野推理，融合强化学习与 LLM 智能体",
+      "llm_tldr_en": "EpicStar enables LLM agents to learn memory as policy with episodic heuristics and a working memory, mitigating strategic drift in long-horizon reasoning tasks.",
+      "llm_tldr_cn": "针对大语言模型在长视野战略任务中的战略漂移问题，本文提出 EpicStar 框架，让智能体把记忆作为策略来学习，结合情景库与工作记忆并使用动态门控机制决定检索或新动作，从而显著提升长视野推理的一致性与表现，对强化学习驱动的智能体策略设计具有方法论启发。",
+      "llm_tldr": "针对大语言模型在长视野战略任务中的战略漂移问题，本文提出 EpicStar 框架，让智能体把记忆作为策略来学习，结合情景库与工作记忆并使用动态门控机制决定检索或新动作，从而显著提升长视野推理的一致性与表现，对强化学习驱动的智能体策略设计具有方法论启发。",
+      "llm_tags": [
+        "query:rl:composite"
+      ],
+      "matched_query_tag": "query:rl:composite",
+      "matched_query_text": "Papers central to 强化学习相关论文检索, especially work that connects or combines: reinforcement learning theory and algorithms; 强化学习研究现状与前沿进展; reinforcement learning algorithm design and theoretical analysis; deep reinforcement learning applications in complex environments.",
+      "matched_requirement_id": "req-composite-rl",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "6"
+    },
+    {
+      "id": "2608.12955v1",
+      "source": "arxiv",
+      "title": "PSPACE-Completeness of Multi-Agent Path Finding for Large Agents",
+      "abstract": "Multi-Agent Path Finding for Large Agents (LA-MAPF) is a geometric variant of MAPF in which agents are modeled as disks and conflicts are determined by physical overlap in the underlying Euclidean workspace. The goal of LA-MAPF is to decide whether there exists a sequence of conflict-free transitions from a start configuration to a goal configuration. Agafonov and Yakovlev proved that LA-MAPF is NP-hard. In this paper, we strengthen their result by proving that LA-MAPF is PSPACE-complete via a polynomial-time reduction from Restricted Sliding Tokens.",
+      "authors": [
+        "Maichi Zhang",
+        "Naoyuki Kamiyama",
+        "Kanae Yoshiwatari"
+      ],
+      "primary_category": "cs.CC",
+      "categories": [
+        "cs.CC"
+      ],
+      "published": "2026-08-13T08:34:03+00:00",
+      "link": "https://arxiv.org/pdf/2608.12955v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:game ai",
+        "query:MAS",
+        "query:game ai"
+      ],
+      "llm_score": 8.0,
+      "llm_evidence_en": "multi-agent path finding planning complexity",
+      "llm_evidence_cn": "多智能体路径规划与复杂度",
+      "llm_evidence": "多智能体路径规划与复杂度",
+      "canonical_evidence": "多智能体路径规划与复杂度",
+      "llm_tldr_en": "Proves that Multi-Agent Path Finding for large disk-shaped agents is PSPACE-complete via a reduction from Restricted Sliding Tokens, strengthening prior NP-hardness.",
+      "llm_tldr_cn": "通过受限滑动令牌问题的多项式归约，证明大尺寸圆盘智能体路径规划问题 LA-MAPF 为 PSPACE-完全，强化了已有 NP-难结果。",
+      "llm_tldr": "通过受限滑动令牌问题的多项式归约，证明大尺寸圆盘智能体路径规划问题 LA-MAPF 为 PSPACE-完全，强化了已有 NP-难结果。",
+      "llm_tags": [
+        "query:mas"
+      ],
+      "matched_query_tag": "query:mas",
+      "matched_query_text": "multi agent decision making and planning approaches",
+      "matched_requirement_id": "req-12",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "8plus"
+    },
+    {
+      "id": "2608.13538v1",
+      "source": "arxiv",
+      "title": "SAEVerbalizer: Generating Explanations for Sparse Autoencoder Features via Representation Verbalization",
+      "abstract": "Sparse autoencoders (SAEs) are proposed to extract numerous features from large language model (LLM) representations, yet explaining these features still relies primarily on external observation. This reliance leads to superficial explanations inferred from observed model behavior and computational inefficiency from collecting such behavioral evidence at scale. We introduce SAEVerbalizer, a framework that injects SAE decoder directions into an LLM's representations and fine-tunes the LLM's downstream layers to generate natural-language explanations of the injected features. Once trained, the resulting verbalizer explains SAE features directly from decoder directions, addressing both limitations. Our experiments show that the learned verbalization capability generalizes to unseen features, transfers across separately trained SAE dictionaries, and, with a lightweight adapter, extends to SAE features from different LLMs. Intervention experiments show that injecting multiple directions yields an explanation combining their meanings, while reversing individual directions produces corresponding meaning shifts.",
+      "authors": [
+        "Weihan Meng",
+        "Hongzhu Guo",
+        "Yi Jing",
+        "Dewen Liu",
+        "Zijun Yao",
+        "Xiaozhi Wang",
+        "Lei Hou",
+        "Juanzi Li"
+      ],
+      "primary_category": "cs.CL",
+      "categories": [
+        "cs.CL"
+      ],
+      "published": "2026-08-13T17:54:11+00:00",
+      "link": "https://arxiv.org/pdf/2608.13538v1",
+      "tags": [
+        "keyword:self distillation",
+        "query:intervention",
+        "query:self distillation"
+      ],
+      "llm_score": 7.0,
+      "llm_evidence_en": "Injects SAE decoder vectors into LLM representations for feature verbalization",
+      "llm_evidence_cn": "将稀疏自编码器解码向量注入LLM表征以生成特征解释",
+      "llm_evidence": "将稀疏自编码器解码向量注入LLM表征以生成特征解释",
+      "canonical_evidence": "将稀疏自编码器解码向量注入LLM表征以生成特征解释",
+      "llm_tldr_en": "SAEVerbalizer injects SAE decoder directions into LLM representations and fine-tunes the model to verbalize them as natural-language feature explanations.",
+      "llm_tldr_cn": "SAEVerbalizer将稀疏自编码器的解码向量注入大语言模型的内部表征中，并通过微调让模型直接以自然语言解释这些特征，避免依赖低效的外部行为观察。",
+      "llm_tldr": "SAEVerbalizer将稀疏自编码器的解码向量注入大语言模型的内部表征中，并通过微调让模型直接以自然语言解释这些特征，避免依赖低效的外部行为观察。",
+      "llm_tags": [
+        "query:intervention"
+      ],
+      "matched_query_tag": "query:intervention",
+      "matched_query_text": "vector based methods for intervening in large language model behavior",
+      "matched_requirement_id": "req-26",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "7"
+    },
+    {
+      "id": "2608.12896v2",
+      "source": "arxiv",
+      "title": "Distance-Based Formation Control with Prescribed Performance for Higher-Order Multi-Agent Systems",
+      "abstract": "We consider distributed distance-based formation control with prescribed transient performance for multi-agent systems modeled by unknown nonlinear dynamics of relative degree greater than one. We introduce a virtual leader whose trajectory is tracked with prescribed transient behavior by a designated subset of agents. The undirected communication graph is either a tree graph or a minimally and infinitesimally rigid graph. In the latter case, we further consider the objective of centroid tracking. In each setting, a distributed and model-free control law is developed, and we establish the satisfaction of the prescribed funnel constraints on the formation and tracking errors, and boundedness of all closed-loop signals. Numerical simulations illustrate the effectiveness of the proposed control laws.",
+      "authors": [
+        "Janina Schaa",
+        "Maria Charitidou",
+        "Dimos V. Dimarogonas",
+        "Thomas Berger"
+      ],
+      "primary_category": "math.OC",
+      "categories": [
+        "math.OC"
+      ],
+      "published": "2026-08-13T07:26:19+00:00",
+      "link": "https://arxiv.org/pdf/2608.12896v2",
+      "tags": [
+        "keyword:MAS",
+        "query:MAS",
+        "query:game ai"
+      ],
+      "llm_score": 6.0,
+      "llm_evidence_en": "multi-agent formation control with prescribed coordination performance",
+      "llm_evidence_cn": "多智能体编队控制与协调机制",
+      "llm_evidence": "多智能体编队控制与协调机制",
+      "canonical_evidence": "多智能体编队控制与协调机制",
+      "llm_tldr_en": "This paper studies distributed distance-based formation control for higher-order nonlinear multi-agent systems, guaranteeing prescribed transient tracking performance via a virtual leader and funnel constraints, with model-free control laws on tree and rigid graphs.",
+      "llm_tldr_cn": "本文研究高阶非线性多智能体系统的分布式距离编队控制，通过虚拟领导者与漏斗约束保证预定的瞬态跟踪性能，在树图与刚体图上设计无模型控制律，并证明形成与跟踪误差的约束满足及闭环信号有界。",
+      "llm_tldr": "本文研究高阶非线性多智能体系统的分布式距离编队控制，通过虚拟领导者与漏斗约束保证预定的瞬态跟踪性能，在树图与刚体图上设计无模型控制律，并证明形成与跟踪误差的约束满足及闭环信号有界。",
+      "llm_tags": [
+        "query:mas"
+      ],
+      "matched_query_tag": "query:mas",
+      "matched_query_text": "agent coordination mechanisms",
+      "matched_requirement_id": "req-7",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "6"
+    },
+    {
+      "id": "2608.13179v1",
+      "source": "arxiv",
+      "title": "Teach the Magnitude, Not the Direction: Verifier-Bounded Credit Assignment for Multi-Turn Multi-step LLM Agents",
+      "abstract": "Reinforcement learning with verifiable rewards (RLVR) offers a verifier-bounded performance ceiling for training multi-turn tool-use agents, yet its trajectory-level credit assignment conflates heterogeneous per-turn outcomes into a single reward signal. On-policy distillation provides dense per-token supervision but is either teacher-bounded or prone to gradient concentration collapse. We introduce $\\textbf{CrEST}$, a hierarchical credit assignment framework that retains RL's verifier-bounded ceiling while incorporating dense token-level signals from a privileged self-teacher. $\\textbf{CrEST}$ resolves credit at two levels: turn-segmented verified advantages address inter-turn dilution, while entropy-gated self-teacher modulation refines intra-turn token contributions. Experiments on BFCL V3 and WildToolBench show that $\\textbf{CrEST}$ consistently outperforms both RL and distillation baselines across two model scales, with the largest gains on long-trajectory and strict session-level metrics. Our work demonstrates that the teacher's role in policy optimization can be reduced from determining update directions to modulating update magnitudes, unlocking dense credit assignment without sacrificing the verifier-bounded ceiling.",
+      "authors": [
+        "Zechuan Wang",
+        "Siyuan Lu",
+        "Hongxuan Zhang",
+        "Linjian Mo",
+        "Chenyi Zhuang",
+        "Leilei Gan"
+      ],
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI"
+      ],
+      "published": "2026-08-13T12:44:37+00:00",
+      "link": "https://arxiv.org/pdf/2608.13179v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "keyword:self distillation",
+        "query:MAS",
+        "query:RL",
+        "query:game ai",
+        "query:self distillation"
+      ],
+      "llm_score": 8.0,
+      "llm_evidence_en": "Reinforcement learning with verifiable rewards and credit assignment for multi-turn agents",
+      "llm_evidence_cn": "面向多轮智能体的可验证奖励强化学习与信用分配",
+      "llm_evidence": "面向多轮智能体的可验证奖励强化学习与信用分配",
+      "canonical_evidence": "面向多轮智能体的可验证奖励强化学习与信用分配",
+      "llm_tldr_en": "This paper introduces CrEST, a hierarchical credit assignment framework for training multi-turn tool-use LLM agents that combines RLVR's verifier-bounded ceiling with dense token-level signals from a privileged self-teacher.",
+      "llm_tldr_cn": "本文提出CrEST，一种分层信用分配框架，用于训练多轮工具调用的大语言模型智能体，结合RLVR的验证器上限与特权自教师的密集词元级监督。",
+      "llm_tldr": "本文提出CrEST，一种分层信用分配框架，用于训练多轮工具调用的大语言模型智能体，结合RLVR的验证器上限与特权自教师的密集词元级监督。",
+      "llm_tags": [
+        "query:rl"
+      ],
+      "matched_query_tag": "query:rl",
+      "matched_query_text": "reinforcement learning theory and algorithms",
+      "matched_requirement_id": "req-1",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "8plus"
+    },
+    {
+      "id": "2608.13755v1",
+      "source": "arxiv",
+      "title": "Best Response Dynamics for Zero-Sum Dynamic Games with Partial-Asymmetric Information",
+      "abstract": "This work studies a class of zero-sum stochastic linear quadratic dynamic games (LQDGs) under partial and asymmetric information. Information asymmetry introduces fundamental challenges related to \\textit{belief representation} and \\textit{theory of mind}, where players must impute belief states and estimates of other players to inform their strategies. Existing work highlights the difficulty of applying dynamic programming-like decomposition approach to these problems. An alternative approach based on \\textit{best response dynamics} is proposed, which provides insights into belief representation and theory of mind challenges. Explicit expressions for each player's best response within the class of pure linear dynamic output feedback control strategies are derived, where the internal state dimension of each control is an integer multiple of the system state dimension. As players iteratively update their best responses, they form increasingly higher-order belief states, leading to infinite-dimensional internal states. However, numerical results reveal that the game's value converges after only a few iterations, suggesting that higher-order belief states provide vanishing benefit. This work further conducts numerical experiments to analyze the impact of asymmetric beliefs, belief orders, relative controllability and observability, and direct feed-through on a linear quadratic pursuit-evasion game's value.",
+      "authors": [
+        "Yuxiang Guan",
+        "Iman Shames",
+        "Tyler H. Summers"
+      ],
+      "primary_category": "math.OC",
+      "categories": [
+        "math.OC"
+      ],
+      "published": "2026-08-13T20:33:29+00:00",
+      "link": "https://arxiv.org/pdf/2608.13755v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 7.0,
+      "llm_evidence_en": "multi-player best response dynamics in zero-sum games with theory of mind",
+      "llm_evidence_cn": "零和博弈中多玩家最佳响应动态与心智理论",
+      "llm_evidence": "零和博弈中多玩家最佳响应动态与心智理论",
+      "canonical_evidence": "零和博弈中多玩家最佳响应动态与心智理论",
+      "llm_tldr_en": "The paper proposes best response dynamics for zero-sum dynamic games with partial and asymmetric information, explicitly computing each player\\'s best response and characterizing theory-of-mind challenges.",
+      "llm_tldr_cn": "本文提出针对部分非对称信息零和动态博弈的最佳响应动力学方法，显式给出各玩家的最佳响应并刻画心智理论难题，为多智能体决策与学习理论分析提供新框架。",
+      "llm_tldr": "本文提出针对部分非对称信息零和动态博弈的最佳响应动力学方法，显式给出各玩家的最佳响应并刻画心智理论难题，为多智能体决策与学习理论分析提供新框架。",
+      "llm_tags": [
+        "query:mas"
+      ],
+      "matched_query_tag": "query:mas",
+      "matched_query_text": "multi-agent decision making",
+      "matched_requirement_id": "req-10",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "7"
+    },
+    {
+      "id": "2608.13476v1",
+      "source": "arxiv",
+      "title": "MARC v1: An Open-Source Multi-Agent Framework for Clinical AI Reasoning and Coordination",
+      "abstract": "We present Multi-Agent Reasoning and Coordination (MARC), an open-source framework that replaces monolithic LLM prompting with deterministic multi-agent orchestration for clinical reasoning. MARC coordinates role-specialized agents for extraction, reasoning, answer generation, and evaluation, with explicit context passing and traceable intermediate outputs, enabling stage-wise failure attribution. We additionally introduce a Decomposer module that generates task-specific agent prompts from a plain-language description, eliminating manual prompt engineering. The framework supports both API-based and local CPU-compatible deployments and is entirely configurable via YAML, without code modifications. MARC is designed to be model-agnostic, interpretable, and accessible to clinical domain experts without programming expertise. The full framework is available at https://github.com/Penn-RAIL/MARC-v1.",
+      "authors": [
+        "Saisha Shetty",
+        "Satvik Tripathi",
+        "Austin Lin",
+        "Colin Zhao",
+        "Theodore Kim",
+        "Don Enwerem",
+        "Jacinta Arnold",
+        "Shahriar Faghani",
+        "Tessa S Cook"
+      ],
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI",
+        "cs.CL"
+      ],
+      "published": "2026-08-13T17:00:08+00:00",
+      "link": "https://arxiv.org/pdf/2608.13476v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:game ai",
+        "query:MAS",
+        "query:game ai"
+      ],
+      "llm_score": 6.0,
+      "llm_evidence_en": "deterministic multi-agent orchestration with role-specialized coordination and context passing",
+      "llm_evidence_cn": "确定性多智能体编排与角色专门化协调",
+      "llm_evidence": "确定性多智能体编排与角色专门化协调",
+      "canonical_evidence": "确定性多智能体编排与角色专门化协调",
+      "llm_tldr_en": "This paper introduces MARC, an open-source multi-agent framework that replaces monolithic LLM prompting with deterministic orchestration of role-specialized agents for extraction, reasoning, answer generation and evaluation in clinical AI.",
+      "llm_tldr_cn": "本文提出开源多智能体框架MARC，用确定性的角色专门化智能体编排取代单体大模型提示，在临床推理中实现抽取、推理、答案生成与评估的协同，并支持阶段化失败归因。",
+      "llm_tldr": "本文提出开源多智能体框架MARC，用确定性的角色专门化智能体编排取代单体大模型提示，在临床推理中实现抽取、推理、答案生成与评估的协同，并支持阶段化失败归因。",
+      "llm_tags": [
+        "query:mas"
+      ],
+      "matched_query_tag": "query:mas",
+      "matched_query_text": "agent coordination mechanisms",
+      "matched_requirement_id": "req-7",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "6"
+    },
+    {
+      "id": "2608.14246v1",
+      "source": "arxiv",
+      "title": "Polaris : Multi Agentic System for Conversational Enterprise Analytics",
+      "abstract": "In today's fast-paced environment, the ability to swiftly access, understand, and act on data is no longer optional; it is essential. Yet most organizations remain data-rich but insight-poor, constrained by the complexity of querying, interpreting, and explaining enterprise-scale information. We present Polaris, a supervisor-led multi-agent framework for conversational enterprise analytics that bridges this gap. Polaris introduces Dynamic Task Coordination (DTC), a decision-theoretic orchestration layer that models agent-task assignment as adaptive bipartite matching, enabling real-time coordination, recovery, and optimization across specialized agents for querying, visualization, and reasoning. By coupling DTC with reason-first, ReAct-style agents, Polaris transforms natural-language queries into coherent analytical workflows that not only retrieve and visualize data but also explain the underlying \"why.\" Evaluation on structured enterprise datasets demonstrates high semantic fidelity and answer relevancy, underscoring the potential of multi-agent orchestration to deliver trustworthy, end-to-end business intelligence at scale.",
+      "authors": [
+        "Varuni H K",
+        "Soham Sarkar",
+        "Jay Kumar",
+        "Goutham Krishnan",
+        "Tanvi Johari",
+        "Avinash Bharadwaj",
+        "Santosh Hegde"
+      ],
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI"
+      ],
+      "published": "2026-08-14T12:26:41+00:00",
+      "link": "https://arxiv.org/pdf/2608.14246v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:game ai",
+        "query:MAS",
+        "query:game ai"
+      ],
+      "llm_score": 8.0,
+      "llm_evidence_en": "supervisor-led multi-agent framework with Dynamic Task Coordination for agent assignment",
+      "llm_evidence_cn": "监督者主导的多智能体框架及动态任务协调机制",
+      "llm_evidence": "监督者主导的多智能体框架及动态任务协调机制",
+      "canonical_evidence": "监督者主导的多智能体框架及动态任务协调机制",
+      "llm_tldr_en": "Polaris presents a multi-agent framework with Dynamic Task Coordination that models agent-task assignment as adaptive bipartite matching, enabling real-time coordination across specialized agents for conversational enterprise analytics.",
+      "llm_tldr_cn": "Polaris提出了一种多智能体企业分析框架,其核心动态任务协调(DTC)层将代理-任务分配建模为自适应二分图匹配,支持查询、可视化与推理等专门代理之间的实时协调与恢复。",
+      "llm_tldr": "Polaris提出了一种多智能体企业分析框架,其核心动态任务协调(DTC)层将代理-任务分配建模为自适应二分图匹配,支持查询、可视化与推理等专门代理之间的实时协调与恢复。",
+      "llm_tags": [
+        "query:mas"
+      ],
+      "matched_query_tag": "query:mas",
+      "matched_query_text": "agent coordination mechanisms",
+      "matched_requirement_id": "req-7",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "8plus"
+    },
+    {
+      "id": "2608.14022v1",
+      "source": "arxiv",
+      "title": "ForgeWM: Progressive Causal Training for Few-Step Action-Conditioned Video World Models",
+      "abstract": "Action-conditioned video world models require low-latency causal generation and reliable responses to game-native controls. Although causal distillation enables one- or few-step video synthesis, extending it to interactive world models remains challenging, as discrete keyboard states and continuous mouse motion must remain aligned with temporally compressed latent chunks during causal training and autoregressive rollout. We introduce ForgeWM, a progressive framework that transforms a bidirectional action-conditioned video generator into efficient few-step world models through domain adaptation, teacher-forced causal training, causal consistency distillation, and on-policy distribution matching with a bidirectional teacher. The resulting budget-specialized students operate at steady-state denoising budgets of 1, 2, and 4 steps. ForgeWM further supports a dual-path deployment protocol combining latency-critical interaction with optional replay-time refinement, where the one-step student re-noises and refines its saved draft. On paired Minecraft trajectories, ForgeWM leads the evaluated systems in Imaging Quality, reference-aligned motion-profile agreement, action-sign accuracy, and mouse-control accuracy, while achieving the lowest reference LPIPS; the same four-stage recipe transfers to gamepad-controlled FPS gameplay. Replay-time refinement matches four-step reference quality while remaining roughly three times closer to the experienced trajectory than regeneration from noise. These results demonstrate ForgeWM's effectiveness for controllable few-step video generation.",
+      "authors": [
+        "Xinye Li",
+        "Lingshuai Lin",
+        "Lei Wang",
+        "Liuzhou Zhang",
+        "Jialin Cui",
+        "Qingshan Li",
+        "Guanchu Wang",
+        "Qingbin Liu",
+        "Xi Chen",
+        "Jiang Bian",
+        "Wai Lam"
+      ],
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI"
+      ],
+      "published": "2026-08-14T07:13:34+00:00",
+      "link": "https://arxiv.org/pdf/2608.14022v1",
+      "tags": [
+        "keyword:game ai",
+        "query:game ai"
+      ],
+      "llm_score": 7.0,
+      "llm_evidence_en": "causal distillation for interactive game world models",
+      "llm_evidence_cn": "面向游戏世界模型的因果蒸馏",
+      "llm_evidence": "面向游戏世界模型的因果蒸馏",
+      "canonical_evidence": "面向游戏世界模型的因果蒸馏",
+      "llm_tldr_en": "ForgeWM is a progressive framework that distills bidirectional video generators into efficient few-step causal world models responsive to game controls.",
+      "llm_tldr_cn": "本文提出ForgeWM框架，通过因果一致性蒸馏与在线策略分布匹配将双向视频生成器转为面向游戏控制的少步动作条件世界模型，对游戏AI与交互式系统具有方法论价值。",
+      "llm_tldr": "本文提出ForgeWM框架，通过因果一致性蒸馏与在线策略分布匹配将双向视频生成器转为面向游戏控制的少步动作条件世界模型，对游戏AI与交互式系统具有方法论价值。",
+      "llm_tags": [
+        "query:game-ai"
+      ],
+      "matched_query_tag": "query:game-ai",
+      "matched_query_text": "game AI reinforcement learning approaches",
+      "matched_requirement_id": "req-18",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "7"
+    },
+    {
+      "id": "2608.14016v1",
+      "source": "arxiv",
+      "title": "Content Based Video Narration of Gameplay with Vision Language Models",
+      "abstract": "Live game commentary is scarce: it exists for professional esports broadcasts and almost nowhere else. We present a content-based video narration system that produces spoken, esports-style commentary for arbitrary gameplay recordings using a general-purpose vision-language model (VLM) and a text-to-speech back end, with no game-specific instrumentation, no engine telemetry, and no task-specific training. Three mechanisms carry the system. Temporal mosaic packing arranges nine uniformly sampled frames into a single 3x3 image, letting an image-native VLM reason about motion while consuming one image payload per segment instead of nine. Context-conditioned prompting replays the K most recent narrations as assistant-role history, suppressing the repetition that dominates per-segment captioning of static scenes. Duration-conditioned generation and elastic alignment constrain narration length in the prompt, then time-scale or symmetrically pad the synthesized audio so each utterance fills its segment slot exactly, giving frame-accurate muxing without a forced aligner. The implementation supports either cloud TTS or a 6-bit quantized 4B-parameter on-device TTS model on Apple silicon, making the speech stage fully local. We report a qualitative case study on real-time strategy footage, a cost model showing the mosaic reduces per-minute image payloads by 9x, and a candid account of observed failure modes - hallucinated game state, resolution loss from mosaicking, and prosody artifacts from time-scaling. We release the system as a reproducible baseline, with an evaluation protocol for the quantitative study a full version will report.",
+      "authors": [
+        "Mathew Varghese"
+      ],
+      "primary_category": "cs.CV",
+      "categories": [
+        "cs.CV",
+        "cs.AI",
+        "cs.GR"
+      ],
+      "published": "2026-08-14T07:03:30+00:00",
+      "link": "https://arxiv.org/pdf/2608.14016v1",
+      "tags": [
+        "keyword:game ai",
+        "query:game ai"
+      ],
+      "llm_score": 6.0,
+      "llm_evidence_en": "content-based esports-style gameplay narration",
+      "llm_evidence_cn": "基于内容的电竞风格游戏解说系统",
+      "llm_evidence": "基于内容的电竞风格游戏解说系统",
+      "canonical_evidence": "基于内容的电竞风格游戏解说系统",
+      "llm_tldr_en": "A VLM-based system that produces spoken esports-style commentary for arbitrary gameplay videos without game-specific instrumentation.",
+      "llm_tldr_cn": "提出基于通用视觉语言模型的电竞风格游戏解说系统，可对任意游戏录像生成语音解说不依赖游戏引擎信息。",
+      "llm_tldr": "提出基于通用视觉语言模型的电竞风格游戏解说系统，可对任意游戏录像生成语音解说不依赖游戏引擎信息。",
+      "llm_tags": [
+        "query:game-ai"
+      ],
+      "matched_query_tag": "query:game-ai",
+      "matched_query_text": "intelligent game systems",
+      "matched_requirement_id": "req-14",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "6"
+    },
+    {
+      "id": "2608.14856v1",
+      "source": "arxiv",
+      "title": "BRAID: Learning Equilibrium Maps in Interdependent Security Games via Weight-Tied Iterative Graph Neural Networks",
+      "abstract": "Computing Nash equilibria in interdependent security (IDS) games on networks is computationally expensive: best-response dynamics may need hundreds of iterations per instance, and downstream tasks such as auditing, stress-testing, and incentive design often require repeatedly re-solving the game under parameter perturbations. We propose BRAID, a Best-Response Amortized Iterative Dynamics model that uses a weight-tied iterative graph neural network to learn a direct map from game parameters to Nash equilibrium effort profiles, replacing iterative best response computation with a single forward pass that is up to 43X faster per instance. BRAID is derived from the best-response fixed-point structure of IDS games: its SUM aggregation reflects additive neighbor coupling, and a weight-tied gated recurrent unit (GRU) mirrors a damped best-response update. The same architecture applies across IDS specifications that vary investment-cost curvature and neighborhood aggregation, including log-linear, quadratic-cost, and log constant-elasticity-of-substitution (CES) utilities. Beyond equilibrium prediction, BRAID also recovers how equilibrium efforts change under perturbations to game parameters, including costs and network edge weights. We make this sensitivity recovery an explicit evaluation target and introduce two training strategies, interior-equilibrium training and input-noise regularization, that improve the local behavior of the learned equilibrium map without using sensitivity labels. Experiments show that BRAID effectively predicts Nash equilibria and recovers equilibrium sensitivities across utility specifications and network sizes.",
+      "authors": [
+        "Elnaz Nowrouzi",
+        "Zhiqun Zuo",
+        "Xueru Zhang",
+        "Mohammad Mahdi Khalili"
+      ],
+      "primary_category": "cs.GT",
+      "categories": [
+        "cs.GT",
+        "cs.LG"
+      ],
+      "published": "2026-08-14T19:53:34+00:00",
+      "link": "https://arxiv.org/pdf/2608.14856v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:RL",
+        "keyword:game ai",
+        "keyword:self distillation",
+        "query:MAS",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 8.0,
+      "llm_evidence_en": "learns Nash equilibrium maps for interdependent security games on networks, a multi-agent game-theoretic setting",
+      "llm_evidence_cn": "学习网络化安全博弈中纳什均衡映射，属于多智能体博弈场景",
+      "llm_evidence": "学习网络化安全博弈中纳什均衡映射，属于多智能体博弈场景",
+      "canonical_evidence": "学习网络化安全博弈中纳什均衡映射，属于多智能体博弈场景",
+      "llm_tldr_en": "Trains a weight-tied iterative GNN that amortizes best-response in interdependent security games to predict Nash equilibria up to 43x faster per instance.",
+      "llm_tldr_cn": "训练权重共享的迭代图神经网络，摊销相依安全博弈的最佳响应计算，单次推理即可近似纳什均衡，速度提升高达43倍。",
+      "llm_tldr": "训练权重共享的迭代图神经网络，摊销相依安全博弈的最佳响应计算，单次推理即可近似纳什均衡，速度提升高达43倍。",
+      "llm_tags": [
+        "query:mas:composite"
+      ],
+      "matched_query_tag": "query:mas:composite",
+      "matched_query_text": "Papers central to 多智能体系统相关研究论文检索, especially work that connects or combines: multi-agent systems research papers; multi-agent systems papers; agent coordination mechanisms; multi-agent cooperation strategies; multi-agent reinforcement learning; multi-agent decision making; multi agent learning methods and algorithms; multi agent decision making and planning approaches.",
+      "matched_requirement_id": "req-composite-mas",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "8plus"
+    },
+    {
+      "id": "2608.14490v1",
+      "source": "arxiv",
+      "title": "Twin: Playing an Unknown Game with a Test-Time Digital Twin",
+      "abstract": "We present a Test-time World-model Inference (Twin) system, in which a frontier coding agent writes an executable world model for completing continual learning tasks, such as ARC-AGI-3 games. Traditional approaches hand-engineer such models, one custom design per task. Each game hides its rules and goal, and our system constructs them from simulation and interaction alone. Its inductive prior over grid games is strong enough to recover the true transitions of the game and the goal on nearly all levels. Replay validation happens in a twin world model. The harness enforces that an action is not made until the program reproduces every previous observed game transition. Each mismatch between a world model prediction and the actual action result becomes a counterexample that is used to repair the world model. Twin clears 179 out of 183 levels (97.8%), and does so more efficiently than humans in 158 out of 179 levels (88.3%). The system infers the goal before any reward on 156 of the levels it clears (87.2%), and in the remaining levels automatically discovers the goal by search. The benchmark scores completion and action efficiency, between 0 and 100, against humans playing each game for the first time. Played directly, the base model scores only 7.8%; an off-the-shelf harness increases it to 61.1%, whereas our twin world model increases the same base model to 93.3%, clearing 23 out of 25 games. Building a usable world model is simpler than anticipated, whereas the harder problem is inferring the right goal.",
+      "authors": [
+        "Alexy Skoutnev",
+        "Kirill Acharya",
+        "Gaston Longhitano",
+        "Madeleine Udell",
+        "Kevin Ellis",
+        "Iddo Drori"
+      ],
+      "primary_category": "cs.AI",
+      "categories": [
+        "cs.AI"
+      ],
+      "published": "2026-08-14T17:06:00+00:00",
+      "link": "https://arxiv.org/pdf/2608.14490v1",
+      "tags": [
+        "keyword:MAS",
+        "keyword:game ai",
+        "query:RL",
+        "query:game ai"
+      ],
+      "llm_score": 7.0,
+      "llm_evidence_en": "test-time world-model inference for ARC-AGI-3 games",
+      "llm_evidence_cn": "针对ARC-AGI-3游戏的测试时世界模型推断",
+      "llm_evidence": "针对ARC-AGI-3游戏的测试时世界模型推断",
+      "canonical_evidence": "针对ARC-AGI-3游戏的测试时世界模型推断",
+      "llm_tldr_en": "Twin lets a coding agent write an executable world model at test time and uses replay-validation to recover hidden rules in ARC-AGI-3 grid games, achieving near-perfect rule recovery across levels.",
+      "llm_tldr_cn": "Twin在测试时由编码智能体编写可执行世界模型，并通过回放验证从交互中恢复ARC-AGI-3网格游戏的隐藏规则，在几乎所有关卡上恢复真实转移与目标。",
+      "llm_tldr": "Twin在测试时由编码智能体编写可执行世界模型，并通过回放验证从交互中恢复ARC-AGI-3网格游戏的隐藏规则，在几乎所有关卡上恢复真实转移与目标。",
+      "llm_tags": [
+        "query:game-ai:composite"
+      ],
+      "matched_query_tag": "query:game-ai:composite",
+      "matched_query_text": "Papers central to 游戏人工智能相关学术论文检索, especially work that connects or combines: game AI research papers techniques; intelligent game systems; procedural game content generation; NPC AI game characters; papers on game AI techniques and methods; game AI reinforcement learning approaches; intelligent game character design research.",
+      "matched_requirement_id": "req-composite-game-ai",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "7"
+    },
+    {
+      "id": "2608.14894v1",
+      "source": "arxiv",
+      "title": "Can Neural Networks Learn by Experimenting on Themselves? Self-Interventional Learning from Functional Consequences to Predictive Self-Knowledge",
+      "abstract": "Machine-learning systems usually model external data, while their internal functional organization is analyzed by external observers. This work introduces Self-Interventional Learning (SIL), in which a neural system perturbs its own functional structure, observes consequences, learns a predictive self-model, generalizes to unexecuted interventions, and uses predictions to guide later structural action. In a construction-known synthetic system, SIL recovered critical structure, redundancy, and replaceability, while synergy was not reliably recovered. Across 30 fresh confirmatory seeds, increasing the pairwise intervention budget from 4 to 56 reduced held-out prediction error from 0.0335 to 0.0148 and increased Spearman correlation from 0.629 to 0.883. In a matched ablation, preserving the correct intervention--consequence mapping reduced prospective prediction error by 81.3%, while using the same learned self-model for action reduced normalized regret by 31.7% relative to ignoring it. However, model-guided action did not significantly outperform a direct empirical-memory policy, and powered CIFAR-10/ResNet validation showed no robustness advantage over equal-budget direct repair search. These results support SIL as an intervention-driven framework for learning predictive knowledge about a network's own functional organization, while showing that the self-model remains incomplete and is not universally superior to simpler direct strategies.",
+      "authors": [
+        "Michał Tomaszewski"
+      ],
+      "primary_category": "cs.LG",
+      "categories": [
+        "cs.LG"
+      ],
+      "published": "2026-08-14T21:01:33+00:00",
+      "link": "https://arxiv.org/pdf/2608.14894v1",
+      "tags": [
+        "keyword:self distillation",
+        "query:self distillation"
+      ],
+      "llm_score": 6.0,
+      "llm_evidence_en": "self-interventional learning where networks learn a predictive self-model from intervening on themselves",
+      "llm_evidence_cn": "神经网络通过对自身进行干预学习预测性自我模型的自干预学习",
+      "llm_evidence": "神经网络通过对自身进行干预学习预测性自我模型的自干预学习",
+      "canonical_evidence": "神经网络通过对自身进行干预学习预测性自我模型的自干预学习",
+      "llm_tldr_en": "The paper introduces Self-Interventional Learning (SIL), in which a neural system perturbs its own functional structure, observes consequences, and learns a predictive self-model that generalizes to unexecuted interventions.",
+      "llm_tldr_cn": "本文提出自干预学习（SIL），使神经系统扰动自身功能结构、观察后果并学习可预测的自我模型，能泛化到未执行的干预，并用预测指导后续结构性动作。在已知构造的合成系统上恢复了关键结构、冗余与可替代性，跨30个新种子验证了成对干预预算增加时预测误差显著下降。",
+      "llm_tldr": "本文提出自干预学习（SIL），使神经系统扰动自身功能结构、观察后果并学习可预测的自我模型，能泛化到未执行的干预，并用预测指导后续结构性动作。在已知构造的合成系统上恢复了关键结构、冗余与可替代性，跨30个新种子验证了成对干预预算增加时预测误差显著下降。",
+      "llm_tags": [
+        "query:self-distillation:composite"
+      ],
+      "matched_query_tag": "query:self-distillation:composite",
+      "matched_query_text": "Papers central to 自蒸馏相关论文检索, especially work that connects or combines: self-distillation neural network; knowledge distillation model compression; self-supervised representation learning; self distillation methods where models learn from themselves.",
+      "matched_requirement_id": "req-composite-self-distillation",
+      "selection_source": "fresh_fetch",
+      "quick_tier": "6"
+    }
+  ]
+}
