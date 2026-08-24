@@ -5,6 +5,7 @@
 - `LLMRouter.call(stage, **kwargs)`：解析路由 → 调 LLM → 记录 usage。
 - `LLMRouter.invalidate_cache()`：清缓存（参考 Polaris `get_llm_router().invalidate_cache()`）。
 - module-level singleton `get_llm_router(config=None)`。
+- `embed_texts()`: embedding stage wrapper with TF-IDF fallback.
 
 零破坏：
 - 未配置 `llm_stage_models` 时，所有 stage fallback `LLM_MODEL` env。
@@ -15,9 +16,12 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.llm import ClientFactory, parse_provider_model
+
+# Capability-only stages (no LLM call, require explicit configuration)
+CAPABILITY_ONLY_STAGES = frozenset({"embedding"})
 
 # 对齐 Polaris _ROUTE_CACHE_TTL = 60s
 ROUTE_CACHE_TTL = 60
@@ -183,3 +187,68 @@ def reset_router_for_tests() -> None:
     """测试用：清空 module-level singleton。"""
     global _router_instance
     _router_instance = None
+
+
+# ---------------------------------------------------------------------------
+# Embedding support
+# ---------------------------------------------------------------------------
+
+
+def _tfidf_embed(texts: List[str]) -> List[List[float]]:
+    """Cheap TF-IDF embedding fallback for semantic dedup.
+
+    This is a simple fallback when no real embedding provider is configured.
+    Uses sklearn TF-IDF to produce fixed-size vectors.
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    vec = TfidfVectorizer(max_features=512)
+    matrix = vec.fit_transform(texts).toarray()
+    return matrix.tolist()
+
+
+def embed_texts(texts: List[str], config: Optional[Dict[str, Any]] = None) -> List[List[float]]:
+    """Embed a batch of texts via the registered embedding route.
+
+    Raises NotImplementedError if no embedding route is configured AND
+    the TF-IDF fallback isn't enabled via config.
+
+    Falls back to sklearn TF-IDF if config['embedding_fallback'] = 'tfidf'
+    (default behavior, to keep current dedup working without a real provider).
+
+    Args:
+        texts: list of strings to embed
+        config: optional config dict with 'embedding_fallback' key.
+                Default: {"embedding_fallback": "tfidf"} for backward compatibility.
+
+    Returns:
+        list of embedding vectors (list of floats per text)
+    """
+    cfg = config or {}
+    # Default to TF-IDF fallback for backward compatibility
+    fallback_mode = cfg.get("embedding_fallback", "tfidf")
+
+    router = get_llm_router()
+    route = router.resolve("embedding")
+
+    # Check if embedding route is configured (non-default)
+    # If using default fallback, treat as not configured
+    has_real_embedding = route.get("provider_model") not in (
+        os.environ.get("LLM_MODEL", _DEFAULT_FALLBACK_PM),
+        _DEFAULT_FALLBACK_PM,
+    )
+
+    if has_real_embedding:
+        # TODO: When a real embedding provider is configured, call it here
+        # For now, still fall through to TF-IDF (Polaris embedding not yet implemented)
+        pass
+
+    # Fall back to TF-IDF if enabled
+    if fallback_mode == "tfidf":
+        return _tfidf_embed(texts)
+
+    # No fallback enabled and no real embedding route → raise
+    raise NotImplementedError(
+        "embedding stage not configured and no fallback enabled. "
+        "Set config['embedding_fallback'] = 'tfidf' to enable TF-IDF fallback."
+    )

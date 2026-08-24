@@ -179,7 +179,7 @@ def semantic_dedup_ideas(
 
     Args:
         ideas: list of idea dicts (already text-deduped)
-        embedding_call: optional override (texts → list[vector]). None = use TF-IDF fallback.
+        embedding_call: optional override (texts → list[vector]). None = use llm_router.embed_texts.
         rerank_call: optional override ((a_text, b_text) → {"is_duplicate": bool,
                          "confidence": 0-1, "reason": str}). None = use router.
         dedup_threshold: cosine similarity above which to consider duplicate
@@ -192,7 +192,6 @@ def semantic_dedup_ideas(
     """
     import json as json_module
     import numpy as np
-    from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
 
     # Default rerank using get_llm_router (if not provided)
@@ -247,9 +246,14 @@ def semantic_dedup_ideas(
             # Use provided embedding function
             vectors = embedding_call(texts)
         else:
-            # Fallback: TF-IDF based cosine similarity
-            vectorizer = TfidfVectorizer(max_features=512, stop_words='english')
-            vectors = vectorizer.fit_transform(texts).toarray()
+            # Use llm_router.embed_texts (includes TF-IDF fallback by default)
+            from src.llm_router import embed_texts
+            vectors = embed_texts(texts)
+            # Convert to numpy for cosine_similarity
+            vectors = np.array(vectors)
+    except NotImplementedError:
+        # No embedding route configured and no fallback → skip semantic dedup
+        return ideas
     except Exception:
         # Embedding unavailable → skip semantic dedup
         return ideas
