@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "extractor": "pymupdf-heuristic",
+  "formulas": [
+    {
+      "latex": "top- K teacher with retained mass M \\le 1 , so the loss is removing the spike that caps context and unlocking the long-",
+      "page": 2,
+      "bbox": [
+        54.0,
+        165.6361846923828,
+        557.9945678710938,
+        175.96435546875
+      ]
+    },
+    {
+      "latex": "dense “ M \\cdot softmax ” term minus a sparse teacher correction (Liu et al. 2024; Gao et al. 2025). This implementation is not",
+      "page": 2,
+      "bbox": [
+        54.0,
+        187.5531768798828,
+        558.0048217773438,
+        197.88134765625
+      ]
+    },
+    {
+      "latex": "(KL) objective. For a single token, let z \\in ^{V} be the student",
+      "page": 2,
+      "bbox": [
+        319.5,
+        274.5732116699219,
+        557.9949340820312,
+        288.15081787109375
+      ]
+    },
+    {
+      "latex": "logits over a vocabulary of size V and q v = exp( z v ) /Z with",
+      "page": 2,
+      "bbox": [
+        319.5,
+        288.9112548828125,
+        558.0076293945312,
+        300.3678283691406
+      ]
+    },
+    {
+      "latex": "Z = P _{u} exp( z u ) the student probability of token v , so that",
+      "page": 2,
+      "bbox": [
+        319.5,
+        299.5616760253906,
+        558.0008544921875,
+        316.9962463378906
+      ]
+    },
+    {
+      "latex": "Require: hidden states h \\in ^{S} \\times ^{B} \\times ^{d} ; projection W \\in",
+      "page": 3,
+      "bbox": [
+        319.5,
+        81.9443588256836,
+        557.9981689453125,
+        93.51348114013672
+      ]
+    },
+    {
+      "latex": "V \\times d ; support _{(} t, b, v, p _{)} ; chunk size _{C} _{s}",
+      "page": 3,
+      "bbox": [
+        343.6319885253906,
+        92.9033432006836,
+        498.7288513183594,
+        105.07756805419922
+      ]
+    },
+    {
+      "latex": "and the student logits. We use the untempered objective ( \\tau =",
+      "page": 3,
+      "bbox": [
+        54.00001525878906,
+        132.8888397216797,
+        292.504638671875,
+        143.08740234375
+      ]
+    },
+    {
+      "latex": "\\sigma _{[} _{s} _{0} _{:} _{s} _{1} _{]} ← P _{v} exp( z − m ) ; discard z 3:",
+      "page": 3,
+      "bbox": [
+        324.4789733886719,
+        148.7593536376953,
+        509.6355895996094,
+        162.01953125
+      ]
+    },
+    {
+      "latex": "5: log Z ^{←} m + log \\sigma ▷ reduce \\sigma if sharded constructs _{the} dense teacher: _{the} cached top- _{K} values _{are}",
+      "page": 3,
+      "bbox": [
+        54.00001525878906,
+        170.8567657470703,
+        558.00439453125,
+        182.54034423828125
+      ]
+    },
+    {
+      "latex": "scattered into a dense tensor p \\in ^{B} \\times ^{S} \\times ^{V} and the objective",
+      "page": 3,
+      "bbox": [
+        54.00001525878906,
+        179.92173767089844,
+        292.50054931640625,
+        193.49932861328125
+      ]
+    },
+    {
+      "latex": "Backward given g = \\partial L /\\partialℓ : is the offline computation closest to online distillation.",
+      "page": 3,
+      "bbox": [
+        54.00001525878906,
+        248.62074279785156,
+        455.20013427734375,
+        259.25323486328125
+      ]
+    },
+    {
+      "latex": "runs about 29% faster per iteration ( 25 . 9 \\to 18 . 5 s), and to 62 GB (forward-chunked) to 58 GB (fused), by never",
+      "page": 4,
+      "bbox": [
+        54.0,
+        628.3317260742188,
+        557.99462890625,
+        638.659423828125
+      ]
+    },
+    {
+      "latex": "and uses substantially less memory. Batch size 1 , hidden size 4 , 096 , vocabulary 131 , 072 , top- K =100 , tensor parallelism 2 , and",
+      "page": 5,
+      "bbox": [
+        54.0,
+        311.574951171875,
+        557.997802734375,
+        321.77349853515625
+      ]
+    },
+    {
+      "latex": "length of 32 , 768 on 8 \\times H200 nodes, the memory it frees lets",
+      "page": 5,
+      "bbox": [
+        54.0,
+        477.1967468261719,
+        292.50457763671875,
+        487.5244140625
+      ]
+    },
+    {
+      "latex": "for forward-chunked, a 3 . 3 \\times advantage in this isolated work-",
+      "page": 6,
+      "bbox": [
+        54.0,
+        312.3316955566406,
+        292.5045471191406,
+        322.65936279296875
+      ]
+    },
+    {
+      "latex": "The fully chunked loss uses 15 . 6 \\times less memory than dense",
+      "page": 6,
+      "bbox": [
+        63.9630012512207,
+        335.0226745605469,
+        292.50506591796875,
+        345.350341796875
+      ]
+    },
+    {
+      "latex": "KL at 32K and 11 . 6 \\times less than forward-chunked at 256K.",
+      "page": 6,
+      "bbox": [
+        54.0,
+        345.9816589355469,
+        292.5046081542969,
+        356.309326171875
+      ]
+    },
+    {
+      "latex": "chunked overtakes it from 64K onward and is 3 . 3 \\times faster",
+      "page": 6,
+      "bbox": [
+        54.0,
+        367.8996276855469,
+        292.504638671875,
+        378.227294921875
+      ]
+    },
+    {
+      "latex": "RMSNorm ( ϵ = 10 ^{−} ^{5} ) 1 / top- 100 Batch size / teacher sup- Normalisation",
+      "page": 8,
+      "bbox": [
+        57.53300094604492,
+        91.57579803466797,
+        470.27166748046875,
+        102.30520629882812
+      ]
+    },
+    {
+      "latex": "2 \\times 10 ^{−} ^{6} \\to 2 \\times 10 ^{−} ^{7}",
+      "page": 8,
+      "bbox": [
+        170.34823608398438,
+        160.35423278808594,
+        244.95875549316406,
+        173.24586486816406
+      ]
+    },
+    {
+      "latex": "forward KL, \\tau = 1 Objective",
+      "page": 8,
+      "bbox": [
+        57.53300094604492,
+        224.09349060058594,
+        238.97705078125,
+        233.27224731445312
+      ]
+    },
+    {
+      "latex": "top- K , K = 100 Teacher support Table _{2:} Configuration _{for} _{the} controlled loss-only bench-",
+      "page": 8,
+      "bbox": [
+        57.53300094604492,
+        234.05650329589844,
+        557.99462890625,
+        244.54547119140625
+      ]
+    }
+  ]
+}

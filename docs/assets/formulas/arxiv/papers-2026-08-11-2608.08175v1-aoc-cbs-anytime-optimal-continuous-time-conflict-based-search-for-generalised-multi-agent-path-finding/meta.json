@@ -1,0 +1,3696 @@
+{
+  "version": 1,
+  "extractor": "pymupdf-heuristic",
+  "formulas": [
+    {
+      "latex": "The classical MAPF problem [1] is posed on an undirected and unweighted graph G = ⟨V , E⟩",
+      "page": 6,
+      "bbox": [
+        72.0,
+        320.7916259765625,
+        540.0342407226562,
+        332.9017639160156
+      ]
+    },
+    {
+      "latex": "with vertices V and edges E . Agents in A exist on the graph, starting at time t = 0 at a",
+      "page": 6,
+      "bbox": [
+        72.0,
+        335.2376403808594,
+        540.08203125,
+        347.3477783203125
+      ]
+    },
+    {
+      "latex": "the same edge in opposite directions at the same timestep. A plan \\pi ^{a} is a sequence of actions,",
+      "page": 6,
+      "bbox": [
+        72.0,
+        388.8366394042969,
+        540.006591796875,
+        405.1308288574219
+      ]
+    },
+    {
+      "latex": "one for each timestep, or agent a to execute. The plan \\pi ^{a} is if it respectively starts and",
+      "page": 6,
+      "bbox": [
+        71.99996948242188,
+        403.28265380859375,
+        540.0055541992188,
+        419.57684326171875
+      ]
+    },
+    {
+      "latex": "ends at a ’s start and goal vertex. A joint plan \\Pi = { \\pi ^{a} | a \\inA} contains one plan for each",
+      "page": 6,
+      "bbox": [
+        71.99996948242188,
+        417.57373046875,
+        540.0263671875,
+        434.0228576660156
+      ]
+    },
+    {
+      "latex": "no two agents conflict while following their plans. Each plan \\pi has a \\sigma ^{\\pi} ( \\pi ) \\in ,",
+      "page": 6,
+      "bbox": [
+        71.99996948242188,
+        449.7351379394531,
+        540.0066528320312,
+        462.91387939453125
+      ]
+    },
+    {
+      "latex": "which is commonly the length of the plan. The \\sigma (\\Pi) is a function determining",
+      "page": 6,
+      "bbox": [
+        71.99996948242188,
+        465.4046936035156,
+        540.0340576171875,
+        477.3598937988281
+      ]
+    },
+    {
+      "latex": "the quality of a joint plan \\Pi; an optimal solution minimises \\sigma . Two common cost functions",
+      "page": 6,
+      "bbox": [
+        71.99996948242188,
+        479.8507080078125,
+        540.0579833984375,
+        491.805908203125
+      ]
+    },
+    {
+      "latex": "X \\sigma \\pi _{(} _{\\pi} _{)} _{,}",
+      "page": 6,
+      "bbox": [
+        357.781982421875,
+        517.9359130859375,
+        409.19915771484375,
+        532.6528930664062
+      ]
+    },
+    {
+      "latex": "Sum-of-Costs (SOC): \\sigma (\\Pi) =",
+      "page": 6,
+      "bbox": [
+        196.95697021484375,
+        520.6976928710938,
+        354.47869873046875,
+        532.6528930664062
+      ]
+    },
+    {
+      "latex": "\\pi \\in \\Pi",
+      "page": 6,
+      "bbox": [
+        357.84698486328125,
+        537.722900390625,
+        374.9826965332031,
+        545.7962646484375
+      ]
+    },
+    {
+      "latex": "\\pi \\in \\Pi \\sigma ^{\\pi} ^{(} ^{\\pi} ^{)} ^{.} Makespan: \\sigma (\\Pi) = max",
+      "page": 6,
+      "bbox": [
+        251.0029754638672,
+        548.6851806640625,
+        415.0451354980469,
+        569.90087890625
+      ]
+    },
+    {
+      "latex": "posed over a directed graph G = ⟨V , E⟩ where each vertex in V corresponds to a position in",
+      "page": 7,
+      "bbox": [
+        71.99990844726562,
+        265.03363037109375,
+        540.0579223632812,
+        277.1437683105469
+      ]
+    },
+    {
+      "latex": "However, each agent a \\inA exists on it’s graph G ^{a} = ⟨V ^{a} , E ^{a} ⟩ defined on a state space",
+      "page": 8,
+      "bbox": [
+        72.0,
+        135.77760314941406,
+        540.0086669921875,
+        152.07179260253906
+      ]
+    },
+    {
+      "latex": "Specifically, every CT node N contains a set of constraints N C and a valid joint plan N \\Pi ,",
+      "page": 10,
+      "bbox": [
+        72.0,
+        110.72663879394531,
+        539.9998168945312,
+        124.47486877441406
+      ]
+    },
+    {
+      "latex": "where every plan \\pi \\in N \\Pi minimises the plan cost \\sigma ^{\\pi} ( \\pi ) over all valid plans satisfying N C .",
+      "page": 10,
+      "bbox": [
+        72.0,
+        123.9481201171875,
+        539.9998168945312,
+        138.9208526611328
+      ]
+    },
+    {
+      "latex": "The search starts at the CT root R with R C = ; every plan \\pi ^{a} \\in N \\Pi is the lowest-cost",
+      "page": 10,
+      "bbox": [
+        72.0,
+        135.1246795654297,
+        539.9950561523438,
+        153.36683654785156
+      ]
+    },
+    {
+      "latex": "the leaf node N minimizing \\sigma ( N \\Pi ) (initially R ) is selected for expansion. During expansion,",
+      "page": 10,
+      "bbox": [
+        72.0,
+        168.5095977783203,
+        540.0272827148438,
+        181.38720703125
+      ]
+    },
+    {
+      "latex": "an arbitrary conflict in N \\Pi is selected, say involving agents i and j , and a",
+      "page": 10,
+      "bbox": [
+        72.0,
+        182.95558166503906,
+        461.6396789550781,
+        196.7038116455078
+      ]
+    },
+    {
+      "latex": "C ^{=} ^{N} ^{C} \\cup{ ^{c} ^{i} ^{}} ^{and}",
+      "page": 10,
+      "bbox": [
+        438.6890563964844,
+        255.0295867919922,
+        540.0016479492188,
+        270.1607360839844
+      ]
+    },
+    {
+      "latex": "C ^{=} ^{N} ^{C} \\cup{ ^{c} ^{j} ^{}} ^{.} That is, ^{i} is constrained in ^{N} ^{i} to give way to ^{j} , while ^{j} is constrained in ^{N} ^{j} ^{N} ^{j}",
+      "page": 10,
+      "bbox": [
+        72.00003051757812,
+        265.2914733886719,
+        539.045166015625,
+        284.8266906738281
+      ]
+    },
+    {
+      "latex": "\\Pi ^{and} ^{N} ^{j} ^{to} give ^{way} ^{to} ^{i} ^{.} ^{The} joint plans ^{N} ^{i}",
+      "page": 10,
+      "bbox": [
+        72.00003051757812,
+        281.5229797363281,
+        300.4231872558594,
+        299.05169677734375
+      ]
+    },
+    {
+      "latex": "\\Pi ^{are} recomputed ^{by} ^{the} low-level path planner",
+      "page": 10,
+      "bbox": [
+        295.7470397949219,
+        284.0765075683594,
+        540.01611328125,
+        299.272705078125
+      ]
+    },
+    {
+      "latex": "they are the only two agents with new constraints; the remaining agents’ plans in N \\Pi already",
+      "page": 10,
+      "bbox": [
+        72.00005340576172,
+        312.9675598144531,
+        540.0138549804688,
+        326.7167663574219
+      ]
+    },
+    {
+      "latex": "LB ( N ) \\le min _{\\Pi} _{\\in} _{(} _{N} _{)} \\sigma (\\Pi) (1)",
+      "page": 10,
+      "bbox": [
+        248.01512145996094,
+        373.5986328125,
+        540.02490234375,
+        393.67877197265625
+      ]
+    },
+    {
+      "latex": "( N ) = \\cup N ^{i} ^{\u0001} N ^{j} ^{\u0001} ^{\u0000} ^{\u0000}",
+      "page": 10,
+      "bbox": [
+        227.190185546875,
+        441.73004150390625,
+        350.7745361328125,
+        455.50677490234375
+      ]
+    },
+    {
+      "latex": "N ^{i} ^{\u0001} N ^{j} ^{\u0001\u0001} ^{\u0000} ^{\u0000} ^{\u0000} LB ( N ) \\le min LB , LB . (3)",
+      "page": 10,
+      "bbox": [
+        207.73104858398438,
+        460.2540283203125,
+        540.0081176757812,
+        474.03076171875
+      ]
+    },
+    {
+      "latex": "never lead to lower-cost solutions, hence \\sigma ( N \\Pi ) \\le \\sigma ( N _{\\Pi} ^{i} ) and \\sigma ( N \\Pi ) \\le \\sigma ( N ^{i} _{\\Pi} ). Property (3)",
+      "page": 11,
+      "bbox": [
+        72.00003051757812,
+        102.27911376953125,
+        540.017333984375,
+        117.60822296142578
+      ]
+    },
+    {
+      "latex": "\\alpha ^{i} starting at time t ^{i} , and j executes \\alpha ^{j} starting t ^{j} . As described theoretically, CCBS’s",
+      "page": 11,
+      "bbox": [
+        72.00008392333984,
+        304.1876220703125,
+        539.984619140625,
+        320.4818115234375
+      ]
+    },
+    {
+      "latex": "u ^{>} ^{t} ^{i} when \\alpha ^{i} ^{can} ^{be} executed",
+      "page": 11,
+      "bbox": [
+        367.7620544433594,
+        318.63360595703125,
+        539.9970092773438,
+        337.8828125
+      ]
+    },
+    {
+      "latex": "without conflicting with j performing \\alpha ^{j} at t ^{j} . Likewise, t ^{j} _{u} > t ^{j} is found for j . The two",
+      "page": 11,
+      "bbox": [
+        72.00006103515625,
+        333.0796203613281,
+        540.00146484375,
+        352.3288269042969
+      ]
+    },
+    {
+      "latex": "constraints c ^{i} = ⟨ i, \\alpha ^{i} , [ t ^{i} , t ^{i} _{u} ) ⟩ forbidding i from executing \\alpha ^{i} starting at any time in [ t ^{i} , t ^{i}",
+      "page": 11,
+      "bbox": [
+        72.00006103515625,
+        347.525634765625,
+        529.6802978515625,
+        365.9042053222656
+      ]
+    },
+    {
+      "latex": "and c ^{j} = ⟨ j, \\alpha ^{j} , [ t ^{j} , t ^{j} _{u} ) ⟩ forbidding j from executing \\alpha ^{j} starting at any time in [ t ^{j} , t ^{j}",
+      "page": 11,
+      "bbox": [
+        72.00009155273438,
+        361.9706726074219,
+        509.77825927734375,
+        380.3492431640625
+      ]
+    },
+    {
+      "latex": "lution completeness to CCBS by introducing a new branching rule, \\delta -BR, that changes how",
+      "page": 12,
+      "bbox": [
+        72.0,
+        156.84461975097656,
+        540.0341186523438,
+        168.79981994628906
+      ]
+    },
+    {
+      "latex": "\\delta -BR is based on shifting constraints from [34] and applies the same rule as CCBS to conflicts",
+      "page": 12,
+      "bbox": [
+        72.0,
+        192.95960998535156,
+        540.0342407226562,
+        204.91481018066406
+      ]
+    },
+    {
+      "latex": "wait action, \\delta -BR finds a specific value \\delta based on the intersection interval I = [ t ^{I} _{1} , t ^{I} _{2} ) and",
+      "page": 12,
+      "bbox": [
+        72.0,
+        220.6270751953125,
+        540.0123901367188,
+        235.89117431640625
+      ]
+    },
+    {
+      "latex": "agent i executing the move action \\alpha ^{i} at time t ^{i} , a constraint c ^{i} is created forbidding i from",
+      "page": 12,
+      "bbox": [
+        72.0,
+        246.40455627441406,
+        540.0108032226562,
+        262.6977844238281
+      ]
+    },
+    {
+      "latex": "executing \\alpha ^{i} starting at any in [ t ^{i} , t ^{i} + \\delta ). For the other agent j waiting at v , a constraint",
+      "page": 12,
+      "bbox": [
+        72.0,
+        260.8505554199219,
+        540.0618286132812,
+        277.1437683105469
+      ]
+    },
+    {
+      "latex": "1 ^{+} \\delta, t ^{I} 2 ^{)} ^{and} from executing",
+      "page": 12,
+      "bbox": [
+        390.58599853515625,
+        278.4110412597656,
+        540.014404296875,
+        294.5457763671875
+      ]
+    },
+    {
+      "latex": "any move action from v starting at any time in [ t ^{I} _{1} + \\delta, t ^{I} _{2} ). It is shown in [27] that OC-CBS",
+      "page": 12,
+      "bbox": [
+        72.0,
+        292.8560791015625,
+        540.0045166015625,
+        308.9908142089844
+      ]
+    },
+    {
+      "latex": "( N ) = \\cup N ^{i} ^{\u0001} N ^{j} ^{\u0001} ^{\u0000} ^{\u0000}",
+      "page": 12,
+      "bbox": [
+        266.16705322265625,
+        520.9012451171875,
+        389.75140380859375,
+        534.677978515625
+      ]
+    },
+    {
+      "latex": "Given a suboptimality bound w \\ge 1, ECBS-CT searches for a solution \\Pi with \\sigma (\\Pi)",
+      "page": 13,
+      "bbox": [
+        72.0,
+        496.7801818847656,
+        508.19830322265625,
+        511.31890869140625
+      ]
+    },
+    {
+      "latex": "\\le w ,",
+      "page": 13,
+      "bbox": [
+        514.0780029296875,
+        499.20867919921875,
+        540.0089111328125,
+        511.3188171386719
+      ]
+    },
+    {
+      "latex": "\\sigma ∗",
+      "page": 13,
+      "bbox": [
+        494.4519958496094,
+        505.81182861328125,
+        503.39666748046875,
+        514.5711669921875
+      ]
+    },
+    {
+      "latex": "where \\sigma ^{∗} is the optimal global cost, such that \\Pi’s suboptimality is at most w . Setting w = 1",
+      "page": 13,
+      "bbox": [
+        72.0,
+        512.4827880859375,
+        540.0748291015625,
+        525.7647705078125
+      ]
+    },
+    {
+      "latex": "applies a focal search: with \\sigma being the minimum LB ( N ) over all CT leaf nodes N , the",
+      "page": 13,
+      "bbox": [
+        72.0,
+        586.03857421875,
+        540.0134887695312,
+        599.7877807617188
+      ]
+    },
+    {
+      "latex": "search selects from the set of nodes satisfying LB ( N ) \\le w\\sigma . Among these satisfying leaf",
+      "page": 13,
+      "bbox": [
+        72.0,
+        600.3297119140625,
+        540.0092163085938,
+        612.4398193359375
+      ]
+    },
+    {
+      "latex": "the state with minium total estimated path cost f , any state with f \\le w \\cdot f is eligable",
+      "page": 14,
+      "bbox": [
+        72.0,
+        74.45671081542969,
+        539.998046875,
+        88.35987854003906
+      ]
+    },
+    {
+      "latex": "show that by increasing from w = 1 to w = 1 . 2 (20% optimality gap) and beyond, runtime",
+      "page": 14,
+      "bbox": [
+        72.0,
+        154.06361389160156,
+        540.1058959960938,
+        166.01881408691406
+      ]
+    },
+    {
+      "latex": "source and target vertices. Edge e corresponds to a trajectory e \\tau : [0 , e D ) 7\\toS mapping",
+      "page": 17,
+      "bbox": [
+        72.0,
+        74.45671081542969,
+        540.0154418945312,
+        88.35987854003906
+      ]
+    },
+    {
+      "latex": "time to the state space, with duration e D \\in > 0 , starting at state e \\tau (0) = ^{v}",
+      "page": 17,
+      "bbox": [
+        72.00003051757812,
+        87.51312255859375,
+        457.633544921875,
+        102.65092468261719
+      ]
+    },
+    {
+      "latex": "\\cdot\\to ^{(} ^{e} ^{)} s ^{and} ending",
+      "page": 17,
+      "bbox": [
+        450.3070068359375,
+        89.05763244628906,
+        540.0059814453125,
+        102.80586242675781
+      ]
+    },
+    {
+      "latex": "v _{at} state _{e} \\tau _{(} _{e} _{D} _{) =} \\to\\cdot _{(} _{e} _{)} _{s} _{.}",
+      "page": 17,
+      "bbox": [
+        72.00003051757812,
+        101.9591064453125,
+        196.56285095214844,
+        116.59788513183594
+      ]
+    },
+    {
+      "latex": "a from the set of all agents A exists on a possibly unique graph G ^{a} = ⟨V ^{a} , E ^{a} ⟩",
+      "page": 17,
+      "bbox": [
+        126.5396728515625,
+        120.83363342285156,
+        540.0015869140625,
+        137.12782287597656
+      ]
+    },
+    {
+      "latex": "defined over a state space S ^{a} . The agent a being located at vertex v \\inV ^{a} means that it is",
+      "page": 17,
+      "bbox": [
+        72.0,
+        135.2796173095703,
+        540.01171875,
+        151.5728302001953
+      ]
+    },
+    {
+      "latex": "in the state v s ; traversing edge e \\inE ^{a} means that it follows the state trajectory e \\tau . Initially,",
+      "page": 17,
+      "bbox": [
+        71.99996948242188,
+        149.72560119628906,
+        540.0021362304688,
+        166.94122314453125
+      ]
+    },
+    {
+      "latex": "\\inV ^{a} ^{at} time ^{t} = 0; ^{we} ^{do} ^{not} assume ^{(} ^{v} ^{).}",
+      "page": 17,
+      "bbox": [
+        203.14651489257812,
+        164.1715850830078,
+        465.21282958984375,
+        183.26585388183594
+      ]
+    },
+    {
+      "latex": "\\alpha is executed by an agent and can mean to either traverse an edge at a specific",
+      "page": 17,
+      "bbox": [
+        129.8153076171875,
+        190.17860412597656,
+        540.070068359375,
+        202.13380432128906
+      ]
+    },
+    {
+      "latex": "time or wait at a vertex during some time interval. A m = ⟨ e, t ⟩\\inE \\times",
+      "page": 17,
+      "bbox": [
+        71.99995422363281,
+        204.4696502685547,
+        527.9832153320312,
+        216.5797882080078
+      ]
+    },
+    {
+      "latex": "but shifted in time: m \\tau ( t ^{′} ) = e \\tau ( t ^{′} − t ) defined over t ^{′} \\in [ t, t + e D ). We say that m ’s source",
+      "page": 17,
+      "bbox": [
+        71.99995422363281,
+        229.0226287841797,
+        540.0217895507812,
+        246.3931884765625
+      ]
+    },
+    {
+      "latex": "v v v v _{and} target vertices _{are} _{the} same _{as} _{e} _{’s:} \\cdot\\to _{(} _{m} _{)} _{=} \\cdot\\to _{(} _{e} _{)} _{and} \\to\\cdot _{(} _{m} _{)} _{=} \\to\\cdot _{(} _{e} _{).} _{We} also denote",
+      "page": 17,
+      "bbox": [
+        71.99996948242188,
+        246.41705322265625,
+        540.0158081054688,
+        261.0558166503906
+      ]
+    },
+    {
+      "latex": "t t \\to\\cdot _{(} _{m} _{)} _{=} _{t} _{+} _{e} _{D} _{,} _{and} _{its} duration matching _{e} _{’s} \\cdot\\to _{(} _{m} _{)} _{=} _{t} _{and} _{m} _{’s} start _{and} _{end} time with",
+      "page": 17,
+      "bbox": [
+        72.00006103515625,
+        261.59796142578125,
+        540.0330200195312,
+        276.2367858886719
+      ]
+    },
+    {
+      "latex": "duration, m D = e D .",
+      "page": 17,
+      "bbox": [
+        72.00006103515625,
+        276.85345458984375,
+        172.74986267089844,
+        290.6016540527344
+      ]
+    },
+    {
+      "latex": "A w = ⟨ v, t 1 , t 2 ⟩\\inV \\times \\times ( \\cup{\\infty} ) means to wait at v during the time interval",
+      "page": 17,
+      "bbox": [
+        72.00004577636719,
+        298.36651611328125,
+        540.0481567382812,
+        311.4000244140625
+      ]
+    },
+    {
+      "latex": "at ( ( v )) are considered. A wait action with t 2 = \\infty is referred to as an",
+      "page": 17,
+      "bbox": [
+        72.00006103515625,
+        327.258544921875,
+        474.5361022949219,
+        341.16168212890625
+      ]
+    },
+    {
+      "latex": "full waiting interval: w \\tau ( t ^{′} ) = v s defined over t ^{′} \\in [ t 1 , t 2 ). We also denote",
+      "page": 17,
+      "bbox": [
+        72.00009155273438,
+        351.81158447265625,
+        438.6998596191406,
+        370.0537109375
+      ]
+    },
+    {
+      "latex": "v v \\cdot\\to _{(} _{w} _{) =} \\to\\cdot _{(} _{w} _{) =} _{v} _{,}",
+      "page": 17,
+      "bbox": [
+        441.9381103515625,
+        354.760986328125,
+        540.00341796875,
+        369.3987731933594
+      ]
+    },
+    {
+      "latex": "t t \\to\\cdot _{(} _{w} _{) =} _{t} _{2} _{,} _{and} _{the} duration _{w} _{D} _{=} _{t} _{2} _{−} _{t} _{1} _{.} _{the} start time \\cdot\\to _{(} _{w} _{) =} _{t} _{1} _{,} _{the} _{end} time",
+      "page": 17,
+      "bbox": [
+        72.00015258789062,
+        369.9419860839844,
+        494.71099853515625,
+        384.5807800292969
+      ]
+    },
+    {
+      "latex": "Every action \\alpha has a \\alpha \\sigma . In the majority of the MAPF literature, this cost equals the",
+      "page": 17,
+      "bbox": [
+        72.00018310546875,
+        392.4195251464844,
+        540.0274658203125,
+        405.298095703125
+      ]
+    },
+    {
+      "latex": "action’s duration, meaning m \\sigma = m D for a move action and w \\sigma = w D for a wait action.",
+      "page": 17,
+      "bbox": [
+        72.00016784667969,
+        406.86553955078125,
+        540.0274658203125,
+        420.6137390136719
+      ]
+    },
+    {
+      "latex": "With superscript \\alpha ^{a} we mean that the action is executed specifically by agent a \\inA , such",
+      "page": 17,
+      "bbox": [
+        72.00015258789062,
+        453.08758544921875,
+        540.0298461914062,
+        469.38177490234375
+      ]
+    },
+    {
+      "latex": "that e \\inE ^{a} (for a move action) and v \\inV ^{a} (for a wait action). However, we omit the",
+      "page": 17,
+      "bbox": [
+        72.00013732910156,
+        467.5335693359375,
+        540.0391235351562,
+        483.8267822265625
+      ]
+    },
+    {
+      "latex": "Just as with actions, the superscript \\Lambda ^{a} = ⟨ \\lambda ^{a}",
+      "page": 18,
+      "bbox": [
+        72.0,
+        70.27363586425781,
+        320.0221862792969,
+        86.56684875488281
+      ]
+    },
+    {
+      "latex": "1 , \\lambda ^{a} 2 , . . . , \\lambda ^{a} N ^{⟩} denotes that agent ^{a} \\inA ^{is}",
+      "page": 18,
+      "bbox": [
+        315.52703857421875,
+        73.38812255859375,
+        540.0216064453125,
+        88.71723175048828
+      ]
+    },
+    {
+      "latex": "assigned to \\Lambda ^{a} . This means that e \\inE ^{a} (for edge tasks) and v \\inV ^{a} (for vertex tasks). Also,",
+      "page": 18,
+      "bbox": [
+        72.00006103515625,
+        84.71961975097656,
+        540.019287109375,
+        101.01283264160156
+      ]
+    },
+    {
+      "latex": "\\pi ^{a} = ⟨ \\alpha 1 , \\alpha 2 , . . . , \\alpha n ⟩ (with n possibly unique to a ) is a sequence of actions for",
+      "page": 18,
+      "bbox": [
+        113.38896942138672,
+        135.27955627441406,
+        540.0234985351562,
+        152.49615478515625
+      ]
+    },
+    {
+      "latex": "agent a \\inA to execute in series. The duration of \\pi ^{a} is the sum of its actions’ durations,",
+      "page": 18,
+      "bbox": [
+        72.00006103515625,
+        149.7255401611328,
+        540.012939453125,
+        166.0187530517578
+      ]
+    },
+    {
+      "latex": "\\pi ^{a} \\alpha _{\\in} _{\\pi} a \\alpha D , however excluding any final infinite wait action if present. We say that \\pi ^{a} _{D} = _{P}",
+      "page": 18,
+      "bbox": [
+        72.00006103515625,
+        167.2860107421875,
+        539.4991455078125,
+        189.0609130859375
+      ]
+    },
+    {
+      "latex": "The first action \\alpha 1 starts at a ’s starting vertex and at time t = 0:",
+      "page": 18,
+      "bbox": [
+        95.41807556152344,
+        204.62452697753906,
+        437.47265625,
+        218.3727569580078
+      ]
+    },
+    {
+      "latex": "\\cdot\\to ^{(} \\alpha 1 ^{) =} ^{v} ^{a} ^{v} ^{t} ^{∧} \\cdot\\to ^{(} \\alpha 1 ) = 0 ^{.}",
+      "page": 18,
+      "bbox": [
+        246.23403930664062,
+        228.279052734375,
+        395.037841796875,
+        244.8568572998047
+      ]
+    },
+    {
+      "latex": "v v t t \\cdot\\to _{(} \\alpha _{k} _{)} _{∧} \\forall _{k} _{\\in} _{[2} , .., n _{]} _{.} \\to\\cdot _{(} \\alpha _{k} _{−} _{1} _{) =} \\to\\cdot _{(} \\alpha _{k} _{−} _{1} _{) =} \\cdot\\to _{(} \\alpha _{k} _{)}",
+      "page": 18,
+      "bbox": [
+        179.93606567382812,
+        286.7331237792969,
+        461.3437194824219,
+        302.1069030761719
+      ]
+    },
+    {
+      "latex": "All tasks in \\Lambda ^{a} = ⟨ \\lambda 1 , \\lambda 2 , . . . , \\lambda N ⟩ are completed in order and one-at-a-time: there",
+      "page": 18,
+      "bbox": [
+        95.41810607910156,
+        316.6386413574219,
+        540.0155639648438,
+        333.8542175292969
+      ]
+    },
+    {
+      "latex": "exists an ordered set of times ⟨ t 1 , t 2 , ..., t N ⟩\\in ^{N}",
+      "page": 18,
+      "bbox": [
+        101.26504516601562,
+        334.1991271972656,
+        352.29986572265625,
+        348.30023193359375
+      ]
+    },
+    {
+      "latex": "\\ge 0 (with ^{t} ^{i} being ^{the} start time ^{of} \\lambda ^{i} ^{)}",
+      "page": 18,
+      "bbox": [
+        345.5810852050781,
+        335.42266845703125,
+        540.0030517578125,
+        350.3338623046875
+      ]
+    },
+    {
+      "latex": "t 1 \\le t 1 _{+} \\lambda 1 ,D \\le t 2 \\le t 2 _{+} \\lambda 2 .D \\le\\cdot \\cdot \\cdot \\le t N",
+      "page": 18,
+      "bbox": [
+        214.2281036376953,
+        364.1597595214844,
+        425.6879577636719,
+        378.0628967285156
+      ]
+    },
+    {
+      "latex": "For every edge task \\lambda i = ⟨ e, e D ⟩\\in \\Lambda ^{a} there exists a move action m = ⟨ e, t i ⟩\\in \\pi ^{a} .",
+      "page": 18,
+      "bbox": [
+        121.17095184326172,
+        402.1697082519531,
+        539.9999389648438,
+        420.25689697265625
+      ]
+    },
+    {
+      "latex": "For every vertex task \\lambda i = ⟨ v, D ⟩\\in \\Lambda ^{a} , it holds that if D = 0 then the agent",
+      "page": 18,
+      "bbox": [
+        121.1708755493164,
+        426.95318603515625,
+        540.0337524414062,
+        441.9259033203125
+      ]
+    },
+    {
+      "latex": "^{=} ^{v} ∨\\exists ^{m} ^{\\in} ^{\\pi} ^{a} ^{:}",
+      "page": 18,
+      "bbox": [
+        269.0786437988281,
+        463.1636962890625,
+        362.202880859375,
+        483.0108947753906
+      ]
+    },
+    {
+      "latex": "v ^{a} ^{v} \\to\\cdot ( m ) = v,",
+      "page": 18,
+      "bbox": [
+        246.2440948486328,
+        466.2781677246094,
+        420.78155517578125,
+        481.1939697265625
+      ]
+    },
+    {
+      "latex": "\\exists w \\in \\pi ^{a} :",
+      "page": 18,
+      "bbox": [
+        193.59307861328125,
+        514.11669921875,
+        242.17388916015625,
+        531.0078735351562
+      ]
+    },
+    {
+      "latex": "v t t \\cdot\\to _{(} _{w} _{) =} _{v} _{∧} \\cdot\\to _{(} _{w} _{)} _{\\le} _{t} _{i} _{< t} _{i} _{+} \\lambda _{i,D} _{\\le} \\to\\cdot _{(} _{w} _{)}",
+      "page": 18,
+      "bbox": [
+        248.81507873535156,
+        517.5091552734375,
+        473.432373046875,
+        532.8819580078125
+      ]
+    },
+    {
+      "latex": "The final action \\alpha n is an infinite wait action ( \\alpha n,D = \\infty ). This is to model that agents",
+      "page": 18,
+      "bbox": [
+        95.41810607910156,
+        551.5977783203125,
+        540.0216674804688,
+        565.5008544921875
+      ]
+    },
+    {
+      "latex": "Without loss of generality, we assume that no two subsequent actions \\alpha i , \\alpha i +1 \\in \\pi ^{a} are both",
+      "page": 18,
+      "bbox": [
+        72.00004577636719,
+        583.5286865234375,
+        540.0159912109375,
+        601.4609375
+      ]
+    },
+    {
+      "latex": "A ⟨ \\alpha ^{i} , \\alpha ^{j} ⟩ is defined to mean that the states of i and j conflict while respec-",
+      "page": 19,
+      "bbox": [
+        72.0,
+        123.9481201171875,
+        540.0084838867188,
+        137.12782287597656
+      ]
+    },
+    {
+      "latex": "tively executing \\alpha ^{i} and \\alpha ^{j} . That is, for some time t when both \\alpha ^{i}",
+      "page": 19,
+      "bbox": [
+        72.00001525878906,
+        135.2796173095703,
+        430.0052185058594,
+        151.5728302001953
+      ]
+    },
+    {
+      "latex": "\\tau ^{and} \\alpha ^{j} \\tau ^{are} defined,",
+      "page": 19,
+      "bbox": [
+        427.0440673828125,
+        138.39410400390625,
+        539.9961547851562,
+        154.52882385253906
+      ]
+    },
+    {
+      "latex": "( i, \\alpha \\tau ^{i} ( t ) , j, \\alpha \\tau ^{j} ( t )) holds. We use the mapping ( \\alpha ^{i} , \\alpha ^{j} ) \\in{ , } (",
+      "page": 19,
+      "bbox": [
+        123.73020935058594,
+        152.840087890625,
+        531.64990234375,
+        168.10418701171875
+      ]
+    },
+    {
+      "latex": "conflict instead of conflict) to denote if ⟨ \\alpha ^{i} , \\alpha ^{j} ⟩ is a conflict or not. Similarly, we abuse",
+      "page": 19,
+      "bbox": [
+        72.00003051757812,
+        167.28607177734375,
+        540.0265502929688,
+        180.4647979736328
+      ]
+    },
+    {
+      "latex": "the notion to let ( \\pi ^{i} , \\pi ^{j} ) denote if \\exists⟨ \\alpha ^{i} , \\alpha ^{j} ⟩\\in \\pi ^{i} \\times \\pi ^{j} such that ( \\alpha ^{i} , \\alpha ^{j} ).",
+      "page": 19,
+      "bbox": [
+        72.00001525878906,
+        178.46165466308594,
+        540.0027465820312,
+        194.91078186035156
+      ]
+    },
+    {
+      "latex": "\\Pi = { \\pi ^{a} | a \\inA} contains one plan for each agent. If all plans \\pi ^{a} \\in \\Pi are",
+      "page": 19,
+      "bbox": [
+        144.55609130859375,
+        200.1306610107422,
+        540.0059814453125,
+        216.5797882080078
+      ]
+    },
+    {
+      "latex": "valid, then \\Pi is valid.",
+      "page": 19,
+      "bbox": [
+        72.0,
+        219.06959533691406,
+        182.29869079589844,
+        231.02479553222656
+      ]
+    },
+    {
+      "latex": "is a joint plan \\Pi for which ¬ ( \\pi ^{i} , \\pi ^{j} ) for all \\pi ^{i} , \\pi ^{j} \\in \\Pi. An",
+      "page": 19,
+      "bbox": [
+        133.82034301757812,
+        236.2456512451172,
+        497.4914245605469,
+        252.6938018798828
+      ]
+    },
+    {
+      "latex": "\\Pi ^{∗} is a solution minimising a function \\sigma over all solutions.",
+      "page": 19,
+      "bbox": [
+        112.0499267578125,
+        253.85775756835938,
+        472.899169921875,
+        267.1398010253906
+      ]
+    },
+    {
+      "latex": "– being satisfied. This requires LB ( N ) = \\sigma ( N \\Pi ) for every CT node N . That is, no",
+      "page": 19,
+      "bbox": [
+        77.00923156738281,
+        291.29962158203125,
+        540.0111083984375,
+        304.17718505859375
+      ]
+    },
+    {
+      "latex": "solution consistent with N C can have a lower cost than \\sigma ( N \\Pi ). For this to be satisfied, two",
+      "page": 19,
+      "bbox": [
+        72.0,
+        305.74462890625,
+        540.0145263671875,
+        319.49383544921875
+      ]
+    },
+    {
+      "latex": "things must hold. First, we assume that \\sigma (\\Pi) is decomposable into a function over, and non-",
+      "page": 19,
+      "bbox": [
+        72.0,
+        320.1906433105469,
+        540.05810546875,
+        332.1458435058594
+      ]
+    },
+    {
+      "latex": "decreasing in, individual plan costs \\sigma ^{\\pi} ( \\pi ) , \\pi \\in \\Pi. Second, we assume that a low-level planner",
+      "page": 19,
+      "bbox": [
+        72.0,
+        333.4131164550781,
+        540.0078125,
+        346.59185791015625
+      ]
+    },
+    {
+      "latex": "is available to compute a single-agent plan \\pi minimising \\sigma ^{\\pi} ( \\pi ) over all plans consistent with a",
+      "page": 19,
+      "bbox": [
+        72.0,
+        347.858154296875,
+        540.0205078125,
+        361.0378723144531
+      ]
+    },
+    {
+      "latex": "\\alpha \\sigma = \\alpha D , and a plan’s cost is equal to the sum of its actions’ costs, \\sigma ^{\\pi} ( \\pi ) = P \\alpha _{\\in} _{\\pi} \\alpha \\sigma .",
+      "page": 19,
+      "bbox": [
+        71.99998474121094,
+        391.1961669921875,
+        539.9998168945312,
+        412.9710693359375
+      ]
+    },
+    {
+      "latex": "We restrict conflicts to be pairwise, and take to be symmetric: ( i, s i , j, s j ) =",
+      "page": 20,
+      "bbox": [
+        72.0,
+        197.4015655517578,
+        558.9492797851562,
+        210.2791748046875
+      ]
+    },
+    {
+      "latex": "a solution; it a child does represent a solution \\Pi, and \\sigma (\\Pi) = LB ( N ), then already here we",
+      "page": 21,
+      "bbox": [
+        72.0,
+        103.50361633300781,
+        540.0580444335938,
+        115.45881652832031
+      ]
+    },
+    {
+      "latex": "know that \\Pi is optimal. Instead of halting with this optimal solution, OC-CBS will continue",
+      "page": 21,
+      "bbox": [
+        72.0,
+        117.94960021972656,
+        540.0459594726562,
+        129.90480041503906
+      ]
+    },
+    {
+      "latex": "iterating until the child node is selected. Even if \\sigma (\\Pi) > LB ( N ), \\Pi may still be optimal,",
+      "page": 21,
+      "bbox": [
+        72.0,
+        132.3946075439453,
+        540.0341186523438,
+        144.3498077392578
+      ]
+    },
+    {
+      "latex": "only that its optimality has not yet been confirmed. Regardless, \\Pi can be made available as",
+      "page": 21,
+      "bbox": [
+        72.0,
+        146.84059143066406,
+        540.0699462890625,
+        158.79579162597656
+      ]
+    },
+    {
+      "latex": "an incumbent with an optimality gap upper bound \\sigma (\\Pi) /LB ( N ). Furthermore, OC-CBS is",
+      "page": 21,
+      "bbox": [
+        72.0,
+        161.2865753173828,
+        540.0580444335938,
+        173.2417755126953
+      ]
+    },
+    {
+      "latex": "plan, in addition to the regular branching using \\delta -BR. AOC-CBS is agnostic to the selection",
+      "page": 21,
+      "bbox": [
+        72.0,
+        356.30560302734375,
+        540.0460205078125,
+        368.26080322265625
+      ]
+    },
+    {
+      "latex": "The high-level search is done over the CT using a modular search portfolio \\Psi = ⟨ \\psi ^{1} , \\psi ^{2} , . . . , \\psi ^{p} ⟩",
+      "page": 21,
+      "bbox": [
+        72.0,
+        469.693115234375,
+        546.9075317382812,
+        482.8728332519531
+      ]
+    },
+    {
+      "latex": "containing a finite number of policies. Each policy \\psi ^{i} \\in \\Psi may be unique, consisting of a",
+      "page": 21,
+      "bbox": [
+        71.99996948242188,
+        480.86968994140625,
+        540.0258178710938,
+        497.3178405761719
+      ]
+    },
+    {
+      "latex": "^{and} ^{a} ^{set} ^{of} repair methods \\psi ^{i} selection policy \\psi ^{i} ^{:}",
+      "page": 21,
+      "bbox": [
+        71.99996948242188,
+        498.5850830078125,
+        340.2317810058594,
+        514.872802734375
+      ]
+    },
+    {
+      "latex": ": \\psi ^{i} controls which unexpanded CT node is selected for expansion.",
+      "page": 21,
+      "bbox": [
+        193.3430633544922,
+        520.2540893554688,
+        540.0056762695312,
+        536.541748046875
+      ]
+    },
+    {
+      "latex": "At iteration k of AOC-CBS, the set Q k contains all CT leaf nodes, and \\Pi denotes the",
+      "page": 22,
+      "bbox": [
+        72.0,
+        74.45671081542969,
+        540.001220703125,
+        88.35987854003906
+      ]
+    },
+    {
+      "latex": "\\Pi ^{\u0000} ^{\u0001} if a solution has been found and k = \\infty best solution found so far, with k = \\sigma",
+      "page": 22,
+      "bbox": [
+        72.0,
+        87.96977996826172,
+        540.0076293945312,
+        102.80586242675781
+      ]
+    },
+    {
+      "latex": "otherwise. Initially Q 0 = { R } contains the root node. Let k = min N \\inQ _{k} _{LB} ( N ) denote",
+      "page": 22,
+      "bbox": [
+        72.00003051757812,
+        103.34867858886719,
+        540.0006713867188,
+        118.65785217285156
+      ]
+    },
+    {
+      "latex": "the minimum cost lower bound over all leaf nodes if Q k _{̸} = , otherwise k = k . Each",
+      "page": 22,
+      "bbox": [
+        72.0,
+        117.79472351074219,
+        540.0006103515625,
+        131.69789123535156
+      ]
+    },
+    {
+      "latex": "policy \\psi \\in \\Psi, in turn, selects a node from Q k to expand according to its selection rule \\psi ;",
+      "page": 22,
+      "bbox": [
+        71.99996948242188,
+        132.24070739746094,
+        539.9998168945312,
+        146.1438751220703
+      ]
+    },
+    {
+      "latex": "selectable nodes remain in Q k . Each policy \\psi then independently applies \\delta -BR to its selected",
+      "page": 22,
+      "bbox": [
+        72.0,
+        175.5776824951172,
+        540.0034790039062,
+        188.6102294921875
+      ]
+    },
+    {
+      "latex": "applies its repair methods in \\psi to its selected CT node, and additionally checks whether",
+      "page": 22,
+      "bbox": [
+        72.0,
+        204.6245880126953,
+        540.005615234375,
+        218.37281799316406
+      ]
+    },
+    {
+      "latex": "\\Pi _{k} _{+1} = arg min \\sigma (\\Pi)",
+      "page": 22,
+      "bbox": [
+        241.75799560546875,
+        271.8875732421875,
+        370.2579040527344,
+        286.7977600097656
+      ]
+    },
+    {
+      "latex": "\\Pi \\in \\cup{ \\Pi }",
+      "page": 22,
+      "bbox": [
+        282.219970703125,
+        286.01373291015625,
+        343.2850646972656,
+        294.0871276855469
+      ]
+    },
+    {
+      "latex": "\\Pi ^{\u0001} ^{\u0000} and the set of unexpanded nodes with the new upper bound k +1 = \\sigma",
+      "page": 22,
+      "bbox": [
+        71.99996948242188,
+        306.5887145996094,
+        479.8661804199219,
+        321.4247741699219
+      ]
+    },
+    {
+      "latex": "N \\in ( Q k _{\\ Q} ) \\cupQ | LB ( N ) < k +1",
+      "page": 22,
+      "bbox": [
+        217.22801208496094,
+        327.7165832519531,
+        435.7201232910156,
+        346.40179443359375
+      ]
+    },
+    {
+      "latex": "\b Q _{k} _{+1} _{=}",
+      "page": 22,
+      "bbox": [
+        168.80401611328125,
+        331.720703125,
+        443.19293212890625,
+        346.5567321777344
+      ]
+    },
+    {
+      "latex": "optimal solution \\Pi ^{∗} and optimal objective value \\sigma ^{∗} , it holds that",
+      "page": 22,
+      "bbox": [
+        72.00006103515625,
+        391.520751953125,
+        405.07415771484375,
+        404.80377197265625
+      ]
+    },
+    {
+      "latex": "k ^{\\le} \\sigma ^{∗} ^{\\le} k ^{;}",
+      "page": 22,
+      "bbox": [
+        116.82986450195312,
+        413.18975830078125,
+        193.40086364746094,
+        428.11083984375
+      ]
+    },
+    {
+      "latex": "∆ = k / k _{−} 1 is a true optimality gap upper bound on \\Pi",
+      "page": 22,
+      "bbox": [
+        95.41809844970703,
+        431.8475646972656,
+        435.43487548828125,
+        449.77984619140625
+      ]
+    },
+    {
+      "latex": "if Q k = then \\sigma (\\Pi _{k} ) = \\sigma ^{∗} and \\Pi",
+      "page": 22,
+      "bbox": [
+        95.41810607910156,
+        456.5277099609375,
+        284.1178894042969,
+        472.91876220703125
+      ]
+    },
+    {
+      "latex": "A conflict ⟨ \\alpha ^{i} , \\alpha ^{j} ⟩ is a conflict which upon branching results in an increase in the",
+      "page": 23,
+      "bbox": [
+        72.0,
+        177.29010009765625,
+        540.0216064453125,
+        190.4688262939453
+      ]
+    },
+    {
+      "latex": "plan costs \\sigma ^{\\pi} ( \\pi ^{i} ) and \\sigma ^{\\pi} ( \\pi ^{j} ) for each agent i and j [48]. A conflict results in an",
+      "page": 23,
+      "bbox": [
+        72.0,
+        191.736083984375,
+        540.0369873046875,
+        204.91481018066406
+      ]
+    },
+    {
+      "latex": "Note that n = \\infty returns the best conflict over all conflicts at a node, and n = 1 reduces to",
+      "page": 23,
+      "bbox": [
+        72.0,
+        409.49169921875,
+        540.070068359375,
+        421.6018371582031
+      ]
+    },
+    {
+      "latex": "From a state ⟨ v, I , \\lambda i ⟩ with arrival time t , two kinds of transitions are possible:",
+      "page": 24,
+      "bbox": [
+        72.0,
+        74.45671081542969,
+        514.726318359375,
+        87.48926544189453
+      ]
+    },
+    {
+      "latex": "v _{1.} are constructed exactly as in CSIPP: for every edge _{e} with \\cdot\\to _{(} _{e} _{) =} _{v} _{,}",
+      "page": 24,
+      "bbox": [
+        86.30697631835938,
+        94.73614501953125,
+        540.0034790039062,
+        109.37492370605469
+      ]
+    },
+    {
+      "latex": "the set of safe times to traverse e and arrive at v ^{′} =",
+      "page": 24,
+      "bbox": [
+        101.2650146484375,
+        106.38764953613281,
+        366.6108703613281,
+        122.68183898925781
+      ]
+    },
+    {
+      "latex": "v \\to\\cdot _{(} _{e} _{)} _{is}",
+      "page": 24,
+      "bbox": [
+        369.927001953125,
+        109.18212890625,
+        407.0494689941406,
+        123.81993103027344
+      ]
+    },
+    {
+      "latex": ") \\cap S e \\cap S ^{+} ^{e} D P e = [ t , t",
+      "page": 24,
+      "bbox": [
+        245.35301208496094,
+        134.78411865234375,
+        394.720703125,
+        150.87586975097656
+      ]
+    },
+    {
+      "latex": ", \\lambda i ⟩ exists at the earliest time of each maximally connected",
+      "page": 24,
+      "bbox": [
+        235.54904174804688,
+        192.26463317871094,
+        540.0198364257812,
+        205.29815673828125
+      ]
+    },
+    {
+      "latex": "interval in P e . If \\lambda i is a vertex task at v , P e is additionally restricted to [ t , t +",
+      "page": 24,
+      "bbox": [
+        101.26502990722656,
+        202.5275421142578,
+        540.0049438476562,
+        220.61476135253906
+      ]
+    },
+    {
+      "latex": "\\lambda i,D ): at t + \\lambda i,D the task is completed regardless, so later departures are already",
+      "page": 24,
+      "bbox": [
+        101.26507568359375,
+        216.97352600097656,
+        540.0354614257812,
+        235.0597686767578
+      ]
+    },
+    {
+      "latex": "captured at state ⟨ v, I , \\lambda i +1 ⟩ . Otherwise, if \\lambda i is an edge task on e , then all states",
+      "page": 24,
+      "bbox": [
+        101.26507568359375,
+        235.6025848388672,
+        540.0189819335938,
+        249.50575256347656
+      ]
+    },
+    {
+      "latex": "reached by a transition along e lead to a state containing the next task \\lambda i +1 (or",
+      "page": 24,
+      "bbox": [
+        101.26504516601562,
+        250.20350646972656,
+        510.6419677734375,
+        263.9517517089844
+      ]
+    },
+    {
+      "latex": "if \\lambda i was the last).",
+      "page": 24,
+      "bbox": [
+        101.26504516601562,
+        264.6495056152344,
+        194.84945678710938,
+        278.3977355957031
+      ]
+    },
+    {
+      "latex": "2. A exists if \\lambda i is a vertex task at v and t + \\lambda i,D <",
+      "page": 24,
+      "bbox": [
+        86.30703735351562,
+        281.9794921875,
+        540.0049438476562,
+        300.06671142578125
+      ]
+    },
+    {
+      "latex": ", \\lambda i +1 ⟩ with arrival time t + \\lambda i,D . Move",
+      "page": 24,
+      "bbox": [
+        316.1930847167969,
+        296.4255065917969,
+        540.0009155273438,
+        313.6410827636719
+      ]
+    },
+    {
+      "latex": "Let ( v, v ^{′} ) be the minimum possible time to move from v \\inV ^{a} to v ^{′} \\inV ^{a}",
+      "page": 24,
+      "bbox": [
+        72.00007629394531,
+        361.276611328125,
+        539.499267578125,
+        377.7247619628906
+      ]
+    },
+    {
+      "latex": "ignoring constraints and unsafe intervals. We define the heuristic at state ⟨ v, I , \\lambda i ⟩ with",
+      "page": 24,
+      "bbox": [
+        72.00015258789062,
+        380.06060791015625,
+        540.0028686523438,
+        393.0931091308594
+      ]
+    },
+    {
+      "latex": "TP-SIPP is a repair function that takes a valid but non-solution joint plan \\Pi as input and",
+      "page": 25,
+      "bbox": [
+        72.0,
+        306.2435302734375,
+        540.05810546875,
+        318.19873046875
+      ]
+    },
+    {
+      "latex": "returns either a repaired solution \\Pi ^{′} or failure. The pseudo-code is found in Algorithm 1,",
+      "page": 25,
+      "bbox": [
+        72.0,
+        316.35052490234375,
+        540.0139770507812,
+        332.64373779296875
+      ]
+    },
+    {
+      "latex": "Since \\Pi is valid, no conflict-free plan \\pi \\in \\Pi on which the following description relies.",
+      "page": 25,
+      "bbox": [
+        71.99998474121094,
+        334.9796142578125,
+        540.0101928710938,
+        347.0897521972656
+      ]
+    },
+    {
+      "latex": "blocks another agent from completing its tasks. If it did, \\pi would conflict with that agent’s",
+      "page": 25,
+      "bbox": [
+        71.99998474121094,
+        349.58056640625,
+        540.0580444335938,
+        361.5357666015625
+      ]
+    },
+    {
+      "latex": "own valid plan and therefore not be conflict-free. So every conflict-free plan in \\Pi is copied",
+      "page": 25,
+      "bbox": [
+        71.99998474121094,
+        364.0265808105469,
+        540.0220947265625,
+        375.9817810058594
+      ]
+    },
+    {
+      "latex": "directly into \\Pi ^{′} , and only the conflicting agents are left unplanned (lines 2–4); the better",
+      "page": 25,
+      "bbox": [
+        71.99998474121094,
+        377.144775390625,
+        540.0484008789062,
+        390.42779541015625
+      ]
+    },
+    {
+      "latex": "\\Pi is to begin with, the fewer repairs are needed. Each unplanned agent has a deadline:",
+      "page": 25,
+      "bbox": [
+        71.99998474121094,
+        392.9176025390625,
+        540.022216796875,
+        404.872802734375
+      ]
+    },
+    {
+      "latex": "waitable and, if so, whether some plan already in \\Pi ^{′} eventually conflicts with it (lines 6–7).",
+      "page": 25,
+      "bbox": [
+        71.99998474121094,
+        417.47161865234375,
+        540.0263671875,
+        433.76483154296875
+      ]
+    },
+    {
+      "latex": "Unplanned agents are grouped into three tiers by this deadline: t = 0 (severely constrained),",
+      "page": 25,
+      "bbox": [
+        71.99996948242188,
+        436.2556457519531,
+        540.0579833984375,
+        448.2108459472656
+      ]
+    },
+    {
+      "latex": "t \\in (0 , \\infty ) (constrained), and t = \\infty (unconstrained) (lines 8–10). Starting with the severely",
+      "page": 25,
+      "bbox": [
+        71.99996948242188,
+        450.5467224121094,
+        540.0938110351562,
+        462.6568603515625
+      ]
+    },
+    {
+      "latex": "A valid plan \\pi ^{a} is sought using MG-CSIPP that (i) avoids conflicts with plans already",
+      "page": 25,
+      "bbox": [
+        71.99996948242188,
+        475.2546691894531,
+        540.0296020507812,
+        491.5478820800781
+      ]
+    },
+    {
+      "latex": "in \\Pi ^{′} , (ii) avoids conflicting with any still-unplanned agent at that agent’s starting vertex",
+      "page": 25,
+      "bbox": [
+        71.99996948242188,
+        492.71185302734375,
+        540.0753173828125,
+        505.993896484375
+      ]
+    },
+    {
+      "latex": "agent’s tasks (line 30). Together, these conditions guarantee that \\pi ^{a} leaves every remaining",
+      "page": 25,
+      "bbox": [
+        71.99996948242188,
+        518.5916748046875,
+        540.012939453125,
+        534.8858642578125
+      ]
+    },
+    {
+      "latex": "1: (\\Pi)",
+      "page": 26,
+      "bbox": [
+        78.2979965209961,
+        125.96760559082031,
+        214.59120178222656,
+        137.9228057861328
+      ]
+    },
+    {
+      "latex": "P ←{ a \\inA | \\pi ^{a} \\in \\Pi is conflict-free }",
+      "page": 26,
+      "bbox": [
+        109.45718383789062,
+        135.91966247558594,
+        300.0686950683594,
+        152.36878967285156
+      ]
+    },
+    {
+      "latex": "\\Pi ^{′} ←{ \\pi ^{a} \\in \\Pi | a \\in P }",
+      "page": 26,
+      "bbox": [
+        109.45718383789062,
+        150.3656463623047,
+        226.9348907470703,
+        166.8147735595703
+      ]
+    },
+    {
+      "latex": "U ←A \\ P ▷ Unplanned agents 4:",
+      "page": 26,
+      "bbox": [
+        78.29800415039062,
+        169.14964294433594,
+        536.1143798828125,
+        181.25978088378906
+      ]
+    },
+    {
+      "latex": "a \\in U ▷ Deadlines reflect only planned agents in P 6:",
+      "page": 26,
+      "bbox": [
+        78.29800415039062,
+        198.04161071777344,
+        534.5123291015625,
+        210.15174865722656
+      ]
+    },
+    {
+      "latex": "\\delta ( a ) ← ( a, \\Pi ^{′} )",
+      "page": 26,
+      "bbox": [
+        127.01937866210938,
+        211.31472778320312,
+        253.69393920898438,
+        224.5977325439453
+      ]
+    },
+    {
+      "latex": "U ^{0} ← ( ⟨ a \\in U | \\delta ( a ) = 0 ⟩ )",
+      "page": 26,
+      "bbox": [
+        109.45718383789062,
+        225.58360290527344,
+        329.65057373046875,
+        242.03273010253906
+      ]
+    },
+    {
+      "latex": "U ^{(0} ^{,} \\infty ^{)} ← ( ⟨ a \\in U | 0 < \\delta ( a ) < \\infty⟩ , \\delta )",
+      "page": 26,
+      "bbox": [
+        109.45718383789062,
+        240.0295867919922,
+        401.95587158203125,
+        256.4777526855469
+      ]
+    },
+    {
+      "latex": "U \\infty ← ( ⟨ a \\in U | \\delta ( a ) = \\infty⟩ )",
+      "page": 26,
+      "bbox": [
+        109.45748901367188,
+        257.6416931152344,
+        339.9816589355469,
+        270.9237365722656
+      ]
+    },
+    {
+      "latex": "( U ^{0} ) = Failed",
+      "page": 26,
+      "bbox": [
+        178.97698974609375,
+        286.63604736328125,
+        248.49876403808594,
+        299.8157653808594
+      ]
+    },
+    {
+      "latex": "( U ^{(0} ^{,} \\infty ^{)} ) = Failed",
+      "page": 26,
+      "bbox": [
+        178.97698974609375,
+        315.4247741699219,
+        265.9067687988281,
+        328.7077941894531
+      ]
+    },
+    {
+      "latex": "( U \\infty ) = Failed",
+      "page": 26,
+      "bbox": [
+        178.9770050048828,
+        344.3167724609375,
+        252.7337646484375,
+        357.59881591796875
+      ]
+    },
+    {
+      "latex": "\\Pi ^{′}",
+      "page": 26,
+      "bbox": [
+        146.76966857910156,
+        373.20782470703125,
+        161.72938537597656,
+        386.4908447265625
+      ]
+    },
+    {
+      "latex": "is a cost lower bound over all solutions in ( N ); \\Pi",
+      "page": 28,
+      "bbox": [
+        72.0,
+        74.61164855957031,
+        325.00787353515625,
+        86.56684875488281
+      ]
+    },
+    {
+      "latex": "k ^{);} ^{k} = min ^{N} \\inQ k ^{LB} ^{(} ^{N} ) if ^{Q} ^{k} ^{̸} ^{=} , otherwise ^{k} ^{=} ^{k} ^{;} iteration ^{k} , with ^{k} ^{=} \\sigma (\\Pi",
+      "page": 28,
+      "bbox": [
+        72.0,
+        88.90275573730469,
+        539.9998168945312,
+        104.21186828613281
+      ]
+    },
+    {
+      "latex": "and ∆ = k / k _{−} 1 is an upper bound on \\Pi _{k} ’s optimality gap.",
+      "page": 28,
+      "bbox": [
+        72.0,
+        103.34873962402344,
+        435.48236083984375,
+        118.56788635253906
+      ]
+    },
+    {
+      "latex": "\\exists N ^{∗} \\inQ _{k} : \\Pi ^{∗} \\in ( N ^{∗} ) UB _{k} = \\sigma ^{∗}",
+      "page": 28,
+      "bbox": [
+        71.99996948242188,
+        138.29086303710938,
+        327.5230712890625,
+        153.3668975830078
+      ]
+    },
+    {
+      "latex": ": At k = 0 we have Q 0 = { R } . Since the empty constraint set R C =",
+      "page": 28,
+      "bbox": [
+        156.0547637939453,
+        188.77769470214844,
+        525.8478393554688,
+        202.6818389892578
+      ]
+    },
+    {
+      "latex": "permits all solutions, \\Pi ^{∗} \\in ( R ). Reachability holds at k = 0.",
+      "page": 28,
+      "bbox": [
+        101.26498413085938,
+        202.05178833007812,
+        419.448974609375,
+        215.3338165283203
+      ]
+    },
+    {
+      "latex": "\\Pi _{k} _{+1} = arg min \\sigma (\\Pi)",
+      "page": 28,
+      "bbox": [
+        256.3909606933594,
+        291.8575744628906,
+        384.889892578125,
+        306.76776123046875
+      ]
+    },
+    {
+      "latex": "\\Pi \\in \\cup{ \\Pi }",
+      "page": 28,
+      "bbox": [
+        296.8529357910156,
+        305.9837341308594,
+        357.91705322265625,
+        314.05712890625
+      ]
+    },
+    {
+      "latex": "N \\in ( Q k _{\\ Q} ) \\cupQ | LB ( N ) < UB k +1",
+      "page": 28,
+      "bbox": [
+        231.88995361328125,
+        343.7146301269531,
+        450.322021484375,
+        362.3988342285156
+      ]
+    },
+    {
+      "latex": "\b Q _{k} _{+1} _{=}",
+      "page": 28,
+      "bbox": [
+        183.4659423828125,
+        347.7177429199219,
+        457.7948303222656,
+        362.55377197265625
+      ]
+    },
+    {
+      "latex": "where all nodes N with LB ( N ) \\ge UB k +1 are pruned. There are three cases:",
+      "page": 28,
+      "bbox": [
+        101.26495361328125,
+        372.1226501464844,
+        494.20843505859375,
+        386.0257873535156
+      ]
+    },
+    {
+      "latex": "1. If UB k = \\sigma ^{∗} , then UB k +1 = \\sigma ^{∗} since no solution can have a cost lower than \\sigma ^{∗} .",
+      "page": 28,
+      "bbox": [
+        112.0599365234375,
+        392.6197509765625,
+        539.999755859375,
+        407.6947937011719
+      ]
+    },
+    {
+      "latex": "2. If instead UB k > \\sigma ^{∗} but during the expansion a solution with cost \\sigma ^{∗} was found,",
+      "page": 28,
+      "bbox": [
+        112.0599136352539,
+        428.7337951660156,
+        540.0065307617188,
+        443.809814453125
+      ]
+    },
+    {
+      "latex": "then UB k +1 = \\sigma ^{∗} . Optimality holds at the start of iteration k + 1.",
+      "page": 28,
+      "bbox": [
+        127.01791381835938,
+        443.1797790527344,
+        467.56561279296875,
+        458.2558288574219
+      ]
+    },
+    {
+      "latex": "3. Otherwise, UB k \\ge UB k +1 > \\sigma ^{∗} . Then optimality does not hold, and therefore",
+      "page": 28,
+      "bbox": [
+        112.05990600585938,
+        464.8487854003906,
+        540.032958984375,
+        479.923828125
+      ]
+    },
+    {
+      "latex": "by the invariant there exists N ^{∗} \\inQ k such that \\Pi ^{∗} \\in ( N ^{∗} ). This gives two",
+      "page": 28,
+      "bbox": [
+        127.01792907714844,
+        479.2947998046875,
+        540.0109252929688,
+        494.3698425292969
+      ]
+    },
+    {
+      "latex": "(i) N ^{∗} : N ^{∗} ^{̸} \\inQ . Since \\Pi ^{∗} \\in ( N ^{∗} ) and \\sigma ^{∗} < UB k +1 ,",
+      "page": 28,
+      "bbox": [
+        130.69894409179688,
+        512.2427368164062,
+        512.8087768554688,
+        529.6142578125
+      ]
+    },
+    {
+      "latex": "(AOC-CBS Termination) Q k = UB k = \\sigma ^{∗} \\Pi",
+      "page": 29,
+      "bbox": [
+        148.2861328125,
+        137.04580688476562,
+        457.0506896972656,
+        152.12086486816406
+      ]
+    },
+    {
+      "latex": "is impossible, optimality must hold. That is, UB k = \\sigma ^{∗} and \\Pi is an optimal solution.",
+      "page": 29,
+      "bbox": [
+        72.0,
+        193.58377075195312,
+        519.2179565429688,
+        208.65882873535156
+      ]
+    },
+    {
+      "latex": "k k ^{=} \\sigma (\\Pi _{k} ^{)} ^{\\Pi} _{k}",
+      "page": 29,
+      "bbox": [
+        214.1951141357422,
+        237.0026397705078,
+        494.0784912109375,
+        252.0668487548828
+      ]
+    },
+    {
+      "latex": "∆ = k / k _{−} 1",
+      "page": 29,
+      "bbox": [
+        191.10968017578125,
+        251.29368591308594,
+        305.9682922363281,
+        265.04193115234375
+      ]
+    },
+    {
+      "latex": "If no incumbent solution \\Pi has been found then k = \\infty . The cost of any",
+      "page": 29,
+      "bbox": [
+        102.796630859375,
+        278.9396667480469,
+        540.01513671875,
+        292.84381103515625
+      ]
+    },
+    {
+      "latex": "Otherwise, k = \\sigma (\\Pi solution cannot be greater than \\infty . _{k} ), and it must hold that",
+      "page": 29,
+      "bbox": [
+        72.00006103515625,
+        293.38568115234375,
+        540.0228881835938,
+        308.60479736328125
+      ]
+    },
+    {
+      "latex": "\\sigma (\\Pi ^{∗} ) \\le k , else \\Pi provides a counterexample. Thus, at every iteration k , k is a",
+      "page": 29,
+      "bbox": [
+        72.00003051757812,
+        306.6597595214844,
+        540.0060424804688,
+        321.7347717285156
+      ]
+    },
+    {
+      "latex": "If in the invariant of Theorem 5.1 holds, such that k = \\sigma ^{∗} , then either",
+      "page": 29,
+      "bbox": [
+        72.00003051757812,
+        342.7737731933594,
+        540.0005493164062,
+        357.84979248046875
+      ]
+    },
+    {
+      "latex": "Q _{k} = and _{k} = _{k} which is a true lower bound on \\sigma ^{∗} , or Q _{k} _{̸} = and _{k} =",
+      "page": 29,
+      "bbox": [
+        72.00003051757812,
+        357.2197570800781,
+        540.0048217773438,
+        372.2958068847656
+      ]
+    },
+    {
+      "latex": "min N \\inQ _{k} _{LB} ( N ) < k since \\forall N \\inQ k : LB ( N ) < k . If instead in the in-",
+      "page": 29,
+      "bbox": [
+        71.99996948242188,
+        372.8376770019531,
+        539.9943237304688,
+        388.1468200683594
+      ]
+    },
+    {
+      "latex": "variant of Theorem 5.1 doesn’t hold, then must hold: \\exists N ^{∗} \\inQ k : \\Pi ^{∗} \\in ( N ^{∗} ).",
+      "page": 29,
+      "bbox": [
+        71.99993896484375,
+        386.1117858886719,
+        540.002685546875,
+        401.18682861328125
+      ]
+    },
+    {
+      "latex": "Then k = min N \\inQ _{k} _{LB} ( N ) \\le LB ( N ^{∗} ) \\le \\sigma ^{∗} . Thus, at every iteration k , k is a true",
+      "page": 29,
+      "bbox": [
+        71.99990844726562,
+        400.55682373046875,
+        540.0097045898438,
+        417.0388488769531
+      ]
+    },
+    {
+      "latex": "Finally, since \\le \\sigma ^{∗} , it must hold that",
+      "page": 29,
+      "bbox": [
+        71.99990844726562,
+        436.67181396484375,
+        282.692626953125,
+        449.953857421875
+      ]
+    },
+    {
+      "latex": "\\sigma (\\Pi _{k} ) _{=} k _{\\ge} k",
+      "page": 29,
+      "bbox": [
+        245.1789093017578,
+        462.45062255859375,
+        366.10845947265625,
+        482.4938659667969
+      ]
+    },
+    {
+      "latex": "\\sigma ∗ k k",
+      "page": 29,
+      "bbox": [
+        269.0887451171875,
+        478.29681396484375,
+        360.5921325683594,
+        491.6172180175781
+      ]
+    },
+    {
+      "latex": "Thus, at every iteration k , ∆ = k / k − 1 is a true upper bound on the optimality",
+      "page": 29,
+      "bbox": [
+        72.00003051757812,
+        502.50469970703125,
+        540.0410766601562,
+        516.2529296875
+      ]
+    },
+    {
+      "latex": "gap of the incumbent solution \\Pi _{k} .",
+      "page": 29,
+      "bbox": [
+        71.99998474121094,
+        517.1055908203125,
+        255.13778686523438,
+        532.1697998046875
+      ]
+    },
+    {
+      "latex": "Q _{K} = for some bounded iteration K . At that point, by the invariant in Theorem 5.1, the",
+      "page": 30,
+      "bbox": [
+        72.0,
+        88.90269470214844,
+        540.07666015625,
+        102.80586242675781
+      ]
+    },
+    {
+      "latex": "incumbent \\Pi will be an optimal solution.",
+      "page": 30,
+      "bbox": [
+        72.0,
+        103.50361633300781,
+        296.7771301269531,
+        115.45881652832031
+      ]
+    },
+    {
+      "latex": "(Policy-driven Termination) \\psi \\in \\Psi",
+      "page": 30,
+      "bbox": [
+        147.2221221923828,
+        130.9946746826172,
+        515.3587036132812,
+        143.1048126220703
+      ]
+    },
+    {
+      "latex": "N \\inQ k LB ( N )",
+      "page": 30,
+      "bbox": [
+        141.7346649169922,
+        145.44065856933594,
+        293.0502014160156,
+        158.47320556640625
+      ]
+    },
+    {
+      "latex": "If at least one such policy \\psi exists, then at every iteration at least one node N \\inQ k",
+      "page": 30,
+      "bbox": [
+        102.79659271240234,
+        187.5326385498047,
+        539.2874755859375,
+        200.565185546875
+      ]
+    },
+    {
+      "latex": "minimizing \\sigma will be expanded. This is a best-first search (with possibly additional node",
+      "page": 30,
+      "bbox": [
+        72.0,
+        202.1336212158203,
+        540.022216796875,
+        214.0888214111328
+      ]
+    },
+    {
+      "latex": "expansions) using \\delta -BR, which is consistent with an OC-CBS search and therefore inherits",
+      "page": 30,
+      "bbox": [
+        72.0,
+        216.57960510253906,
+        539.998291015625,
+        228.53480529785156
+      ]
+    },
+    {
+      "latex": "N \\inQ k minimizing LB ( N ) is selected for expansion at every iteration k , min N \\inQ _{k} _{LB} ( N )",
+      "page": 30,
+      "bbox": [
+        72.0,
+        266.98468017578125,
+        539.9971923828125,
+        282.2938537597656
+      ]
+    },
+    {
+      "latex": "vertex pairs, starting with n = 2 and incrementing until no solution (including sub-optimal)",
+      "page": 31,
+      "bbox": [
+        72.0,
+        660.5606689453125,
+        540.0698852539062,
+        672.515869140625
+      ]
+    },
+    {
+      "latex": "(a) with |V| = (b) with |V| = (c) with |V| = 1 607",
+      "page": 32,
+      "bbox": [
+        72.0,
+        257.4698486328125,
+        540.0009765625,
+        268.52032470703125
+      ]
+    },
+    {
+      "latex": "178 and |E| = 916. 362 and |E| = 1 088. and |E| = 7 894.",
+      "page": 32,
+      "bbox": [
+        72.0,
+        271.01983642578125,
+        471.3719177246094,
+        282.0703125
+      ]
+    },
+    {
+      "latex": "pendix B with a density \\rho = 1 . 0.",
+      "page": 32,
+      "bbox": [
+        72.0,
+        308.9286804199219,
+        239.37281799316406,
+        320.8838806152344
+      ]
+    },
+    {
+      "latex": "\\sqrt",
+      "page": 32,
+      "bbox": [
+        414.7569885253906,
+        335.0987243652344,
+        424.7156677246094,
+        347.0539245605469
+      ]
+    },
+    {
+      "latex": "\\sqrt",
+      "page": 32,
+      "bbox": [
+        227.27699279785156,
+        695.288818359375,
+        237.2356719970703,
+        707.2440185546875
+      ]
+    },
+    {
+      "latex": "when ∆ = \\infty ), so it is used continuously while ∆ \\ge 5% and is progressively phased",
+      "page": 34,
+      "bbox": [
+        72.0,
+        301.0697021484375,
+        540.0241088867188,
+        317.5178527832031
+      ]
+    },
+    {
+      "latex": "out in favour of the LB-raising portfolio as ∆ decreases. At ∆ = 1% it runs only every",
+      "page": 34,
+      "bbox": [
+        72.0,
+        315.670654296875,
+        540.0240478515625,
+        331.9638671875
+      ]
+    },
+    {
+      "latex": "behind. Taken over the full 30 second budget, finds a feasible solution to 6 . 9 \\times as many",
+      "page": 37,
+      "bbox": [
+        72.0,
+        190.0236053466797,
+        540.0701293945312,
+        202.1337432861328
+      ]
+    },
+    {
+      "latex": "problems as on (2329 versus 336), 4 . 7 \\times as many on (3896 versus 827),",
+      "page": 37,
+      "bbox": [
+        72.0,
+        204.46958923339844,
+        540.1060180664062,
+        216.57972717285156
+      ]
+    },
+    {
+      "latex": "and 3 . 1 \\times as many on (904 versus 291). Specifically on , 4 . 7 \\times is a",
+      "page": 37,
+      "bbox": [
+        72.0,
+        218.9145965576172,
+        540.0819091796875,
+        231.0247344970703
+      ]
+    },
+    {
+      "latex": "t = 30 seconds. The geometric mean curve is also shown, computed by dividing the data",
+      "page": 37,
+      "bbox": [
+        71.99996948242188,
+        522.4326782226562,
+        540.0422973632812,
+        536.180908203125
+      ]
+    },
+    {
+      "latex": "0.78 \\times 0.93 \\times 1.19 \\times 0–0 . 1 572 0.02 0.03",
+      "page": 38,
+      "bbox": [
+        123.48100280761719,
+        476.5386962890625,
+        488.62884521484375,
+        488.6488342285156
+      ]
+    },
+    {
+      "latex": "0.78 \\times 2.02 \\times 2.59 \\times 0 . 1–0 . 5 311 0.22 0.28",
+      "page": 38,
+      "bbox": [
+        123.48100280761719,
+        490.9847106933594,
+        488.64080810546875,
+        503.0948486328125
+      ]
+    },
+    {
+      "latex": "1.16 \\times 3.68 \\times 3.16 \\times 0 . 5–2 231 1.06 0.91",
+      "page": 38,
+      "bbox": [
+        123.48100280761719,
+        505.43072509765625,
+        488.62884521484375,
+        517.5408325195312
+      ]
+    },
+    {
+      "latex": "1.70 \\times 4.01 \\times 2.36 \\times 2–5 145 3.18 1.87",
+      "page": 38,
+      "bbox": [
+        123.48100280761719,
+        519.876708984375,
+        488.62884521484375,
+        531.98681640625
+      ]
+    },
+    {
+      "latex": "2.88 \\times 4.43 \\times 1.54 \\times 5–15 101 8.30 2.88",
+      "page": 38,
+      "bbox": [
+        123.48100280761719,
+        534.32275390625,
+        488.62884521484375,
+        546.432861328125
+      ]
+    },
+    {
+      "latex": "3.41 \\times 4.77 \\times 1.40 \\times 15–30 46 19.65 5.76",
+      "page": 38,
+      "bbox": [
+        123.48100280761719,
+        548.7677001953125,
+        488.64080810546875,
+        560.8778076171875
+      ]
+    },
+    {
+      "latex": "> 2 . 76 \\times > 30 (timeout) 67 > 30 10.88 – –",
+      "page": 38,
+      "bbox": [
+        123.48100280761719,
+        563.2137451171875,
+        488.61688232421875,
+        575.3238525390625
+      ]
+    },
+    {
+      "latex": "(overhead), so that speedup = throughput / overhead. The final row holds instances did",
+      "page": 38,
+      "bbox": [
+        71.99996948242188,
+        663.0015869140625,
+        540.0699462890625,
+        674.956787109375
+      ]
+    },
+    {
+      "latex": "per unit time, peaking at 4 . 77 \\times that of in the 15–30 second bucket. This is well short of",
+      "page": 39,
+      "bbox": [
+        72.0,
+        153.9086151123047,
+        540.0819702148438,
+        166.0187530517578
+      ]
+    },
+    {
+      "latex": "the 11 \\times ideal, giving at most 43% parallel efficiency on our hardware, which we attribute to",
+      "page": 39,
+      "bbox": [
+        72.0,
+        168.35459899902344,
+        540.0819091796875,
+        180.46473693847656
+      ]
+    },
+    {
+      "latex": "time of 0 . 02 seconds the pool expands nodes than a single process (0 . 93 \\times ), as the",
+      "page": 39,
+      "bbox": [
+        72.0,
+        211.6925506591797,
+        540.0580444335938,
+        223.8026885986328
+      ]
+    },
+    {
+      "latex": "on mid-difficulty problems (3 . 16 \\times in the 0 . 5–2 second bucket) and falls to 1 . 40 \\times on the",
+      "page": 39,
+      "bbox": [
+        72.0,
+        320.0356140136719,
+        540.0821533203125,
+        332.145751953125
+      ]
+    },
+    {
+      "latex": "overhead exceeds the throughput and is the faster solver (0 . 78 \\times ); from the 0 . 5–2 second",
+      "page": 39,
+      "bbox": [
+        72.0,
+        385.0416564941406,
+        540.0819091796875,
+        397.15179443359375
+      ]
+    },
+    {
+      "latex": "bucket onward the ordering reverses and the advantage grows monotonically, reaching 3 . 41 \\times",
+      "page": 39,
+      "bbox": [
+        72.0,
+        399.4876708984375,
+        540.0940551757812,
+        411.5978088378906
+      ]
+    },
+    {
+      "latex": "Every configuration in Section 6.2.1 uses the \\infty conflict selection strategy. This",
+      "page": 39,
+      "bbox": [
+        72.0,
+        561.1737670898438,
+        540.0341186523438,
+        573.2838745117188
+      ]
+    },
+    {
+      "latex": "narrows as the gap threshold loosens, and on it has closed entirely by \\le 5%.",
+      "page": 40,
+      "bbox": [
+        72.0,
+        556.8197021484375,
+        497.2704162597656,
+        568.9298095703125
+      ]
+    },
+    {
+      "latex": "respectively, while 8, 16 and \\infty reach 286, 291 and 291—a 48% in-",
+      "page": 41,
+      "bbox": [
+        71.99999237060547,
+        117.79466247558594,
+        540.058349609375,
+        129.90480041503906
+      ]
+    },
+    {
+      "latex": "the threshold loosens. On it survives at \\le 1% (280 and 289 against 350,",
+      "page": 41,
+      "bbox": [
+        71.99999237060547,
+        161.1316375732422,
+        540.093994140625,
+        173.2417755126953
+      ]
+    },
+    {
+      "latex": "359 and 372) and at \\le 5% (497 and 473 against 537, 555 and 554). On it is already",
+      "page": 41,
+      "bbox": [
+        71.99999237060547,
+        175.57762145996094,
+        540.1658935546875,
+        187.68775939941406
+      ]
+    },
+    {
+      "latex": "marginal at \\le 1% (401 and 434 against 438, 450 and 441) and absent at \\le 5%, where all",
+      "page": 41,
+      "bbox": [
+        71.99999237060547,
+        190.0236053466797,
+        540.1538696289062,
+        202.1337432861328
+      ]
+    },
+    {
+      "latex": "loss: it costs 0 . 84 \\times against in paired geometric-mean runtime, expands 18%",
+      "page": 41,
+      "bbox": [
+        71.99999237060547,
+        312.8125915527344,
+        511.162353515625,
+        324.9227294921875
+      ]
+    },
+    {
+      "latex": "constraint-tree nodes, and at \\le 5% falls behind outright (473 against 497). On",
+      "page": 41,
+      "bbox": [
+        71.99999237060547,
+        327.25860595703125,
+        540.1179809570312,
+        339.3687438964844
+      ]
+    },
+    {
+      "latex": "it is a modest gain instead, at 1 . 05 \\times paired geometric-mean runtime with 10%",
+      "page": 41,
+      "bbox": [
+        100.84788513183594,
+        341.7046203613281,
+        509.1179504394531,
+        353.81475830078125
+      ]
+    },
+    {
+      "latex": "and this holds on both maps. At the optimal threshold 8, 16 and \\infty",
+      "page": 41,
+      "bbox": [
+        71.99999237060547,
+        507.831787109375,
+        540.0462036132812,
+        519.94189453125
+      ]
+    },
+    {
+      "latex": "0.92 \\times 0.97 \\times 1.05 \\times 0–0 . 1 134 0.03 0.03",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        111.77769470214844,
+        506.1247253417969,
+        123.88783264160156
+      ]
+    },
+    {
+      "latex": "0.90 \\times 0.84 \\times 0.93 \\times 0 . 1–1 102 0.31 0.35",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        126.22367858886719,
+        506.1247253417969,
+        138.3338165283203
+      ]
+    },
+    {
+      "latex": "2.67 \\times 0.75 \\times 0.28 \\times 1–30 44 5.60 2.10",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        140.66966247558594,
+        506.1247253417969,
+        152.77980041503906
+      ]
+    },
+    {
+      "latex": "> 3 . 43 \\times > 30 (timeout) 62 > 30 8.74 – –",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        155.1146697998047,
+        506.1127624511719,
+        167.2248077392578
+      ]
+    },
+    {
+      "latex": "1.03 \\times 0.79 \\times 0.77 \\times 0–0 . 1 137 0.02 0.02",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        189.99668884277344,
+        506.1247253417969,
+        202.10682678222656
+      ]
+    },
+    {
+      "latex": "1.55 \\times 0.63 \\times 0.41 \\times 0 . 1–1 44 0.24 0.15",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        204.4426727294922,
+        506.1247253417969,
+        216.5528106689453
+      ]
+    },
+    {
+      "latex": "3.94 \\times 0.89 \\times 0.23 \\times 1–30 15 3.35 0.85",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        218.88865661621094,
+        506.1247253417969,
+        230.99879455566406
+      ]
+    },
+    {
+      "latex": "> 13 . 06 \\times > 30 (timeout) 95 > 30 2.30 – –",
+      "page": 43,
+      "bbox": [
+        105.98400115966797,
+        233.3336639404297,
+        506.11279296875,
+        245.4438018798828
+      ]
+    },
+    {
+      "latex": "there, probing does not repay its cost at all below one second (0 . 92 \\times and 0 . 90 \\times ), and only",
+      "page": 43,
+      "bbox": [
+        72.0,
+        383.6268005371094,
+        540.0941162109375,
+        395.7369384765625
+      ]
+    },
+    {
+      "latex": "on instances taking more than a second does it pay off, at 2 . 67 \\times . On",
+      "page": 43,
+      "bbox": [
+        72.0,
+        398.07281494140625,
+        490.7908020019531,
+        410.1829528808594
+      ]
+    },
+    {
+      "latex": "the corresponding progression is 1 . 03 \\times , 1 . 55 \\times and 3 . 94 \\times . Consequently the aggre-",
+      "page": 43,
+      "bbox": [
+        105.03221893310547,
+        412.5188293457031,
+        540.0939331054688,
+        424.62896728515625
+      ]
+    },
+    {
+      "latex": "gate geometric mean over jointly-solved instances—1 . 25 \\times on and 1 . 08 \\times on",
+      "page": 43,
+      "bbox": [
+        72.0,
+        426.96484375,
+        540.070068359375,
+        439.0749816894531
+      ]
+    },
+    {
+      "latex": ", taking a geometric-mean 2 . 30 seconds and therefore at least 13 \\times less time,",
+      "page": 43,
+      "bbox": [
+        154.39523315429688,
+        484.7478942871094,
+        540.0581665039062,
+        496.8580322265625
+      ]
+    },
+    {
+      "latex": "with extreme cases exceeding 100 \\times ; on it proved a further 62 at a geometric-mean",
+      "page": 43,
+      "bbox": [
+        72.0,
+        499.19390869140625,
+        540.0579833984375,
+        511.3040466308594
+      ]
+    },
+    {
+      "latex": "8 . 74 seconds, at least 3 . 4 \\times less time, with extreme cases exceeding 50 \\times . On neither map is",
+      "page": 43,
+      "bbox": [
+        72.0,
+        513.639892578125,
+        540.0340576171875,
+        525.75
+      ]
+    },
+    {
+      "latex": "limit, AOC-CBS finds a feasible solution to 5 . 8 \\times as many instances as OC-CBS solves",
+      "page": 44,
+      "bbox": [
+        72.0,
+        554.6837158203125,
+        540.0222778320312,
+        566.7938232421875
+      ]
+    },
+    {
+      "latex": "agents and solves none at 135. That map’s 5 . 6 \\times is therefore a lower bound.",
+      "page": 44,
+      "bbox": [
+        72.0,
+        641.3587036132812,
+        460.50823974609375,
+        653.4688110351562
+      ]
+    },
+    {
+      "latex": "At ∆ = 0 the two methods are equivalent: AOC-CBS proves optimality on",
+      "page": 44,
+      "bbox": [
+        119.53388214111328,
+        673.2896118164062,
+        540.0491943359375,
+        689.5838012695312
+      ]
+    },
+    {
+      "latex": "Permitting suboptimality again separates them, by 5 . 4 \\times overall (3 220 instances against",
+      "page": 45,
+      "bbox": [
+        72.0,
+        385.0437316894531,
+        540.1058959960938,
+        397.15386962890625
+      ]
+    },
+    {
+      "latex": ", , and the roadmap), AOC-CBS solves 2 . 8 to 3 . 8 \\times as",
+      "page": 45,
+      "bbox": [
+        101.72062683105469,
+        442.8267822265625,
+        540.0462036132812,
+        454.9369201660156
+      ]
+    },
+    {
+      "latex": "roadmap), the factor is 8 . 6 to 12 . 3 \\times . Accepting a bounded optimality gap is thus",
+      "page": 45,
+      "bbox": [
+        116.68853759765625,
+        471.71881103515625,
+        540.0819091796875,
+        483.8289489746094
+      ]
+    },
+    {
+      "latex": "The comparison in Section 6 shows that AOC-CBS is able to solve around 5 \\times as many",
+      "page": 46,
+      "bbox": [
+        72.0,
+        139.89170837402344,
+        540.0462036132812,
+        152.00184631347656
+      ]
+    },
+    {
+      "latex": "solver, but that accepting a bounded optimality gap buys roughly a 5 \\times increase in the",
+      "page": 46,
+      "bbox": [
+        72.0,
+        226.56663513183594,
+        540.0820922851562,
+        238.67677307128906
+      ]
+    },
+    {
+      "latex": "size of the gain grows with the map: 2 . 8 to 3 . 8 \\times on the three smallest maps against 8 . 6 to",
+      "page": 46,
+      "bbox": [
+        72.0,
+        284.3496398925781,
+        540.0821533203125,
+        296.45977783203125
+      ]
+    },
+    {
+      "latex": "12 . 3 \\times on the three largest, so bounded suboptimality is worth most where optimal methods",
+      "page": 46,
+      "bbox": [
+        72.0,
+        298.795654296875,
+        540.06982421875,
+        310.9057922363281
+      ]
+    },
+    {
+      "latex": "TP-SIPP extends the reachable agent count several-fold at loose ∆ , yet at ∆ = 0 every",
+      "page": 46,
+      "bbox": [
+        72.0,
+        374.06365966796875,
+        540.0145263671875,
+        390.35784912109375
+      ]
+    },
+    {
+      "latex": "behaviour at ∆ = 0, which no static configuration achieves at both ends. We expect this",
+      "page": 46,
+      "bbox": [
+        71.99996948242188,
+        518.522705078125,
+        540.0324096679688,
+        534.81591796875
+      ]
+    },
+    {
+      "latex": "loss depends on the map. By contrast 8 lies within 5 instances of \\infty . Since",
+      "page": 47,
+      "bbox": [
+        72.0,
+        117.79466247558594,
+        539.9983520507812,
+        129.90480041503906
+      ]
+    },
+    {
+      "latex": "Finally, AOC-CBS is implemented in Python and is level at ∆ = 0 with a C++ implemen-",
+      "page": 47,
+      "bbox": [
+        72.0,
+        315.8525390625,
+        540.0150146484375,
+        332.145751953125
+      ]
+    },
+    {
+      "latex": "iteration, an incumbent solution \\Pi (once one has been found) with a known optimality",
+      "page": 50,
+      "bbox": [
+        72.0,
+        99.16462707519531,
+        540.0325927734375,
+        115.45881652832031
+      ]
+    },
+    {
+      "latex": "an optimal solution \\Pi ^{∗} .",
+      "page": 50,
+      "bbox": [
+        72.0,
+        131.06777954101562,
+        192.226806640625,
+        144.3498077392578
+      ]
+    },
+    {
+      "latex": "For any agent pair ⟨ i, j ⟩\\inA\\timesA : i ̸ = j , the following conflict information can be computed",
+      "page": 50,
+      "bbox": [
+        71.99999237060547,
+        254.07456970214844,
+        540.081787109375,
+        266.1847229003906
+      ]
+    },
+    {
+      "latex": "1. : \\forall⟨ v ^{i} , v ^{j} ⟩\\inV ^{i} \\times V ^{j} , is ( i, v ^{i}",
+      "page": 50,
+      "bbox": [
+        86.30699157714844,
+        285.8505859375,
+        383.7401428222656,
+        302.2997131347656
+      ]
+    },
+    {
+      "latex": "\\forall⟨ v ^{i} , e ^{j} ⟩\\inV ^{i} \\times E ^{j} , for which times t \\in [0 , e ^{j}",
+      "page": 50,
+      "bbox": [
+        121.17105102539062,
+        329.1886291503906,
+        352.0051574707031,
+        345.63677978515625
+      ]
+    },
+    {
+      "latex": "D ^{)} ^{is} ^{(} i, v s ^{i} , j, e ^{j} \\tau ^{(} ^{t} ^{))?}",
+      "page": 50,
+      "bbox": [
+        348.5780029296875,
+        332.4580383300781,
+        504.582275390625,
+        348.00714111328125
+      ]
+    },
+    {
+      "latex": "\\forall⟨ e ^{i} , v ^{j} ⟩\\inE ^{i} \\times V ^{j} , for which times t \\in [0 , e ^{i}",
+      "page": 50,
+      "bbox": [
+        121.17106628417969,
+        350.8576354980469,
+        351.46319580078125,
+        367.3057861328125
+      ]
+    },
+    {
+      "latex": "D ^{)} ^{is} ^{(} i, e ^{i} \\tau ^{(} ^{t} ^{)} , j, v ^{j} s ^{)?}",
+      "page": 50,
+      "bbox": [
+        348.5780334472656,
+        354.1270446777344,
+        504.9693298339844,
+        369.4561462402344
+      ]
+    },
+    {
+      "latex": "3. : \\forall⟨ e ^{i} , e ^{j} ⟩\\inE ^{i} \\timesE ^{j} , for which start times \\delta \\in [ − e ^{i} _{D} , e ^{j}",
+      "page": 50,
+      "bbox": [
+        86.30706787109375,
+        372.5256652832031,
+        437.0332336425781,
+        391.1241760253906
+      ]
+    },
+    {
+      "latex": "D ^{, e} ^{j} does there exists ^{a} ^{t} ^{\\in} [max(0 , \\delta ^{)} ^{,} min( ^{e} ^{i} D ^{))} where ^{(} i, e ^{i} \\tau ^{(} \\delta ^{+} ^{t} ^{)} , j, e ^{j}",
+      "page": 50,
+      "bbox": [
+        101.26507568359375,
+        388.9121398925781,
+        513.7982177734375,
+        405.7912292480469
+      ]
+    },
+    {
+      "latex": "\\tau ^{(} ^{t} ^{))?}",
+      "page": 50,
+      "bbox": [
+        510.37109375,
+        391.4657287597656,
+        538.9673461914062,
+        405.5052795410156
+      ]
+    },
+    {
+      "latex": "conflict if one waits at a vertex and the other begins traversing its edge at time t = 0, and",
+      "page": 50,
+      "bbox": [
+        72.0001220703125,
+        442.0257568359375,
+        540.0701293945312,
+        453.98095703125
+      ]
+    },
+    {
+      "latex": "the other begins traversing its edge at time t = 0. This conflict information is what [27]",
+      "page": 50,
+      "bbox": [
+        72.0001220703125,
+        470.91778564453125,
+        540.070068359375,
+        482.87298583984375
+      ]
+    },
+    {
+      "latex": "on t for the Vertex-Edge cases and \\delta and t for the Edge-Edge case exist since we do not",
+      "page": 50,
+      "bbox": [
+        72.0001220703125,
+        499.8088073730469,
+        540.022216796875,
+        511.7640075683594
+      ]
+    },
+    {
+      "latex": "times when an agent cannot wait at a vertex if another traverses and edge at time t = 0;",
+      "page": 51,
+      "bbox": [
+        72.0,
+        197.4015655517578,
+        540.0821533203125,
+        209.3567657470703
+      ]
+    },
+    {
+      "latex": "Edge-Edge information that assumes one agent traverses its edge at t = 0, this information",
+      "page": 51,
+      "bbox": [
+        72.0,
+        226.2925567626953,
+        540.0699462890625,
+        238.2477569580078
+      ]
+    },
+    {
+      "latex": "agent-pair ⟨ i, j ⟩\\inA\\timesA : i ̸ = j , in practice the above information computed for ⟨ i, j ⟩ is easily",
+      "page": 51,
+      "bbox": [
+        72.0,
+        276.6986389160156,
+        540.0701293945312,
+        288.80877685546875
+      ]
+    },
+    {
+      "latex": "[ t 1 , t 2 ) when j begins its traversal at t = 0, then if instead i begins its traversal at t = 0",
+      "page": 51,
+      "bbox": [
+        72.0,
+        334.6366271972656,
+        540.0640258789062,
+        347.5141906738281
+      ]
+    },
+    {
+      "latex": "Many applications may have multiple agents of the same , \\rho ^{a} for agent a . Al-",
+      "page": 51,
+      "bbox": [
+        72.00001525878906,
+        460.3106994628906,
+        540.0073852539062,
+        476.6039123535156
+      ]
+    },
+    {
+      "latex": "though it is sufficient for our framework to let \\rho ^{a} remain abstract, \\rho ^{a} could for instance",
+      "page": 51,
+      "bbox": [
+        72.00003051757812,
+        474.7567138671875,
+        540.0110473632812,
+        491.0499267578125
+      ]
+    },
+    {
+      "latex": "with \\rho ^{k} = \\rho ^{i} we know that ( k, s k , j, s j ). Given this, the conflict information does",
+      "page": 51,
+      "bbox": [
+        72.00006103515625,
+        518.09375,
+        540.021728515625,
+        535.310302734375
+      ]
+    },
+    {
+      "latex": "in conflict, via f ( i, s i , j, s j ) \\le 0 ⇔ ( i, s i , j, s j ). A Lipschitz constant L f bounds",
+      "page": 52,
+      "bbox": [
+        72.00003051757812,
+        153.90867614746094,
+        540.0009765625,
+        167.8118438720703
+      ]
+    },
+    {
+      "latex": "i.e. | f ( i, s i , j, s j ) − f ( i, s ^{′} _{i} , j, s ^{′} _{j} ) | \\le L f \\cdot | ∆ − ∆ ^{′} | for any two relative positions ∆ and",
+      "page": 52,
+      "bbox": [
+        72.00003051757812,
+        181.62777709960938,
+        540.0335693359375,
+        196.99517822265625
+      ]
+    },
+    {
+      "latex": "D ^{and} ^{e} ^{j} Consider agents ^{i} ^{and} ^{j} following trajectories ^{e} ^{i} \\tau ^{and} ^{e} ^{j} \\tau ^{,} with durations ^{e} ^{i}",
+      "page": 52,
+      "bbox": [
+        72.00003051757812,
+        245.40802001953125,
+        508.1752014160156,
+        262.9377746582031
+      ]
+    },
+    {
+      "latex": "be evaluated as f ( t ) = f ( i, e ^{i} \\tau ( t ) , j, e ^{j} \\tau ( t )). Suppose f ( t ) > 0, i.e. at time t the agents are not",
+      "page": 52,
+      "bbox": [
+        72.00007629394531,
+        275.6289978027344,
+        540.0633544921875,
+        290.89312744140625
+      ]
+    },
+    {
+      "latex": "by the Lipschitz bound, f can therefore change by at most L f \\cdot ( | ^{i} | max _{+} | ^{j} | max ) per unit",
+      "page": 52,
+      "bbox": [
+        72.0001220703125,
+        333.4130859375,
+        540.0078125,
+        348.38482666015625
+      ]
+    },
+    {
+      "latex": "∆ t =",
+      "page": 52,
+      "bbox": [
+        233.09014892578125,
+        381.4126281738281,
+        259.51116943359375,
+        393.3678283691406
+      ]
+    },
+    {
+      "latex": "L f \\cdot ( | i | max _{+} | j | max )",
+      "page": 52,
+      "bbox": [
+        264.0140075683594,
+        389.27410888671875,
+        377.7169494628906,
+        403.3618469238281
+      ]
+    },
+    {
+      "latex": "only pointwise evaluations of f . The same procedure symmetrically holds if f ( t ) \\le 0 (i.e., a",
+      "page": 52,
+      "bbox": [
+        72.00003051757812,
+        458.0567321777344,
+        540.0581665039062,
+        470.1668701171875
+      ]
+    },
+    {
+      "latex": "starting at t = 0). The interior of the ellipse d ^{2} ( t, \\delta ) = 0 in the ( t, \\delta )-plane represents a",
+      "page": 54,
+      "bbox": [
+        72.0,
+        73.38812255859375,
+        540.0345458984375,
+        86.56684875488281
+      ]
+    },
+    {
+      "latex": "tive line segments (instead of the infinite lines) form a parallelogram in the ( t, \\delta )-plane. For",
+      "page": 54,
+      "bbox": [
+        71.99998474121094,
+        117.94960021972656,
+        540.05810546875,
+        129.90480041503906
+      ]
+    },
+    {
+      "latex": "every point ( t, \\delta ) within both the parallelogram and the ellipse, the agents will be colliding",
+      "page": 54,
+      "bbox": [
+        71.99998474121094,
+        132.3946075439453,
+        540.0579833984375,
+        144.3498077392578
+      ]
+    },
+    {
+      "latex": "with each other at time t if the one agent traverses its edge starting at time \\delta . The points",
+      "page": 54,
+      "bbox": [
+        71.99998474121094,
+        146.84059143066406,
+        540.0581665039062,
+        158.79579162597656
+      ]
+    },
+    {
+      "latex": "minimizing and maximizing \\delta within this intersection form a single interval, which is what",
+      "page": 54,
+      "bbox": [
+        71.99998474121094,
+        161.2865753173828,
+        540.0340576171875,
+        173.2417755126953
+      ]
+    },
+    {
+      "latex": "A state in this model is a pair ( , ) \\in ^{2} \\times ^{2} consisting of a position and velocity ;",
+      "page": 54,
+      "bbox": [
+        71.99998474121094,
+        274.82562255859375,
+        540.0320434570312,
+        291.2737731933594
+      ]
+    },
+    {
+      "latex": "v s = ⟨ v , v ⟩ , and is waitable if v = . The trajectory e \\tau ( t ) of an edge e \\inE from v \\inV to",
+      "page": 54,
+      "bbox": [
+        71.99998474121094,
+        308.0556640625,
+        540.0419311523438,
+        321.95880126953125
+      ]
+    },
+    {
+      "latex": "u \\inV is defined by a pair of cubic splines, one for each of the two dimensions, interpolated",
+      "page": 54,
+      "bbox": [
+        71.99996948242188,
+        322.5016784667969,
+        540.0221557617188,
+        334.61181640625
+      ]
+    },
+    {
+      "latex": "first waypoint, e \\tau (0) = v with e ^{′} \\tau (0) = v , and at the last, e \\tau ( e D ) = u with e ^{′} \\tau ( e D )) =",
+      "page": 54,
+      "bbox": [
+        71.99996948242188,
+        350.2207946777344,
+        540.0045776367188,
+        365.58819580078125
+      ]
+    },
+    {
+      "latex": "i is kept stationary at v ^{i} _{s} and we use the Lipschitz-bounded conflict search to find all T \\in",
+      "page": 55,
+      "bbox": [
+        72.0,
+        196.17706298828125,
+        540.009765625,
+        212.31178283691406
+      ]
+    },
+    {
+      "latex": "[0 , e ^{j} _{D} ) : \\phi ( T ) \\le 0 where \\phi ( T ) = f ( i, v _{s} ^{i} , j, e ^{j}",
+      "page": 55,
+      "bbox": [
+        72.0,
+        209.29400634765625,
+        294.53814697265625,
+        226.173095703125
+      ]
+    },
+    {
+      "latex": "\\tau ^{(} ^{T} ^{))} ^{For} Edge-Edge, ^{a} nested search ^{is} required",
+      "page": 55,
+      "bbox": [
+        291.1109924316406,
+        211.8474884033203,
+        540.006591796875,
+        225.8870849609375
+      ]
+    },
+    {
+      "latex": "instead. We fix j to begin traversing e ^{j} at time t = 0, and seek all start times \\delta for i to",
+      "page": 55,
+      "bbox": [
+        72.0,
+        221.95448303222656,
+        540.050537109375,
+        238.24769592285156
+      ]
+    },
+    {
+      "latex": "D ^{, e} ^{j} outer search therefore ^{is} done over ^{i} ^{’s} start times \\delta ^{\\in} ^{[} ^{−} ^{e} ^{i}",
+      "page": 55,
+      "bbox": [
+        72.00000762939453,
+        252.63092041015625,
+        387.0191650390625,
+        269.2900390625
+      ]
+    },
+    {
+      "latex": "h ( \\delta ) = min g ( t, \\delta ) ,",
+      "page": 55,
+      "bbox": [
+        259.8900146484375,
+        277.30242919921875,
+        352.12542724609375,
+        289.25762939453125
+      ]
+    },
+    {
+      "latex": "D , \\delta ^{+} ^{e} ^{j} with ^{the} inner search over ^{t} ^{\\in} [max(0 , \\delta ^{)} ^{,} min( ^{e} ^{i}",
+      "page": 55,
+      "bbox": [
+        72.00001525878906,
+        302.7218933105469,
+        355.55718994140625,
+        319.3809814453125
+      ]
+    },
+    {
+      "latex": "g ( t, \\delta ) = f ( i, e ^{i} \\tau ( t ) , j, e ^{j} \\tau ( t − \\delta )) .",
+      "page": 55,
+      "bbox": [
+        226.9520263671875,
+        325.5718994140625,
+        385.06787109375,
+        341.4329833984375
+      ]
+    },
+    {
+      "latex": "Each evaluation of h ( \\delta ) requires an inner minimization over t , since two agents traversing",
+      "page": 55,
+      "bbox": [
+        72.00003051757812,
+        356.7334289550781,
+        540.0819091796875,
+        368.6886291503906
+      ]
+    },
+    {
+      "latex": "with offset \\delta are conflict-free only if g ( t, \\delta ) > 0 for every t in the valid window, which",
+      "page": 55,
+      "bbox": [
+        72.00003051757812,
+        371.179443359375,
+        540.0460815429688,
+        383.1346435546875
+      ]
+    },
+    {
+      "latex": "is exactly the condition min t _{g} ( t, \\delta ). However, the inner search does not need the true",
+      "page": 55,
+      "bbox": [
+        72.00003051757812,
+        385.6254577636719,
+        540.0249633789062,
+        399.3736572265625
+      ]
+    },
+    {
+      "latex": "minimum, only its sign: as soon as any evaluated t yield g ( t, \\delta ) \\le 0, a conflict at offset \\delta",
+      "page": 55,
+      "bbox": [
+        72.00003051757812,
+        399.9165344238281,
+        539.6397094726562,
+        412.02667236328125
+      ]
+    },
+    {
+      "latex": "point \\delta is certified conflict-free. This asymmetry means a conflicting \\delta is typically resolved",
+      "page": 55,
+      "bbox": [
+        72.00003051757812,
+        443.40850830078125,
+        540.0341796875,
+        455.36370849609375
+      ]
+    },
+    {
+      "latex": "after a few evaluations, while a conflict-free \\delta requires exhausting the entire inner domain.",
+      "page": 55,
+      "bbox": [
+        72.00003051757812,
+        457.8545227050781,
+        534.714111328125,
+        469.8097229003906
+      ]
+    },
+    {
+      "latex": "obtained from L f by the chain rule. For the inner search, both agents move, giving | \\partialg/\\partialt | \\le",
+      "page": 55,
+      "bbox": [
+        72.00003051757812,
+        493.8146057128906,
+        540.0618286132812,
+        507.7177429199219
+      ]
+    },
+    {
+      "latex": "triple ⟨ , \\phi, ⟩ consisting of a position \\in ^{2} , an orientation \\phi \\in , and a velocity \\in ^{2} .",
+      "page": 56,
+      "bbox": [
+        72.0,
+        234.403076171875,
+        539.9998168945312,
+        247.58277893066406
+      ]
+    },
+    {
+      "latex": "relative to its reference point; placing the agent in a state rotates those vertices by \\phi about",
+      "page": 56,
+      "bbox": [
+        72.0,
+        264.5195617675781,
+        540.0581665039062,
+        276.4747619628906
+      ]
+    },
+    {
+      "latex": "f ( i, s i , j, s j ) =",
+      "page": 56,
+      "bbox": [
+        171.33099365234375,
+        483.9766845703125,
+        243.30035400390625,
+        496.854248046875
+      ]
+    },
+    {
+      "latex": "constant is again L f = 1, since a boundary distance changes by at most the distance any",
+      "page": 57,
+      "bbox": [
+        72.0,
+        89.05763244628906,
+        540.0471801757812,
+        102.80586242675781
+      ]
+    },
+    {
+      "latex": "speed \\times circumradius); a Dubins curve travelling at speed v with turning radius R reports",
+      "page": 57,
+      "bbox": [
+        72.0,
+        226.1376190185547,
+        540.0341186523438,
+        238.2477569580078
+      ]
+    },
+    {
+      "latex": "Given a MovingAI map, its free cells define a free space X free \\subset ^{2} , with every unit cell",
+      "page": 58,
+      "bbox": [
+        72.0,
+        173.5540771484375,
+        540.002197265625,
+        188.3708953857422
+      ]
+    },
+    {
+      "latex": "turn this into a roadmap G = ⟨V , E⟩ , we require four parameters: a target vertex density",
+      "page": 58,
+      "bbox": [
+        72.0,
+        203.51463317871094,
+        540.0818481445312,
+        215.62477111816406
+      ]
+    },
+    {
+      "latex": "\\rho > 0, a clearance radius r > 0, a stretch factor \\kappa \\ge 1, and a maximum edge length",
+      "page": 58,
+      "bbox": [
+        72.0,
+        217.9606170654297,
+        540.0700073242188,
+        230.0707550048828
+      ]
+    },
+    {
+      "latex": "Vertices are scattered evenly across the free space at roughly the requested density \\rho . Each",
+      "page": 58,
+      "bbox": [
+        72.0,
+        261.4525451660156,
+        540.0221557617188,
+        273.4077453613281
+      ]
+    },
+    {
+      "latex": "otherwise force a detour between two vertices that is more than \\kappa times the straight-line",
+      "page": 58,
+      "bbox": [
+        72.0,
+        319.2366027832031,
+        540.0341796875,
+        331.1918029785156
+      ]
+    },
+    {
+      "latex": "(b) Density \\rho = 0 . 5, with |V| = (c) Density \\rho = 2 . 0, with |V| = (a) Density \\rho = 0 . 05, with",
+      "page": 59,
+      "bbox": [
+        72.0,
+        257.46380615234375,
+        540.0228881835938,
+        268.5142822265625
+      ]
+    },
+    {
+      "latex": "|V| = 223 and |E| = 824. 1 607 and |E| = 7 894. 4 582 and |E| = 24 442.",
+      "page": 59,
+      "bbox": [
+        72.0,
+        271.0128173828125,
+        505.3101501464844,
+        282.06329345703125
+      ]
+    },
+    {
+      "latex": "Figure 14: The MovingAI gridmap , with |V| = 2 445 and |E| = 8 782, sampled",
+      "page": 59,
+      "bbox": [
+        72.0,
+        294.32171630859375,
+        540.0940551757812,
+        306.4318542480469
+      ]
+    },
+    {
+      "latex": "with various densities. The remaining parameters are r = 0 . 5, \\kappa = 1 . 5, and l max = 4 \\delta .",
+      "page": 59,
+      "bbox": [
+        72.0,
+        308.9216613769531,
+        510.6831970214844,
+        322.6708679199219
+      ]
+    },
+    {
+      "latex": "p From _{the} target density \\rho _{we} derive _{a} minimum separation \\delta _{=} _{0} _{.} _{8} /\\rho between sampled",
+      "page": 59,
+      "bbox": [
+        72.0,
+        343.51080322265625,
+        540.0118408203125,
+        357.09185791015625
+      ]
+    },
+    {
+      "latex": "p _{1} /\\rho would achieve exactly _{the} vertices. Placing vertices _{on} _{a} regular grid with spacing",
+      "page": 59,
+      "bbox": [
+        72.0,
+        359.3318176269531,
+        540.0176391601562,
+        372.911865234375
+      ]
+    },
+    {
+      "latex": "target density \\rho ; however, rejection sampling under a minimum-separation constraint yields",
+      "page": 59,
+      "bbox": [
+        72.0,
+        375.40264892578125,
+        540.046142578125,
+        387.35784912109375
+      ]
+    },
+    {
+      "latex": "p _{1} /\\rho _{to} partially compensate, using _{the} empirically tuned factor _{0} _{.} _{8.} _{The} region below",
+      "page": 59,
+      "bbox": [
+        72.0,
+        402.6688232421875,
+        540.0654296875,
+        416.2498779296875
+      ]
+    },
+    {
+      "latex": "\\sqrt",
+      "page": 59,
+      "bbox": [
+        72.0,
+        452.03375244140625,
+        81.95867919921875,
+        463.98895263671875
+      ]
+    },
+    {
+      "latex": "2 /\\delta up to the nearest odd integer value, so that the diagonal of a refined cell is shorter",
+      "page": 59,
+      "bbox": [
+        81.96299743652344,
+        462.07763671875,
+        540.0744018554688,
+        474.0328369140625
+      ]
+    },
+    {
+      "latex": "than \\delta and no two sampled vertices can therefore land in the same refined cell, letting each",
+      "page": 59,
+      "bbox": [
+        72.0,
+        476.5236511230469,
+        540.033935546875,
+        488.4788513183594
+      ]
+    },
+    {
+      "latex": "it. Refining relative to the density \\rho also removes any upper bound on how dense a roadmap",
+      "page": 59,
+      "bbox": [
+        72.0,
+        534.306640625,
+        540.0701904296875,
+        546.2618408203125
+      ]
+    },
+    {
+      "latex": "accepted only if it lies at least \\delta from every previously accepted vertex; since only the cell’s",
+      "page": 59,
+      "bbox": [
+        71.99996948242188,
+        678.7656860351562,
+        540.0220336914062,
+        690.7208862304688
+      ]
+    },
+    {
+      "latex": "of \\rho even after the 0 . 8 correction in the separation, which only partially compensates for",
+      "page": 60,
+      "bbox": [
+        72.0,
+        103.50361633300781,
+        540.0580444335938,
+        115.45881652832031
+      ]
+    },
+    {
+      "latex": "collapses to a single edge e = ⟨ u, v ⟩\\inE ; otherwise, the retained turning positions, each lying",
+      "page": 60,
+      "bbox": [
+        71.99996948242188,
+        341.70458984375,
+        540.0459594726562,
+        353.8147277832031
+      ]
+    },
+    {
+      "latex": "are close in a straight line but far apart along G . We consider candidate pairs u, v \\inV whose",
+      "page": 60,
+      "bbox": [
+        71.99996948242188,
+        507.83172607421875,
+        540.0579833984375,
+        519.9418334960938
+      ]
+    },
+    {
+      "latex": "than returned. The stretch factor \\kappa and the target density \\rho jointly control the size and",
+      "page": 61,
+      "bbox": [
+        72.0,
+        74.61164855957031,
+        540.0579833984375,
+        86.56684875488281
+      ]
+    },
+    {
+      "latex": "quality trade-off: values of \\kappa near 1 and higher \\rho yield roadmaps whose distances closely",
+      "page": 61,
+      "bbox": [
+        72.0,
+        89.05763244628906,
+        540.0580444335938,
+        101.01283264160156
+      ]
+    },
+    {
+      "latex": "Given a graph G = ⟨V , E⟩ and an agent model, we construct a scenario as follows. Because",
+      "page": 61,
+      "bbox": [
+        72.0,
+        174.62266540527344,
+        540.0579833984375,
+        186.73280334472656
+      ]
+    }
+  ]
+}
