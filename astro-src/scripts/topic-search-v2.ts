@@ -138,6 +138,45 @@ interface MatchResult {
   error?: string;
 }
 
+// Run a single persona argument through LLM (mirrors src/elo_debate.py:run_match_persona)
+async function runMatchPersona(
+  persona: string,
+  stance: string,
+  a: DebateIdea,
+  b: DebateIdea,
+  roundN: number,
+): Promise<string> {
+  try {
+    const route = resolveRoute('topic.debate') as any;
+    const prompt = `你是 ${persona}。${stance}
+
+请用 3-5 句话,从你独特的视角,比较以下两个研究想法并给出你的论据(本轮第 ${roundN} 轮)。
+
+想法 A: ${a.title}
+
+想法 B: ${b.title}
+
+直接输出你的论据,不要前缀说明。`;
+    const response = await fetch(`${String(route.baseUrl).replace(/\/$/, '')}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${route.apiKey}` },
+      body: JSON.stringify({
+        model: route.model,
+        messages: [
+          { role: 'system', content: `你是 ${persona}。${stance} 你善于从特定角度分析研究想法的优劣。` },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 300,
+        temperature: 0.7,
+      }),
+    });
+    const data = await response.json();
+    return data?.choices?.[0]?.message?.content || `${persona}: (LLM 调用失败)`;
+  } catch (err) {
+    return `${persona}: (调用失败: ${String(err).slice(0, 50)})`;
+  }
+}
+
 async function runMatch(
   a: DebateIdea,
   b: DebateIdea,
@@ -150,21 +189,27 @@ async function runMatch(
   const con = personas[1] ?? '工程师';
   const judgeName = personas[2] ?? '怀疑论者';
 
+  // Persona stances (matching Python DEFAULT_PERSONAS)
+  const PRO_STANCE = '你支持方法论创新,重视原创性和理论贡献。';
+  const CON_STANCE = '你注重工程可行性,关注实现难度和实际价值。';
+
   try {
     for (let debateRound = 1; debateRound <= rounds; debateRound++) {
-      // Pro (正方)
+      // Pro (正方) - LLM call
+      const proContent = await runMatchPersona(pro, PRO_STANCE, a, b, debateRound);
       transcript.push({
         persona: pro,
         side: 'pro',
         round: (debateRound - 1) * 2 + 1,
-        content: `${pro}: idea_a "${a.title}" 在 novelty 上更具优势`,
+        content: proContent,
       });
-      // Con (反方)
+      // Con (反方) - LLM call
+      const conContent = await runMatchPersona(con, CON_STANCE, b, a, debateRound);
       transcript.push({
         persona: con,
         side: 'con',
         round: (debateRound - 1) * 2 + 2,
-        content: `${con}: idea_b "${b.title}" 在 feasibility 上更可行`,
+        content: conContent,
       });
     }
     // Judge
