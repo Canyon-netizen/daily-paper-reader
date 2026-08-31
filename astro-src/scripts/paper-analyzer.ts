@@ -82,6 +82,11 @@ export interface AnalysisResult {
   // 新代码读老数据不崩。`string[]` 与 `TopicTags` 在联合类型里仅作为占位,
   // 不参与新写入路径。
   categories?: Categories | string[] | TopicTags;
+  // 方法对比 pros/cons:每个方法名映射到其优点数组和缺点数组。
+  // 由 paper.method_debate LLM 生成,键为方法名(如 "Transformer", "CNN"),值为 {pros, cons}。
+  method_pros_cons?: Record<string, { pros: string[]; cons: string[] }>;
+  // 方法对比跨方法总结:1-2 句概括各方法的优劣对比。
+  method_comparison?: string;
 }
 
 // 旧 3-层结构 (domain/task/method) — 现已被 4-dim Categories 取代。
@@ -2581,6 +2586,25 @@ function copyAsMarkdown(r: AnalysisResult): void {
     `\n## 结果\n${r.result}`,
     `\n## 结论\n${r.conclusion}`,
     r.context ? `\n## 主题语境\n${r.context}` : '',
+    // 方法对比
+    r.method_pros_cons ? (() => {
+      const lines = ['\n## 方法对比'];
+      for (const [method, { pros, cons }] of Object.entries(r.method_pros_cons!)) {
+        lines.push(`\n### ${method}`);
+        if (pros.length > 0) {
+          lines.push('\n**优点:**');
+          for (const pro of pros) lines.push(`- ${pro}`);
+        }
+        if (cons.length > 0) {
+          lines.push('\n**缺点:**');
+          for (const con of cons) lines.push(`- ${con}`);
+        }
+      }
+      if (r.method_comparison) {
+        lines.push(`\n${r.method_comparison}`);
+      }
+      return lines.join('\n');
+    })() : '',
     '',
   ].filter((s) => s !== '').join('\n');
   navigator.clipboard.writeText(md).then(
