@@ -84,13 +84,91 @@ function swissPairs<T extends { elo_rating?: number }>(ideas: T[]): Array<[T, T]
 }
 
 // ---------------------------------------------------------------------------
-// 简化版 judge:无 LLM 接入时返 "tie",保留接口以备将来 LLM 接入
+// LLM Judge (mirrors src/elo_debate.py:judge_debate)
 // ---------------------------------------------------------------------------
 
+// LLM config - these should be set via Cloudflare Pages environment variables
+const LLM_CONFIG = {
+  baseUrl: (globalThis as any).__LLM_BASE_URL__ || 'https://api.deepseek.com',
+  apiKey: (globalThis as any).__LLM_API_KEY__ || '',
+  model: 'deepseek-chat',
+};
+
 async function judge(a: Idea, b: Idea): Promise<{ winner: "a" | "b" | "tie"; reason: string }> {
-  // v1 简化:无 LLM judge,所有 match 走 tie 路径(elo 不变)
-  // 真实场景: 调用 resolveRoute('topic.debate') 调 LLM
-  return { winner: "tie", reason: "no LLM judge configured in Function runtime" };
+  if (!LLM_CONFIG.apiKey) {
+    console.error('[judge] No LLM_API_KEY configured');
+    return { winner: "tie", reason: "judge_unavailable: no API key configured" };
+  }
+
+  try {
+    const systemPrompt = '你是中立裁判。基于两个研究想法的标题,只返回 JSON 格式 {"winner": "a"|"b"|"tie", "reason": "<50字内>"}。';
+    const userPrompt = `A: ${a.title}\nB: ${b.title}`;
+    const response = await fetch(`${LLM_CONFIG.baseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${LLM_CONFIG.apiKey}` },
+      body: JSON.stringify({
+        model: LLM_CONFIG.model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 200,
+        temperature: 0.3,
+      }),
+    });
+    const data = await response.json();
+    const raw = data?.choices?.[0]?.message?.content || '{}';
+    const jsonText = String(raw).replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    const parsed = JSON.parse(jsonText);
+    const w = parsed.winner;
+    const winner: "a" | "b" | "tie" = w === 'a' || w === 'b' ? w : 'tie';
+    return { winner, reason: String(parsed.reason || '').slice(0, 100) };
+  } catch (err) {
+    console.error('[judge] LLM call failed:', err);
+    return { winner: "tie", reason: `judge_unavailable: ${String(err).slice(0, 50)}` };
+  }
+}
+
+// Run a single persona argument through LLM
+async function runMatchPersona(
+  persona: string,
+  stance: string,
+  a: Idea,
+  b: Idea,
+  roundN: number,
+): Promise<string> {
+  if (!LLM_CONFIG.apiKey) {
+    return `${persona}: (未配置 API key)`;
+  }
+
+  try {
+    const prompt = `你是 ${persona}。${stance}
+
+请用 3-5 句话,从你独特的视角,比较以下两个研究想法并给出你的论据(本轮第 ${roundN} 轮)。
+
+想法 A: ${a.title}
+
+想法 B: ${b.title}
+
+直接输出你的论据,不要前缀说明。`;
+    const response = await fetch(`${LLM_CONFIG.baseUrl.replace(/\/$/, '')}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${LLM_CONFIG.apiKey}` },
+      body: JSON.stringify({
+        model: LLM_CONFIG.model,
+        messages: [
+          { role: 'system', content: `你是 ${persona}。${stance} 你善于从特定角度分析研究想法的优劣。` },
+          { role: 'user', content: prompt },
+        ],
+        max_tokens: 300,
+        temperature: 0.7,
+      }),
+    });
+    const data = await response.json();
+    return data?.choices?.[0]?.message?.content || `${persona}: (LLM 调用失败)`;
+  } catch (err) {
+    return `${persona}: (调用失败: ${String(err).slice(0, 50)})`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -108,19 +186,27 @@ async function runMatch(
   const judgeName = personas[2] ?? DEFAULT_PERSONAS[2];
   const transcript: MatchResult["transcript"] = [];
 
+  // Persona stances (matching Python DEFAULT_PERSONAS)
+  const PRO_STANCE = '你支持方法论创新,重视原创性和理论贡献。';
+  const CON_STANCE = '你注重工程可行性,关注实现难度和实际价值。';
+
   try {
     for (let r = 1; r <= rounds; r++) {
+      // Pro (正方) - LLM call
+      const proContent = await runMatchPersona(pro, PRO_STANCE, a, b, r);
       transcript.push({
         persona: pro,
         side: "pro",
         round: (r - 1) * 2 + 1,
-        content: `${pro}: idea_a "${a.title}" 在 novelty 上更具优势`,
+        content: proContent,
       });
+      // Con (反方) - LLM call
+      const conContent = await runMatchPersona(con, CON_STANCE, b, a, r);
       transcript.push({
         persona: con,
         side: "con",
         round: (r - 1) * 2 + 2,
-        content: `${con}: idea_b "${b.title}" 在 feasibility 上更可行`,
+        content: conContent,
       });
     }
     const judgeResult = await judge(a, b);

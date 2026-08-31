@@ -26,6 +26,7 @@ from typing import Any, Dict, List
 from src.idea_signals import collect_signals
 from src.elo_debate import run_debate, ELO_INITIAL
 from src.idea_lifecycle import auto_promote_ideas
+from src.llm_router import get_llm_router
 
 
 # ---------------------------------------------------------------------------
@@ -607,12 +608,73 @@ def run_topic_v2(session_id: str | None = None,
     except Exception:
         ranked_ideas_input = deduped_ideas  # fail-soft
 
-    # 4. 跑 Elo 辩论 —— judge_llm_call=None → 跳过 debate(plan §4.2 PR-A)。
+    # 4. 跑 Elo 辩论 —— judge_llm_call=None 时尝试用配置的 LLM，否则回退。
     if judge_llm_call is None:
-        # 不调 run_debate,不污染 ELO 排序,显式 degraded。
-        ranked_ideas = _rank_ideas_without_debate(ranked_ideas_input)
-        debate_status = "not_configured"
-        used_tokens = 0
+        # 尝试从配置的 LLM 创建一个默认 judge
+        try:
+            router = get_llm_router()
+            # 尝试解析 topic.debate stage，确保配置了
+            router.resolve("topic.debate")
+
+            def default_judge_llm_call(a, b):
+                """默认 judge: 用配置的 LLM (topic.debate) 判定两个 idea 的胜负。"""
+                prompt = (
+                    f"请判定以下两个研究想法的优劣，选择获胜者。\n\n"
+                    f"想法 A: {a.get('title', '?')}\n"
+                    f"目标: {a.get('goal', '')}\n"
+                    f"信号: {', '.join(a.get('signals', []))}\n\n"
+                    f"想法 B: {b.get('title', '?')}\n"
+                    f"目标: {b.get('goal', '')}\n"
+                    f"信号: {', '.join(b.get('signals', []))}\n\n"
+                    f"请返回 JSON 格式: {{\"winner\": \"a\" 或 \"b\" 或 \"tie\", \"reason\": \"简短理由\"}}"
+                )
+                try:
+                    response = router.call(
+                        "topic.debate",
+                        messages=[{"role": "user", "content": prompt}],
+                    )
+                    # Extract content from response
+                    text = ""
+                    if isinstance(response, dict):
+                        choices = response.get("choices", [])
+                        if choices:
+                            msg = choices[0].get("message", {})
+                            text = msg.get("content", "") or ""
+                    # Parse JSON from response
+                    import re
+                    match = re.search(r'\{.*\}', text, re.DOTALL)
+                    if match:
+                        import json
+                        result = json.loads(match.group())
+                        winner = result.get("winner", "tie")
+                        reason = result.get("reason", "")
+                        if winner in {"a", "b", "tie"}:
+                            return {"winner": winner, "reason": reason}
+                    return {"winner": "tie", "reason": "解析失败"}
+                except Exception as e:
+                    return {"winner": "tie", "reason": f"LLM 调用失败: {e}"}
+
+            judge_llm_call = default_judge_llm_call
+            # 使用 judge 继续跑 debate
+            ranked_ideas = run_debate(
+                ideas=ranked_ideas_input,
+                judge_llm_call=judge_llm_call,
+                rounds=DEFAULT_ROUNDS,
+            )
+            debate_status = "completed"
+            used_tokens = -1
+        except Exception as e:
+            # LLM 未配置，回退到旧行为：跳过 debate
+            import warnings
+            warnings.warn(
+                f"judge_llm_call 未提供且 LLM 未配置: {e}。"
+                "回退到跳过 debate，所有 idea 保持 ELO_INITIAL。",
+                UserWarning,
+                stacklevel=2,
+            )
+            ranked_ideas = _rank_ideas_without_debate(ranked_ideas_input)
+            debate_status = "not_configured"
+            used_tokens = 0
     else:
         ranked_ideas = run_debate(
             ideas=ranked_ideas_input,

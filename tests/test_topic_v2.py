@@ -200,6 +200,48 @@ def test_run_topic_v2_real_judge_uses_completed_status(tmp_path, mock_signals, m
     assert len(progress["personas"]) > 0
 
 
+def test_judge_default_uses_llm_router(tmp_path, mock_signals, monkeypatch):
+    """当 judge_llm_call=None 且 LLM 已配置时,默认使用 router.call('topic.debate')。"""
+    from src import topic_v2
+
+    monkeypatch.setattr(topic_v2, "collect_signals", lambda *a, **kw: mock_signals)
+
+    # Track if router.call was invoked with 'topic.debate'
+    router_calls = []
+
+    class MockRouter:
+        def resolve(self, stage):
+            if stage == "topic.debate":
+                return {"provider_model": "mock/model", "temperature": 0.5}
+            raise ValueError(f"Unknown stage: {stage}")
+
+        def call(self, stage, messages):
+            router_calls.append(stage)
+            # Return a valid response with winner "a"
+            return {
+                "choices": [{
+                    "message": {
+                        "content": '{"winner": "a", "reason": "test reason"}'
+                    }
+                }]
+            }
+
+    # Mock get_llm_router at the reference that topic_v2 uses (import binding)
+    monkeypatch.setattr(topic_v2, "get_llm_router", lambda: MockRouter())
+
+    # Call without judge_llm_call - should use default from router
+    result = run_topic_v2(session_id="default_judge_test", judge_llm_call=None)
+    progress = result["debate_progress"]
+
+    # Verify router was called with topic.debate
+    assert "topic.debate" in router_calls, f"Expected topic.debate in router_calls, got {router_calls}"
+    # Verify debate actually ran (status should be completed, not not_configured)
+    assert progress["status"] == "completed", f"Expected completed status, got {progress['status']}"
+    # Verify ideas have been through debate
+    assert progress["rounds"] > 0
+    assert len(progress["personas"]) > 0
+
+
 # ----------------------------------------------------------------------------
 # Elo 排名验证
 # ----------------------------------------------------------------------------
