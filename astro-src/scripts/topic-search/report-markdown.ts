@@ -93,6 +93,7 @@ function normalizeReportTopic(obj: any, prev: TopicReport | undefined, mode: 'fu
   return {
     overview: truncReport(obj.overview, 800) || '(未生成总览)',
     dimensions: dims,
+    methodsComparison: obj.methodsComparison ? truncReport(obj.methodsComparison, 600) : undefined,
     sharedFindings: arrOf('sharedFindings', 8),
     gaps: arrOf('gaps', 6),
     nextSteps: arrOf('nextSteps', 6),
@@ -126,6 +127,14 @@ export async function generateTopicReport(
     if (r.result) lines.push(`结果: ${truncReport(r.result, 600)}`);
     if (r.conclusion) lines.push(`结论: ${truncReport(r.conclusion, 600)}`);
     if (r.context) lines.push(`主题语境: ${truncReport(r.context, 600)}`);
+    // 添加结构化的方法对比数据
+    if (r.method_pros_cons && Object.keys(r.method_pros_cons).length > 0) {
+      const methodPairs = Object.entries(r.method_pros_cons).map(([method, { pros, cons }]) => {
+        return `${method}: pros=[${pros.join(', ')}], cons=[${cons.join(', ')}]`;
+      });
+      lines.push(`方法对比: ${methodPairs.join('; ')}`);
+    }
+    if (r.method_comparison) lines.push(`方法总结: ${truncReport(r.method_comparison, 600)}`);
     blocks.push(lines.join('\n'));
   });
   const papersContext = blocks.join('\n\n');
@@ -274,6 +283,36 @@ export function buildReportMarkdown(): string | null {
     });
     lines.push('');
   });
+
+  // 方法对比综览 + 每篇论文的方法 pros/cons
+  const hasMethodData = r.methodsComparison || (cur?.summaries.some((s) => s.summary.method_pros_cons && Object.keys(s.summary.method_pros_cons).length > 0));
+  if (hasMethodData) {
+    lines.push('## 方法对比综览');
+    if (r.methodsComparison) {
+      lines.push(r.methodsComparison);
+      lines.push('');
+    }
+    // 逐篇列出 method_pros_cons
+    if (cur?.summaries) {
+      const papersWithMethods = cur.summaries.filter(
+        (s) => s.summary.method_pros_cons && Object.keys(s.summary.method_pros_cons).length > 0,
+      );
+      if (papersWithMethods.length > 0) {
+        lines.push('### 各论文方法详析');
+        papersWithMethods.forEach((s) => {
+          lines.push(`**arXiv:${s.arxivId}**`);
+          const mpc = s.summary.method_pros_cons!;
+          Object.entries(mpc).forEach(([method, { pros, cons }]) => {
+            lines.push(`- **${method}**: `);
+            if (pros.length > 0) lines.push(`  - 优点: ${pros.join(', ')}`);
+            if (cons.length > 0) lines.push(`  - 缺点: ${cons.join(', ')}`);
+          });
+          lines.push('');
+        });
+      }
+    }
+  }
+
   if (r.sharedFindings.length) {
     lines.push('## 共同发现');
     r.sharedFindings.forEach((s) => lines.push(`- ${s}`));
