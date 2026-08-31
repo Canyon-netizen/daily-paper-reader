@@ -1,0 +1,230 @@
+/* 方法对比样式 — method-debate-section */
+
+/* Section container */
+.method-debate-section {
+  margin: 2rem auto;
+  max-width: var(--content-max-width, 720px);
+  padding: 0 1.5rem;
+}
+
+.method-debate-section summary {
+  cursor: pointer;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--fg, #1a1a1a);
+  padding: 0.75rem 0;
+  border-bottom: 2px solid var(--accent-soft, rgba(179, 27, 27, 0.08));
+  user-select: none;
+}
+
+.method-debate-section summary:hover {
+  color: var(--accent-hover, #8a1414);
+}
+
+.method-debate-content {
+  padding: 1rem 0 1.5rem;
+}
+
+/* Empty state */
+.method-debate-empty {
+  text-align: center;
+  padding: 2rem 1rem;
+  color: var(--fg-muted, #4b5563);
+}
+
+.method-debate-empty p {
+  margin-bottom: 1rem;
+}
+
+.method-debate-generate-btn,
+.method-debate-regen-btn {
+  background: var(--accent, #b31b1b);
+  color: #fff;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.method-debate-generate-btn:hover,
+.method-debate-regen-btn:hover {
+  background: var(--accent-hover, #8a1414);
+}
+
+.method-debate-generate-btn:disabled,
+.method-debate-regen-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Cards grid */
+.method-debate-cards {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (min-width: 640px) {
+  .method-debate-cards {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+}
+
+/* Individual card */
+.method-debate-card {
+  background: var(--bg-elevated, #fff);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.method-debate-card-header {
+  background: var(--bg-muted, #f3f4f6);
+  padding: 0.75rem 1rem;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg, #1a1a1a);
+  border-bottom: 1px solid var(--bg-muted, #f3f4f6);
+}
+
+.method-debate-card-body {
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Pros - green left border */
+.method-debate-pros {
+  border-left: 3px solid #22c55e;
+  padding-left: 0.75rem;
+}
+
+.method-debate-pros-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #22c55e;
+  margin-bottom: 0.25rem;
+}
+
+.method-debate-pros-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: 0.9rem;
+  color: var(--fg, #1a1a1a);
+  line-height: 1.5;
+}
+
+.method-debate-pros-list li {
+  margin-bottom: 0.25rem;
+}
+
+/* Cons - red right border */
+.method-debate-cons {
+  border-right: 3px solid #ef4444;
+  padding-right: 0.75rem;
+  text-align: right;
+}
+
+.method-debate-cons-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ef4444;
+  margin-bottom: 0.25rem;
+}
+
+.method-debate-cons-list {
+  margin: 0;
+  padding-right: 1.25rem;
+  font-size: 0.9rem;
+  color: var(--fg, #1a1a1a);
+  line-height: 1.5;
+  list-style-position: inside;
+}
+
+.method-debate-cons-list li {
+  margin-bottom: 0.25rem;
+}
+
+/* Cross-method comparison */
+.method-debate-comparison {
+  margin-top: 1.25rem;
+  padding: 1rem;
+  background: var(--bg-muted, #f3f4f6);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  color: var(--fg-muted, #4b5563);
+  font-style: italic;
+  line-height: 1.6;
+}
+
+/* Regenerate button */
+.method-debate-regen-btn {
+  display: block;
+  margin: 1.5rem auto 0;
+  background: transparent;
+  border: 1px solid var(--accent, #b31b1b);
+  color: var(--accent, #b31b1b);
+}
+
+.method-debate-regen-btn:hover {
+  background: var(--accent-soft, rgba(179, 27, 27, 0.08));
+}
+
+/* Toast styling (inline, minimal) */
+.dpr-toast {
+  position: fixed;
+  bottom: 2rem;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  z-index: 9999;
+  animation: toast-in 0.3s ease;
+}
+
+.dpr-toast--info {
+  background: var(--bg-elevated, #fff);
+  color: var(--fg, #1a1a1a);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.dpr-toast--success {
+  background: #22c55e;
+  color: #fff;
+}
+
+.dpr-toast--error {
+  background: #ef4444;
+  color: #fff;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(1rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+  .method-debate-card {
+    background: var(--bg-elevated, #161b22);
+  }
+
+  .method-debate-card-header {
+    background: var(--bg-muted, #21262d);
+    border-bottom-color: var(--bg-muted, #21262d);
+  }
+
+  .method-debate-comparison {
+    background: var(--bg-muted, #21262d);
+  }
+}
