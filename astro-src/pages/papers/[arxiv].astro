@@ -15,6 +15,7 @@ import '../../styles/paper-chat.css';
 import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
 import '../../styles/papers.css';
+import '../../styles/method-debate.css';
 
 // 全文 inline 上限。超过这个大小(原始 utf-8 字节计)就不内联,让客户端走 fetch /papers/{id}.txt。
 // 200KB 原文 base64 后 ~270KB 进 HTML,论文单页就这样大了;能覆盖绝大多数 arXiv 短文(< 30 页),
@@ -260,6 +261,68 @@ const tabTitle = plainZh || plainEn || id;
             </section>
           )}
 
+          {/* 方法对比:每篇论文的 methods pros/cons debate。
+              优先用 frontmatter 字段,若无则从 localStorage 兜底,若都无则展示空状态+生成按钮。 */}
+          <details id="method-debate-section" class="method-debate-section">
+            <summary>🆚 方法对比</summary>
+            <div class="method-debate-content">
+              {(() => {
+                const hasProsCons = paper.method_pros_cons && Object.keys(paper.method_pros_cons).length > 0;
+                if (!hasProsCons) {
+                  return (
+                    <div class="method-debate-empty">
+                      <p>暂未生成 — 点击下方按钮</p>
+                      <button
+                        type="button"
+                        class="method-debate-generate-btn"
+                        data-action="generate-method-debate"
+                        data-arxiv={paper.canonicalArxivId || paper.arxivId || ''}
+                      >🔄 生成方法对比</button>
+                    </div>
+                  );
+                }
+                return (
+                  <>
+                    <div class="method-debate-cards">
+                      {Object.entries(paper.method_pros_cons!).map(([method, { pros, cons }]) => (
+                        <section class="method-debate-card" aria-labelledby={`method-${method.replace(/\s+/g, '-').toLowerCase()}`}>
+                          <h4 id={`method-${method.replace(/\s+/g, '-').toLowerCase()}`} class="method-debate-card-header">{method}</h4>
+                          <div class="method-debate-card-body">
+                            {pros && pros.length > 0 && (
+                              <div class="method-debate-pros">
+                                <div class="method-debate-pros-label">✓ 优点</div>
+                                <ul class="method-debate-pros-list">
+                                  {pros.map((pro, i) => <li key={`pro-${i}`}>{pro}</li>)}
+                                </ul>
+                              </div>
+                            )}
+                            {cons && cons.length > 0 && (
+                              <div class="method-debate-cons">
+                                <div class="method-debate-cons-label">✗ 缺点</div>
+                                <ul class="method-debate-cons-list">
+                                  {cons.map((con, i) => <li key={`con-${i}`}>{con}</li>)}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                    {paper.method_comparison && (
+                      <p class="method-debate-comparison"><em>{paper.method_comparison}</em></p>
+                    )}
+                    <button
+                      type="button"
+                      class="method-debate-regen-btn"
+                      data-action="regen-method-debate"
+                      data-arxiv={paper.canonicalArxivId || paper.arxivId || ''}
+                    >🔄 重新生成</button>
+                  </>
+                );
+              })()}
+            </div>
+          </details>
+
           {paper.body && (
             <section class="paper-body">
               <div class="container">
@@ -444,6 +507,173 @@ const tabTitle = plainZh || plainEn || id;
     import '../../scripts/user-libraries-ui.ts';
     import '../../scripts/paper-compile-ui.ts';
     import '../../scripts/paper-cross-libraries.ts';
+
+    // 方法对比:客户端 LLM 调用 + DOM 更新
+    // -------------------------------------------------------
+    (function () {
+      const STORAGE_KEY_PREFIX = 'dpr_method_debate_';
+
+      // 检查 localStorage 兜底
+      function getStoredDebate(arxivId: string): { prosCons: Record<string, { pros: string[]; cons: string[] }>; comparison: string } | null {
+        try {
+          const raw = localStorage.getItem(STORAGE_KEY_PREFIX + arxivId);
+          if (!raw) return null;
+          const data = JSON.parse(raw);
+          return data && data.prosCons && data.comparison ? data : null;
+        } catch { return null; }
+      }
+
+      // 保存到 localStorage
+      function saveDebate(arxivId: string, prosCons: Record<string, { pros: string[]; cons: string[] }>, comparison: string): void {
+        try {
+          localStorage.setItem(STORAGE_KEY_PREFIX + arxivId, JSON.stringify({ prosCons, comparison }));
+        } catch { /* 忽略存储失败 */ }
+      }
+
+      // 从设置读取 LLM 配置
+      function loadLLMConfig(): { apiKey: string; baseUrl: string; model: string } | null {
+        try {
+          const stored = localStorage.getItem('dpr_settings');
+          if (!stored) return null;
+          const s = JSON.parse(stored);
+          if (!s.apiKey || !s.baseUrl || !s.model) return null;
+          return { apiKey: s.apiKey, baseUrl: s.baseUrl, model: s.model };
+        } catch { return null; }
+      }
+
+      // 调用 LLM 生成方法对比
+      async function generateMethodDebate(arxivId: string, methodText: string, paperTitle: string): Promise<{ prosCons: Record<string, { pros: string[]; cons: string[] }>; comparison: string }> {
+        const cfg = loadLLMConfig();
+        if (!cfg) throw new Error('请先在设置页填写 API Key');
+
+        const systemPrompt = `你是一篇学术论文的方法分析助手。
+论文: ${paperTitle}
+方法描述: ${methodText}
+
+请分析这篇论文中使用的**所有方法**,为每种方法列出:
+1. 优点 (pros): 该方法相比其他方法的优势,用 2-4 个要点描述
+2. 缺点 (cons): 该方法的局限性或劣势,用 2-4 个要点描述
+
+最后用 1-2 句话总结各方法之间的对比。
+
+请返回 JSON 格式:
+{
+  "prosCons": {
+    "方法名1": { "pros": ["优点1", "优点2"], "cons": ["缺点1"] },
+    "方法名2": { "pros": ["优点1"], "cons": ["缺点1", "缺点2"] }
+  },
+  "comparison": "跨方法对比总结"
+}`;
+
+        const response = await fetch(`${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${cfg.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: cfg.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: '请分析这篇论文的方法并返回 JSON' },
+            ],
+            temperature: 0.5,
+            max_tokens: 4000,
+          }),
+        });
+
+        if (!response.ok) {
+          const err = await response.text().catch(() => '');
+          throw new Error(`LLM 调用失败 (${response.status}): ${err.slice(0, 100)}`);
+        }
+
+        const data = await response.json();
+        const content = data?.choices?.[0]?.message?.content || '';
+
+        // 尝试提取 JSON
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('LLM 返回格式错误,无法解析 JSON');
+
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (!parsed.prosCons || !parsed.comparison) throw new Error('LLM 返回缺少必要字段');
+
+        return parsed;
+      }
+
+      // 渲染方法对比卡片
+      function renderCards(prosCons: Record<string, { pros: string[]; cons: string[] }>, comparison: string): string {
+        const cardsHtml = Object.entries(prosCons).map(([method, { pros, cons }]) => {
+          const slug = method.replace(/\s+/g, '-').toLowerCase();
+          const prosHtml = pros?.length
+            ? `<div class="method-debate-pros"><div class="method-debate-pros-label">✓ 优点</div><ul class="method-debate-pros-list">${pros.map((p, i) => `<li key="pro-${i}">${p}</li>`).join('')}</ul></div>`
+            : '';
+          const consHtml = cons?.length
+            ? `<div class="method-debate-cons"><div class="method-debate-cons-label">✗ 缺点</div><ul class="method-debate-cons-list">${cons.map((c, i) => `<li key="con-${i}">${c}</li>`).join('')}</ul></div>`
+            : '';
+          return `<section class="method-debate-card" aria-labelledby="method-${slug}"><h4 id="method-${slug}" class="method-debate-card-header">${method}</h4><div class="method-debate-card-body">${prosHtml}${consHtml}</div></section>`;
+        }).join('');
+
+        const comparisonHtml = comparison ? `<p class="method-debate-comparison"><em>${comparison}</em></p>` : '';
+        const regenBtn = document.querySelector('.method-debate-regen-btn') as HTMLButtonElement;
+        const arxivId = regenBtn?.dataset.arxiv || '';
+
+        return `<div class="method-debate-cards">${cardsHtml}</div>${comparisonHtml}<button type="button" class="method-debate-regen-btn" data-action="regen-method-debate" data-arxiv="${arxivId}">🔄 重新生成</button>`;
+      }
+
+      // 显示 toast (复用 toast.ts 的逻辑)
+      function showToast(msg: string, level: 'info' | 'success' | 'error' = 'info'): void {
+        const toast = document.createElement('div');
+        toast.className = `dpr-toast dpr-toast--${level}`;
+        toast.textContent = msg;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+      }
+
+      // 处理按钮点击
+      document.addEventListener('click', async (e) => {
+        const btn = (e.target as HTMLElement).closest('[data-action="generate-method-debate"], [data-action="regen-method-debate"]') as HTMLButtonElement;
+        if (!btn) return;
+
+        const action = btn.dataset.action;
+        const arxivId = btn.dataset.arxiv;
+        if (!arxivId) return;
+
+        const section = document.getElementById('method-debate-section');
+        const content = section?.querySelector('.method-debate-content') as HTMLElement;
+        if (!content) return;
+
+        // 禁用按钮,显示加载状态
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = '生成中...';
+
+        try {
+          // 从页面读取 method 字段
+          const methodEl = document.querySelector('[data-method]') as HTMLElement;
+          const methodText = methodEl?.dataset.method || '';
+          const titleEl = document.querySelector('h1') as HTMLElement;
+          const paperTitle = titleEl?.textContent || '';
+
+          if (!methodText) throw new Error('论文缺少方法描述字段');
+
+          const result = await generateMethodDebate(arxivId, methodText, paperTitle);
+
+          // 保存到 localStorage
+          saveDebate(arxivId, result.prosCons, result.comparison);
+
+          // 渲染卡片
+          content.innerHTML = renderCards(result.prosCons, result.comparison);
+
+          showToast('已重新生成', 'success');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : '生成失败';
+          showToast(`生成失败 — ${msg}`, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      });
+    })();
 
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
     // 如果当前 mode 是 fulltext,paper-chat.ts 内部会触发 loadFulltextSkeleton。
