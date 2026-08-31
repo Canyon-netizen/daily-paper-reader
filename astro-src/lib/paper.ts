@@ -96,6 +96,15 @@ export interface PaperFrontmatter {
   conclusion?: string;
   /** Stage 9 概念层 — 从 frontmatter `concepts:` 段解析,概念页 / chips / wikilink 三处共用的真值来源。 */
   concepts?: ConceptRef[];
+  /** 方法对比 pros/cons:每个方法名映射到其优点数组和缺点数组。
+   *  由 paper.method_debate LLM 生成,键为方法名(如 "Transformer", "CNN"),值为 {pros, cons}。 */
+  method_pros_cons?: Record<string, { pros: string[]; cons: string[] }>;
+  /** 方法对比跨方法总结:1-2 句概括各方法的优劣对比。 */
+  method_comparison?: string;
+  /** 方法对比生成时间(ISO 8601 时间戳)。 */
+  method_debate_generated_at?: string;
+  /** 方法对比使用的模型(如 "deepseek/deepseek-chat")。 */
+  method_debate_model?: string;
   [key: string]: unknown;
 }
 

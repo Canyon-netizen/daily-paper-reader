@@ -34,7 +34,8 @@ export type PromptTarget =
   | 'library.digest'       // Polaris research_digest.PAPER_INSIGHTS_SYSTEM_PROMPT
   | 'library.digest_synth' // Polaris research_digest.DIGEST_SYNTHESIS_SYSTEM_PROMPT
   | 'library.trend'        // Polaris research_digest.TREND_SYSTEM_PROMPT
-  | 'library.chat';        // Polaris papers.CHAT_SYSTEM_PROMPT_TEMPLATE (库级适配)
+  | 'library.chat'        // Polaris papers.CHAT_SYSTEM_PROMPT_TEMPLATE (库级适配)
+  | 'paper.method_debate'; // 方法对比:每个方法 pros/cons + cross-method summary
 
 export interface PackManifest {
   pack_id: string;

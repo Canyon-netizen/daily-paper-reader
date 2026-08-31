@@ -44,6 +44,9 @@ const ROUTES: Record<string, Route> = {
   library_trend: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4, isStream: true },
   library_chat: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.4, isStream: true },
 
+  // 方法对比 (paper.method_debate)
+  'paper.method_debate': { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
+
   default: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
 };
 
