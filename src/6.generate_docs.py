@@ -29,6 +29,7 @@ from src.paper_figures import ensure_paper_media
 from src.paper_formulas import ensure_paper_formulas
 from src.title_utils import strip_title_markup
 from src.venue_extract import venue_label_list
+from src.method_debate import generate_method_debate
 from src.taxonomy import (
     normalize_category_dim,
     build_categories as _build_cats,
@@ -1507,6 +1508,25 @@ def process_paper(
             if glance:
                 paper["_glance_overview"] = glance
 
+        # 方法优缺点辩论分析 (fail-soft) - 已有文件
+        try:
+            method_debate_result = generate_method_debate(title, abstract_en, None)
+            if method_debate_result:
+                upsert_front_matter_field_to_path(
+                    md_path, "method_pros_cons", method_debate_result.get("method_pros_cons", {})
+                )
+                upsert_front_matter_field_to_path(
+                    md_path, "method_comparison", method_debate_result.get("method_comparison", "")
+                )
+                upsert_front_matter_field_to_path(
+                    md_path, "method_debate_generated_at", method_debate_result.get("method_debate_generated_at", "")
+                )
+                upsert_front_matter_field_to_path(
+                    md_path, "method_debate_model", method_debate_result.get("method_debate_model", "")
+                )
+        except Exception as e:
+            log(f"[WARN] 方法辩论异常跳过: {paper_id} - {e}")
+
         # 修复历史格式：TLDR 行末尾不应带反斜杠
         fixed, changed = normalize_meta_tldr_line(existing)
         if changed:
@@ -1645,6 +1665,27 @@ def process_paper(
     os.makedirs(os.path.dirname(md_path), exist_ok=True)
     atomic_write_text(md_path, content)
     verify_paper_md_was_written(md_path)
+
+    # 方法优缺点辩论分析 (fail-soft)
+    try:
+        method_debate_result = generate_method_debate(title, abstract_en, None)
+        if method_debate_result:
+            upsert_front_matter_field_to_path(
+                md_path, "method_pros_cons", method_debate_result.get("method_pros_cons", {})
+            )
+            upsert_front_matter_field_to_path(
+                md_path, "method_comparison", method_debate_result.get("method_comparison", "")
+            )
+            upsert_front_matter_field_to_path(
+                md_path, "method_debate_generated_at", method_debate_result.get("method_debate_generated_at", "")
+            )
+            upsert_front_matter_field_to_path(
+                md_path, "method_debate_model", method_debate_result.get("method_debate_model", "")
+            )
+        else:
+            logger.warning(f"[WARN] 方法辩论生成失败: {paper_id}")
+    except Exception as e:
+        logger.warning(f"[WARN] 方法辩论异常跳过: {paper_id} - {e}")
 
     # PR-5: 概念图谱提取(默认 disabled)
     # Stage 8 fail-loud:4 层静默失败的修复 (见 [[feedback_pr5_concept_extract_silent_failures]])。
