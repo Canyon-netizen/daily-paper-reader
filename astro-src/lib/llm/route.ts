@@ -47,6 +47,10 @@ const ROUTES: Record<string, Route> = {
   // 方法对比 (paper.method_debate)
   'paper.method_debate': { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
 
+  // Elo debate stages (PR-6)
+  'topic.debate': { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.7 },
+  'elo.debate': { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.7 },
+
   default: { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5 },
 };
 

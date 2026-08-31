@@ -68,6 +68,8 @@ export interface DebateIdea {
   wins: number;
   /** 单场失败明细。 */
   debate_errors?: Array<{ round: number; error: string }>;
+  /** 单场辩论记录(transcript + result)。 */
+  debate_log?: Array<any>;
 }
 
 export interface DebateProgress {
@@ -109,6 +111,7 @@ export interface TopicReportDimension {
 export interface TopicReport {
   overview: string;                              // 截断 800
   dimensions: TopicReportDimension[];            // 2-6
+  methodsComparison?: string;                     // 截断 600
   sharedFindings: string[];                      // 截断 120/条, 最长 8
   gaps: string[];                                // 截断 120/条, 最长 6
   nextSteps: string[];                           // 截断 120/条, 最长 6

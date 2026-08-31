@@ -26,6 +26,7 @@ export type PromptTarget =
   | 'topic.explore'
   | 'topic.summary'
   | 'topic.report'
+  | 'topic.debate'        // Elo debate: persona arguments + judge
   // Polaris library workbench — 8 Tab 配套 stage (PR 阶段 1 起)
   | 'library.compile'       // Polaris wiki_compile.LIBRARIAN_SYSTEM_PROMPT
   | 'library.relevance'    // Polaris relevance.RELEVANCE_SYSTEM_PROMPT
