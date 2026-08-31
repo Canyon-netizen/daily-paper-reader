@@ -307,3 +307,36 @@ def test_load_fixture():
 def test_stage_name_correct():
     """Test that STAGE_NAME is correct."""
     assert STAGE_NAME == "paper.method_debate"
+
+
+# ----------------------------------------------------------------------------
+# Backfill dry-run behavior (regression test for generate-before-check bug)
+# ----------------------------------------------------------------------------
+
+def test_backfill_dry_run_skips_llm_call(tmp_path, monkeypatch):
+    """process_paper(dry_run=True) must NOT invoke generate_method_debate.
+
+    Regression: previously the LLM call happened before the dry_run check,
+    so --dry-run still triggered HTTP 401 when DEEPSEEK_API_KEY was unset.
+    """
+    from src.maintain import backfill_method_debate
+
+    # Stub generate_method_debate — must never be called.
+    called = {"n": 0}
+
+    def fake_generate(*args, **kwargs):
+        called["n"] += 1
+        return None
+
+    monkeypatch.setattr(backfill_method_debate, "generate_method_debate", fake_generate)
+
+    md_path = tmp_path / "2607.00001v1-test.md"
+    md_path.write_text("---\ntitle: Test\nabstract: Test abstract\n---\nbody\n", encoding="utf-8")
+
+    # Mock load_paper_text to return a tiny string.
+    monkeypatch.setattr(backfill_method_debate, "load_paper_text", lambda *a, **kw: "fake paper text")
+
+    result = backfill_method_debate.process_paper(str(md_path), dry_run=True)
+
+    assert result is True
+    assert called["n"] == 0, "generate_method_debate must not be called when dry_run=True"

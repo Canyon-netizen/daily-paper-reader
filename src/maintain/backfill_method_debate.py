@@ -107,6 +107,10 @@ def process_paper(md_path: str, dry_run: bool = False) -> bool:
     if not paper_text:
         logger.info(f"[INFO] 无本地 .txt, 仅用摘要: {paper_id}")
 
+    if dry_run:
+        logger.info(f"[DRYRUN] 跳过 LLM 调用与写入: {title[:50]}")
+        return True
+
     # Generate method debate
     logger.info(f"[PROCESS] 生成中: {title[:50]}...")
     result = generate_method_debate(title, abstract, paper_text)
@@ -114,10 +118,6 @@ def process_paper(md_path: str, dry_run: bool = False) -> bool:
     if not result:
         logger.warning(f"[FAIL] 生成失败: {title[:50]}")
         return False
-
-    if dry_run:
-        logger.info(f"[DRYRUN] 跳过写入: {json.dumps(result, ensure_ascii=False)[:200]}...")
-        return True
 
     # Write result to frontmatter
     try:
