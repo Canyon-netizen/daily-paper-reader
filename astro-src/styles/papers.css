@@ -789,3 +789,47 @@
 .hue-amber    { color: #d97706; }
 .hue-rose     { color: #e11d48; }
 .hue-sky      { color: #0284c7; }
+
+/* ========================================
+ * paper-notes wikilink dropdown
+ * ======================================== */
+.wikilink-dropdown {
+  position: absolute;
+  z-index: 1000;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow-md, 0 4px 6px -1px rgba(0, 0, 0, 0.1));
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 0.875rem;
+}
+.wikilink-dropdown-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+.wikilink-dropdown-item:last-child {
+  border-bottom: none;
+}
+.wikilink-dropdown-item:hover,
+.wikilink-dropdown-item.is-selected {
+  background: var(--accent-soft);
+}
+.wikilink-dropdown-id {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--accent);
+}
+.wikilink-dropdown-title {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

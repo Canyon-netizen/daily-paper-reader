@@ -16,6 +16,7 @@ import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
 import '../../styles/papers.css';
 import '../../styles/method-debate.css';
+import '../../styles/follow-up-questions.css';
 
 // 全文 inline 上限。超过这个大小(原始 utf-8 字节计)就不内联,让客户端走 fetch /papers/{id}.txt。
 // 200KB 原文 base64 后 ~270KB 进 HTML,论文单页就这样大了;能覆盖绝大多数 arXiv 短文(< 30 页),
@@ -261,6 +262,24 @@ const tabTitle = plainZh || plainEn || id;
             </section>
           )}
 
+          {/* 深入追问:3-5 个引导性问题,帮助读者深入探索这篇论文。 */}
+          {paper.follow_up_questions && paper.follow_up_questions.length > 0 && (
+            <details class="follow-up-questions-section">
+              <summary>🤔 深入追问</summary>
+              <ul class="follow-up-questions-list">
+                {paper.follow_up_questions.map((q, i) => (
+                  <li>
+                    <button
+                      type="button"
+                      class="follow-up-question-btn"
+                      data-question={q}
+                    >{q}</button>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
           {/* 方法对比:每篇论文的 methods pros/cons debate。
               优先用 frontmatter 字段,若无则从 localStorage 兜底,若都无则展示空状态+生成按钮。 */}
           <details id="method-debate-section" class="method-debate-section">
@@ -354,9 +373,24 @@ const tabTitle = plainZh || plainEn || id;
           )}
 
           {/* 我的笔记 — 失焦防抖保存,本地 + Gist 同步。
-              broken 论文 / 404 不挂(notes editor 内部 null-safe 退出)。 */}
+              broken 论文 / 404 不挂(notes editor 内部 null-safe 退出)。
+              data-paper-index 用于 wikilink 自动补全(JSON 字符串)。 */}
           {paper && !paper.isBroken && (
-            <section class="paper-notes" id="paper-notes-section" aria-label="我的笔记">
+            <section
+              class="paper-notes"
+              id="paper-notes-section"
+              aria-label="我的笔记"
+              data-paper-index={JSON.stringify(
+                (await listPapers({ limit: 500, sortBy: 'date' })).map((p) => ({
+                  id: p.id.split('/').pop() || p.id,
+                  canonicalArxivId: p.canonicalArxivId,
+                  title: p.title,
+                  title_zh: p.title_zh,
+                  title_plain: p.title_plain,
+                  title_zh_plain: p.title_zh_plain,
+                }))
+              )}
+            >
               <div class="container">
                 <div class="paper-notes-header">
                   <h3>📓 我的笔记</h3>
@@ -672,6 +706,15 @@ const tabTitle = plainZh || plainEn || id;
           btn.disabled = false;
           btn.textContent = originalText;
         }
+      });
+
+      // 深入追问:点击问题后通过 postMessage 发送给 paper-chat
+      document.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest('.follow-up-question-btn') as HTMLButtonElement;
+        if (!btn) return;
+        const question = btn.dataset.question;
+        if (!question) return;
+        window.postMessage({ type: 'dpr-ask-question', question }, '*');
       });
     })();
 
