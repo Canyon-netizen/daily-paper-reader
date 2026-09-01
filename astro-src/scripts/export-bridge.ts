@@ -13,6 +13,7 @@
 
 import { renderBibtex } from './export/bibtex';
 import { renderCsl } from './export/csl';
+import { renderRis } from './export/ris';
 import { buildObsidianZip } from './export/obsidian';
 import { getUserNote, listStarred } from '../lib/user-library';
 import { downloadAsFile } from './export/trigger-download';
@@ -121,7 +122,7 @@ async function loadPapersByIds(canonicalIds: string[]): Promise<PaperInput[]> {
 }
 
 /** 通用导出入口。 */
-async function exportBySet(opts: ExportOptions, kind: 'bibtex' | 'csl' | 'zip'): Promise<void> {
+async function exportBySet(opts: ExportOptions, kind: 'bibtex' | 'csl' | 'ris' | 'zip'): Promise<void> {
   if (opts.canonicalIds.length === 0) {
     setHint(opts.hintElementId, opts.emptyMessage, 'error');
     return;
@@ -133,17 +134,20 @@ async function exportBySet(opts: ExportOptions, kind: 'bibtex' | 'csl' | 'zip'):
       setHint(opts.hintElementId, '× fetch 失败(可能 docs 还未拷贝到 /papers/)', 'error');
       return;
     }
-    const ext = kind === 'bibtex' ? 'bib' : kind === 'csl' ? 'csl.json' : 'zip';
+    const ext = kind === 'bibtex' ? 'bib' : kind === 'csl' ? 'csl.json' : kind === 'ris' ? 'ris' : 'zip';
     const mime = kind === 'bibtex' ? 'application/x-bibtex'
       : kind === 'csl' ? 'application/vnd.citationstyles.csl+json'
+      : kind === 'ris' ? 'application/x-research-info-systems'
       : 'application/zip';
     const baseName = kind === 'bibtex' ? 'references'
       : kind === 'csl' ? 'library'
+      : kind === 'ris' ? 'references'
       : 'my-library';
     const filename = `${opts.filenamePrefix}-${baseName}.${ext}`;
     let content: string | Uint8Array;
     if (kind === 'bibtex') content = renderBibtex(papers);
     else if (kind === 'csl') content = renderCsl(papers);
+    else if (kind === 'ris') content = renderRis(papers);
     else content = buildObsidianZip(papers);
     downloadAsFile(content, filename, mime);
     setHint(opts.hintElementId, `✓ ${opts.filenamePrefix} ${papers.length} 篇导出完成`, 'ok');
@@ -173,6 +177,10 @@ export async function exportCsl(): Promise<void> {
   await exportBySet(await starredOpts(), 'csl');
 }
 
+export async function exportRis(): Promise<void> {
+  await exportBySet(await starredOpts(), 'ris');
+}
+
 export async function exportZip(): Promise<void> {
   setHint('export-hint', '打包中…(手写 ZIP 较慢,几十篇约 1-2s)');
   await exportBySet(await starredOpts(), 'zip');
@@ -181,6 +189,7 @@ export async function exportZip(): Promise<void> {
 export function initExportButtons(): void {
   document.getElementById('export-bibtex-btn')?.addEventListener('click', () => void exportBibtex());
   document.getElementById('export-csl-btn')?.addEventListener('click', () => void exportCsl());
+  document.getElementById('export-ris-btn')?.addEventListener('click', () => void exportRis());
   document.getElementById('export-zip-btn')?.addEventListener('click', () => void exportZip());
 }
 
@@ -205,10 +214,10 @@ function readLibraryIds(): string[] {
   }
 }
 
-function readLibraryMeta(): { prefix: string; hintId: string } {
+function readLibraryMeta(): { filenamePrefix: string; hintId: string } {
   const el = document.querySelector<HTMLElement>('#library-wb-data');
   return {
-    prefix: el?.dataset.prefix || 'library',
+    filenamePrefix: el?.dataset.prefix || 'library',
     hintId: el?.dataset.hintId || 'lib-export-hint',
   };
 }
@@ -221,6 +230,11 @@ export async function exportLibraryBibtex(): Promise<void> {
 export async function exportLibraryCsl(): Promise<void> {
   const meta = readLibraryMeta();
   await exportBySet({ canonicalIds: readLibraryIds(), ...meta, emptyMessage: '该文献库暂无论文' }, 'csl');
+}
+
+export async function exportLibraryRis(): Promise<void> {
+  const meta = readLibraryMeta();
+  await exportBySet({ canonicalIds: readLibraryIds(), ...meta, emptyMessage: '该文献库暂无论文' }, 'ris');
 }
 
 export async function exportLibraryZip(): Promise<void> {
@@ -236,6 +250,7 @@ export function initLibraryExportButtons(): void {
       const target = a.dataset.libraryExportTarget;
       if (target === 'bibtex') void exportLibraryBibtex();
       else if (target === 'csl') void exportLibraryCsl();
+      else if (target === 'ris') void exportLibraryRis();
       else if (target === 'obsidian') void exportLibraryZip();
     });
   });

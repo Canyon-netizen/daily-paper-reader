@@ -1,21 +1,25 @@
 // astro-src/scripts/export/csl.ts
 //
-// 最小 CSL-JSON 导出(plan §Stage 11.iv):
-//   - id, type, title, author, issued, container-title, URL
-//   - 不做 publisher / DOI / pages 等花式字段
+// Full CSL-JSON export:
+//   - id, type, title, author, issued, container-title, URL, DOI, abstract
 //   - author 拆 name → family / given
+//   - Support all standard CSL-JSON fields
 //
-// 数据源:PaperInput(与 bibtex.ts 共享)。
+// Data source: PaperInput (shared with bibtex.ts)
 
 interface PaperInput {
   id: string;
   title?: string;
+  title_zh?: string;
   authors?: string;
   date?: string;
   pdf?: string;
   arxivId?: string;
   source?: string;
-  categories?: { venue?: string[] };
+  venue?: string;
+  categories?: { venue?: string[]; task?: string[]; method?: string[]; type?: string[] };
+  body?: string;
+  userNote?: string;
 }
 
 interface CslAuthor {
@@ -32,6 +36,7 @@ interface CslEntry {
   issued?: { 'date-parts': number[][] };
   URL?: string;
   DOI?: string;
+  [key: string]: unknown;
 }
 
 export function renderCsl(papers: PaperInput[]): string {
@@ -51,16 +56,30 @@ export function renderCsl(papers: PaperInput[]): string {
         return { family: name };
       });
     }
-    const year = (p.date || '').match(/\d{4}/)?.[0];
-    const month = (p.date || '').match(/\d{4}-(\d{2})/)?.[1];
-    if (year) {
-      const parts: number[] = [Number(year)];
-      if (month) parts.push(Number(month));
+    const dateMatch = p.date?.match(/(\d{4})-(\d{2})(?:-(\d{2}))?/);
+    if (dateMatch) {
+      const parts: number[] = [Number(dateMatch[1]), Number(dateMatch[2])];
+      if (dateMatch[3]) parts.push(Number(dateMatch[3]));
       entry.issued = { 'date-parts': [parts] };
     }
-    const venue = p.categories?.venue?.[0];
+    const venue = p.categories?.venue?.[0] || p.venue;
     if (venue) entry['container-title'] = venue;
-    if (p.pdf) entry.URL = p.pdf;
+    // URL: arXiv preferrable to PDF
+    if (p.arxivId) {
+      entry.URL = `https://arxiv.org/abs/${p.arxivId}`;
+    } else if (p.pdf) {
+      entry.URL = p.pdf;
+    }
+    // DOI extraction from PDF URL
+    if (p.pdf && p.pdf.includes('doi.org')) {
+      const doiMatch = p.pdf.match(/doi\.org\/([^?]+)/);
+      if (doiMatch) entry.DOI = doiMatch[1];
+    }
+    // Abstract from body (first ~500 chars)
+    if (p.body) {
+      const abstract = p.body.slice(0, 500).replace(/[#*`\n]/g, ' ').trim();
+      if (abstract) (entry as Record<string, unknown>)['abstract'] = abstract;
+    }
     return entry;
   });
   return JSON.stringify(entries, null, 2) + '\n';

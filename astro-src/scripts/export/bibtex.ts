@@ -24,6 +24,7 @@ interface PaperInput {
   source?: string;
   venue?: string;
   categories?: { venue?: string[]; task?: string[]; method?: string[]; type?: string[] };
+  body?: string;
   userNote?: string;
 }
 
@@ -118,9 +119,32 @@ export function renderBibtexEntry(p: PaperInput, key: string): string {
     if (type === 'inproceedings') fields.push(`  booktitle    = {${escapeLatex(venue)}}`);
     else fields.push(`  journal      = {${escapeLatex(venue)}}`);
   }
-  if (p.pdf) fields.push(`  url          = {${p.pdf}}`);
-  if (p.arxivId) fields.push(`  eprint       = {${p.arxivId}}`);
+  // arXiv-specific fields
+  if (p.arxivId) {
+    fields.push(`  eprint       = {${p.arxivId}}`);
+    fields.push(`  archivePrefix = {arXiv}`);
+    // Extract primary class from categories if available
+    const primaryClass = p.categories?.method?.[0] || p.categories?.task?.[0] || p.categories?.type?.[0];
+    if (primaryClass) fields.push(`  primaryClass = {${primaryClass}}`);
+  }
+  if (p.pdf) {
+    fields.push(`  url          = {${p.pdf}}`);
+    // Extract DOI from PDF URL if present
+    const doiMatch = p.pdf.match(/doi\.org\/([^?]+)/);
+    if (doiMatch) {
+      fields.push(`  doi          = {${doiMatch[1]}}`);
+    }
+  }
   if (p.userNote) fields.push(`  note         = {${escapeLatex(p.userNote.slice(0, 200))}}`);
+
+  // Abstract from body (first ~300 chars)
+  if (p.body) {
+    const abstract = p.body.slice(0, 300).replace(/\n+/g, ' ').trim();
+    if (abstract) {
+      fields.push(`  abstract     = {${escapeLatex(abstract)}}`);
+    }
+  }
+
   return `@${type}{${key},\n${fields.join(',\n')}\n}`;
 }
 

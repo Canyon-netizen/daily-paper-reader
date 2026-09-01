@@ -197,20 +197,21 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
     </section>
 
     <!-- ===== 导出(Stage 11) =====
-        在浏览器里把星标的论文 + 笔记打包成 BibTeX / CSL-JSON / Obsidian ZIP。
+        在浏览器里把星标的论文 + 笔记打包成 BibTeX / CSL-JSON / RIS / Obsidian ZIP。
         走 fetch('/arxiv-index.json') 拿到所有论文 id,再 fetch 每篇 md 提取
         frontmatter;然后调用 src/scripts/export/* 模块在浏览器里合成文件。 -->
     <section class="settings-card">
       <h2 class="settings-card-title">📦 导出我的图书馆</h2>
       <p class="settings-card-sub">
         把当前星标 + 笔记打包成文献管理格式,全部在浏览器完成,纯前端。
-        包括 BibTeX (Zotero/Mendeley 通用)、CSL-JSON (Papers 3 等)
-        和 Obsidian ZIP (笔记 frontmatter + 自动归档布局)。
+        支持 BibTeX (Zotero/Mendeley/Overleaf 通用)、CSL-JSON (Papers 3 等)、
+        RIS (Zotero/Mendeley 专用)和 Obsidian ZIP (笔记 frontmatter + 自动归档布局)。
       </p>
 
       <div class="settings-gist-actions">
         <button type="button" id="export-bibtex-btn" class="settings-action-btn">📄 导出 references.bib</button>
         <button type="button" id="export-csl-btn" class="settings-action-btn">📋 导出 library.csl.json</button>
+        <button type="button" id="export-ris-btn" class="settings-action-btn">📑 导出 references.ris</button>
         <button type="button" id="export-zip-btn" class="settings-action-btn primary">📦 导出 my-library.zip</button>
         <span id="export-hint" class="settings-gist-hint"></span>
       </div>
