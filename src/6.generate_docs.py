@@ -412,11 +412,12 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
     user_text = json.dumps(payload, ensure_ascii=False)
     user_prompt = (
         "请基于上面的 JSON 中的 title 和 abstract，输出一个中文速览摘要，严格返回 JSON（不要输出任何其它文字）：\n"
-        "{\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\"}\n"
+        "{\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"follow_up_questions\":[\"...\",\"...\",\"...\"]}\n"
         "要求：\n"
         "- tldr：150-220个中文字符，不是一句话口号；通常写成3-4个短句，按“问题背景→核心方法→关键结果→贡献意义”的顺序组织\n"
         "- motivation/method/result/conclusion：每个字段30-70个中文字符，通常一句话；对标论文页速览卡片，简洁但必须包含具体信息\n"
         "- context(主题语境)：40-90个中文字符，1-2句话；把这篇论文放回所属研究主题里定位——说明它在该主题脉络中的位置(承接/扩展/对比哪类已有工作)、典型适用场景或边界条件、已知局限性或仍未解决的问题；不要重复 tldr/motivation/method/result/conclusion 里已经说过的事实\n"
+        "- follow_up_questions(深入追问)：数组，包含3-5个中文问题，每个问题15-30个字符；问题要驱动读者深入探索，例如\"作者的方法在哪些数据集上效果不明显？\"、\"如果换成 Transformer backbone，这个方法还能保持效果吗？\"、\"实验部分的基线选择是否公平？\"；禁止在问题里包含答案，禁止超过30个字符\n"
         "- 不要把英文句子放进中文字段；可保留必要英文术语或模型名\n"
         "Output must be strict JSON only, no markdown, no fences, no extra text."
     )
@@ -430,6 +431,7 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
             "result": {"type": "string"},
             "conclusion": {"type": "string"},
             "context": {"type": "string"},
+            "follow_up_questions": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["tldr", "motivation", "method", "result", "conclusion"],
         "additionalProperties": False,
@@ -460,6 +462,7 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
             result = str(obj.get("result") or "").strip()
             conclusion = str(obj.get("conclusion") or "").strip()
             context = str(obj.get("context") or "").strip()
+            follow_up_questions = obj.get("follow_up_questions") or []
             # 过滤掉空字段和占位符（"。" 或 "方法与实现细节请参考摘要与正文。" 等）
             # context 是新增的可选字段,空字符串视为未提供,不参与"必填五段必须齐全"的判断。
             placeholder_fields = {"", "。", "方法与实现细节请参考摘要与正文。", "结果与对比结论请参考摘要与正文。", "总体而言，该工作在所述任务上展示了有效性，并提供了可复用的思路或工具。"}
@@ -475,6 +478,11 @@ def generate_glance_overview(title: str, abstract: str, max_retries: int = 3) ->
             ]
             if context and context not in placeholder_fields:
                 lines.append(f"**Context**：{ensure_single_sentence_end(context)}")
+            # 添加深入追问(如果存在且非空)
+            if follow_up_questions and isinstance(follow_up_questions, list):
+                for q in follow_up_questions:
+                    if q and isinstance(q, str) and q.strip():
+                        lines.append(f"**FollowUp**：{q.strip()}")
             return "\n".join(lines)
         except Exception as e:
             # 额度不足等“硬失败”不必重试，直接降级
@@ -1152,6 +1160,7 @@ def build_markdown_content(
     glance_result = ""
     glance_conclusion = ""
     glance_context = ""
+    glance_follow_up_questions = []
 
     if glance:
         for line in glance.split("\n"):
@@ -1168,6 +1177,10 @@ def build_markdown_content(
                 glance_conclusion = line.split("：", 1)[-1].split(":", 1)[-1].strip()
             elif line.startswith("**Context**：") or line.startswith("**Context**:"):
                 glance_context = line.split("：", 1)[-1].split(":", 1)[-1].strip()
+            elif line.startswith("**FollowUp**：") or line.startswith("**FollowUp**:"):
+                q = line.split("：", 1)[-1].split(":", 1)[-1].strip()
+                if q:
+                    glance_follow_up_questions.append(q)
 
     # 优先使用速览生成的 TLDR（100字左右），否则使用原来的 TLDR
     display_tldr = glance_tldr if glance_tldr else tldr
@@ -1252,6 +1265,10 @@ def build_markdown_content(
         lines.append(f"conclusion: {yaml_escape_value(glance_conclusion)}")
     if glance_context:
         lines.append(f"context: {yaml_escape_value(glance_context)}")
+    if glance_follow_up_questions:
+        # 发射为 YAML flow-style 列表: follow_up_questions: ["q1", "q2", "q3"]
+        quoted = ", ".join(f'"{q}"' for q in glance_follow_up_questions)
+        lines.append(f"follow_up_questions: [{quoted}]")
 
     lines.append("---")
     lines.append("")

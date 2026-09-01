@@ -87,6 +87,9 @@ export interface AnalysisResult {
   method_pros_cons?: Record<string, { pros: string[]; cons: string[] }>;
   // 方法对比跨方法总结:1-2 句概括各方法的优劣对比。
   method_comparison?: string;
+  // 深入追问:3-5 个引导性问题,帮助读者深入探索这篇论文。
+  // 来自 LLM 生成,中文,每个问题 15-30 个字符,聚焦于实验局限、适用边界、可扩展方向等。
+  follow_up_questions?: string[];
 }
 
 // 旧 3-层结构 (domain/task/method) — 现已被 4-dim Categories 取代。
@@ -1228,7 +1231,15 @@ ${TYPE_LINES}
 - 如果正文明显不完整,根据已有内容合理推断,但要简明
 - tldr / motivation / method / result / conclusion / context 之间要互补不重复:
   tldr 写宏观叙事(背景→方法→结果→贡献),四段写具体细节,context 写主题坐标——三块内容分工明确,
-  这样用户看完任意一段都不会觉得信息有缺口`;
+  这样用户看完任意一段都不会觉得信息有缺口。
+- follow_up_questions(深入追问,新增):数组,包含 3-5 个中文问题,每个问题 15-30 个字符。
+  问题要驱动读者深入探索,例如:
+  - "作者的方法在哪些数据集上效果不明显?"
+  - "如果换成 Transformer backbone,这个方法还能保持效果吗?"
+  - "实验部分的基线选择是否公平?"
+  - "这篇论文的假设在实际场景中是否容易满足?"
+  - "作者提到的局限性可以通过什么方式改进?"
+  禁止在问题里包含答案,禁止超过 30 个字符。`;
 
 function buildUserPrompt(title: string, abstract: string, body: string): string {
   // 对齐 src/6.generate_docs.py: payload = {"title": title, "abstract": abstract}
@@ -1236,7 +1247,7 @@ function buildUserPrompt(title: string, abstract: string, body: string): string 
   const payload = JSON.stringify({ title, abstract: abstract || '(无 abstract,从正文摘录)', body_excerpt: body.slice(0, 8000) }, null, 0);
   return (
     "请基于上面的 JSON 中的 title / abstract / body_excerpt,输出一个中文速览摘要,严格返回 JSON(不要输出任何其它文字):\n" +
-    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"topic_tags\":{\"venue\":[],\"task\":[\"...\"],\"method\":[\"...\"],\"type\":[\"...\"]}}\n" +
+    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"topic_tags\":{\"venue\":[],\"task\":[\"...\"],\"method\":[\"...\"],\"type\":[\"...\"]},\"follow_up_questions\":[\"...\",\"...\",\"...\"]}\n" +
     "Output must be strict JSON only, no markdown, no fences, no extra text."
   ).replace("上面的 JSON", payload + "\n上面的 JSON");
 }
@@ -1435,6 +1446,7 @@ export async function callLLM(
     result: parsed.result || '',
     conclusion: parsed.conclusion || '',
     context: parsed.context || '',
+    follow_up_questions: parsed.follow_up_questions || [],
     // categories 由 normalizeCategories 按 lib/taxonomies 的 3-dim 候选池 (task/method/type)
     // 严格过滤;自由标签必须带 "other:" 前缀才接受;venue 维度由前端从 source 字段重推,
     // LLM 输出此处忽略。LLM 没返回 / 字段缺失 / 格式错乱 / 顶层是 string[] (旧 history)
@@ -2586,6 +2598,10 @@ function copyAsMarkdown(r: AnalysisResult): void {
     `\n## 结果\n${r.result}`,
     `\n## 结论\n${r.conclusion}`,
     r.context ? `\n## 主题语境\n${r.context}` : '',
+    // 深入追问
+    r.follow_up_questions && r.follow_up_questions.length > 0
+      ? `\n## 深入追问\n${r.follow_up_questions.map((q) => `- ${q}`).join('\n')}`
+      : '',
     // 方法对比
     r.method_pros_cons ? (() => {
       const lines = ['\n## 方法对比'];

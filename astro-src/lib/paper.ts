@@ -105,6 +105,8 @@ export interface PaperFrontmatter {
   method_debate_generated_at?: string;
   /** 方法对比使用的模型(如 "deepseek/deepseek-chat")。 */
   method_debate_model?: string;
+  /** 深入追问:3-5 个引导性问题,帮助读者深入探索这篇论文。 */
+  follow_up_questions?: string[];
   [key: string]: unknown;
 }
 

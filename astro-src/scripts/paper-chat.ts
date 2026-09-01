@@ -724,6 +724,13 @@ function initChat(): void {
     const text = QUICK_PROMPTS[idx] ?? '';
     if (text) void send(text);
   });
+
+  // 支持从外部(如图文卡片)预填充问题并自动发送
+  window.addEventListener('message', (event) => {
+    if (event.data?.type === 'dpr-ask-question' && event.data?.question) {
+      void send(event.data.question);
+    }
+  });
 }
 
 // 顶层 try 包住:之前 initChat() 抛 ReferenceError 时(escapeHtml 未定义)

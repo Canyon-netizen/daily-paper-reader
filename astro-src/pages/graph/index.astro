@@ -1,0 +1,170 @@
+---
+// astro-src/pages/graph/index.astro — Citation graph landing page
+// Form to enter arxivId and jump to /graph/[arxivId]
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+---
+
+<BaseLayout title="Citation Graph - Daily Paper Reader">
+  <Navbar currentPath="/graph" />
+  <main class="graph-landing">
+    <div class="container">
+      <h1>Citation Graph</h1>
+      <p class="subtitle">Explore connected papers in an interactive network</p>
+
+      <form id="graph-form" class="graph-form">
+        <div class="input-group">
+          <label for="arxiv-input">Enter arXiv ID</label>
+          <input
+            type="text"
+            id="arxiv-input"
+            name="arxivId"
+            placeholder="e.g., 2301.12345 or 2301.12345v1"
+            pattern="^\d{4}\.\d{4,5}(v\d+)?$"
+            required
+          />
+          <span class="hint">Format: YYYY.NNNNN or YYYY.NNNNNvX</span>
+        </div>
+        <button type="submit">Open Graph</button>
+      </form>
+
+      <div class="info-section">
+        <h2>How it works</h2>
+        <ul>
+          <li>Enter an arXiv ID to see that paper and its most related papers</li>
+          <li>The graph shows papers connected by similarity (Jaccard, TF-IDF, or embedding)</li>
+          <li>Click any node to navigate to that paper's page</li>
+          <li>Hover to see paper details and similarity scores</li>
+        </ul>
+      </div>
+    </div>
+  </main>
+</BaseLayout>
+
+<script>
+  const form = document.getElementById('graph-form') as HTMLFormElement;
+  const input = document.getElementById('arxiv-input') as HTMLInputElement;
+
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const arxivId = input.value.trim();
+    if (arxivId) {
+      window.location.href = `/graph/${arxivId}/`;
+    }
+  });
+</script>
+
+<style>
+  .graph-landing {
+    min-height: 80vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-8) var(--space-4);
+  }
+
+  .container {
+    max-width: 560px;
+    width: 100%;
+  }
+
+  h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    margin-bottom: var(--space-2);
+    text-align: center;
+  }
+
+  .subtitle {
+    text-align: center;
+    color: var(--fg-muted);
+    font-size: 1.1rem;
+    margin-bottom: var(--space-8);
+  }
+
+  .graph-form {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
+    margin-bottom: var(--space-8);
+  }
+
+  .input-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
+  }
+
+  label {
+    font-weight: 500;
+    font-size: 0.95rem;
+  }
+
+  input {
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-size: 1rem;
+    background: var(--bg);
+    color: var(--fg);
+    transition: border-color var(--transition), box-shadow var(--transition);
+  }
+
+  input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .hint {
+    font-size: 0.8rem;
+    color: var(--fg-muted);
+  }
+
+  button {
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    background: var(--accent);
+    color: var(--accent-fg);
+    border: none;
+    border-radius: var(--radius-md);
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity var(--transition), transform var(--transition);
+  }
+
+  button:hover {
+    opacity: 0.9;
+  }
+
+  button:active {
+    transform: scale(0.98);
+  }
+
+  .info-section {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: var(--space-5);
+  }
+
+  .info-section h2 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: var(--space-3);
+  }
+
+  .info-section ul {
+    margin: 0;
+    padding-left: var(--space-5);
+    color: var(--fg-muted);
+    line-height: 1.7;
+  }
+
+  .info-section li {
+    margin-bottom: var(--space-1);
+  }
+</style>

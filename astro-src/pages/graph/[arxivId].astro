@@ -1,0 +1,358 @@
+---
+// astro-src/pages/graph/[arxivId].astro — Citation graph view page
+// Fetches related papers and renders interactive graph
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import { listPapers, readPaper } from '../../lib/paper';
+import { computeRelations, type RelationNode, type RelationEdge } from '../../lib/paper-relations';
+import '../../styles/citation-graph.css';
+
+interface Props {
+  arxivId: string;
+}
+
+const { arxivId } = Astro.params;
+
+// Parse arxivId - support both with and without version
+const arxivMatch = arxivId?.match(/^(\d{4}\.\d{4,5})(v\d+)?$/);
+if (!arxivMatch) {
+  return Astro.redirect('/graph/');
+}
+
+const canonicalId = arxivMatch[1]; // without version
+const fullId = `papers/${arxivId}`;
+
+// Fetch the main paper
+const mainPaper = await readPaper(fullId) || await readPaper(`papers/${canonicalId}`);
+
+// If not found, try to find in paper list
+let paperList: Awaited<ReturnType<typeof listPapers>> = [];
+if (!mainPaper) {
+  paperList = await listPapers({ dedup: true, limit: 5000 });
+}
+
+// Compute related papers
+let nodes: RelationNode[] = [];
+let edges: RelationEdge[] = [];
+let error: string | null = null;
+
+try {
+  // Use all papers for relation computation
+  const allPapers = paperList.length > 0 ? paperList : await listPapers({ dedup: true });
+
+  // Find the target paper in the list
+  const targetPaper = allPapers.find(p =>
+    p.id === fullId ||
+    p.id === `papers/${arxivId}` ||
+    p.id === `papers/${canonicalId}` ||
+    p.canonicalArxivId === canonicalId
+  );
+
+  if (targetPaper) {
+    const result = await computeRelations(allPapers, {
+      algorithm: 'hybrid',
+      topK: 12,
+      minWeight: 0.05,
+    });
+
+    // Filter to only show the main paper and its related ones
+    const relatedIds = new Set<string>();
+    relatedIds.add(targetPaper.id);
+
+    for (const edge of result.edges) {
+      if (edge.source === targetPaper.id || edge.target === targetPaper.id) {
+        relatedIds.add(edge.source);
+        relatedIds.add(edge.target);
+      }
+    }
+
+    nodes = result.nodes.filter(n => relatedIds.has(n.id));
+    edges = result.edges.filter(e => relatedIds.has(e.source) && relatedIds.has(e.target));
+  } else {
+    error = `Paper ${arxivId} not found in the database`;
+  }
+} catch (e) {
+  error = e instanceof Error ? e.message : 'Failed to compute relations';
+}
+
+// Convert to graph data for cytoscape
+const graphData = {
+  nodes: nodes.map(n => ({
+    data: {
+      id: n.id,
+      label: n.title.substring(0, 50) + (n.title.length > 50 ? '...' : ''),
+      title: n.title,
+      arxivId: n.arxivId,
+      tags: n.tags,
+    }
+  })),
+  edges: edges.map(e => ({
+    data: {
+      id: `${e.source}-${e.target}`,
+      source: e.source,
+      target: e.target,
+      weight: e.weight,
+      type: e.type,
+      sharedTags: e.sharedTags,
+    }
+  }))
+};
+
+const pageTitle = mainPaper?.title || mainPaper?.title_zh || `Graph: ${arxivId}`;
+---
+
+<BaseLayout title={`${pageTitle} - Citation Graph`}>
+  <Navbar currentPath="/graph" />
+  <main class="graph-page">
+    <div class="graph-header">
+      <div class="container">
+        <div class="header-row">
+          <h1>
+            <a href="/graph/" class="back-link">←</a>
+            Citation Graph
+          </h1>
+          <div class="search-box">
+            <input
+              type="text"
+              id="graph-search"
+              placeholder="Filter nodes..."
+            />
+          </div>
+        </div>
+        {mainPaper && (
+          <div class="main-paper-info">
+            <span class="label">Main paper:</span>
+            <a href={`/papers/${arxivId}/`}>{mainPaper.title || mainPaper.title_zh}</a>
+            {mainPaper.authors && <span class="authors">{mainPaper.authors}</span>}
+          </div>
+        )}
+        {error && <div class="error-message">{error}</div>}
+      </div>
+    </div>
+
+    <div class="graph-container">
+      <div id="citation-graph" data-graph={JSON.stringify(graphData)}></div>
+
+      <div class="graph-controls">
+        <div class="control-group">
+          <label for="similarity-threshold">Similarity threshold</label>
+          <input
+            type="range"
+            id="similarity-threshold"
+            min="0"
+            max="100"
+            value="5"
+          />
+          <span class="threshold-value">0.05</span>
+        </div>
+        <div class="control-group">
+          <label for="algorithm-select">Algorithm</label>
+          <select id="algorithm-select">
+            <option value="hybrid">Hybrid (recommended)</option>
+            <option value="jaccard">Jaccard</option>
+            <option value="tfidf">TF-IDF</option>
+            <option value="embedding">Embedding</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div id="graph-tooltip" class="graph-tooltip" hidden></div>
+  </main>
+</BaseLayout>
+
+<script>
+  import cytoscape from 'cytoscape';
+
+  // Initialize the graph
+  const container = document.getElementById('citation-graph') as HTMLElement;
+  const graphDataAttr = container?.dataset.graph;
+
+  if (graphDataAttr) {
+    const graphData = JSON.parse(graphDataAttr);
+
+    // Determine if the main paper is the first node (reorder)
+    const mainNodeId = graphData.nodes[0]?.data?.id || '';
+
+    const cy = cytoscape({
+      container: container,
+      elements: {
+        nodes: graphData.nodes.map((n: any) => ({
+          data: {
+            ...n.data,
+            isMain: n.data.id === mainNodeId,
+          }
+        })),
+        edges: graphData.edges,
+      },
+      style: [
+        {
+          selector: 'node',
+          style: {
+            'label': 'data(label)',
+            'font-size': '10px',
+            'text-valign': 'bottom',
+            'text-halign': 'center',
+            'text-margin-y': 4,
+            'width': 40,
+            'height': 40,
+            'background-color': '#e5e7eb',
+            'border-width': 2,
+            'border-color': '#9ca3af',
+          }
+        },
+        {
+          selector: 'node[isMain]',
+          style: {
+            'background-color': '#3b82f6',
+            'border-color': '#2563eb',
+            'width': 50,
+            'height': 50,
+          }
+        },
+        {
+          selector: 'node:selected',
+          style: {
+            'border-width': 3,
+            'border-color': '#f59e0b',
+          }
+        },
+        {
+          selector: 'edge',
+          style: {
+            'width': 1,
+            'line-color': '#d1d5db',
+            'target-arrow-color': '#d1d5db',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'opacity': 0.6,
+          }
+        },
+        {
+          selector: 'edge[weight > 0.5]',
+          style: {
+            'width': 2,
+            'line-color': '#6b7280',
+            'opacity': 0.8,
+          }
+        },
+        {
+          selector: 'edge[weight > 0.8]',
+          style: {
+            'width': 3,
+            'line-color': '#3b82f6',
+            'opacity': 1,
+          }
+        },
+        {
+          selector: '.filtered-out',
+          style: {
+            'display': 'none',
+          }
+        }
+      ],
+      layout: {
+        name: 'cose', // compound spring embedder - good for force-directed
+        animate: true,
+        animationDuration: 500,
+        nodeRepulsion: () => 8000,
+        idealEdgeLength: () => 80,
+        gravity: 0.3,
+      },
+      minZoom: 0.3,
+      maxZoom: 3,
+      wheelSensitivity: 0.3,
+    });
+
+    // Click to navigate
+    cy.on('tap', 'node', (evt) => {
+      const node = evt.target;
+      const arxivId = node.data('arxivId');
+      if (arxivId) {
+        window.location.href = `/papers/${arxivId}/`;
+      }
+    });
+
+    // Hover tooltip
+    const tooltip = document.getElementById('graph-tooltip') as HTMLElement;
+
+    cy.on('mouseover', 'node', (evt) => {
+      const node = evt.target;
+      const title = node.data('title') || '';
+      const arxivId = node.data('arxivId') || '';
+      const tags = node.data('tags') || [];
+
+      tooltip.innerHTML = `
+        <div class="tooltip-title">${title}</div>
+        <div class="tooltip-arxiv">arXiv: ${arxivId}</div>
+        ${tags.length > 0 ? `<div class="tooltip-tags">${tags.slice(0, 5).join(', ')}</div>` : ''}
+      `;
+      tooltip.hidden = false;
+
+      const pos = evt.renderedPosition;
+      tooltip.style.left = `${pos.x + 15}px`;
+      tooltip.style.top = `${pos.y + 15}px`;
+    });
+
+    cy.on('mouseout', 'node', () => {
+      tooltip.hidden = true;
+    });
+
+    // Search filter
+    const searchInput = document.getElementById('graph-search') as HTMLInputElement;
+    searchInput?.addEventListener('input', (e) => {
+      const query = (e.target as HTMLInputElement).value.toLowerCase();
+
+      cy.batch(() => {
+        if (!query) {
+          cy.nodes().removeClass('filtered-out');
+          cy.edges().removeClass('filtered-out');
+        } else {
+          const matching = cy.nodes().filter((n) => {
+            const label = n.data('label') || '';
+            const title = n.data('title') || '';
+            return label.toLowerCase().includes(query) || title.toLowerCase().includes(query);
+          });
+
+          cy.nodes().addClass('filtered-out');
+          matching.removeClass('filtered-out');
+
+          // Also show edges between visible nodes
+          cy.edges().addClass('filtered-out');
+          cy.edges().filter((edge) => {
+            return !edge.source().hasClass('filtered-out') && !edge.target().hasClass('filtered-out');
+          }).removeClass('filtered-out');
+        }
+      });
+    });
+
+    // Similarity threshold slider
+    const thresholdSlider = document.getElementById('similarity-threshold') as HTMLInputElement;
+    const thresholdValue = thresholdSlider?.parentElement?.querySelector('.threshold-value') as HTMLElement;
+
+    thresholdSlider?.addEventListener('input', (e) => {
+      const value = parseInt((e.target as HTMLInputElement).value) / 1000;
+      if (thresholdValue) {
+        thresholdValue.textContent = value.toFixed(2);
+      }
+
+      cy.batch(() => {
+        cy.edges().addClass('filtered-out');
+        cy.edges().filter((edge) => {
+          return edge.data('weight') >= value;
+        }).removeClass('filtered-out');
+
+        // Hide nodes with no visible edges
+        const visibleEdges = cy.edges().filter((e) => !e.hasClass('filtered-out'));
+        const visibleNodeIds = new Set<string>();
+        visibleEdges.forEach((edge) => {
+          visibleNodeIds.add(edge.source().id());
+          visibleNodeIds.add(edge.target().id());
+        });
+
+        cy.nodes().addClass('filtered-out');
+        cy.nodes().filter((n) => visibleNodeIds.has(n.id())).removeClass('filtered-out');
+      });
+    });
+  }
+</script>
