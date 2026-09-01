@@ -180,8 +180,8 @@ def generate_method_debate(
         if not method_comparison:
             method_comparison = "本文未提出多个独立方法进行对比"
 
-        # Get model identifier from response
-        model_id = "deepseek/deepseek-chat"  # Default, matching config
+        # Get model identifier from response (fall back to env LLM_MODEL if missing)
+        model_id = os.getenv("LLM_MODEL") or "unknown"
         if isinstance(response, dict):
             model_id = response.get("model", model_id)
 
