@@ -1,0 +1,599 @@
+/* astro-src/styles/projects.css
+ *
+ * Project workspace page styles.
+ * Uses existing CSS variables from global.css and hue colors from libraries.css.
+ * Theme-aware with :global() escapes for Astro scoped CSS.
+ */
+
+/* Import hue colors from libraries.css */
+@import url('./libraries.css');
+
+/* Main shell */
+.projects-shell {
+  padding: var(--space-6);
+  max-width: var(--shell-max-width);
+  margin: 0 auto;
+}
+
+/* Header */
+.projects-header {
+  margin-bottom: var(--space-8);
+}
+
+.projects-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.projects-header h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.projects-sub {
+  margin: var(--space-2) 0 0;
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+}
+
+/* Grid for project cards */
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+/* Project card */
+.project-card {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  border-left: 4px solid var(--hue-color, var(--accent));
+  cursor: pointer;
+  transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.project-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.project-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.project-card-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.project-card-hue {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--hue-color, var(--accent));
+  flex-shrink: 0;
+}
+
+.project-card-statement {
+  margin: 0 0 var(--space-3);
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.project-card-meta {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.project-card-meta .kbd {
+  background: var(--bg-muted);
+  color: var(--fg-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+}
+
+/* New project form */
+.projects-new-form {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--space-4);
+}
+
+.proj-form-inner {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  width: 100%;
+  max-width: 480px;
+  box-shadow: var(--shadow-lg);
+}
+
+.proj-form-inner h2 {
+  margin: 0 0 var(--space-5);
+  font-size: 1.3rem;
+  color: var(--fg);
+}
+
+.proj-form-field {
+  margin-bottom: var(--space-4);
+}
+
+.proj-form-field label {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-weight: 500;
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+
+.proj-form-field input,
+.proj-form-field textarea {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.95rem;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.proj-form-field input:focus,
+.proj-form-field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.proj-form-actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  margin-top: var(--space-5);
+}
+
+/* Hue picker */
+.proj-hue-picker {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.hue-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--hue-color);
+  cursor: pointer;
+  transition: transform var(--transition), border-color var(--transition);
+}
+
+.hue-swatch:hover {
+  transform: scale(1.1);
+}
+
+.hue-swatch.selected {
+  border-color: var(--fg);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--hue-color);
+}
+
+/* Detail panel */
+.projects-detail-panel {
+  animation: fadeIn var(--transition-slow);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.proj-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  flex-wrap: wrap;
+}
+
+.proj-detail-info {
+  flex: 1;
+  min-width: 200px;
+}
+
+.proj-detail-info h2 {
+  margin: 0 0 var(--space-2);
+  font-size: 1.5rem;
+  color: var(--fg);
+}
+
+.proj-detail-info p {
+  margin: 0 0 var(--space-3);
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+.proj-detail-meta {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.proj-detail-meta .kbd {
+  background: var(--bg-muted);
+  color: var(--fg-subtle);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+}
+
+/* Tabs - matches paper-analyzer.astro ARIA pattern */
+.project-detail-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--space-5);
+}
+
+.tab-btn {
+  padding: var(--space-3) var(--space-5);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition), border-color var(--transition);
+}
+
+.tab-btn:hover {
+  color: var(--fg);
+}
+
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel {
+  animation: fadeIn var(--transition);
+}
+
+/* Papers tab */
+.papers-tab-content h3,
+.writing-header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--fg);
+}
+
+.papers-stages-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.papers-stages-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+/* Stage card */
+.stage-card {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+}
+
+.stage-card.done {
+  opacity: 0.7;
+}
+
+.stage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.stage-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.stage-status {
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+  padding: 2px 8px;
+  background: var(--bg-muted);
+  border-radius: var(--radius-sm);
+}
+
+.stage-card.done .stage-status {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.stage-papers {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+}
+
+.paper-chip {
+  background: var(--tag-bg);
+  color: var(--tag-fg);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+}
+
+.stage-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.btn-sm:hover {
+  background: var(--bg-muted);
+  color: var(--fg);
+}
+
+/* Stage new form inline */
+.stage-new-form {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  padding: var(--space-3);
+  background: var(--bg-muted);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+}
+
+.stage-new-form input {
+  flex: 1;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+
+.stage-new-form input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Ungrouped papers */
+.papers-ungrouped {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.papers-ungrouped h4 {
+  margin: 0 0 var(--space-3);
+  font-size: 1rem;
+  color: var(--fg-muted);
+}
+
+.papers-ungrouped-list {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-3);
+  min-height: 32px;
+}
+
+/* Writing tab */
+.writing-tab-content {
+  padding: var(--space-2) 0;
+}
+
+.writing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+
+.writing-drafts-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.draft-item {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.draft-item:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.draft-title {
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: var(--space-2);
+}
+
+.draft-meta {
+  font-size: 0.85rem;
+  color: var(--fg-subtle);
+}
+
+/* Highlights placeholder */
+.highlights-tab-content {
+  padding: var(--space-8) 0;
+  text-align: center;
+}
+
+.highlights-placeholder {
+  color: var(--fg-muted);
+  font-size: 0.95rem;
+}
+
+/* Add paper modal */
+.paper-add-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--space-4);
+}
+
+.paper-add-modal-backdrop {
+  position: absolute;
+  inset: 0;
+}
+
+.paper-add-modal-content {
+  position: relative;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  width: 100%;
+  max-width: 400px;
+  box-shadow: var(--shadow-lg);
+}
+
+.paper-add-modal-content h3 {
+  margin: 0 0 var(--space-4);
+  font-size: 1.2rem;
+  color: var(--fg);
+}
+
+.paper-add-modal-content input {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.95rem;
+  font-family: var(--font-mono);
+}
+
+.paper-add-modal-content input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.paper-add-modal-actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
+/* Utility */
+.text-muted {
+  color: var(--fg-subtle);
+  font-size: 0.9rem;
+}
+
+/* Dark theme overrides - using :global() to escape Astro scoped CSS */
+:global([data-theme='dark']) .projects-shell {
+  /* Uses CSS vars, no override needed */
+}
+
+:global([data-theme='dark']) .project-card {
+  background: var(--bg-elevated);
+}
+
+:global([data-theme='dark']) .proj-form-inner,
+:global([data-theme='dark']) .paper-add-modal-content {
+  background: var(--bg-elevated);
+}
+
+:global([data-theme='dark']) .stage-card,
+:global([data-theme='dark']) .draft-item {
+  background: var(--bg-elevated);
+  border-color: var(--border);
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .projects-shell {
+    padding: var(--space-4);
+  }
+
+  .projects-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .projects-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .project-detail-tabs {
+    overflow-x: auto;
+  }
+
+  .tab-btn {
+    padding: var(--space-2) var(--space-3);
+    font-size: 0.85rem;
+  }
+
+  .proj-detail-header {
+    flex-direction: column;
+  }
+}

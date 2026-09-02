@@ -1,0 +1,556 @@
+---
+// astro-src/pages/projects/index.astro
+//
+// Project workspace — list and detail view.
+// SSR-renders an empty shell; client-side orchestrator fills content.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/projects.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const PROJECT_TABS = [
+  { id: 'papers', label: '📑 论文', icon: 'papers' },
+  { id: 'writing', label: '📝 写作', icon: 'writing' },
+  { id: 'highlights', label: '🧩 高亮', icon: 'highlights' },
+] as const;
+---
+
+<BaseLayout title="项目工作区">
+  <Navbar />
+  <main class="shell projects-shell">
+    <header class="projects-header">
+      <div class="projects-title-row">
+        <h1>📁 项目工作区</h1>
+        <button class="button primary" id="proj-new-btn">+ 新建项目</button>
+      </div>
+      <p class="projects-sub">分组管理 + 阶段推进 + 写作草稿 — 三件套。</p>
+    </header>
+
+    <!-- List view -->
+    <section id="projects-list-panel" class="projects-list-panel" hidden>
+      <div class="projects-grid" id="projects-grid"></div>
+    </section>
+
+    <!-- Empty state -->
+    <section id="projects-empty" class="dpr-empty">
+      <div class="dpr-empty-icon">📁</div>
+      <h3>暂无项目</h3>
+      <p>点击下方按钮创建你的第一个项目工作区。</p>
+      <div class="dpr-empty-actions">
+        <button class="button primary" id="proj-new-btn-empty">+ 新建项目</button>
+      </div>
+    </section>
+
+    <!-- New project form -->
+    <div id="projects-new-form" class="projects-new-form" hidden>
+      <div class="proj-form-inner">
+        <h2>创建新项目</h2>
+        <div class="proj-form-field">
+          <label for="proj-new-name">项目名称</label>
+          <input
+            type="text"
+            id="proj-new-name"
+            placeholder="项目名 (1-32 字)"
+            maxlength="32"
+          />
+        </div>
+        <div class="proj-form-field">
+          <label for="proj-new-statement">项目声明</label>
+          <textarea
+            id="proj-new-statement"
+            placeholder="一句话声明 (1-200 字)"
+            rows="2"
+            maxlength="200"
+          ></textarea>
+        </div>
+        <div class="proj-form-field">
+          <label>选择颜色</label>
+          <div class="proj-hue-picker" id="proj-new-hue"></div>
+        </div>
+        <div class="proj-form-actions">
+          <button class="button primary" id="proj-new-create">创建项目</button>
+          <button class="button" id="proj-new-cancel">取消</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Detail view -->
+    <section id="projects-detail-panel" class="projects-detail-panel" hidden>
+      <div class="proj-detail-header">
+        <button class="button" id="proj-back-btn">← 返回</button>
+        <div class="proj-detail-info">
+          <h2 id="proj-detail-name"></h2>
+          <p id="proj-detail-statement"></p>
+          <div class="proj-detail-meta" id="proj-detail-meta"></div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="project-detail-tabs" role="tablist" aria-label="项目视图">
+        {PROJECT_TABS.map((tab, i) => (
+          <button
+            class="tab-btn"
+            role="tab"
+            id={`tab-${tab.id}`}
+            aria-selected={i === 0 ? 'true' : 'false'}
+            aria-controls={`panel-${tab.id}`}
+            data-tab={tab.id}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <!-- Papers tab panel -->
+      <div
+        class="tab-panel"
+        id="panel-papers"
+        role="tabpanel"
+        aria-labelledby="tab-papers"
+        hidden
+      >
+        <div class="papers-tab-content">
+          <div class="papers-stages-header">
+            <h3>阶段</h3>
+            <button class="button" id="stage-new-btn">+ 新建阶段</button>
+          </div>
+          <div class="papers-stages-list" id="papers-stages-list"></div>
+
+          <!-- New stage inline form (hidden by default) -->
+          <div class="stage-new-form" id="stage-new-form" hidden>
+            <input type="text" id="stage-new-name" placeholder="阶段名称 (1-32 字)" maxlength="32" />
+            <button class="button primary" id="stage-new-create">添加</button>
+            <button class="button" id="stage-new-cancel">取消</button>
+          </div>
+
+          <!-- Ungrouped papers -->
+          <div class="papers-ungrouped" id="papers-ungrouped">
+            <h4>未分组论文</h4>
+            <div class="papers-ungrouped-list" id="papers-ungrouped-list"></div>
+            <button class="button" id="paper-add-btn">+ 加入论文</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Writing tab panel -->
+      <div
+        class="tab-panel"
+        id="panel-writing"
+        role="tabpanel"
+        aria-labelledby="tab-writing"
+        hidden
+      >
+        <div class="writing-tab-content">
+          <div class="writing-header">
+            <h3>草稿</h3>
+            <button class="button primary" id="draft-new-btn">+ 新建草稿</button>
+          </div>
+          <div class="writing-drafts-list" id="writing-drafts-list"></div>
+        </div>
+      </div>
+
+      <!-- Highlights tab panel (placeholder) -->
+      <div
+        class="tab-panel"
+        id="panel-highlights"
+        role="tabpanel"
+        aria-labelledby="tab-highlights"
+        hidden
+      >
+        <div class="highlights-tab-content">
+          <p class="highlights-placeholder">高亮聚合（Phase B MVP）</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Add paper modal (simple inline) -->
+    <div id="paper-add-modal" class="paper-add-modal" hidden>
+      <div class="paper-add-modal-backdrop"></div>
+      <div class="paper-add-modal-content">
+        <h3>加入论文</h3>
+        <input
+          type="text"
+          id="paper-add-input"
+          placeholder="输入 arXiv ID (如 2607.01234)"
+        />
+        <div class="paper-add-modal-actions">
+          <button class="button primary" id="paper-add-confirm">添加</button>
+          <button class="button" id="paper-add-cancel">取消</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    import {
+      getProjectsList,
+      getProjectDetail,
+      getStageProgress,
+      subscribeLibraries,
+      createProject,
+      createStage,
+      updateStageName,
+      completeStage,
+      addPaperToProjectStage,
+      getProjectDrafts,
+    } from '../../scripts/projects';
+    import { createLibrary } from '../../lib/user-libraries/store';
+    import { LIBRARY_HUES, type LibraryHue } from '../../lib/user-libraries/types';
+    import { saveDraft, type Draft } from '../../lib/projects/draft-store';
+
+    // State
+    let currentProjectId: string | null = null;
+    let currentTab = 'papers';
+    let selectedHue: LibraryHue = 'emerald';
+
+    // DOM elements
+    const listPanel = document.getElementById('projects-list-panel') as HTMLElement;
+    const emptyPanel = document.getElementById('projects-empty') as HTMLElement;
+    const newForm = document.getElementById('projects-new-form') as HTMLElement;
+    const detailPanel = document.getElementById('projects-detail-panel') as HTMLElement;
+    const detailName = document.getElementById('proj-detail-name') as HTMLElement;
+    const detailStatement = document.getElementById('proj-detail-statement') as HTMLElement;
+    const detailMeta = document.getElementById('proj-detail-meta') as HTMLElement;
+    const stagesList = document.getElementById('papers-stages-list') as HTMLElement;
+    const ungroupedList = document.getElementById('papers-ungrouped-list') as HTMLElement;
+    const draftsList = document.getElementById('writing-drafts-list') as HTMLElement;
+    const huePicker = document.getElementById('proj-new-hue') as HTMLElement;
+
+    // Build hue picker
+    function renderHuePicker(selected: LibraryHue): void {
+      huePicker.innerHTML = '';
+      LIBRARY_HUES.forEach((hue) => {
+        const swatch = document.createElement('button');
+        swatch.className = `hue-swatch ${hue === selected ? 'selected' : ''}`;
+        swatch.dataset.hue = hue;
+        swatch.style.setProperty('--hue-color', `var(--hue-${hue})`);
+        swatch.title = hue;
+        swatch.addEventListener('click', () => {
+          selectedHue = hue;
+          renderHuePicker(hue);
+        });
+        huePicker.appendChild(swatch);
+      });
+    }
+
+    // Show/hide helpers
+    function showPanel(panel: HTMLElement): void {
+      panel.hidden = false;
+    }
+    function hidePanel(panel: HTMLElement): void {
+      panel.hidden = true;
+    }
+
+    // Render project list
+    function renderList(): void {
+      const projects = getProjectsList();
+      const grid = document.getElementById('projects-grid') as HTMLElement;
+
+      if (projects.length === 0) {
+        hidePanel(listPanel);
+        showPanel(emptyPanel);
+        return;
+      }
+
+      showPanel(listPanel);
+      hidePanel(emptyPanel);
+      hidePanel(detailPanel);
+      hidePanel(newForm);
+
+      grid.innerHTML = '';
+      projects.forEach((proj) => {
+        const progress = getStageProgress(proj);
+        const card = document.createElement('div');
+        card.className = `project-card hue-${proj.hue}`;
+        card.style.setProperty('--hue-color', `var(--hue-${proj.hue})`);
+        card.dataset.id = proj.id;
+        card.innerHTML = `
+          <div class="project-card-header">
+            <h3 class="project-card-title">${proj.name}</h3>
+            <span class="project-card-hue"></span>
+          </div>
+          <p class="project-card-statement">${proj.statement}</p>
+          <div class="project-card-meta">
+            <span class="kbd">${proj.paperIds?.length || 0} 篇</span>
+            <span class="kbd">${progress.active} 活跃</span>
+            <span class="kbd">${progress.done} 完成</span>
+          </div>
+        `;
+        card.addEventListener('click', () => openProject(proj.id));
+        grid.appendChild(card);
+      });
+    }
+
+    // Open project detail
+    function openProject(id: string): void {
+      currentProjectId = id;
+      const detail = getProjectDetail(id);
+      if (!detail) return;
+
+      hidePanel(listPanel);
+      hidePanel(emptyPanel);
+      hidePanel(newForm);
+      showPanel(detailPanel);
+
+      detailName.textContent = detail.name;
+      detailStatement.textContent = detail.statement;
+      const progress = detail.stageProgress;
+      detailMeta.innerHTML = `
+        <span class="kbd">${progress.totalPapers} 篇论文</span>
+        <span class="kbd">${detail.stages?.length || 0} 个阶段</span>
+      `;
+
+      renderTabs();
+      renderPapersTab();
+      renderWritingTab();
+    }
+
+    // Render tabs
+    function renderTabs(): void {
+      const tabs = document.querySelectorAll('.tab-btn');
+      tabs.forEach((tab) => {
+        tab.addEventListener('click', () => {
+          const tabId = (tab as HTMLElement).dataset.tab;
+          if (tabId) switchTab(tabId);
+        });
+      });
+      switchTab(currentTab);
+    }
+
+    // Switch tab
+    function switchTab(tabId: string): void {
+      currentTab = tabId;
+      const tabs = document.querySelectorAll('.tab-btn') as NodeListOf<HTMLElement>;
+      const panels = document.querySelectorAll('.tab-panel') as NodeListOf<HTMLElement>;
+
+      tabs.forEach((t) => {
+        const isSelected = t.dataset.tab === tabId;
+        t.classList.toggle('active', isSelected);
+        t.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+      });
+
+      panels.forEach((p) => {
+        const isActive = p.id === `panel-${tabId}`;
+        p.hidden = !isActive;
+      });
+    }
+
+    // Render papers tab
+    function renderPapersTab(): void {
+      if (!currentProjectId) return;
+      const detail = getProjectDetail(currentProjectId);
+      if (!detail) return;
+
+      // Render stages
+      const stages = detail.stages || [];
+      stagesList.innerHTML = '';
+      if (stages.length === 0) {
+        stagesList.innerHTML = '<p class="text-muted">暂无阶段</p>';
+      } else {
+        stages.forEach((stage) => {
+          const stageCard = document.createElement('div');
+          stageCard.className = `stage-card ${stage.status === 'done' ? 'done' : ''}`;
+          stageCard.innerHTML = `
+            <div class="stage-header">
+              <h4>${stage.name}</h4>
+              <span class="stage-status">${stage.status === 'done' ? '✓ 完成' : '进行中'}</span>
+            </div>
+            <div class="stage-papers">${(stage.paperIds || []).map(id => `<span class="paper-chip">${id}</span>`).join('') || '<span class="text-muted">无</span>'}</div>
+            <div class="stage-actions">
+              <button class="btn-sm" data-action="add-paper" data-stage="${stage.id}">+ 论文</button>
+              <button class="btn-sm" data-action="rename" data-stage="${stage.id}">重命名</button>
+              <button class="btn-sm" data-action="archive" data-stage="${stage.id}">${stage.status === 'done' ? '激活' : '完成'}</button>
+            </div>
+          `;
+          stagesList.appendChild(stageCard);
+        });
+      }
+
+      // Render ungrouped papers
+      const allStagePaperIds = new Set(stages.flatMap(s => s.paperIds || []));
+      const ungrouped = (detail.paperIds || []).filter(id => !allStagePaperIds.has(id));
+      ungroupedList.innerHTML = ungrouped.length > 0
+        ? ungrouped.map(id => `<span class="paper-chip">${id}</span>`).join('')
+        : '<span class="text-muted">无</span>';
+    }
+
+    // Render writing tab
+    async function renderWritingTab(): Promise<void> {
+      if (!currentProjectId) return;
+      const drafts = await getProjectDrafts(currentProjectId);
+
+      draftsList.innerHTML = '';
+      if (drafts.length === 0) {
+        draftsList.innerHTML = '<p class="text-muted">暂无草稿</p>';
+      } else {
+        drafts.forEach((draft) => {
+          const item = document.createElement('div');
+          item.className = 'draft-item';
+          item.innerHTML = `
+            <div class="draft-title">${draft.title}</div>
+            <div class="draft-meta">${draft.wordCount} 字 · ${new Date(draft.savedAt).toLocaleDateString()}</div>
+          `;
+          draftsList.appendChild(item);
+        });
+      }
+    }
+
+    // Event handlers
+    function setupEventListeners(): void {
+      // New project buttons
+      const newBtns = [document.getElementById('proj-new-btn'), document.getElementById('proj-new-btn-empty')];
+      newBtns.forEach((btn) => {
+        btn?.addEventListener('click', () => {
+          hidePanel(listPanel);
+          hidePanel(emptyPanel);
+          hidePanel(detailPanel);
+          showPanel(newForm);
+          renderHuePicker(selectedHue);
+          (document.getElementById('proj-new-name') as HTMLInputElement).focus();
+        });
+      });
+
+      // Cancel new project
+      document.getElementById('proj-new-cancel')?.addEventListener('click', () => {
+        hidePanel(newForm);
+        renderList();
+      });
+
+      // Create project
+      document.getElementById('proj-new-create')?.addEventListener('click', () => {
+        const nameInput = document.getElementById('proj-new-name') as HTMLInputElement;
+        const stmtInput = document.getElementById('proj-new-statement') as HTMLTextAreaElement;
+        const name = nameInput.value.trim();
+        const stmt = stmtInput.value.trim();
+
+        if (!name || name.length > 32) {
+          alert('请输入项目名称 (1-32 字)');
+          return;
+        }
+        if (!stmt || stmt.length > 200) {
+          alert('请输入项目声明 (1-200 字)');
+          return;
+        }
+
+        const id = createProject(name, stmt, selectedHue);
+        if (id) {
+          nameInput.value = '';
+          stmtInput.value = '';
+          openProject(id);
+        } else {
+          alert('创建失败，请重试');
+        }
+      });
+
+      // Back button
+      document.getElementById('proj-back-btn')?.addEventListener('click', () => {
+        currentProjectId = null;
+        hidePanel(detailPanel);
+        renderList();
+      });
+
+      // New stage button
+      document.getElementById('stage-new-btn')?.addEventListener('click', () => {
+        const form = document.getElementById('stage-new-form') as HTMLElement;
+        form.hidden = false;
+        (document.getElementById('stage-new-name') as HTMLInputElement).focus();
+      });
+
+      document.getElementById('stage-new-cancel')?.addEventListener('click', () => {
+        (document.getElementById('stage-new-form') as HTMLElement).hidden = true;
+      });
+
+      document.getElementById('stage-new-create')?.addEventListener('click', () => {
+        if (!currentProjectId) return;
+        const input = document.getElementById('stage-new-name') as HTMLInputElement;
+        const name = input.value.trim();
+        if (!name || name.length > 32) {
+          alert('请输入阶段名称 (1-32 字)');
+          return;
+        }
+        const stageId = createStage(currentProjectId, name);
+        if (stageId) {
+          input.value = '';
+          (document.getElementById('stage-new-form') as HTMLElement).hidden = true;
+          renderPapersTab();
+        }
+      });
+
+      // Stage action delegation
+      stagesList.addEventListener('click', (e) => {
+        const target = e.target as HTMLElement;
+        if (!target.matches('button[data-action]')) return;
+        if (!currentProjectId) return;
+
+        const action = target.dataset.action;
+        const stageId = target.dataset.stage;
+        if (!stageId) return;
+
+        if (action === 'archive') {
+          completeStage(currentProjectId, stageId);
+          renderPapersTab();
+        } else if (action === 'rename') {
+          const newName = prompt('输入新名称:');
+          if (newName && newName.trim()) {
+            updateStageName(currentProjectId, stageId, newName.trim());
+            renderPapersTab();
+          }
+        } else if (action === 'add-paper') {
+          // Show add paper modal placeholder
+          const arxivId = prompt('输入 arXiv ID:');
+          if (arxivId && arxivId.trim()) {
+            addPaperToProjectStage(currentProjectId, stageId, arxivId.trim());
+            renderPapersTab();
+          }
+        }
+      });
+
+      // New draft button
+      document.getElementById('draft-new-btn')?.addEventListener('click', async () => {
+        if (!currentProjectId) return;
+        const title = prompt('草稿标题:');
+        if (!title || !title.trim()) return;
+
+        const draft: Draft = {
+          id: '',
+          projectId: currentProjectId,
+          title: title.trim(),
+          markdown: '',
+          savedAt: Date.now(),
+          wordCount: 0,
+        };
+
+        const result = await saveDraft(draft);
+        if (result.ok) {
+          renderWritingTab();
+        }
+      });
+
+      // Add paper to ungrouped (placeholder)
+      document.getElementById('paper-add-btn')?.addEventListener('click', () => {
+        const arxivId = prompt('输入 arXiv ID:');
+        if (arxivId && currentProjectId) {
+          // Add to library paperIds directly - simplified for MVP
+          // In real implementation would call store.addPaperToLibrary
+          alert(`已添加 ${arxivId} (MVP: 请刷新页面)`);
+          renderPapersTab();
+        }
+      });
+    }
+
+    // Subscribe to changes
+    const unsubscribe = subscribeLibraries(() => {
+      if (currentProjectId) {
+        openProject(currentProjectId);
+      } else {
+        renderList();
+      }
+    });
+
+    // Initial render
+    renderList();
+    setupEventListeners();
+  </script>
+</BaseLayout>
