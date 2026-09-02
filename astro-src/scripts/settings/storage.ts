@@ -61,6 +61,12 @@ export const STORAGE_KEYS = {
   // 搜索偏好(Stage 5):笔记通道开关、degrade 接受过的 flag 等。
   // 浏览器 localStorage,不上 Gist。
   searchPrefs: 'dpr_search_prefs_v1',
+  // Project 对比集合(Workspace + Writing + Compare + Dashboard 环形面板)。
+  // 纯 localStorage,刷新即丢。
+  compareSet: 'dpr_compare_set_v1',
+  // 阅读仪表盘缓存(Workspace + Writing + Compare + Dashboard 环形面板)。
+  // 纯 localStorage,脏标记触发刷新。
+  dashboardCache: 'dpr_dashboard_cache_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 

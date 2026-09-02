@@ -33,6 +33,14 @@ import {
   DPR_BULK_SELECTION_CHANGE_LEGACY,
   DPR_USER_LIBRARIES_CHANGE,
   DPR_USER_LIBRARIES_CHANGE_LEGACY,
+  DPR_PROJECT_STAGE_CHANGE,
+  DPR_PROJECT_STAGE_CHANGE_LEGACY,
+  DPR_DRAFT_AUTOSAVE,
+  DPR_DRAFT_AUTOSAVE_LEGACY,
+  DPR_COMPARE_SET_CHANGE,
+  DPR_COMPARE_SET_CHANGE_LEGACY,
+  DPR_READING_DASHBOARD_DIRTY,
+  DPR_READING_DASHBOARD_DIRTY_LEGACY,
 } from './names';
 import type {
   DprThemeChangeDetail,
@@ -41,6 +49,10 @@ import type {
   DprUserLibraryChangeDetail,
   DprBulkSelectionChangeDetail,
   DprUserLibrariesChangeDetail,
+  DprProjectStageChangeDetail,
+  DprDraftAutosaveDetail,
+  DprCompareSetChangeDetail,
+  DprReadingDashboardDirtyDetail,
 } from './types';
 
 /** 通用 emit helper。target 默认 document。
@@ -215,4 +227,101 @@ export function onDprUserLibrariesChange(
   handler: (detail: DprUserLibrariesChangeDetail) => void,
 ): () => void {
   return on(target, DPR_USER_LIBRARIES_CHANGE, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:project-stage-change (legacy alias: dpr:project-stage-change)
+//
+// 唯一合法 emit 方是 lib/user-libraries/store.ts 的 project stage 漏斗。
+// 其它模块只应该 on(...) 订阅。
+// ---------------------------------------------------------------------------
+export function emitDprProjectStageChange(
+  target: EventTarget = document,
+  detail: DprProjectStageChangeDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_PROJECT_STAGE_CHANGE,
+    detail,
+    DPR_PROJECT_STAGE_CHANGE_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprProjectStageChange(
+  target: EventTarget = document,
+  handler: (detail: DprProjectStageChangeDetail) => void,
+): () => void {
+  return on(target, DPR_PROJECT_STAGE_CHANGE, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:draft-autosave (legacy alias: dpr:draft-autosave)
+//
+// 唯一合法 emit 方是 lib/projects/draft-store。UI 订阅此事件更新保存指示器。
+// ---------------------------------------------------------------------------
+export function emitDprDraftAutosave(
+  target: EventTarget = document,
+  detail: DprDraftAutosaveDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_DRAFT_AUTOSAVE,
+    detail,
+    DPR_DRAFT_AUTOSAVE_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprDraftAutosave(
+  target: EventTarget = document,
+  handler: (detail: DprDraftAutosaveDetail) => void,
+): () => void {
+  return on(target, DPR_DRAFT_AUTOSAVE, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:compare-set-change (legacy alias: dpr:compare-set-change)
+//
+// 唯一合法 emit 方是 lib/projects/compare-store。
+// ---------------------------------------------------------------------------
+export function emitDprCompareSetChange(
+  target: EventTarget = document,
+  detail: DprCompareSetChangeDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_COMPARE_SET_CHANGE,
+    detail,
+    DPR_COMPARE_SET_CHANGE_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprCompareSetChange(
+  target: EventTarget = document,
+  handler: (detail: DprCompareSetChangeDetail) => void,
+): () => void {
+  return on(target, DPR_COMPARE_SET_CHANGE, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:reading-dashboard-dirty (legacy alias: dpr:reading-dashboard-dirty)
+//
+// 唯一合法 emit 方是 lib/projects/dashboard-store。
+// ---------------------------------------------------------------------------
+export function emitDprReadingDashboardDirty(
+  target: EventTarget = document,
+  detail: DprReadingDashboardDirtyDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_READING_DASHBOARD_DIRTY,
+    detail,
+    DPR_READING_DASHBOARD_DIRTY_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprReadingDashboardDirty(
+  target: EventTarget = document,
+  handler: (detail: DprReadingDashboardDirtyDetail) => void,
+): () => void {
+  return on(target, DPR_READING_DASHBOARD_DIRTY, handler);
 }

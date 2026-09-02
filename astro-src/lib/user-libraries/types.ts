@@ -203,6 +203,34 @@ export interface LibraryPaperMeta {
   updatedAt: number;
 }
 
+/** Project 阶段 —— Project 工作区扩展,论文按阶段分组。
+ *  每个阶段内 paperIds 按加入顺序排列,UI 展示为 Kanban 列。 */
+export interface ProjectStage {
+  /** 唯一 id,cuid 产生。 */
+  id: string;
+  /** 阶段名称,1-32 字。 */
+  name: string;
+  /** 阶段内的论文 id,按加入顺序。 */
+  paperIds: string[];
+  /** 阶段状态:active 进行中 / done 已完成。 */
+  status: 'active' | 'done';
+  /** 创建时间戳 epoch ms。 */
+  createdAt: number;
+}
+
+/** Project 草稿软引用 —— 实际 markdown 内容存在 lib/projects/draft-store IDB,
+ *  这里只存元数据以便不打开 IDB 也能列出项目下的草稿。 */
+export interface DraftRef {
+  /** 草稿 id。 */
+  id: string;
+  /** 草稿标题,1-100 字。 */
+  title: string;
+  /** 最近保存时间戳 epoch ms。 */
+  savedAt: number;
+  /** 字数(不含 markdown 标记)。 */
+  wordCount: number;
+}
+
 export interface UserLibrary {
   id: string;
   /** 1-32 字,trim 后非空(漏斗会再校验一次,见 store.ts:isValidName) */
@@ -244,6 +272,11 @@ export interface UserLibrary {
    *  key = concept slug,值可以是 displayName 重命名 / exclude 隐藏 /
    *  canonicalSlug 合并到另一 slug。 */
   conceptOverrides: Record<string, LibraryConceptOverride>;
+  /** Project 工作区扩展:论文按阶段分组(可选)。空数组 = 不分组。 */
+  stages: ProjectStage[];
+  /** Project 工作区扩展:草稿软引用(实际 markdown 在 lib/projects/draft-store IDB)。
+   *  这里只存元数据,以便不打开 IDB 也能列出项目下的草稿。 */
+  draftRefs: DraftRef[];
 }
 
 /** 兜底 definition —— 用于老 v1 doc 没有 definition 字段时。 */
@@ -270,9 +303,11 @@ export function defaultLibraryDefinition(statement: string): LibraryDefinition {
  *  v3 加入 papers:Record<cx, LibraryPaperMeta>(Polaris library_papers 镜像),
  *  老 doc 加载时此字段兜底为 `{}`。
  *  v4 加入 conceptOverrides:Record<slug, LibraryConceptOverride>
- *  (Polaris concept_relink 镜像),老 doc 加载时此字段兜底为 `{}`。 */
+ *  (Polaris concept_relink 镜像),老 doc 加载时此字段兜底为 `{}`。
+ *  v5 加入 stages:ProjectStage[] 和 draftRefs:DraftRef[] (Project 工作区扩展),
+ *  老 doc 加载时这两个字段兜底为 `[]`。 */
 export interface UserLibrariesDoc {
-  schemaVersion: 4;
+  schemaVersion: 5;
   /** key = library.id,**永不含 vN**。 */
   libraries: Record<string, UserLibrary>;
 }

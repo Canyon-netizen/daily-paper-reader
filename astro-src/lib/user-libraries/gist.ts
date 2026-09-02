@@ -82,6 +82,9 @@ export function deserializeUserLibraries(block: unknown): UserLibrariesDoc | nul
       updatedAt: typeof l.updatedAt === 'number' ? l.updatedAt : 0,
       papers: {},
       conceptOverrides: {},
+      // schema v5: stages + draftRefs 可选,远端老 doc 缺这两字段时一律兜底空数组
+      stages: Array.isArray(l.stages) ? l.stages.filter((s): s is NonNullable<typeof s> => !!s && typeof s === 'object') : [],
+      draftRefs: Array.isArray(l.draftRefs) ? l.draftRefs.filter((d): d is NonNullable<typeof d> => !!d && typeof d === 'object') : [],
     };
   }
   return { schemaVersion: USER_LIBRARIES_SCHEMA_VERSION, libraries: libs };

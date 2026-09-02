@@ -27,6 +27,14 @@ export {
   DPR_BULK_SELECTION_CHANGE_LEGACY,
   DPR_USER_LIBRARIES_CHANGE,
   DPR_USER_LIBRARIES_CHANGE_LEGACY,
+  DPR_PROJECT_STAGE_CHANGE,
+  DPR_PROJECT_STAGE_CHANGE_LEGACY,
+  DPR_DRAFT_AUTOSAVE,
+  DPR_DRAFT_AUTOSAVE_LEGACY,
+  DPR_COMPARE_SET_CHANGE,
+  DPR_COMPARE_SET_CHANGE_LEGACY,
+  DPR_READING_DASHBOARD_DIRTY,
+  DPR_READING_DASHBOARD_DIRTY_LEGACY,
 } from './names';
 
 export type {
@@ -40,6 +48,11 @@ export type {
   DprBulkSelectionChangeDetail,
   DprUserLibrariesChangeDetail,
   DprUserLibrariesChangeReason,
+  DprProjectStageChangeDetail,
+  DprProjectStageChangeReason,
+  DprDraftAutosaveDetail,
+  DprCompareSetChangeDetail,
+  DprReadingDashboardDirtyDetail,
 } from './types';
 
 export {
@@ -57,4 +70,12 @@ export {
   onDprBulkSelectionChange,
   emitDprUserLibrariesChange,
   onDprUserLibrariesChange,
+  emitDprProjectStageChange,
+  onDprProjectStageChange,
+  emitDprDraftAutosave,
+  onDprDraftAutosave,
+  emitDprCompareSetChange,
+  onDprCompareSetChange,
+  emitDprReadingDashboardDirty,
+  onDprReadingDashboardDirty,
 } from './bus';

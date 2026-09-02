@@ -23,12 +23,13 @@
 //    barrel 拿 STORAGE_KEYS,不直接 import scripts/settings.ts。
 
 import { canonicalArxivId } from '../arxiv';
-import { emitDprUserLibrariesChange } from '../events';
-import type { DprUserLibrariesChangeReason } from '../events';
+import { emitDprUserLibrariesChange, emitDprProjectStageChange } from '../events';
+import type { DprUserLibrariesChangeReason, DprProjectStageChangeReason } from '../events';
 import { STORAGE_KEYS } from '../storage';
 import { appendLibraryActivity } from './activity-log';
 import type { LibraryActivityDetail } from './activity-log';
 import type {
+  DraftRef,
   LibraryAnchor,
   LibraryConceptOverride,
   LibraryDefinition,
@@ -36,13 +37,14 @@ import type {
   LibraryPaperMeta,
   LibraryPaperStatus,
   LibraryRubricItem,
+  ProjectStage,
   UserLibrary,
   UserLibrariesDoc,
   WriteResult,
 } from './types';
 import { defaultLibraryDefinition } from './types';
 
-export const USER_LIBRARIES_SCHEMA_VERSION = 4;
+export const USER_LIBRARIES_SCHEMA_VERSION = 5;
 
 const KEY = STORAGE_KEYS.userLibraries;
 
@@ -129,6 +131,9 @@ export function loadUserLibraries(): UserLibrariesDoc {
           : 'personal',
         papers: sanitizePaperMetas(l.papers),
         conceptOverrides: sanitizeConceptOverrides(l.conceptOverrides),
+        // v5 forward-upgrade: stages 和 draftRefs 老库没有,兜底为空数组
+        stages: sanitizeStages((l as any).stages),
+        draftRefs: sanitizeDraftRefs((l as any).draftRefs),
       };
     }
     return { schemaVersion: USER_LIBRARIES_SCHEMA_VERSION, libraries: libs };
@@ -272,6 +277,49 @@ function sanitizeConceptOverrides(input: unknown): Record<string, LibraryConcept
     if (typeof o.exclude === 'boolean') entry.exclude = o.exclude;
     // 至少一个字段非空才保留(否则是空 override,丢)
     if (Object.keys(entry).length > 0) out[slug] = entry;
+  }
+  return out;
+}
+
+/** 清洗 ProjectStage 数组。v5 forward-upgrade 用。 */
+function sanitizeStages(input: unknown): ProjectStage[] {
+  if (!Array.isArray(input)) return [];
+  const out: ProjectStage[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue;
+    const s = raw as Partial<ProjectStage>;
+    if (typeof s.id !== 'string' || typeof s.name !== 'string') continue;
+    const name = s.name.trim().slice(0, 32);
+    if (!name) continue;
+    const paperIds = Array.isArray(s.paperIds) ? s.paperIds.filter((x): x is string => typeof x === 'string') : [];
+    const status = s.status === 'done' ? 'done' : 'active';
+    out.push({
+      id: s.id,
+      name,
+      paperIds,
+      status,
+      createdAt: typeof s.createdAt === 'number' ? s.createdAt : Date.now(),
+    });
+  }
+  return out;
+}
+
+/** 清洗 DraftRef 数组。v5 forward-upgrade 用。 */
+function sanitizeDraftRefs(input: unknown): DraftRef[] {
+  if (!Array.isArray(input)) return [];
+  const out: DraftRef[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object') continue;
+    const d = raw as Partial<DraftRef>;
+    if (typeof d.id !== 'string' || typeof d.title !== 'string') continue;
+    const title = d.title.trim().slice(0, 100);
+    if (!title) continue;
+    out.push({
+      id: d.id,
+      title,
+      savedAt: typeof d.savedAt === 'number' ? d.savedAt : 0,
+      wordCount: typeof d.wordCount === 'number' ? Math.max(0, d.wordCount) : 0,
+    });
   }
   return out;
 }
@@ -499,7 +547,14 @@ function commit(
   const doc = loadUserLibraries();
   const prev = doc.libraries[id];
   const next: UserLibrary = prev
-    ? { ...prev, paperIds: prev.paperIds.slice(), papers: { ...(prev.papers || {}) }, conceptOverrides: { ...(prev.conceptOverrides || {}) } }
+    ? {
+        ...prev,
+        paperIds: prev.paperIds.slice(),
+        papers: { ...(prev.papers || {}) },
+        conceptOverrides: { ...(prev.conceptOverrides || {}) },
+        stages: prev.stages ? prev.stages.slice() : [],
+        draftRefs: prev.draftRefs ? prev.draftRefs.slice() : [],
+      }
     : {
         id,
         name: '',
@@ -514,6 +569,8 @@ function commit(
         updatedAt: 0,
         papers: {},
         conceptOverrides: {},
+        stages: [],
+        draftRefs: [],
       };
 
   const before = JSON.stringify(prev ?? null);
@@ -1162,4 +1219,169 @@ export function replaceUserLibraries(
 /** 清空所有用户文献库(设置页的「重置」用)。 */
 export function clearUserLibraries(): WriteResult {
   return replaceUserLibraries(emptyDoc(), 'reset');
+}
+
+// ---------------------------------------------------------------------------
+// Project Stage API (v5 扩展)
+// ---------------------------------------------------------------------------
+
+/** 生成阶段 id。 */
+function genStageId(): string {
+  return `stage_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** 阶段名校验(1-32 字 trim 后非空)。 */
+function isValidStageName(s: unknown): s is string {
+  return typeof s === 'string' && s.trim().length > 0 && s.trim().length <= 32;
+}
+
+/** 新建阶段。返回新建的 stage id(失败时为空串)。 */
+export function addStage(libraryId: string, stageName: string): WriteResult & { stageId?: string } {
+  const trimmed = stageName.trim();
+  if (!isValidStageName(trimmed)) {
+    return { ok: false, reason: 'invalid' };
+  }
+  const stageId = genStageId();
+  const now = Date.now();
+  const newStage: ProjectStage = {
+    id: stageId,
+    name: trimmed,
+    paperIds: [],
+    status: 'active',
+    createdAt: now,
+  };
+  const result = commitStage(libraryId, 'stage-created', stageId, (entry) => {
+    entry.stages.push(newStage);
+  });
+  if (result.ok) return { ...result, stageId };
+  return result;
+}
+
+/** 重命名阶段。 */
+export function renameStage(libraryId: string, stageId: string, newName: string): WriteResult {
+  const trimmed = newName.trim();
+  if (!isValidStageName(trimmed)) {
+    return { ok: false, reason: 'invalid' };
+  }
+  return commitStage(libraryId, 'stage-renamed', stageId, (entry) => {
+    const stage = entry.stages.find((s) => s.id === stageId);
+    if (stage) stage.name = trimmed;
+  });
+}
+
+/** 归档阶段。归档后阶段仍在,但 UI 不显示在 Kanban 列中。 */
+export function archiveStage(libraryId: string, stageId: string): WriteResult {
+  return commitStage(libraryId, 'stage-archived', stageId, (entry) => {
+    const stage = entry.stages.find((s) => s.id === stageId);
+    if (stage) stage.status = 'done';
+  });
+}
+
+/** 论文加入阶段。重复加直接 noop。 */
+export function addPaperToStage(libraryId: string, stageId: string, arxivId: string): WriteResult {
+  const cid = canonicalArxivId(arxivId);
+  if (!cid) return { ok: false, reason: 'invalid' };
+  return commitStage(libraryId, 'paper-added', stageId, (entry) => {
+    const stage = entry.stages.find((s) => s.id === stageId);
+    if (stage && !stage.paperIds.includes(cid)) {
+      stage.paperIds.push(cid);
+    }
+  }, cid);
+}
+
+/** 论文移出阶段。 */
+export function removePaperFromStage(libraryId: string, stageId: string, arxivId: string): WriteResult {
+  const cid = canonicalArxivId(arxivId);
+  if (!cid) return { ok: false, reason: 'invalid' };
+  return commitStage(libraryId, 'paper-removed', stageId, (entry) => {
+    const stage = entry.stages.find((s) => s.id === stageId);
+    if (stage) {
+      const idx = stage.paperIds.indexOf(cid);
+      if (idx >= 0) stage.paperIds.splice(idx, 1);
+    }
+  }, cid);
+}
+
+/** 论文跨阶段移动。fromStageId === toStageId 时等同于 addPaperToStage。 */
+export function movePaperBetweenStages(
+  libraryId: string,
+  fromStageId: string,
+  toStageId: string,
+  arxivId: string,
+): WriteResult {
+  const cid = canonicalArxivId(arxivId);
+  if (!cid) return { ok: false, reason: 'invalid' };
+  // 先从原阶段移除
+  const fromRemoved = commitStage(libraryId, 'paper-moved', fromStageId, (entry) => {
+    const stage = entry.stages.find((s) => s.id === fromStageId);
+    if (stage) {
+      const idx = stage.paperIds.indexOf(cid);
+      if (idx >= 0) stage.paperIds.splice(idx, 1);
+    }
+  }, cid);
+  if (!fromRemoved.ok || !fromRemoved.changed) {
+    return fromRemoved;
+  }
+  // 再加入目标阶段
+  return commitStage(libraryId, 'paper-moved', toStageId, (entry) => {
+    const stage = entry.stages.find((s) => s.id === toStageId);
+    if (stage && !stage.paperIds.includes(cid)) {
+      stage.paperIds.push(cid);
+    }
+  }, cid);
+}
+
+/** Project Stage 的 commit 漏斗。
+ *
+ * @param libraryId    library.id
+ * @param reason       DPR_PROJECT_STAGE_CHANGE 的 reason
+ * @param stageId      涉及的阶段 id
+ * @param mutate       在 entry 的副本上修改 stages 数组
+ * @param arxivId      可选,如果是 paper 操作,传 canonicalArxivId 以便写 activity log
+ */
+function commitStage(
+  libraryId: string,
+  reason: DprProjectStageChangeReason,
+  stageId: string,
+  mutate: (entry: UserLibrary) => void | boolean,
+  arxivId?: string,
+): WriteResult {
+  const doc = loadUserLibraries();
+  const prev = doc.libraries[libraryId];
+  if (!prev) return { ok: false, reason: 'unavailable' };
+  const next: UserLibrary = {
+    ...prev,
+    stages: prev.stages ? prev.stages.slice() : [],
+    draftRefs: prev.draftRefs ? prev.draftRefs.slice() : [],
+  };
+
+  const proceed = mutate(next);
+  if (proceed === false) return { ok: true, changed: false };
+
+  // 校验 stages 数组完整性
+  if (!Array.isArray(next.stages)) next.stages = [];
+
+  const now = Date.now();
+  next.updatedAt = now;
+  doc.libraries[libraryId] = next;
+
+  const res = persist(doc);
+  if (!res.ok) return res;
+
+  // 写 activity log (fire-and-forget)
+  if (arxivId && (reason === 'paper-added' || reason === 'paper-removed' || reason === 'paper-moved')) {
+    try {
+      const kind = reason === 'paper-added' ? 'added-to-stage' : reason === 'paper-removed' ? 'removed-from-stage' : 'moved-between-stages';
+      appendLibraryActivity(libraryId, kind, `论文 ${arxivId} ${reason === 'paper-added' ? '加入' : reason === 'paper-removed' ? '移出' : '移动'}阶段`, {
+        arxivId,
+        stageId,
+        reason,
+      });
+    } catch { /* ignore */ }
+  }
+
+  // 发 DPR_PROJECT_STAGE_CHANGE 事件
+  const target = typeof window !== 'undefined' ? window : document;
+  emitDprProjectStageChange(target, { ids: [stageId], reason, projectId: libraryId });
+  return { ok: true, changed: true };
 }

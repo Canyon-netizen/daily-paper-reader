@@ -80,3 +80,47 @@ export const DPR_BULK_SELECTION_CHANGE_LEGACY = 'dpr-bulk-selection-change';
 export const DPR_USER_LIBRARIES_CHANGE = 'dpr:user-libraries-change';
 /** @deprecated 兼容风格一致性而提供的 legacy 别名(与本文件其它事件同构)。 */
 export const DPR_USER_LIBRARIES_CHANGE_LEGACY = 'dpr-user-libraries-change';
+
+/** Project 工作区阶段变化(创建 / 归档 / 重命名 / 论文移动 / 加入 / 移除)—
+ *  detail: DprProjectStageChangeDetail { ids, reason, projectId }
+ *
+ *  **单一 emit 源**:只有 lib/user-libraries/store.ts 的 project stage 漏斗会发。
+ *  这是 Project = UserLibrary v5 的核心事件,listener 据 reason 决定重绘粒度。
+ *
+ *  reason 取值:
+ *   - 'stage-created':新建阶段
+ *   - 'stage-archived':归档阶段
+ *   - 'stage-renamed':重命名阶段
+ *   - 'paper-added':论文加入阶段
+ *   - 'paper-removed':论文移出阶段
+ *   - 'paper-moved':论文跨阶段移动 */
+export const DPR_PROJECT_STAGE_CHANGE = 'dpr:project-stage-change';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
+export const DPR_PROJECT_STAGE_CHANGE_LEGACY = 'dpr:project-stage-change';
+
+/** 草稿自动保存(去抖动后每 30s 触发一次)—
+ *  detail: DprDraftAutosaveDetail { draftId, savedAt }
+ *
+ *  **单一 emit 源**:只有 lib/projects/draft-store 会发。
+ *  UI 订阅此事件以更新「最近保存」指示器,不要从 detail 读真值。 */
+export const DPR_DRAFT_AUTOSAVE = 'dpr:draft-autosave';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
+export const DPR_DRAFT_AUTOSAVE_LEGACY = 'dpr:draft-autosave';
+
+/** 对比集合变化—
+ *  detail: DprCompareSetChangeDetail { ids }
+ *
+ *  **单一 emit 源**:只有 lib/projects/compare-store 会发。
+ *  这是 Project 对比功能的专用事件,ids 为当前对比集中的 canonicalArxivId。 */
+export const DPR_COMPARE_SET_CHANGE = 'dpr:compare-set-change';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
+export const DPR_COMPARE_SET_CHANGE_LEGACY = 'dpr:compare-set-change';
+
+/** 阅读仪表盘脏标记(数据变更后需要刷新)—
+ *  detail: DprReadingDashboardDirtyDetail { source }
+ *
+ *  **单一 emit 源**:只有 lib/projects/dashboard-store 会发。
+ *  source 标识触发来源('stage' | 'draft' | 'compare'),listener 据此决定刷新范围。 */
+export const DPR_READING_DASHBOARD_DIRTY = 'dpr:reading-dashboard-dirty';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
+export const DPR_READING_DASHBOARD_DIRTY_LEGACY = 'dpr:reading-dashboard-dirty';

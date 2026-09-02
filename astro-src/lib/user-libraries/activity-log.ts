@@ -39,7 +39,10 @@
 //     | 'concept-override'
 //     | 'digest-generated'
 //     | 'ingest-run'
-//     | 'rescore';
+//     | 'rescore'
+//     | 'added-to-stage'     // v5:Project 阶段加入论文
+//     | 'removed-from-stage' // v5:Project 阶段移出论文
+//     | 'moved-between-stages' // v5:Project 阶段间移动论文
 
 // 通用 detail 类型 —— call-site 在 detail 里塞任意结构。
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

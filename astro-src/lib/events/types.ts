@@ -90,3 +90,40 @@ export interface DprUserLibrariesChangeDetail {
   ids: string[];
   reason: DprUserLibrariesChangeReason;
 }
+
+/** Project 阶段变化的原因标签。 */
+export type DprProjectStageChangeReason =
+  | 'stage-created'
+  | 'stage-archived'
+  | 'stage-renamed'
+  | 'paper-added'
+  | 'paper-removed'
+  | 'paper-moved';
+
+export interface DprProjectStageChangeDetail {
+  /** 受影响的阶段 id。'stage-created' 可能只有 1 条。 */
+  ids: string[];
+  reason: DprProjectStageChangeReason;
+  /** 所属的 project/library id。 */
+  projectId: string;
+}
+
+/** 草稿自动保存的 detail。 */
+export interface DprDraftAutosaveDetail {
+  /** 草稿 id。 */
+  draftId: string;
+  /** 保存时间戳 epoch ms。 */
+  savedAt: number;
+}
+
+/** 对比集合变化的 detail。 */
+export interface DprCompareSetChangeDetail {
+  /** 当前对比集中的 canonical arXiv id。 */
+  ids: string[];
+}
+
+/** 阅读仪表盘脏标记的 detail。 */
+export interface DprReadingDashboardDirtyDetail {
+  /** 触发来源标识。 */
+  source: 'stage' | 'draft' | 'compare';
+}
