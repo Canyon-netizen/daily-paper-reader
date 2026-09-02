@@ -148,19 +148,28 @@ def generate_method_debate(
             logger.warning(f"[method_debate] Empty response for title: {title[:50]}")
             return None
 
-        # Strip <think>...</think> reasoning blocks before parsing
-        # (MiniMax reasoning models and DeepSeek-R1 emit these before the answer)
+        # Strip <think>...</think> reasoning blocks before parsing.
+        # Two cases to handle:
+        #   1. Well-formed: <think>...</think>{json}
+        #   2. Unclosed:    <think>{json}    (LLM never emits </think>)
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        # If still contains <think> (unclosed), drop everything up to first {
+        if "<think>" in content:
+            brace_idx = content.find("{")
+            if brace_idx > 0:
+                content = content[brace_idx:].strip()
 
         # Try to parse as JSON
         try:
             result = json.loads(content)
         except json.JSONDecodeError:
-            # Try to extract JSON from the response (in case there's extra text)
-            match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", content, re.DOTALL)
-            if match:
+            # Try to extract JSON by finding first { and last }
+            first_brace = content.find("{")
+            last_brace = content.rfind("}")
+            if first_brace != -1 and last_brace > first_brace:
+                candidate = content[first_brace:last_brace + 1]
                 try:
-                    result = json.loads(match.group(0))
+                    result = json.loads(candidate)
                 except json.JSONDecodeError as e:
                     logger.warning(f"[method_debate] Failed to parse JSON: {e}")
                     return None

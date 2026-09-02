@@ -203,8 +203,9 @@ def main() -> int:
         if process_paper(md_path, dry_run=args.dry_run):
             success += 1
 
-        # Sleep to avoid rate limiting
-        time.sleep(2)
+        # Sleep to avoid rate limiting (configurable via DPR_BACKFILL_SLEEP env)
+        sleep_sec = float(os.environ.get("DPR_BACKFILL_SLEEP", "0.5"))
+        time.sleep(sleep_sec)
 
     logger.info(f"[DONE] 处理 {processed} 篇, 成功 {success} 篇")
     return 0
