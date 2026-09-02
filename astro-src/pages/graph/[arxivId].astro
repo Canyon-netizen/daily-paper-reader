@@ -6,9 +6,21 @@ import Navbar from '../../components/Navbar.astro';
 import { listPapers, readPaper } from '../../lib/paper';
 import { computeRelations, type RelationNode, type RelationEdge } from '../../lib/paper-relations';
 import '../../styles/citation-graph.css';
+// arxiv-index 由 build-arxiv-index.mjs 在 prebuild 阶段生成,predev/prebuild 同样会触发。
+// 这里直接 import,Vite 会把 JSON 内联进 static path 列表,
+// 避免在 getStaticPaths() 里走 fs.readFile 的 SSR-only 路径。
+import arxivIndex from '../../../public/arxiv-index.json';
 
 interface Props {
   arxivId: string;
+}
+
+/** 生成所有 [arxivId] 静态页路径。
+ *  — 用 build 时生成的 arxiv-index.json(flat hash map)取所有 canonical id + 版本 id。
+ *  — 对 bioRxiv / medRxiv / chemRxiv 等非 arXiv 来源(文件名校验不匹配 arXiv id),
+ *    getStaticPaths 自动从 URL 路径过滤;运行时第 17 行的 arxivMatch 仍会兜底 reject。 */
+export function getStaticPaths() {
+  return Object.keys(arxivIndex).map((id) => ({ params: { arxivId: id } }));
 }
 
 const { arxivId } = Astro.params;
