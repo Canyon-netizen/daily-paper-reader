@@ -180,6 +180,12 @@ def main() -> int:
         default="docs/papers",
         help="论文目录(默认 docs/papers)",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="并发 worker 数(默认 4, MiniMax 429 风险随 worker 数上升)",
+    )
     args = parser.parse_args()
 
     docs_dir = os.path.join(ROOT, args.source_dir)
@@ -190,24 +196,35 @@ def main() -> int:
     # Find all .md files
     pattern = os.path.join(docs_dir, "**", "*.md")
     md_files = sorted(glob.glob(pattern, recursive=True))
-    logger.info(f"[INFO] 发现 {len(md_files)} 个论文文件")
+    logger.info(f"[INFO] 发现 {len(md_files)} 个论文文件, workers={args.workers}")
 
-    # Process
+    # Process — with thread pool
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    sleep_sec = float(os.environ.get("DPR_BACKFILL_SLEEP", "0.5"))
+
+    def _process_with_delay(md_path: str):
+        time.sleep(sleep_sec)  # Stagger worker starts
+        return process_paper(md_path, dry_run=args.dry_run)
+
     processed = 0
     success = 0
-    for md_path in md_files:
-        if args.limit > 0 and processed >= args.limit:
-            break
-        processed += 1
+    failed = 0
+    work = md_files if args.limit == 0 else md_files[: args.limit]
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futures = {ex.submit(_process_with_delay, p): p for p in work}
+        for fut in as_completed(futures):
+            processed += 1
+            try:
+                ok = fut.result()
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                failed += 1
+                logger.warning(f"[FAIL] {os.path.basename(futures[fut])[:60]}: {type(e).__name__}: {e}")
 
-        if process_paper(md_path, dry_run=args.dry_run):
-            success += 1
-
-        # Sleep to avoid rate limiting (configurable via DPR_BACKFILL_SLEEP env)
-        sleep_sec = float(os.environ.get("DPR_BACKFILL_SLEEP", "0.5"))
-        time.sleep(sleep_sec)
-
-    logger.info(f"[DONE] 处理 {processed} 篇, 成功 {success} 篇")
+    logger.info(f"[DONE] 处理 {processed} 篇, 成功 {success} 篇, 失败 {failed} 篇")
     return 0
 
 

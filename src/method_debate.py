@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -54,6 +55,66 @@ def _load_prompt_body() -> str:
     except Exception as e:
         logger.warning(f"[method_debate] Failed to load prompt body: {e}, using default")
     return _DEFAULT_PROMPT_BODY
+
+
+def _repair_json(content: str) -> str:
+    """修复 LLM 输出的常见 JSON 问题:
+    1. 用单引号代替双引号的 key/字符串
+    2. 字符串内未转义的双引号 (启发式:转义中文/英文字符之间的裸引号)
+    3. 尾随逗号
+    """
+    text = content
+
+    # 1. Trailing commas before } or ]
+    text = re.sub(r",\s*([}\]])", r"\1", text)
+
+    # 2. Escape unescaped double quotes inside Chinese-character strings
+    #    Heuristic: " followed by Chinese chars or vice versa
+    #    (skip; too aggressive — leave for Attempt 4)
+
+    # 3. Convert single-quoted strings to double-quoted (Python literal style)
+    #    Match patterns like 'key': 'value' or 'value' inside objects
+    text = re.sub(r"'(\w+)'\s*:\s*'", r'"\1": "', text)
+    text = re.sub(r"'(\w+)'\s*:\s*'", r'"\1": "', text)  # double-pass
+    text = re.sub(r":\s*'([^']*)'", r': "\1"', text)
+
+    return text
+
+
+def _extract_balanced_blocks(content: str) -> list[str]:
+    """扫描 content 中所有平衡的 { ... } 块,按长度降序返回。"""
+    blocks = []
+    stack = []
+    start = None
+    in_string = False
+    escape_next = False
+
+    for i, ch in enumerate(content):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            if not stack:
+                start = i
+            stack.append(i)
+        elif ch == "}":
+            if stack:
+                stack.pop()
+                if not stack and start is not None:
+                    blocks.append(content[start:i + 1])
+                    start = None
+
+    # Sort by length (longest first, more likely to be the actual JSON)
+    blocks.sort(key=len, reverse=True)
+    return blocks
 
 
 def generate_method_debate(
@@ -131,10 +192,24 @@ def generate_method_debate(
 
     try:
         # Use router.call which auto-resolves the stage config
-        response = router.call(
-            STAGE_NAME,
-            messages=messages,
-        )
+        # Retry on 429 rate limit (up to 3 times with exponential backoff)
+        response = None
+        for retry in range(3):
+            try:
+                response = router.call(
+                    STAGE_NAME,
+                    messages=messages,
+                )
+                break  # success
+            except Exception as e:
+                err_str = str(e).lower()
+                is_rate_limit = "rate_limit" in err_str or "429" in err_str
+                if is_rate_limit and retry < 2:
+                    wait = 5 * (retry + 1)
+                    logger.warning(f"[method_debate] 429 rate limit, retrying in {wait}s...")
+                    time.sleep(wait)
+                    continue
+                raise  # other errors: let outer try/except handle
 
         # Extract content from response
         content = ""
@@ -153,17 +228,43 @@ def generate_method_debate(
         #   1. Well-formed: <think>...</think>{json}
         #   2. Unclosed:    <think>{json}    (LLM never emits </think>)
         content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-        # If still contains <think> (unclosed), drop everything up to first {
+        # If still contains <think> (unclosed), drop everything up to last { that
+        # starts the actual JSON (use schema anchor "method_pros_cons" or last balanced {)
         if "<think>" in content:
-            brace_idx = content.find("{")
-            if brace_idx > 0:
-                content = content[brace_idx:].strip()
+            # Prefer the { right before "method_pros_cons" schema key
+            anchor = content.rfind('"method_pros_cons"')
+            if anchor > 0:
+                # Walk back to find the opening { of this object's container
+                depth = 0
+                idx = anchor
+                while idx > 0:
+                    ch = content[idx]
+                    if ch == "}":
+                        depth += 1
+                    elif ch == "{":
+                        if depth == 0:
+                            content = content[idx:]
+                            break
+                        depth -= 1
+                    idx -= 1
+            else:
+                # Fallback: last balanced { ... } block
+                blocks = _extract_balanced_blocks(content)
+                if blocks:
+                    content = blocks[0]
 
-        # Try to parse as JSON
+        # Try to parse as JSON (4 fallback strategies)
+        result = None
+        parse_errors = []
+
+        # Attempt 1: direct parse
         try:
             result = json.loads(content)
-        except json.JSONDecodeError:
-            # Try to extract JSON by finding first { and last }
+        except json.JSONDecodeError as e:
+            parse_errors.append(f"direct: {e}")
+
+        # Attempt 2: extract first { to last }
+        if result is None:
             first_brace = content.find("{")
             last_brace = content.rfind("}")
             if first_brace != -1 and last_brace > first_brace:
@@ -171,11 +272,30 @@ def generate_method_debate(
                 try:
                     result = json.loads(candidate)
                 except json.JSONDecodeError as e:
-                    logger.warning(f"[method_debate] Failed to parse JSON: {e}")
-                    return None
-            else:
-                logger.warning(f"[method_debate] No JSON found in response")
-                return None
+                    parse_errors.append(f"first-last: {e}")
+
+        # Attempt 3: repair common issues
+        if result is None:
+            repaired = _repair_json(content)
+            try:
+                result = json.loads(repaired)
+            except json.JSONDecodeError as e:
+                parse_errors.append(f"repair: {e}")
+
+        # Attempt 4: extract largest balanced { ... } block
+        if result is None:
+            for candidate in _extract_balanced_blocks(content):
+                try:
+                    parsed = json.loads(candidate)
+                    if isinstance(parsed, dict):
+                        result = parsed
+                        break
+                except json.JSONDecodeError:
+                    continue
+
+        if result is None:
+            logger.warning(f"[method_debate] Failed to parse JSON after 4 attempts: {'; '.join(parse_errors[:2])}")
+            return None
 
         # Validate result structure
         if not isinstance(result, dict):
