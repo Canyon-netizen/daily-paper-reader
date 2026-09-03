@@ -134,6 +134,14 @@ const tabTitle = plainZh || plainEn || id;
                       hidden
                       aria-label="把这篇论文加入主题探索"
                     >📌 选入探索</button>
+                    <button
+                      type="button"
+                      id="paper-compare-btn"
+                      class="paper-compare-btn"
+                      hidden
+                      aria-label="把这篇论文加入对比"
+                      data-arxiv-id={paper.canonicalArxivId || ' '}
+                    >➕ 加入对比</button>
                     {/* + 加进文献库(2026-08-02):对照 Polaris LibraryPicker,弹层多选
                         用户库。客户端由 scripts/user-libraries-ui.ts 接管交互。 */}
                     <button
@@ -721,6 +729,51 @@ const tabTitle = plainZh || plainEn || id;
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
     // 如果当前 mode 是 fulltext,paper-chat.ts 内部会触发 loadFulltextSkeleton。
     // 切到 summary 的用户不发任何 arxiv 请求,首屏零开销。
+
+    // 跨论文对比按钮
+    // -------------------------------------------------------
+    (function () {
+      const btn = document.getElementById('paper-compare-btn');
+      if (!btn) return;
+      const arxivId = btn.getAttribute('data-arxiv-id');
+      if (!arxivId || arxivId === ' ') return;
+
+      // 动态导入避免 SSR 问题
+      const { addToCompare, removeFromCompare, isInCompare, getCompareSet, subscribeCompare } = await import('../../lib/projects/compare');
+
+      // 显示按钮
+      btn.hidden = false;
+
+      // 同步按钮状态
+      function syncBtn(): void {
+        const set = getCompareSet();
+        const inSet = isInCompare(arxivId);
+        const count = set?.arxivIds.length ?? 0;
+        btn.textContent = inSet ? `✓ 在对比中 (${count})` : '➕ 加入对比';
+        btn.classList.toggle('paper-compare-btn--active', inSet);
+      }
+
+      // 点击处理
+      btn.addEventListener('click', () => {
+        if (isInCompare(arxivId)) {
+          removeFromCompare(arxivId);
+        } else {
+          const result = addToCompare(arxivId);
+          if (!result) {
+            // 集合已满或其他错误
+            alert('对比集合已满(最多4篇),请先移除一篇后再添加。');
+          }
+        }
+      });
+
+      // 订阅变化事件
+      const unsub = subscribeCompare(syncBtn);
+      // 页面卸载时取消订阅
+      window.addEventListener('unload', unsub);
+
+      // 初始化状态
+      syncBtn();
+    })();
   </script>
 </BaseLayout>
 

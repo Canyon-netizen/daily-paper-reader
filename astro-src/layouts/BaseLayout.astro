@@ -57,6 +57,15 @@ const fullTitle = title.includes('Daily Paper Reader') ? title : `${title} · Da
           }
         } catch (e) { /* ignore */ }
       })();
+
+      // 跨论文对比浮动按钮(全局)
+      (function() {
+        // 仅在非对比页显示浮动按钮
+        if (window.location.pathname.includes('/papers/compare')) return;
+        import('../scripts/compare-page').then((mod) => {
+          mod.mountCompareFloatingButton();
+        }).catch(() => { /* ignore */ });
+      })();
     </script>
   </body>
 </html>

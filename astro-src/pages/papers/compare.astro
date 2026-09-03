@@ -1,0 +1,304 @@
+---
+// astro-src/pages/papers/compare.astro
+//
+// Cross-paper comparison page.
+// URL: /papers/compare/?ids=a,b,c (2-4 ids separated by commas)
+import type { GetStaticPaths } from 'astro';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/compare.css';
+
+export const getStaticPaths: GetStaticPaths = async () => {
+  // Generate empty paths - client will handle ?ids= parameter
+  return [{ params: {} }];
+};
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+<BaseLayout title="跨论文对比">
+  <Navbar />
+  <main class="shell compare-shell">
+    <header class="compare-header">
+      <h1>⚖️ 跨论文对比</h1>
+      <p class="compare-sub">最多 4 篇并排,看清方法 / 数据集 / 评估 / 优缺点。</p>
+    </header>
+    <nav class="compare-flags">
+      <button type="button" class="button" id="compare-clear">🗑 清空</button>
+      <a class="button ghost" href="/papers/">← 全部论文</a>
+    </nav>
+    <div id="compare-table" class="compare-table">
+      <div class="compare-loading">加载中...</div>
+    </div>
+  </main>
+
+  <script>
+    import { getCompareSet, clearCompareSet } from '../../lib/projects/compare';
+    import { listPapers } from '../../lib/paper';
+    import { computeRelations } from '../../lib/paper-relations';
+    import { onDprCompareSetChange } from '../../lib/events';
+
+    // Get paper IDs from URL or sessionStorage
+    function getPaperIds(): string[] {
+      const urlParams = new URLSearchParams(window.location.search);
+      const idsParam = urlParams.get('ids');
+      if (idsParam) {
+        return idsParam.split(',').filter(Boolean).slice(0, 4);
+      }
+      const compareSet = getCompareSet();
+      return compareSet?.arxivIds || [];
+    }
+
+    // Render the comparison table
+    async function renderTable(): Promise<void> {
+      const tableEl = document.getElementById('compare-table');
+      if (!tableEl) return;
+
+      const paperIds = getPaperIds();
+
+      if (paperIds.length < 2) {
+        tableEl.innerHTML = `
+          <div class="compare-empty">
+            <p>请先选择至少 2 篇论文进行对比</p>
+            <p>在论文页面点击「➕ 加入对比」按钮</p>
+          </div>
+        `;
+        return;
+      }
+
+      try {
+        // Fetch paper data - need all papers to find the ones we need
+        const allPapers = await listPapers({ dedup: true, limit: 500 });
+        const selectedPapers = allPapers.filter((p) => {
+          const id = p.canonicalArxivId || p.arxivId;
+          return paperIds.includes(id);
+        });
+
+        if (selectedPapers.length < 2) {
+          tableEl.innerHTML = `
+            <div class="compare-error">
+              <p>只能找到 ${selectedPapers.length} 篇论文,请检查选择</p>
+            </div>
+          `;
+          return;
+        }
+
+        // Compute relations for shared citations
+        let relationsResult = null;
+        try {
+          relationsResult = await computeRelations(selectedPapers, {
+            algorithm: 'hybrid',
+            topK: 4,
+          });
+        } catch (err) {
+          console.warn('computeRelations failed:', err);
+        }
+
+        // Build paper ID set for relation lookup
+        const paperIdSet = new Set(selectedPapers.map((p) => p.canonicalArxivId || p.arxivId));
+
+        // Filter relations to selected papers
+        const selectedRelations = relationsResult?.edges.filter(
+          (e) => paperIdSet.has(e.source) && paperIdSet.has(e.target)
+        ) || [];
+
+        // Render the table
+        tableEl.innerHTML = buildTableHtml(selectedPapers, selectedRelations);
+        tableEl.style.setProperty('--compare-paper-count', String(selectedPapers.length));
+
+        // Update clear button handler
+        attachEventHandlers();
+      } catch (err) {
+        console.error('Failed to load papers:', err);
+        tableEl.innerHTML = `
+          <div class="compare-error">
+            <p>加载失败: ${err instanceof Error ? err.message : '未知错误'}</p>
+          </div>
+        `;
+      }
+    }
+
+    function buildTableHtml(
+      papers: Array<Record<string, unknown>>,
+      relations: Array<{ source: string; target: string; weight: number }>
+    ): string {
+      const labels = [
+        '标题',
+        'arXiv ID',
+        '任务',
+        '方法',
+        '会议 / 来源',
+        '日期',
+        '作者',
+        '方法对比',
+        '共同引用',
+        '概念',
+        '评估指标',
+        '相关度',
+      ];
+
+      let html = '';
+
+      // Header row: paper titles
+      html += `<div class="compare-cell compare-cell--label"></div>`;
+      for (const paper of papers) {
+        const title = (paper.title_zh as string) || (paper.title as string) || (paper.arxivId as string) || '';
+        const truncated = title.length > 40 ? title.slice(0, 40) + '...' : title;
+        const slug = (paper.slug as string) || (paper.arxivId as string) || '';
+        html += `
+          <div class="compare-cell compare-cell--paper">
+            <strong>${escapeHtml(truncated)}</strong>
+          </div>
+        `;
+      }
+
+      // Data rows
+      const rows = buildRowData(papers, relations);
+
+      for (let i = 0; i < labels.length; i++) {
+        const label = labels[i];
+        const cells = rows[i];
+
+        html += `<div class="compare-cell compare-cell--label">${escapeHtml(label)}</div>`;
+        for (const cell of cells) {
+          html += `<div class="compare-cell compare-cell--paper">${cell}</div>`;
+        }
+      }
+
+      return html;
+    }
+
+    function buildRowData(
+      papers: Array<Record<string, unknown>>,
+      relations: Array<{ source: string; target: string; weight: number }>
+    ): string[][] {
+      const rows: string[][] = [];
+
+      // Title row
+      rows.push(papers.map((p) => {
+        const title = (p.title_zh as string) || (p.title as string) || '';
+        const slug = (p.slug as string) || (p.arxivId as string) || '';
+        return `<a href="/papers/${encodeURIComponent(slug)}/" target="_blank">${escapeHtml(title)}</a>`;
+      }));
+
+      // arXiv ID row
+      rows.push(papers.map((p) => {
+        const id = (p.arxivId as string) || (p.canonicalArxivId as string) || '';
+        const slug = (p.slug as string) || id;
+        return `<a href="/papers/${encodeURIComponent(slug)}/" class="compare-arxiv-link">${escapeHtml(id)}</a>`;
+      }));
+
+      // Task row
+      rows.push(papers.map((p) => {
+        const cats = p.categories as Record<string, string[]> | undefined;
+        const tasks = cats?.task || [];
+        return tasks.length > 0 ? tasks.map((t) => `<span class="compare-chip">${escapeHtml(t)}</span>`).join(' ') : '—';
+      }));
+
+      // Method row
+      rows.push(papers.map((p) => {
+        const cats = p.categories as Record<string, string[]> | undefined;
+        const methods = cats?.method || [];
+        return methods.length > 0 ? methods.map((m) => `<span class="compare-chip">${escapeHtml(m)}</span>`).join(' ') : '—';
+      }));
+
+      // Venue row
+      rows.push(papers.map((p) => {
+        const cats = p.categories as Record<string, string[]> | undefined;
+        const venues = cats?.venue || [];
+        const accepted = p.accepted as boolean | undefined;
+        return venues.length > 0 ? venues.map((v) => {
+          const accClass = accepted ? ' venue-badge--accepted' : '';
+          return `<span class="venue-badge${accClass}">${escapeHtml(v)}</span>`;
+        }).join(' ') : '—';
+      }));
+
+      // Date row
+      rows.push(papers.map((p) => (p.date as string) || '—'));
+
+      // Authors row
+      rows.push(papers.map((p) => {
+        const authors = (p.authors as string) || '';
+        return `<span class="compare-authors" title="${escapeHtml(authors)}">${escapeHtml(authors)}</span>`;
+      }));
+
+      // Method comparison row
+      rows.push(papers.map((p) => {
+        const slug = (p.slug as string) || (p.arxivId as string) || '';
+        return `<a href="/papers/${encodeURIComponent(slug)}/#method-debate-section">查看详情 →</a>`;
+      }));
+
+      // Shared citations row
+      rows.push(papers.map((p) => {
+        const id = (p.canonicalArxivId as string) || (p.arxivId as string) || '';
+        const related = relations
+          .filter((r) => r.source === id || r.target === id)
+          .map((r) => {
+            const otherId = r.source === id ? r.target : r.source;
+            const weight = (r.weight * 100).toFixed(0);
+            return `<div class="compare-share-item">
+              <span class="compare-share-weight">${weight}%</span>
+              <span>${escapeHtml(otherId)}</span>
+            </div>`;
+          });
+        return related.length > 0
+          ? `<div class="compare-share">${related.join('')}</div>`
+          : '<span class="compare-empty-small">无共同引用</span>';
+      }));
+
+      // Concepts row
+      rows.push(papers.map((p) => {
+        const concepts = (p.concepts as Array<{ label?: string; name?: string }>) || [];
+        if (concepts.length === 0) return '—';
+        return `<div class="compare-concepts">${concepts.slice(0, 5).map((c) =>
+          `<span class="compare-chip">${escapeHtml(c.label || c.name || '')}</span>`
+        ).join('')}</div>`;
+      }));
+
+      // Metrics row (type dimension)
+      rows.push(papers.map((p) => {
+        const cats = p.categories as Record<string, string[]> | undefined;
+        const types = cats?.type || [];
+        return types.length > 0 ? types.map((t) => `<span class="compare-chip">${escapeHtml(t)}</span>`).join(' ') : '—';
+      }));
+
+      // Relevance row
+      rows.push(papers.map((_p, idx) => {
+        if (idx === 0) return '<span class="compare-relevance-self">基准</span>';
+        // In a full implementation, we'd compute relevance to first paper
+        return '<span class="compare-empty-small">—</span>';
+      }));
+
+      return rows;
+    }
+
+    function attachEventHandlers(): void {
+      const clearBtn = document.getElementById('compare-clear');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => {
+          clearCompareSet();
+          window.location.href = '/papers/';
+        });
+      }
+    }
+
+    function escapeHtml(str: string): string {
+      if (!str) return '';
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      renderTable();
+    });
+
+    // Listen for compare set changes
+    onDprCompareSetChange(() => {
+      renderTable();
+    });
+  </script>
+</BaseLayout>
