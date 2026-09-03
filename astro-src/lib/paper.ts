@@ -331,9 +331,24 @@ export function flattenCategories(c: Categories | undefined | null): string[] {
   return out;
 }
 
+/** 全 build process 内的 listPapers 缓存。
+ *  关键动机(2026-09-03):astro build 单进程跑全 700+ /papers/[arxiv]/ 静态页时,
+ *  每页都调 listPapers({limit:500}) 走一遍 readPaper × 500 = 35万 次 fs+yaml parse,
+ *  是 build 时间大头(~7 min)。缓存 unfiltered 全列表后,所有带 limit/sortBy 的调用
+ *  派生同一份数据 — O(1) 重复 + 一次性 N 次 read。Cloudflare Pages 20 min 上限可以
+ *  从逼近压到 12-15 min 留出余量。
+ *  SSR (Node) build 进程内有效,客户端 bundle 不进(Vite tree-shake 掉 if 永不被 import)。
+ */
+let _fullListCache: PaperListItem[] | null = null;
+let _fullListBase = '/';
+
 export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[]> {
-  const ids = await listAllPaperIds();
   const base = opts.base || '/';
+  // 全列表缓存命中 → 直接派生
+  if (_fullListCache && _fullListBase === base && !opts.pathPrefix && !opts.dedup) {
+    return applyPaperFilters(_fullListCache, opts);
+  }
+  const ids = await listAllPaperIds();
   const items: PaperListItem[] = [];
   for (const id of ids) {
     const p = await readPaper(id);
@@ -380,6 +395,11 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
     sortOrder: opts.sortOrder,
     limit: opts.limit,
   });
+  // 写入全列表缓存(无 dedup/pathPrefix 的下次调用 O(1))
+  if (!opts.pathPrefix && !opts.dedup) {
+    _fullListCache = items;
+    _fullListBase = base;
+  }
 }
 
 /** 老格式 paper 的 tag 前缀(`tags: ["query:rl"]` → 主题 key = "rl")。
