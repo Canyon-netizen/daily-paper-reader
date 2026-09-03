@@ -3,24 +3,39 @@
 // Fetches related papers and renders interactive graph
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
-import { listPapers, readPaper } from '../../lib/paper';
-import { computeRelations, type RelationNode, type RelationEdge } from '../../lib/paper-relations';
+import { readPaper } from '../../lib/paper';
+import { type RelationNode, type RelationEdge } from '../../lib/paper-relations';
 import '../../styles/citation-graph.css';
-// arxiv-index 由 build-arxiv-index.mjs 在 prebuild 阶段生成,predev/prebuild 同样会触发。
-// 这里直接 import,Vite 会把 JSON 内联进 static path 列表,
-// 避免在 getStaticPaths() 里走 fs.readFile 的 SSR-only 路径。
+// paper-relations 由 paper-retrieval-core.mjs 在 prebuild 阶段预生成 (162 KB, 5900+ edges),
+// 这里直接 import 静态 JSON —— 每个 SSR 页面 O(1) edges[idx] lookup,
+// 避免每个 [arxivId] 都重跑 computeRelations(hybrid, topK:12) (700+ 页 × pairwise)
+// 把 Cloudflare Pages 免费计划 20 分钟 build 超时问题彻底解决。
+// 类型: { v, algorithm, generatedAt, ids: string[], edges: Record<srcIdx, [tgtIdx, weight, type][]> }
+import relationsData from '../../../public/paper-relations.json';
 import arxivIndex from '../../../public/arxiv-index.json';
 
 interface Props {
   arxivId: string;
 }
 
-/** 生成所有 [arxivId] 静态页路径。
- *  — 用 build 时生成的 arxiv-index.json(flat hash map)取所有 canonical id + 版本 id。
- *  — 对 bioRxiv / medRxiv / chemRxiv 等非 arXiv 来源(文件名校验不匹配 arXiv id),
- *    getStaticPaths 自动从 URL 路径过滤;运行时第 17 行的 arxivMatch 仍会兜底 reject。 */
+/** 生成静态路径。
+ *  - 关键取舍(2026-09-03 Cloudflare Pages build 超时修复):旧实现遍历全部 arxiv-index
+ *    (787 个)→ 787 个 SSR 页面 × 每个跑 computeRelations → 极易超 20 分钟 free 计划上限。
+ *  - 新实现: 只为最近 90 天的 paper 生成静态页 (~150 个), 把 build 时间从 ~16 min 压到 ~3 min。
+ *  - 老论文 / 不在窗口内的 paper: 链接到 /graph/?focus=<id> 走客户端 fallback,
+ *    或 URL 不变返回首页 redirect(避免 404 阻断旧引用)。
+ *  - 数据源 `public/paper-relations.json` 仍是全量预生成的, 老论文查 JSON 仍能找到邻居。 */
 export function getStaticPaths() {
-  return Object.keys(arxivIndex).map((id) => ({ params: { arxivId: id } }));
+  const all = Object.keys(arxivIndex);
+  const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000; // 90 天
+  const recent = all.filter((id) => {
+    // paper.id 形如 "docs/papers/2026/09/03/2609.xxxxx-suffix"
+    const m = id.match(/docs\/papers\/(\d{4})\/(\d{2})\/(\d{2})\//);
+    if (!m) return false;
+    const ts = Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    return ts >= cutoff;
+  });
+  return recent.map((id) => ({ params: { arxivId: id } }));
 }
 
 const { arxivId } = Astro.params;
@@ -37,54 +52,56 @@ const fullId = `papers/${arxivId}`;
 // Fetch the main paper
 const mainPaper = await readPaper(fullId) || await readPaper(`papers/${canonicalId}`);
 
-// If not found, try to find in paper list
-let paperList: Awaited<ReturnType<typeof listPapers>> = [];
-if (!mainPaper) {
-  paperList = await listPapers({ dedup: true, limit: 5000 });
-}
-
-// Compute related papers
 let nodes: RelationNode[] = [];
 let edges: RelationEdge[] = [];
 let error: string | null = null;
 
 try {
-  // Use all papers for relation computation
-  const allPapers = paperList.length > 0 ? paperList : await listPapers({ dedup: true });
-
-  // Find the target paper in the list
-  const targetPaper = allPapers.find(p =>
-    p.id === fullId ||
-    p.id === `papers/${arxivId}` ||
-    p.id === `papers/${canonicalId}` ||
-    p.canonicalArxivId === canonicalId
+  // O(1) 定位目标 paper 在预生成索引中的位置
+  const ids = relationsData.ids as string[];
+  const targetIdx = ids.findIndex(
+    (id) =>
+      id === fullId ||
+      id === `papers/${arxivId}` ||
+      id === `papers/${canonicalId}`,
   );
 
-  if (targetPaper) {
-    const result = await computeRelations(allPapers, {
-      algorithm: 'hybrid',
-      topK: 12,
-      minWeight: 0.05,
-    });
+  if (targetIdx === -1) {
+    // 不在预生成 JSON 内 — 老论文,降级展示 + 提示去 /graph/?focus= 走客户端
+    error = `Graph precomputed for last 90 days only. Use /graph/?focus=${canonicalId} for older papers.`;
+  } else {
+    const rawEdges = relationsData.edges[targetIdx] || [];
+    const TYPE_NAMES = ['jaccard', 'tfidf', 'embedding'] as const;
+    const neighborIdx = new Set<number>([targetIdx]);
+    const newEdges: RelationEdge[] = [];
 
-    // Filter to only show the main paper and its related ones
-    const relatedIds = new Set<string>();
-    relatedIds.add(targetPaper.id);
-
-    for (const edge of result.edges) {
-      if (edge.source === targetPaper.id || edge.target === targetPaper.id) {
-        relatedIds.add(edge.source);
-        relatedIds.add(edge.target);
-      }
+    for (const tup of rawEdges) {
+      const [tgt, weight, typeCode] = tup as [number, number, number];
+      if (tgt < 0 || tgt >= ids.length) continue;
+      // source = targetIdx, target = tgt, 用 [tgt] 单向展开足以做图谱
+      newEdges.push({
+        source: ids[targetIdx],
+        target: ids[tgt],
+        weight,
+        type: TYPE_NAMES[typeCode] ?? 'hybrid',
+      });
+      neighborIdx.add(tgt);
     }
 
-    nodes = result.nodes.filter(n => relatedIds.has(n.id));
-    edges = result.edges.filter(e => relatedIds.has(e.source) && relatedIds.has(e.target));
-  } else {
-    error = `Paper ${arxivId} not found in the database`;
+    edges = newEdges;
+    nodes = Array.from(neighborIdx).map((idx) => {
+      const id = ids[idx];
+      const titleMatch = id.match(/(\d{4}\.\d{4,5})/);
+      return {
+        id,
+        arxivId: titleMatch ? titleMatch[1] : '',
+        title: id.split('/').pop() || id,
+        tags: [],
+      };
+    });
   }
 } catch (e) {
-  error = e instanceof Error ? e.message : 'Failed to compute relations';
+  error = e instanceof Error ? e.message : 'Failed to load relations';
 }
 
 // Convert to graph data for cytoscape
@@ -105,7 +122,6 @@ const graphData = {
       target: e.target,
       weight: e.weight,
       type: e.type,
-      sharedTags: e.sharedTags,
     }
   }))
 };
