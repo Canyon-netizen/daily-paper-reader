@@ -240,7 +240,10 @@ async function writePaperRelations(rows, startedAt) {
   const core = await import(pathToFileURL(join(ROOT, 'astro-src', 'lib', 'paper-relations', 'core.mjs')).href);
   // 构造 relations 算法输入:{ id, g, t, z, l }。
   const relRows = rows.map((r) => ({ id: r.i, g: r.g, t: r.t, z: r.z, l: r.l }));
-  const rel = core.computeRelations(relRows, { topK: 8, minWeight: 0 });
+  // topK: 8 → 4 (2026-09-03 Cloudflare build time budget): paper-relations.json
+  // 体积从 ~162KB 减到 ~80KB,每节点出边减半但 'related' 召回仍然够用 (Notes 编辑器
+  // autocomplete + graph 页 + 跨论文 compare 全部走此 JSON, topK=4 已是经验下限)。
+  const rel = core.computeRelations(relRows, { topK: 4, minWeight: 0 });
   const artifact = {
     v: 1,
     algorithm: 'hybrid',
@@ -253,7 +256,7 @@ async function writePaperRelations(rows, startedAt) {
   for (const arr of Object.values(rel.edges)) edgeCount += arr.length;
   console.log(
     `[paper-relations] ids=${rel.ids.length} edges=${edgeCount} ` +
-    `topK=8 -> public/paper-relations.json`,
+    `topK=4 -> public/paper-relations.json`,
   );
 }
 
