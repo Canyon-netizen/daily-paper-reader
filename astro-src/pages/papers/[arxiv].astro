@@ -7,7 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
-import { readPaper, listAllPaperIds, flattenCategories } from '../../lib/paper';
+import { readPaper, listPapers, listAllPaperIds, flattenCategories } from '../../lib/paper';
 import { renderMarkdownBody, renderTitleHtml } from '../../lib/markdown';
 import { paperPlainTitle } from '../../lib/title';
 import { buildConceptIndex, buildWikilinkResolver } from '../../lib/concepts-index';
@@ -732,7 +732,7 @@ const tabTitle = plainZh || plainEn || id;
 
     // 跨论文对比按钮
     // -------------------------------------------------------
-    (function () {
+    (async function () {
       const btn = document.getElementById('paper-compare-btn');
       if (!btn) return;
       const arxivId = btn.getAttribute('data-arxiv-id');

@@ -25,6 +25,7 @@ import NewLibraryModal from '../components/NewLibraryModal.astro';
 import '../styles/home.css';
 import '../styles/libraries.css';
 import '../styles/user-libraries.css';
+import '../styles/dashboard.css';
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
 const repo = defaultPaperRepository;
@@ -59,8 +60,16 @@ const newToday = items.filter((p) => p.date === today).length;
         <span class="shortcut">🕒 最近更新 {lastUpdated || '—'}</span>
         <a class="shortcut" href={base + '/papers/'}>📚 全部论文</a>
         <a class="shortcut" href={base + '/topic/'}>🎯 主题探索</a>
+        <a class="shortcut" href={base + '/projects/'}>📂 项目工作区</a>
+        <a class="shortcut" href={base + '/dashboard/'}>📊 阅读仪表板</a>
       </div>
     </header>
+
+    <!-- 阅读仪表板 strip: 客户端水合,显示 3 个 KPI + 跳 /dashboard/ -->
+    <section id="dashboard-strip-mount" class="dashboard-strip-mount" aria-label="阅读状态概览"></section>
+    <script type="application/json" id="home-papers-data" set:html={JSON.stringify(items.map(p => ({
+      id: p.id, canonicalArxivId: p.canonicalArxivId, title: p.title, date: p.date,
+    })))}></script>
 
     <div class="libraries-actionbar">
       <span class="lib-segmented" data-type-filter data-type-filter-target="#all-libraries">
@@ -154,5 +163,11 @@ const newToday = items.filter((p) => p.date === today).length;
 
   <script>
     import '../scripts/user-libraries-ui';
+    import { mountDashboardStrip } from '../scripts/dashboard-strip';
+    const itemsForStrip = JSON.parse(document.getElementById('home-papers-data')?.textContent || '[]');
+    const mount = document.getElementById('dashboard-strip-mount');
+    if (mount && Array.isArray(itemsForStrip)) {
+      mountDashboardStrip(mount, itemsForStrip);
+    }
   </script>
 </BaseLayout>
