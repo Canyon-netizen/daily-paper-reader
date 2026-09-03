@@ -1,0 +1,338 @@
+/* astro-src/styles/dashboard.css
+ *
+ * Reading dashboard styles.
+ * Uses existing CSS variables from global.css.
+ */
+
+/* === Main shell === */
+
+.dashboard-shell {
+  max-width: var(--wide-max-width);
+  margin: 0 auto;
+  padding: var(--space-6);
+}
+
+.dashboard-header {
+  margin-bottom: var(--space-8);
+  text-align: center;
+}
+
+.dashboard-header h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0 0 var(--space-3);
+  color: var(--fg);
+}
+
+.dashboard-sub {
+  font-size: 1.1rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+/* === KPI cards === */
+
+.dashboard-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-8);
+}
+
+.dashboard-kpi-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-5);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dashboard-kpi-number {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--fg);
+  line-height: 1;
+}
+
+.dashboard-kpi-label {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.dashboard-kpi-words .dashboard-kpi-number {
+  color: var(--accent);
+}
+
+/* === Section styles === */
+
+.dashboard-section {
+  margin-top: var(--space-8);
+}
+
+.dashboard-section-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0 0 var(--space-2);
+  color: var(--fg);
+}
+
+.dashboard-section-desc {
+  font-size: 0.95rem;
+  color: var(--fg-muted);
+  margin: 0 0 var(--space-4);
+}
+
+/* === Stale reads === */
+
+.dashboard-stale-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dashboard-stale-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-3) var(--space-4);
+}
+
+.dashboard-stale-link {
+  flex: 1;
+  font-family: monospace;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.dashboard-stale-link:hover {
+  text-decoration: underline;
+}
+
+.dashboard-stale-days {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.dashboard-stale-btn {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.875rem;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.dashboard-stale-btn:hover {
+  background: var(--bg-elevated);
+  border-color: var(--link);
+}
+
+/* === New related papers === */
+
+.dashboard-related-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+.dashboard-related-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.dashboard-related-link {
+  font-family: monospace;
+  font-size: 1rem;
+  color: var(--link);
+  text-decoration: none;
+}
+
+.dashboard-related-link:hover {
+  text-decoration: underline;
+}
+
+.dashboard-related-meta {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.dashboard-related-weight {
+  font-weight: 500;
+}
+
+.dashboard-related-to {
+  font-size: 0.8rem;
+}
+
+/* === Drafts === */
+
+.drafts-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-3);
+}
+
+/* === Strip (home page insertion) === */
+
+.strip-dashboard {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-4) 0;
+}
+
+.strip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 20px;
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: background-color 0.15s, transform 0.15s;
+}
+
+.strip-pill:hover {
+  transform: translateY(-1px);
+}
+
+.strip-pill-icon {
+  font-size: 1rem;
+}
+
+.strip-pill-label {
+  font-weight: 500;
+  color: var(--fg);
+}
+
+.strip-pill-count {
+  font-weight: 700;
+  color: var(--fg);
+  background: var(--bg-surface);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.strip-pill-unread {
+  background: #e8f5e9;
+  color: #2e7d32;
+}
+
+.strip-pill-stale {
+  background: #ffebee;
+  color: #c62828;
+}
+
+.strip-pill-new {
+  background: #e3f2fd;
+  color: #1565c0;
+}
+
+.strip-pill-disabled {
+  background: var(--bg-surface);
+  color: var(--fg-muted);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 20px;
+  font-size: 0.9rem;
+}
+
+/* === Error state === */
+
+.dpr-error {
+  color: #c62828;
+  padding: var(--space-4);
+  text-align: center;
+  background: #ffebee;
+  border-radius: 6px;
+  margin: var(--space-4) 0;
+}
+
+/* === Button styles === */
+
+.dpr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: 6px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s;
+}
+
+.dpr-btn-primary {
+  background: var(--accent);
+  color: white;
+  border: none;
+}
+
+.dpr-btn-primary:hover {
+  background: #1976d2;
+}
+
+.dpr-btn-secondary {
+  background: var(--bg-surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+
+.dpr-btn-secondary:hover {
+  background: var(--bg-elevated);
+  border-color: var(--link);
+}
+
+/* === Dark theme support === */
+
+:global([data-theme='dark']) .dashboard-kpi-card {
+  background: var(--bg-elevated);
+}
+
+:global([data-theme='dark']) .dashboard-stale-item {
+  background: var(--bg-elevated);
+}
+
+:global([data-theme='dark']) .dashboard-related-card {
+  background: var(--bg-elevated);
+}
+
+:global([data-theme='dark']) .strip-pill-unread {
+  background: #1b5e20;
+  color: #a5d6a7;
+}
+
+:global([data-theme='dark']) .strip-pill-stale {
+  background: #b71c1c;
+  color: #ffcdd2;
+}
+
+:global([data-theme='dark']) .strip-pill-new {
+  background: #0d47a1;
+  color: #90caf9;
+}
+
+:global([data-theme='dark']) .dpr-error {
+  background: #2c1a1a;
+  color: #ef9a9a;
+}

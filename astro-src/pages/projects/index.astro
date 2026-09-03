@@ -7,6 +7,7 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import '../../styles/projects.css';
+import '../../styles/writing.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
@@ -196,9 +197,10 @@ const PROJECT_TABS = [
       addPaperToProjectStage,
       getProjectDrafts,
     } from '../../scripts/projects';
-    import { createLibrary } from '../../lib/user-libraries/store';
     import { LIBRARY_HUES, type LibraryHue } from '../../lib/user-libraries/types';
     import { saveDraft, type Draft } from '../../lib/projects/draft-store';
+    import { initDraftEditor, loadPaperCorpus } from '../../scripts/projects-draft-editor';
+    import { downloadLiteratureReview } from '../../scripts/export/literature-review';
 
     // State
     let currentProjectId: string | null = null;
@@ -376,6 +378,11 @@ const PROJECT_TABS = [
         : '<span class="text-muted">无</span>';
     }
 
+    // Current editing state
+    let currentDraftId: string | null = null;
+    let currentEditorDetach: (() => void) | null = null;
+    let paperCorpus: Array<{ canonicalArxivId: string; title?: string; title_zh?: string; title_plain?: string; title_zh_plain?: string }> = [];
+
     // Render writing tab
     async function renderWritingTab(): Promise<void> {
       if (!currentProjectId) return;
@@ -383,18 +390,143 @@ const PROJECT_TABS = [
 
       draftsList.innerHTML = '';
       if (drafts.length === 0) {
-        draftsList.innerHTML = '<p class="text-muted">暂无草稿</p>';
+        draftsList.innerHTML = '<p class="text-muted">暂无草稿。点击上方按钮创建新草稿。</p>';
       } else {
         drafts.forEach((draft) => {
           const item = document.createElement('div');
-          item.className = 'draft-item';
+          item.className = `draft-item${currentDraftId === draft.id ? ' active' : ''}`;
           item.innerHTML = `
-            <div class="draft-title">${draft.title}</div>
+            <div class="draft-title">${escapeHtml(draft.title)}</div>
             <div class="draft-meta">${draft.wordCount} 字 · ${new Date(draft.savedAt).toLocaleDateString()}</div>
           `;
+          item.addEventListener('click', () => openDraftEditor(draft));
           draftsList.appendChild(item);
         });
       }
+    }
+
+    // Open draft editor
+    async function openDraftEditor(draft: Draft): Promise<void> {
+      // Clean up previous editor
+      if (currentEditorDetach) {
+        currentEditorDetach();
+        currentEditorDetach = null;
+      }
+
+      currentDraftId = draft.id;
+
+      // Load paper corpus if not loaded
+      if (paperCorpus.length === 0) {
+        paperCorpus = await loadPaperCorpus();
+      }
+
+      // Get project detail for paper lookup
+      const projectDetail = currentProjectId ? getProjectDetail(currentProjectId) : null;
+      const projectPapers = projectDetail?.paperIds || [];
+
+      // Find project papers from corpus for lookup
+      const projectCorpus = paperCorpus.filter(p => projectPapers.includes(p.canonicalArxivId));
+
+      // Find the writing panel container
+      const writingPanel = document.getElementById('panel-writing');
+      if (!writingPanel) return;
+
+      // Clear and create editor container
+      const editorContainer = document.createElement('div');
+      editorContainer.id = 'draft-editor-container';
+      editorContainer.className = 'draft-editor-full';
+
+      // Clear existing editor if any
+      const existingEditor = writingPanel.querySelector('.draft-editor-full');
+      if (existingEditor) {
+        existingEditor.remove();
+      }
+
+      // Add editor after the header
+      const header = writingPanel.querySelector('.writing-header');
+      if (header?.nextSibling) {
+        writingPanel.insertBefore(editorContainer, header.nextSibling);
+      } else {
+        writingPanel.appendChild(editorContainer);
+      }
+
+      // Initialize the editor
+      const editor = await initDraftEditor(editorContainer, draft, projectCorpus);
+      currentEditorDetach = editor.detach;
+
+      // Wire export button
+      const exportBtn = document.getElementById('draft-export-btn');
+      exportBtn?.addEventListener('click', () => {
+        const titleInput = document.getElementById('draft-title') as HTMLInputElement;
+        const textarea = document.getElementById('draft-textarea') as HTMLTextAreaElement;
+        if (!titleInput || !textarea) return;
+
+        const projectName = projectDetail?.name || 'project';
+        const draftTitle = titleInput.value || draft.title;
+        const markdown = textarea.value;
+
+        // Build paper lookup
+        const paperLookup = (arxivId: string) => {
+          const paper = projectCorpus.find(p => p.canonicalArxivId === arxivId);
+          if (paper) {
+            return {
+              title: paper.title_zh_plain || paper.title_plain || paper.title_zh || paper.title || arxivId,
+              authors: [],
+              year: undefined,
+            };
+          }
+          return null;
+        };
+
+        downloadLiteratureReview({
+          projectName,
+          draftTitle,
+          draftMarkdown: markdown,
+          paperLookup,
+        });
+
+        const status = document.getElementById('draft-export-status');
+        if (status) {
+          status.textContent = '已导出 .md 和 .bib';
+          status.className = 'draft-export-status success';
+          setTimeout(() => {
+            status.textContent = '';
+            status.className = 'draft-export-status';
+          }, 3000);
+        }
+      });
+
+      // Re-render list to show active state
+      renderWritingTab();
+    }
+
+    // Close draft editor
+    function closeDraftEditor(): void {
+      if (currentEditorDetach) {
+        currentEditorDetach();
+        currentEditorDetach = null;
+      }
+      currentDraftId = null;
+
+      // Remove editor container
+      const editorContainer = document.getElementById('draft-editor-container');
+      if (editorContainer) {
+        editorContainer.remove();
+      }
+
+      renderWritingTab();
+    }
+
+    // Escape HTML helper
+    function escapeHtml(text: string): string {
+      const map: Record<string, string> = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+      };
+      return text.replace(/[&<>"']/g, m => map[m]);
     }
 
     // Event handlers
@@ -524,7 +656,14 @@ const PROJECT_TABS = [
 
         const result = await saveDraft(draft);
         if (result.ok) {
-          renderWritingTab();
+          // Reload drafts to get the generated ID
+          const drafts = await getProjectDrafts(currentProjectId);
+          const newDraft = drafts.find(d => d.title === title.trim());
+          if (newDraft) {
+            openDraftEditor(newDraft);
+          } else {
+            renderWritingTab();
+          }
         }
       });
 

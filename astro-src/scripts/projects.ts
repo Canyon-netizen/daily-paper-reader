@@ -22,7 +22,7 @@ import {
   onDprProjectStageChange,
   emitDprUserLibrariesChange,
 } from '../lib/events';
-import { listDraftsByProject } from '../lib/projects/draft-store';
+import { listDraftsByProject, type Draft } from '../lib/projects/draft-store';
 
 /** Stage progress summary — computed from a project's stages. */
 export interface StageProgress {
@@ -175,19 +175,11 @@ export function removePaperFromProjectStage(
 }
 
 /**
- * Get drafts for a project.
- */
-export async function getProjectDrafts(
-  projectId: string,
-): Promise<Array<{ id: string; title: string; savedAt: number; wordCount: number }>> {
+ * Get drafts for a project. Returns full Draft[] (not a subset) because
+ * openDraftEditor() needs `markdown` + `projectId` to mount the editor. */
+export async function getProjectDrafts(projectId: string): Promise<Draft[]> {
   if (typeof window === 'undefined') return [];
-  const drafts = await listDraftsByProject(projectId);
-  return drafts.map((d) => ({
-    id: d.id,
-    title: d.title,
-    savedAt: d.savedAt,
-    wordCount: d.wordCount,
-  }));
+  return await listDraftsByProject(projectId);
 }
 
 /**

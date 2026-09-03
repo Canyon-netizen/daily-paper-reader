@@ -1,0 +1,260 @@
+---
+// astro-src/pages/dashboard.astro
+//
+// Full reading dashboard page - SSR shell with client hydration.
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import '../styles/dashboard.css';
+---
+
+<BaseLayout title="阅读仪表板">
+  <Navbar />
+  <main class="shell dashboard-shell">
+    <header class="dashboard-header">
+      <h1>阅读仪表板</h1>
+      <p class="dashboard-sub">一眼看到该读什么、该重读什么、相关新论文有哪些。</p>
+    </header>
+    <section id="dashboard-kpis" class="dashboard-kpis"></section>
+    <section id="dashboard-stale" class="dashboard-section"></section>
+    <section id="dashboard-new-related" class="dashboard-section"></section>
+    <section id="dashboard-drafts" class="dashboard-section"></section>
+  </main>
+  <script>
+    import { buildDashboardSummary } from '../lib/projects/recommend';
+    import {
+      onDprReadingDashboardDirty,
+      emitDprReadingDashboardDirty,
+    } from '../lib/events';
+    import { findRelatedForList } from '../lib/paper-relations/list-related';
+    import type { PaperListItem } from '../lib/paper';
+
+    // Dashboard orchestrator - loads data and renders sections
+    async function loadAndRenderDashboard() {
+      const kpisEl = document.getElementById('dashboard-kpis');
+      const staleEl = document.getElementById('dashboard-stale');
+      const newRelatedEl = document.getElementById('dashboard-new-related');
+      const draftsEl = document.getElementById('dashboard-drafts');
+
+      if (!kpisEl || !staleEl || !newRelatedEl || !draftsEl) {
+        return;
+      }
+
+      try {
+        // Build dashboard summary
+        const summary = await buildDashboardSummary({
+          staleDays: 30,
+          newRelatedLimit: 5,
+        });
+
+        // Render KPIs
+        renderKPIs(kpisEl, summary);
+
+        // Render stale reads
+        renderStale(staleEl, summary);
+
+        // Render new related papers
+        renderNewRelated(newRelatedEl, summary);
+
+        // Render drafts section (from summary)
+        renderDrafts(draftsEl, summary);
+      } catch (err) {
+        console.error('[dashboard] Failed to load:', err);
+        kpisEl.innerHTML = '<p class="dpr-error">加载失败，请刷新页面重试。</p>';
+      }
+    }
+
+    function renderKPIs(container: HTMLElement, summary: Awaited<ReturnType<typeof buildDashboardSummary>>) {
+      const { byStatus, totalProjects, totalDrafts, totalWords, weeklyAdds } = summary;
+
+      container.innerHTML = `
+        <div class="dashboard-kpi-card">
+          <span class="dashboard-kpi-number">${byStatus.unread}</span>
+          <span class="dashboard-kpi-label">待读</span>
+        </div>
+        <div class="dashboard-kpi-card">
+          <span class="dashboard-kpi-number">${byStatus.reading}</span>
+          <span class="dashboard-kpi-label">在读</span>
+        </div>
+        <div class="dashboard-kpi-card">
+          <span class="dashboard-kpi-number">${byStatus.read}</span>
+          <span class="dashboard-kpi-label">已读</span>
+        </div>
+        <div class="dashboard-kpi-card">
+          <span class="dashboard-kpi-number">${weeklyAdds}</span>
+          <span class="dashboard-kpi-label">本周新增</span>
+        </div>
+        <div class="dashboard-kpi-card">
+          <span class="dashboard-kpi-number">${totalProjects}</span>
+          <span class="dashboard-kpi-label">项目</span>
+        </div>
+        <div class="dashboard-kpi-card">
+          <span class="dashboard-kpi-number">${totalDrafts}</span>
+          <span class="dashboard-kpi-label">草稿</span>
+        </div>
+        <div class="dashboard-kpi-card dashboard-kpi-words">
+          <span class="dashboard-kpi-number">${formatWords(totalWords)}</span>
+          <span class="dashboard-kpi-label">字数</span>
+        </div>
+      `;
+    }
+
+    function renderStale(container: HTMLElement, summary: Awaited<ReturnType<typeof buildDashboardSummary>>) {
+      const { staleReads } = summary;
+
+      if (staleReads.length === 0) {
+        container.innerHTML = `
+          <h2 class="dashboard-section-title">已很久没读</h2>
+          <div class="dpr-empty">
+            <p class="dpr-empty-icon">🎉</p>
+            <h3>所有论文 7 天内都过了一眼!</h3>
+            <p>暂无需要重读的论文。</p>
+          </div>
+        `;
+        return;
+      }
+
+      const itemsHtml = staleReads
+        .map(
+          (item) => `
+          <div class="dashboard-stale-item" data-arxiv-id="${item.arxivId}">
+            <a href="/papers/${item.arxivId}/" class="dashboard-stale-link">${item.arxivId}</a>
+            <span class="dashboard-stale-days">${item.lastTouchDays} 天</span>
+            <button class="dashboard-stale-btn" data-action="reread" data-id="${item.arxivId}">重读</button>
+          </div>
+        `
+        )
+        .join('');
+
+      container.innerHTML = `
+        <h2 class="dashboard-section-title">已很久没读</h2>
+        <p class="dashboard-section-desc">超过 30 天没有翻开的论文</p>
+        <div class="dashboard-stale-list">
+          ${itemsHtml}
+        </div>
+      `;
+
+      // Attach event listeners for reread buttons
+      container.querySelectorAll('.dashboard-stale-btn').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const target = e.target as HTMLButtonElement;
+          const arxivId = target.dataset.id;
+          if (!arxivId) return;
+
+          // Mark as "reading" status - would call user-library store
+          // For now, just emit dirty event to refresh
+          emitDprReadingDashboardDirty();
+        });
+      });
+    }
+
+    function renderNewRelated(
+      container: HTMLElement,
+      summary: Awaited<ReturnType<typeof buildDashboardSummary>>
+    ) {
+      const { newRelated } = summary;
+
+      if (newRelated.length === 0) {
+        container.innerHTML = `
+          <h2 class="dashboard-section-title">相关新论文</h2>
+          <div class="dpr-empty">
+            <p class="dpr-empty-icon">📚</p>
+            <h3>暂无新相关论文</h3>
+            <p>收藏更多论文后会推荐相关新论文。</p>
+          </div>
+        `;
+        return;
+      }
+
+      const itemsHtml = newRelated
+        .map(
+          (item) => `
+          <div class="dashboard-related-card" data-arxiv-id="${item.arxivId}">
+            <a href="/papers/${item.arxivId}/" class="dashboard-related-link">${item.arxivId}</a>
+            <div class="dashboard-related-meta">
+              <span class="dashboard-related-weight">相关度: ${(item.relatedToIds.length)} 篇</span>
+              ${item.relatedToIds.length > 0 ? `<span class="dashboard-related-to">关联: ${item.relatedToIds.join(', ')}</span>` : ''}
+            </div>
+          </div>
+        `
+        )
+        .join('');
+
+      container.innerHTML = `
+        <h2 class="dashboard-section-title">相关新论文</h2>
+        <p class="dashboard-section-desc">根据你的收藏推荐的近 7 天新论文</p>
+        <div class="dashboard-related-list">
+          ${itemsHtml}
+        </div>
+      `;
+    }
+
+    function renderDrafts(
+      container: HTMLElement,
+      summary: Awaited<ReturnType<typeof buildDashboardSummary>>
+    ) {
+      const { totalDrafts, totalWords } = summary;
+
+      if (totalDrafts === 0) {
+        container.innerHTML = `
+          <h2 class="dashboard-section-title">写作进度</h2>
+          <div class="dpr-empty">
+            <p class="dpr-empty-icon">✍️</p>
+            <h3>还没有草稿</h3>
+            <p>在项目中创建草稿开始写作。</p>
+            <div class="dpr-empty-actions">
+              <a href="/projects/" class="dpr-btn dpr-btn-primary">进入项目</a>
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = `
+        <h2 class="dashboard-section-title">写作进度</h2>
+        <p class="dashboard-section-desc">共有 ${totalDrafts} 篇草稿，${formatWords(totalWords)} 字</p>
+        <div class="dpr-empty-actions">
+          <a href="/projects/" class="dpr-btn dpr-btn-secondary">查看全部草稿</a>
+        </div>
+      `;
+    }
+
+    function formatWords(words: number): string {
+      if (words >= 10000) {
+        return (words / 10000).toFixed(1) + 'w';
+      }
+      if (words >= 1000) {
+        return (words / 1000).toFixed(1) + 'k';
+      }
+      return words.toString();
+    }
+
+    // Throttle - prevent rapid re-renders
+    let renderThrottleTimeout: ReturnType<typeof setTimeout> | null = null;
+    const RENDER_THROTTLE_MS = 5000;
+
+    function scheduleRerender() {
+      if (renderThrottleTimeout) {
+        clearTimeout(renderThrottleTimeout);
+      }
+      renderThrottleTimeout = setTimeout(() => {
+        loadAndRenderDashboard();
+      }, RENDER_THROTTLE_MS);
+    }
+
+    // Subscribe to dirty events
+    const unsubscribe = onDprReadingDashboardDirty(() => {
+      scheduleRerender();
+    });
+
+    // Initial load
+    loadAndRenderDashboard();
+
+    // Cleanup on page navigation
+    window.addEventListener('beforeunload', () => {
+      unsubscribe();
+      if (renderThrottleTimeout) {
+        clearTimeout(renderThrottleTimeout);
+      }
+    });
+  </script>
+</BaseLayout>
