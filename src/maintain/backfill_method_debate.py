@@ -193,10 +193,25 @@ def main() -> int:
         logger.error(f"[ERROR] 目录不存在: {docs_dir}")
         return 1
 
-    # Find all .md files
+    # Find all .md files — PRIORITIZE papers without method_pros_cons first
     pattern = os.path.join(docs_dir, "**", "*.md")
-    md_files = sorted(glob.glob(pattern, recursive=True))
-    logger.info(f"[INFO] 发现 {len(md_files)} 个论文文件, workers={args.workers}")
+    all_md_files = sorted(glob.glob(pattern, recursive=True))
+
+    def _has_method_debate(md_path: str) -> bool:
+        """Quick check: does the file already have method_pros_cons?"""
+        try:
+            with open(md_path, "r", encoding="utf-8") as f:
+                content = f.read(8192)  # Read first 8KB only (fast)
+            return "method_pros_cons" in content
+        except Exception:
+            return False
+
+    missing = [p for p in all_md_files if not _has_method_debate(p)]
+    done = [p for p in all_md_files if _has_method_debate(p)]
+    # Process missing first (priority), then already-done (no-op but counted in limit)
+    md_files = missing + done
+
+    logger.info(f"[INFO] 发现 {len(all_md_files)} 个论文文件, missing={len(missing)}, done={len(done)}, workers={args.workers}")
 
     # Process — with thread pool
     from concurrent.futures import ThreadPoolExecutor, as_completed

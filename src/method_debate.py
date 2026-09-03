@@ -322,6 +322,7 @@ def generate_method_debate(
             "method_comparison": method_comparison,
             "method_debate_model": model_id,
             "method_debate_generated_at": timestamp,
+            "method_debate_status": "completed_no_methods" if not method_pros_cons else "completed",
         }
 
     except Exception as e:
