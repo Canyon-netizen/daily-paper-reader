@@ -237,9 +237,24 @@ async function main() {
 }
 
 async function writePaperRelations(rows, startedAt) {
+  // Phase J5:输入未变则跳过 O(N²) hybrid jaccard+tfidf,直接复用旧 JSON。
+  // 输入 fingerprint = sorted (id, title, categories.?, method.?) 拼接的 SHA1。
+  // 覆盖字段是 relations 算法的实际输入(同 g/t/z/l 的派生源)。
   const core = await import(pathToFileURL(join(ROOT, 'astro-src', 'lib', 'paper-relations', 'core.mjs')).href);
-  // 构造 relations 算法输入:{ id, g, t, z, l }。
   const relRows = rows.map((r) => ({ id: r.i, g: r.g, t: r.t, z: r.z, l: r.l }));
+  const fp = await computeFingerprint(relRows);
+  const HASH_FILE = join(ROOT, '.prebuild-relations-hash');
+  let prevHash = '';
+  if (existsSync(HASH_FILE)) {
+    try { prevHash = readFileSync(HASH_FILE, 'utf8').trim(); } catch {}
+  }
+  if (fp === prevHash && existsSync(OUT_RELATIONS)) {
+    console.log(
+      `[paper-relations] inputs unchanged (hash=${fp.slice(0, 8)}), ` +
+      `skip computeRelations, reuse public/paper-relations.json`,
+    );
+    return;
+  }
   // topK: 8 → 4 (2026-09-03 Cloudflare build time budget): paper-relations.json
   // 体积从 ~162KB 减到 ~80KB,每节点出边减半但 'related' 召回仍然够用 (Notes 编辑器
   // autocomplete + graph 页 + 跨论文 compare 全部走此 JSON, topK=4 已是经验下限)。
@@ -252,12 +267,24 @@ async function writePaperRelations(rows, startedAt) {
     edges: rel.edges,
   };
   writeFileSync(OUT_RELATIONS, JSON.stringify(artifact));
+  writeFileSync(HASH_FILE, fp);
   let edgeCount = 0;
   for (const arr of Object.values(rel.edges)) edgeCount += arr.length;
   console.log(
     `[paper-relations] ids=${rel.ids.length} edges=${edgeCount} ` +
     `topK=4 -> public/paper-relations.json`,
   );
+}
+
+async function computeFingerprint(rows) {
+  const { createHash } = await import('node:crypto');
+  const sorted = rows
+    .slice()
+    .sort((a, b) => a.id.localeCompare(b.id))
+    // r.g 是 string[] (categories flat);r.t/z/l 是 string。统一 String() 兜底。
+    .map((r) => `${r.id}|${(r.g || []).join(',')}|${String(r.t ?? '')}|${String(r.z ?? '')}|${String(r.l ?? '')}`)
+    .join('\n');
+  return createHash('sha1').update(sorted).digest('hex');
 }
 
 main();
