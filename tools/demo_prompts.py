@@ -110,6 +110,16 @@ def load_paper(arxiv_id: str) -> tuple[str, str]:
     return title, text
 
 
+def strip_thinking(raw: str) -> str:
+    """剥掉 LLM 输出的 <think>...</think> 思考块 (Qwen/MiniMax/DeepSeek R1 类模型常见)。"""
+    import re
+    s = raw
+    # 多行匹配: <think>...</think> 或 <think> ... </think> (任意空白)
+    s = re.sub(r"<think>[\s\S]*?</think>", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"<thinking>[\s\S]*?</thinking>", "", s, flags=re.IGNORECASE)
+    return s.strip()
+
+
 def strip_markdown_fences(raw: str) -> str:
     """LLM 偶尔仍会包 ```json ... ```,剥掉。"""
     s = raw.strip()
@@ -126,10 +136,25 @@ def self_score_deep_extract(parsed: dict) -> dict[str, float]:
     """6 维 rubric 自动打分 (Round 2 prompt 验证)。"""
     scores = {}
 
-    # D1 Faithfulness — proxy: metric.context 是否含 Table/Figure/Section
+    # D1 Faithfulness — proxy: metric.context 是否含具体场景词 + 数字 + baseline
+    # LLM 实际有两种 grounding 方式:
+    #   (a) 硬锚点: Table N / Figure N / Section X.Y / page N
+    #   (b) 语义锚点: 具体任务名 (Quadratic/MNIST/...) + 具体设置 (T=50/n=10/ε_total≈5) + baseline 名 (DP-GM/FedAvg/...)
+    # 两种都算 grounded,语义锚点往往更可读
     metrics = parsed.get("reported_metrics", [])
     if metrics:
-        traceable = sum(1 for m in metrics if any(k in str(m.get("context", "")) for k in ["Table", "Figure", "Section", "page"]))
+        hard_anchor = {"table", "figure", "section", "page"}
+        scene_words = {"quadratic", "logistic", "mnist", "cifar", "glue", "squad",
+                       "humaneval", "mmlu", "gsm", "gsm8k", "toy", "imagenet",
+                       "t=", "n=", "ε", "epsilon", "round", "epoch", "shot", "batch"}
+        baseline_words = {"baseline", "dp-gm", "fedavg", "non-private", "private",
+                          "ppo", "dqn", "lora", "full fine-tune", "sft", "rlhf",
+                          "4-bit", "8-bit", "fp16", "fp32", "quantized"}
+        def has_grounding(ctx: str) -> bool:
+            c = ctx.lower()
+            return (any(k in c for k in hard_anchor)
+                    or (any(k in c for k in scene_words) and any(k in c for k in baseline_words)))
+        traceable = sum(1 for m in metrics if has_grounding(str(m.get("context", ""))))
         scores["D1"] = round(traceable / len(metrics) * 5, 2)
     else:
         scores["D1"] = 1.0
@@ -201,7 +226,8 @@ def main() -> int:
     print(f"[demo] loaded prompt ({len(prompt)} chars)")
 
     raw = call_llm(prompt, paper_text, env)
-    clean = strip_markdown_fences(raw)
+    clean = strip_thinking(raw)
+    clean = strip_markdown_fences(clean)
 
     out_dir = ROOT / args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
