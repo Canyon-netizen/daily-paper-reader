@@ -25,6 +25,9 @@ import '../../styles/follow-up-questions.css';
 // 1 KB 以下的视为 404 HTML/空,也不内联。
 const FULLTEXT_INLINE_MAX_BYTES = 200 * 1024;
 
+/** per-build 缓存 (Phase J2):同 build 进程内同 id 只 fs.readFile 一次。 */
+const _fulltextCache = new Map<string, string>();
+
 /**
  * SSR 阶段直接 fs 读 docs/papers/{arxiv}-slug.txt,base64 编码后塞进页面。
  * 客户端 paper-chat.ts::loadFulltextSkeleton 优先用 inline 内容,不走 HTTP。
@@ -39,6 +42,10 @@ const FULLTEXT_INLINE_MAX_BYTES = 200 * 1024;
  *     客户端走 fetch 兜底,保留 f40bc41 的 fetch 链不破。
  */
 async function readFulltextInline(id: string): Promise<string> {
+  // per-build 缓存命中 (Phase J2)
+  if (_fulltextCache.has(id)) {
+    return _fulltextCache.get(id) ?? '';
+  }
   try {
     // docs/papers/ 现在按 arxiv id 的 YYMM 分桶到 <YYYY>/<MM>/ 子目录,
     // id 形如 `papers/2026/06/2606.26155v1-detecting-and...`,直接 join 即可。
@@ -46,10 +53,14 @@ async function readFulltextInline(id: string): Promise<string> {
     const buf = await readFile(txtPath);
     if (buf.byteLength > FULLTEXT_INLINE_MAX_BYTES || buf.byteLength < 1000) {
       // 太大 → 不内联,客户端 fetch;太小 → 视为异常(404 HTML/空),不内联
+      _fulltextCache.set(id, '');
       return '';
     }
-    return buf.toString('base64');
+    const encoded = buf.toString('base64');
+    _fulltextCache.set(id, encoded);
+    return encoded;
   } catch {
+    _fulltextCache.set(id, '');
     return '';
   }
 }

@@ -158,12 +158,17 @@ export interface FigureEntry {
 // lib/paper-frontmatter/,本文件顶部已 import 它们。
 
 export async function readPaper(id: string): Promise<Paper | null> {
+  // per-build 缓存命中(Phase J2):同一 paper id 在同一 build 进程内只读一次盘
+  if (_paperCache.has(id)) {
+    return _paperCache.get(id) ?? null;
+  }
   const disk = await import('./paper-disk.mjs');
   const mdPath = disk.joinPath(disk.DOCS_DIR, `${id}.md`);
   let text: string;
   try {
     text = await disk.readTextFile(mdPath);
   } catch {
+    _paperCache.set(id, null);
     return null;
   }
   const parsed = parseFrontmatter(text);
@@ -193,7 +198,7 @@ export async function readPaper(id: string): Promise<Paper | null> {
   const figures = fmFigures.length > 0
     ? fmFigures
     : (await loadFiguresFromAssetMeta(arxivId)) ?? [];
-  return {
+  const result: Paper = {
     ...parsed.data,
     id,
     slug: id.split('/').pop() || '',
@@ -216,6 +221,9 @@ export async function readPaper(id: string): Promise<Paper | null> {
 // 详情面板 / library 工作台就地展示 wiki,严格优先避免展示「半截翻译」。
 wikiContent: extractWikiArticleStrict(parsed.body) || extractWikiArticle(parsed.body) || undefined,
   };
+  // per-build 缓存写入(Phase J2):同进程再次 readPaper(id) 直接 O(1) 命中
+  _paperCache.set(id, result);
+  return result;
 }
 
 /** 当 frontmatter 没有 `categories.venue` 但 `source` 是会议源时,
@@ -352,6 +360,11 @@ export function flattenCategories(c: Categories | undefined | null): string[] {
  */
 let _fullListCache: PaperListItem[] | null = null;
 let _fullListBase = '/';
+
+/** per-paper cache (Phase J2) — 同 build 进程内每个 paper id 只读盘一次。
+ *  ~700 papers × N IO 调用 → 1 次读盘 + 1 次 gray-matter parse。
+ *  Module 作用域对单次 build 进程有效,无需 invalidate。 */
+const _paperCache = new Map<string, Paper | null>();
 
 export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[]> {
   const base = opts.base || '/';
