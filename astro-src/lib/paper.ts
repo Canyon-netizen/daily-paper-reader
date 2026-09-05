@@ -355,8 +355,9 @@ let _fullListBase = '/';
 
 export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[]> {
   const base = opts.base || '/';
-  // 全列表缓存命中 → 直接派生
-  if (_fullListCache && _fullListBase === base && !opts.pathPrefix && !opts.dedup) {
+  // 全列表缓存命中 → 直接派生(任何 opts 都能命中,因为 cache 存的是
+  // 未过滤未排序未 dedup 的全量 items;dedup/filter/sort 全部在 applyPaperFilters 阶段做)
+  if (_fullListCache && _fullListBase === base && !opts.pathPrefix) {
     return applyPaperFilters(_fullListCache, opts);
   }
   const ids = await listAllPaperIds();
@@ -396,6 +397,12 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       wikiContent: p.wikiContent,
     });
   }
+  // 写入全列表缓存(下次任何 opts 调用都直接派生,O(1) 命中)
+  // pathPrefix 仍然跳过缓存 — 那是另一份 corpus 视角,不该污染全量 cache
+  if (!opts.pathPrefix) {
+    _fullListCache = items;
+    _fullListBase = base;
+  }
   // 过滤+排序+限条 + dedup 全部委托给 paper-filter(纯数据 pipeline)
   return applyPaperFilters(items, {
     tag: opts.tag,
@@ -406,11 +413,6 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
     sortOrder: opts.sortOrder,
     limit: opts.limit,
   });
-  // 写入全列表缓存(无 dedup/pathPrefix 的下次调用 O(1))
-  if (!opts.pathPrefix && !opts.dedup) {
-    _fullListCache = items;
-    _fullListBase = base;
-  }
 }
 
 /** 老格式 paper 的 tag 前缀(`tags: ["query:rl"]` → 主题 key = "rl")。
