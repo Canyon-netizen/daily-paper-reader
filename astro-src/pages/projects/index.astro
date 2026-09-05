@@ -8,11 +8,13 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import '../../styles/projects.css';
 import '../../styles/writing.css';
+import '../../styles/ideas.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
 const PROJECT_TABS = [
   { id: 'papers', label: '📑 论文', icon: 'papers' },
+  { id: 'ideas', label: '💡 Ideas', icon: 'ideas' },
   { id: 'writing', label: '📝 写作', icon: 'writing' },
   { id: 'highlights', label: '🧩 高亮', icon: 'highlights' },
 ] as const;
@@ -149,6 +151,26 @@ const PROJECT_TABS = [
             <button class="button primary" id="draft-new-btn">+ 新建草稿</button>
           </div>
           <div class="writing-drafts-list" id="writing-drafts-list"></div>
+        </div>
+      </div>
+
+      <!-- Ideas tab panel (Phase G idea bank) -->
+      <div
+        class="tab-panel"
+        id="panel-ideas"
+        role="tabpanel"
+        aria-labelledby="tab-ideas"
+        hidden
+      >
+        <div class="ideas-tab-content">
+          <div class="ideas-header">
+            <h3>💡 研究思路</h3>
+            <button class="button primary" id="ideas-generate-btn">🚀 生成思路</button>
+          </div>
+          <p class="ideas-sub">从项目下的论文 + method_debate + (可选) 标定 paper 派生可执行 idea。</p>
+          <div class="ideas-anchor-picker" id="ideas-anchor-picker"></div>
+          <div class="ideas-list" id="ideas-list"></div>
+          <p class="ideas-empty">还没有 idea — 点上方按钮生成。</p>
         </div>
       </div>
 
@@ -307,6 +329,7 @@ const PROJECT_TABS = [
       renderTabs();
       renderPapersTab();
       renderWritingTab();
+      renderIdeasTab();
     }
 
     // Render tabs
@@ -319,6 +342,25 @@ const PROJECT_TABS = [
         });
       });
       switchTab(currentTab);
+    }
+
+    // Render ideas tab (Phase G idea bank)
+    async function renderIdeasTab(): Promise<void> {
+      if (!currentProjectId) return;
+      const list = document.getElementById('ideas-list');
+      const empty = document.querySelector('.ideas-empty') as HTMLElement | null;
+      const anchorPicker = document.getElementById('ideas-anchor-picker');
+      const generateBtn = document.getElementById('ideas-generate-btn');
+      if (!list || !generateBtn) return;
+
+      // 挂 idea-bank UI (idempotent, attachIdeaBankUI 返回 cleanup 函数)
+      const { attachIdeaBankUI } = await import('../scripts/projects-idea-bank');
+      const cleanup = attachIdeaBankUI(
+        document.querySelector('.ideas-tab-content') as HTMLElement,
+        currentProjectId,
+      );
+      // 切换 tab 时 cleanup — 简化: 用 pagehide
+      window.addEventListener('pagehide', () => cleanup(), { once: true });
     }
 
     // Switch tab
