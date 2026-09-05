@@ -124,3 +124,18 @@ export const DPR_COMPARE_SET_CHANGE_LEGACY = 'dpr:compare-set-change';
 export const DPR_READING_DASHBOARD_DIRTY = 'dpr:reading-dashboard-dirty';
 /** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
 export const DPR_READING_DASHBOARD_DIRTY_LEGACY = 'dpr:reading-dashboard-dirty';
+
+/** Idea Bank 状态变化(生成 / 状态变更 / 删除 / 清除)—
+ *  detail: DprIdeaBankChangeDetail { projectId, reason }
+ *
+ *  **单一 emit 源**:只有 astro-src/scripts/projects-idea-bank.ts 会发。
+ *  这是 Project Idea Bank 功能的核心事件,listener 据 reason 决定刷新粒度。
+ *
+ *  reason 取值:
+ *   - 'generate':新想法生成
+ *   - 'status':想法状态变更(star/reject/promote)
+ *   - 'delete':删除单个想法
+ *   - 'purge':清除整个项目的想法 */
+export const DPR_IDEA_BANK_CHANGE = 'dpr:idea-bank-change';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
+export const DPR_IDEA_BANK_CHANGE_LEGACY = 'dpr:idea-bank-change';

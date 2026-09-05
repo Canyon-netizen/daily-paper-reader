@@ -35,6 +35,8 @@ export {
   DPR_COMPARE_SET_CHANGE_LEGACY,
   DPR_READING_DASHBOARD_DIRTY,
   DPR_READING_DASHBOARD_DIRTY_LEGACY,
+  DPR_IDEA_BANK_CHANGE,
+  DPR_IDEA_BANK_CHANGE_LEGACY,
 } from './names';
 
 export type {
@@ -53,6 +55,8 @@ export type {
   DprDraftAutosaveDetail,
   DprCompareSetChangeDetail,
   DprReadingDashboardDirtyDetail,
+  DprIdeaBankChangeDetail,
+  DprIdeaBankChangeReason,
 } from './types';
 
 export {
@@ -78,4 +82,6 @@ export {
   onDprCompareSetChange,
   emitDprReadingDashboardDirty,
   onDprReadingDashboardDirty,
+  emitDprIdeaBankChange,
+  onDprIdeaBankChange,
 } from './bus';

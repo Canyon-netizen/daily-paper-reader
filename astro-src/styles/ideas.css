@@ -1,0 +1,228 @@
+/* astro-src/styles/ideas.css
+ *
+ * Idea Bank styles for project workspace.
+ * Uses existing CSS variables from global.css.
+ * Theme-aware with :global() escapes for Astro scoped CSS.
+ */
+
+/* Main container */
+.idea-bank {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--bg-base);
+  border-radius: var(--radius-md);
+}
+
+/* Header */
+.idea-bank-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.idea-bank-header h3 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.idea-count {
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+}
+
+/* Anchor picker */
+.idea-anchor-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.idea-anchor-picker label {
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+}
+
+.idea-anchor-picker .anchor-select {
+  flex: 1;
+  max-width: 300px;
+  padding: var(--space-2);
+  background: var(--bg-input);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-default);
+  font-size: 0.875rem;
+}
+
+/* Prompt section */
+.idea-bank-prompt {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-4) 0;
+}
+
+.idea-bank-prompt .generate-btn {
+  padding: var(--space-3) var(--space-6);
+  background: var(--accent-bg-active);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.idea-bank-prompt .generate-btn:hover:not(:disabled) {
+  background: var(--accent-bg-hover);
+  transform: translateY(-1px);
+}
+
+.idea-bank-prompt .generate-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Idea list */
+.idea-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Idea card */
+.idea-card {
+  padding: var(--space-4);
+  background: var(--bg-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.idea-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Card status variants */
+.idea-card--starred {
+  border-left: 3px solid var(--color-star);
+  background: linear-gradient(90deg, var(--color-star-bg) 0%, var(--bg-raised) 20%);
+}
+
+.idea-card--rejected {
+  border-left: 3px solid var(--color-reject);
+  opacity: 0.7;
+}
+
+.idea-card--promoted {
+  border-left: 3px solid var(--color-promote);
+  background: linear-gradient(90deg, var(--color-promote-bg) 0%, var(--bg-raised) 20%);
+}
+
+/* Card header */
+.idea-card-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.idea-status-icon {
+  font-size: 1rem;
+}
+
+.idea-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg-default);
+}
+
+/* Card body */
+.idea-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.idea-card-body p {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--fg-default);
+}
+
+.idea-card-body strong {
+  color: var(--fg-strong);
+}
+
+/* Meta info */
+.idea-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+
+.idea-meta span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Card actions */
+.idea-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.idea-card-actions button {
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.idea-card-actions button:hover {
+  background: var(--bg-subtle);
+  color: var(--fg-default);
+}
+
+.idea-card-actions .btn-star:hover {
+  color: var(--color-star);
+  border-color: var(--color-star);
+}
+
+.idea-card-actions .btn-reject:hover {
+  color: var(--color-reject);
+  border-color: var(--color-reject);
+}
+
+.idea-card-actions .btn-promote:hover {
+  color: var(--color-promote);
+  border-color: var(--color-promote);
+}
+
+.idea-card-actions .btn-delete:hover {
+  color: var(--fg-danger);
+  border-color: var(--fg-danger);
+}

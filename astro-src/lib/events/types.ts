@@ -127,3 +127,18 @@ export interface DprReadingDashboardDirtyDetail {
   /** 触发来源标识。 */
   source: 'stage' | 'draft' | 'compare';
 }
+
+/** Idea Bank 变化的原因标签。 */
+export type DprIdeaBankChangeReason =
+  | 'generate'
+  | 'status'
+  | 'delete'
+  | 'promote'
+  | 'purge';
+
+export interface DprIdeaBankChangeDetail {
+  /** 所属的项目 id。 */
+  projectId: string;
+  /** 触发原因。 */
+  reason: DprIdeaBankChangeReason;
+}

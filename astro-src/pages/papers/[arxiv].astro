@@ -16,6 +16,7 @@ import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
 import '../../styles/papers.css';
 import '../../styles/method-debate.css';
+import '../../styles/paper-deep-extract.css';
 import '../../styles/follow-up-questions.css';
 
 // 全文 inline 上限。超过这个大小(原始 utf-8 字节计)就不内联,让客户端走 fetch /papers/{id}.txt。
@@ -350,6 +351,132 @@ const tabTitle = plainZh || plainEn || id;
             </div>
           </details>
 
+          {/* 深度抽取:指标/数据集/算力需求/局限性/可复现性评分。
+              优先用 frontmatter 字段,若无则从 localStorage 兜底,若都无则展示空状态+生成按钮。 */}
+          <details id="deep-extract-section" class="deep-extract-section-wrapper">
+            <summary>🔬 深度抽取</summary>
+            <div class="deep-extract-content">
+              {(() => {
+                const hasDeepExtract = paper.deep_extract && (
+                  (paper.deep_extract.reported_metrics && paper.deep_extract.reported_metrics.length > 0) ||
+                  (paper.deep_extract.datasets && paper.deep_extract.datasets.length > 0) ||
+                  (paper.deep_extract.compute_requirements && Object.keys(paper.deep_extract.compute_requirements).length > 0) ||
+                  (paper.deep_extract.limitations && paper.deep_extract.limitations.length > 0) ||
+                  paper.deep_extract.replicability_score
+                );
+                if (!hasDeepExtract) {
+                  return (
+                    <div class="deep-extract-empty">
+                      <p>深度抽取提供:指标/数据集/算力需求/局限性/可复现性评分</p>
+                      <button
+                        type="button"
+                        class="deep-extract-generate-btn"
+                        data-action="generate-deep-extract"
+                        data-arxiv={paper.canonicalArxivId || paper.arxivId || ''}
+                        data-title={paper.title || ''}
+                        data-abstract={paper.abstract || ''}
+                      >🔬 深度抽取 (5 项)</button>
+                    </div>
+                  );
+                }
+                const de = paper.deep_extract!;
+                return (
+                  <>
+                    {de.reported_metrics && de.reported_metrics.length > 0 && (
+                      <div class="deep-extract-section">
+                        <h4 class="deep-extract-section-title">📊 报告指标</h4>
+                        <div class="deep-extract-metrics-grid">
+                          {de.reported_metrics.map((m, i) => (
+                            <div class="deep-extract-metric" key={`metric-${i}`}>
+                              <div class="deep-extract-metric-name">{m.name}</div>
+                              <div class="deep-extract-metric-value">{m.value}</div>
+                              {m.context && <div class="deep-extract-metric-context">{m.context}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {de.datasets && de.datasets.length > 0 && (
+                      <div class="deep-extract-section">
+                        <h4 class="deep-extract-section-title">📁 数据集</h4>
+                        <div class="deep-extract-datasets-list">
+                          {de.datasets.map((d, i) => (
+                            <div class="deep-extract-dataset" key={`dataset-${i}`}>
+                              <span class="deep-extract-dataset-name">{d.name}</span>
+                              <span class="deep-extract-dataset-role">{d.role}</span>
+                              {d.size && <span class="deep-extract-dataset-size">{d.size}</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {de.compute_requirements && Object.keys(de.compute_requirements).length > 0 && (
+                      <div class="deep-extract-section">
+                        <h4 class="deep-extract-section-title">🖥️ 算力需求</h4>
+                        <div class="deep-extract-compute-grid">
+                          {de.compute_requirements.params && (
+                            <div class="deep-extract-compute-item">
+                              <span class="deep-extract-compute-label">参数量</span>
+                              <span class="deep-extract-compute-value">{de.compute_requirements.params}</span>
+                            </div>
+                          )}
+                          {de.compute_requirements.gpu_hours && (
+                            <div class="deep-extract-compute-item">
+                              <span class="deep-extract-compute-label">GPU小时</span>
+                              <span class="deep-extract-compute-value">{de.compute_requirements.gpu_hours}</span>
+                            </div>
+                          )}
+                          {de.compute_requirements.model_size && (
+                            <div class="deep-extract-compute-item">
+                              <span class="deep-extract-compute-label">模型大小</span>
+                              <span class="deep-extract-compute-value">{de.compute_requirements.model_size}</span>
+                            </div>
+                          )}
+                          {de.compute_requirements.flops && (
+                            <div class="deep-extract-compute-item">
+                              <span class="deep-extract-compute-label">FLOPs</span>
+                              <span class="deep-extract-compute-value">{de.compute_requirements.flops}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {de.limitations && de.limitations.length > 0 && (
+                      <div class="deep-extract-section">
+                        <h4 class="deep-extract-section-title">⚠️ 局限性</h4>
+                        <ul class="deep-extract-limitations-list">
+                          {de.limitations.map((l, i) => (
+                            <li class="deep-extract-limitation" key={`limitation-${i}`}>{l}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {de.replicability_score && (
+                      <div class="deep-extract-section">
+                        <h4 class="deep-extract-section-title">🔄 可复现性评分</h4>
+                        <div class="deep-extract-replicability">
+                          <div class="deep-extract-replicability-score">
+                            {'★'.repeat(de.replicability_score)}{'☆'.repeat(5 - de.replicability_score)}
+                            <span class="deep-extract-replicability-value">{de.replicability_score}/5</span>
+                          </div>
+                          {de.replicability_reason && <div class="deep-extract-replicability-reason">{de.replicability_reason}</div>}
+                        </div>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      class="deep-extract-regen-btn"
+                      data-action="regen-deep-extract"
+                      data-arxiv={paper.canonicalArxivId || paper.arxivId || ''}
+                      data-title={paper.title || ''}
+                      data-abstract={paper.abstract || ''}
+                    >🔄 重新生成</button>
+                  </>
+                );
+              })()}
+            </div>
+          </details>
+
           {paper.body && (
             <section class="paper-body">
               <div class="container">
@@ -662,6 +789,193 @@ const tabTitle = plainZh || plainEn || id;
         return `<div class="method-debate-cards">${cardsHtml}</div>${comparisonHtml}<button type="button" class="method-debate-regen-btn" data-action="regen-method-debate" data-arxiv="${arxivId}">🔄 重新生成</button>`;
       }
 
+      // 深度抽取:storage key
+      const DEEP_EXTRACT_KEY_PREFIX = 'dpr_deep_extract_';
+
+      function getStoredDeepExtract(arxivId: string): {
+        reportedMetrics: Array<{ name: string; value: string; context?: string }>;
+        datasets: Array<{ name: string; role: string; size?: string }>;
+        computeRequirements: { params?: string; gpuHours?: string; modelSize?: string; flops?: string };
+        limitations: string[];
+        replicabilityScore: number;
+        replicabilityReason: string;
+      } | null {
+        try {
+          const raw = localStorage.getItem(DEEP_EXTRACT_KEY_PREFIX + arxivId);
+          if (!raw) return null;
+          const data = JSON.parse(raw);
+          return data && data.replicabilityScore ? data : null;
+        } catch { return null; }
+      }
+
+      function saveDeepExtract(arxivId: string, data: {
+        reportedMetrics: Array<{ name: string; value: string; context?: string }>;
+        datasets: Array<{ name: string; role: string; size?: string }>;
+        computeRequirements: { params?: string; gpuHours?: string; modelSize?: string; flops?: string };
+        limitations: string[];
+        replicabilityScore: number;
+        replicabilityReason: string;
+      }): void {
+        try {
+          localStorage.setItem(DEEP_EXTRACT_KEY_PREFIX + arxivId, JSON.stringify(data));
+        } catch { /* ignore */ }
+      }
+
+      async function generateDeepExtract(
+        arxivId: string,
+        paperTitle: string,
+        paperAbstract: string,
+        paperText?: string
+      ): Promise<{
+        reportedMetrics: Array<{ name: string; value: string; context?: string }>;
+        datasets: Array<{ name: string; role: string; size?: string }>;
+        computeRequirements: { params?: string; gpuHours?: string; modelSize?: string; flops?: string };
+        limitations: string[];
+        replicabilityScore: number;
+        replicabilityReason: string;
+      }> {
+        const cfg = loadLLMConfig();
+        if (!cfg) throw new Error('请先在设置页填写 API Key');
+
+        const systemPrompt = `你是论文深度分析助手。请从论文中提取以下 5 个维度的结构化信息：
+
+1. reported_metrics: 论文报告的具体数值指标（如 BLEU-4: 32.4）
+2. datasets: 使用的数据集/基准（如 ImageNet-1k）
+3. compute_requirements: 训练算力需求（参数量、GPU 小时、模型大小等）
+4. limitations: 论文局限性（作者承认的 + LLM 推断的）
+5. replicability_score: 1-5 分可复现性评分 + 理由
+
+论文标题: ${paperTitle}
+论文摘要: ${paperAbstract}
+${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : ''}
+
+请返回严格 JSON 格式：
+{
+  "reported_metrics": [{"name": "指标", "value": "数值", "context": "环境"}],
+  "datasets": [{"name": "数据集", "role": "训练/评估/两者", "size": "规模"}],
+  "compute_requirements": {"params": "7B", "gpu_hours": "1000", "model_size": "14GB", "flops": "1e22"},
+  "limitations": ["局限1", "局限2"],
+  "replicability_score": 3,
+  "replicability_reason": "理由"
+}
+
+如果某信息未在论文中提及，不要编造，直接省略该字段。`;
+
+        const response = await fetch(`${cfg.baseUrl.replace(/\/+$/, '')}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${cfg.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: cfg.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: '请分析这篇论文并返回 JSON' },
+            ],
+            temperature: 0.3,
+            max_tokens: 4000,
+          }),
+        });
+
+        if (!response.ok) {
+          const err = await response.text().catch(() => '');
+          throw new Error(`LLM 调用失败 (${response.status}): ${err.slice(0, 100)}`);
+        }
+
+        const data = await response.json();
+        const content = data?.choices?.[0]?.message?.content || '';
+
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error('LLM 返回格式错误,无法解析 JSON');
+
+        const parsed = JSON.parse(jsonMatch[0]);
+
+        return {
+          reportedMetrics: parsed.reported_metrics || [],
+          datasets: parsed.datasets || [],
+          computeRequirements: {
+            params: parsed.compute_requirements?.params,
+            gpuHours: parsed.compute_requirements?.gpu_hours,
+            modelSize: parsed.compute_requirements?.model_size,
+            flops: parsed.compute_requirements?.flops,
+          },
+          limitations: parsed.limitations || [],
+          replicabilityScore: parsed.replicability_score || 3,
+          replicabilityReason: parsed.replicability_reason || '',
+        };
+      }
+
+      function renderDeepExtract(data: {
+        reportedMetrics: Array<{ name: string; value: string; context?: string }>;
+        datasets: Array<{ name: string; role: string; size?: string }>;
+        computeRequirements: { params?: string; gpuHours?: string; modelSize?: string; flops?: string };
+        limitations: string[];
+        replicabilityScore: number;
+        replicabilityReason: string;
+      }): string {
+        let html = '';
+
+        // Metrics
+        if (data.reportedMetrics && data.reportedMetrics.length > 0) {
+          html += '<div class="deep-extract-section"><h4 class="deep-extract-section-title">📊 报告指标</h4>';
+          html += '<div class="deep-extract-metrics-grid">';
+          for (const m of data.reportedMetrics) {
+            html += `<div class="deep-extract-metric">
+              <div class="deep-extract-metric-name">${m.name}</div>
+              <div class="deep-extract-metric-value">${m.value}</div>
+              ${m.context ? `<div class="deep-extract-metric-context">${m.context}</div>` : ''}
+            </div>`;
+          }
+          html += '</div></div>';
+        }
+
+        // Datasets
+        if (data.datasets && data.datasets.length > 0) {
+          html += '<div class="deep-extract-section"><h4 class="deep-extract-section-title">📁 数据集</h4>';
+          html += '<div class="deep-extract-datasets-list">';
+          for (const d of data.datasets) {
+            html += `<div class="deep-extract-dataset">
+              <span class="deep-extract-dataset-name">${d.name}</span>
+              <span class="deep-extract-dataset-role">${d.role}</span>
+              ${d.size ? `<span class="deep-extract-dataset-size">${d.size}</span>` : ''}
+            </div>`;
+          }
+          html += '</div></div>';
+        }
+
+        // Compute requirements
+        if (data.computeRequirements && Object.keys(data.computeRequirements).length > 0) {
+          html += '<div class="deep-extract-section"><h4 class="deep-extract-section-title">🖥️ 算力需求</h4>';
+          html += '<div class="deep-extract-compute-grid">';
+          const cr = data.computeRequirements;
+          if (cr.params) html += `<div class="deep-extract-compute-item"><span class="deep-extract-compute-label">参数量</span><span class="deep-extract-compute-value">${cr.params}</span></div>`;
+          if (cr.gpuHours) html += `<div class="deep-extract-compute-item"><span class="deep-extract-compute-label">GPU小时</span><span class="deep-extract-compute-value">${cr.gpuHours}</span></div>`;
+          if (cr.modelSize) html += `<div class="deep-extract-compute-item"><span class="deep-extract-compute-label">模型大小</span><span class="deep-extract-compute-value">${cr.modelSize}</span></div>`;
+          if (cr.flops) html += `<div class="deep-extract-compute-item"><span class="deep-extract-compute-label">FLOPs</span><span class="deep-extract-compute-value">${cr.flops}</span></div>`;
+          html += '</div></div>';
+        }
+
+        // Limitations
+        if (data.limitations && data.limitations.length > 0) {
+          html += '<div class="deep-extract-section"><h4 class="deep-extract-section-title">⚠️ 局限性</h4>';
+          html += '<ul class="deep-extract-limitations-list">';
+          for (const l of data.limitations) {
+            html += `<li class="deep-extract-limitation">${l}</li>`;
+          }
+          html += '</ul></div>';
+        }
+
+        // Replicability score
+        html += '<div class="deep-extract-section"><h4 class="deep-extract-section-title">🔄 可复现性评分</h4>';
+        html += `<div class="deep-extract-replicability">
+          <div class="deep-extract-replicability-score">${'★'.repeat(data.replicabilityScore)}${'☆'.repeat(5 - data.replicabilityScore)} <span class="deep-extract-replicability-value">${data.replicabilityScore}/5</span></div>
+          <div class="deep-extract-replicability-reason">${data.replicabilityReason}</div>
+        </div></div>`;
+
+        return html;
+      }
+
       // 显示 toast (复用 toast.ts 的逻辑)
       function showToast(msg: string, level: 'info' | 'success' | 'error' = 'info'): void {
         const toast = document.createElement('div');
@@ -707,6 +1021,52 @@ const tabTitle = plainZh || plainEn || id;
           content.innerHTML = renderCards(result.prosCons, result.comparison);
 
           showToast('已重新生成', 'success');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : '生成失败';
+          showToast(`生成失败 — ${msg}`, 'error');
+        } finally {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      });
+
+      // 深度抽取按钮点击处理
+      document.addEventListener('click', async (e) => {
+        const btn = (e.target as HTMLElement).closest('[data-action="generate-deep-extract"], [data-action="regen-deep-extract"]') as HTMLButtonElement;
+        if (!btn) return;
+
+        const arxivId = btn.dataset.arxiv;
+        const paperTitle = btn.dataset.title || '';
+        const paperAbstract = btn.dataset.abstract || '';
+        if (!arxivId) return;
+
+        const section = document.getElementById('deep-extract-section');
+        const content = section?.querySelector('.deep-extract-content') as HTMLElement;
+        if (!content) return;
+
+        // 禁用按钮,显示加载状态
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = '生成中...';
+
+        try {
+          // 从 localStorage 读取论文正文
+          let paperText = '';
+          const textKey = `dpr_paper_text_${arxivId}`;
+          const storedText = localStorage.getItem(textKey);
+          if (storedText) {
+            paperText = storedText;
+          }
+
+          const result = await generateDeepExtract(arxivId, paperTitle, paperAbstract, paperText || undefined);
+
+          // 保存到 localStorage
+          saveDeepExtract(arxivId, result);
+
+          // 渲染卡片
+          content.innerHTML = renderDeepExtract(result) + `<button type="button" class="deep-extract-regen-btn" data-action="regen-deep-extract" data-arxiv="${arxivId}" data-title="${paperTitle}" data-abstract="${paperAbstract}">🔄 重新生成</button>`;
+
+          showToast('深度抽取完成', 'success');
         } catch (err) {
           const msg = err instanceof Error ? err.message : '生成失败';
           showToast(`生成失败 — ${msg}`, 'error');

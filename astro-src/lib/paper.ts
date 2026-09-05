@@ -107,6 +107,17 @@ export interface PaperFrontmatter {
   method_debate_model?: string;
   /** 深入追问:3-5 个引导性问题,帮助读者深入探索这篇论文。 */
   follow_up_questions?: string[];
+  /** 深度抽取:指标/数据集/算力需求/局限性/可复现性评分。由 paper.deep_extract LLM 生成。 */
+  deep_extract?: {
+    reported_metrics: Array<{ name: string; value: string; context?: string }>;
+    datasets: Array<{ name: string; role: string; size?: string }>;
+    compute_requirements: { params?: string; gpu_hours?: string; model_size?: string; flops?: string };
+    limitations: string[];
+    replicability_score: number;
+    replicability_reason: string;
+    deep_extract_model?: string;
+    deep_extract_generated_at?: string;
+  };
   [key: string]: unknown;
 }
 

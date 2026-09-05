@@ -5,4 +5,5 @@
 export * from './activity';
 export * from './compare';
 export * from './draft-store';
+export * from './ideas';
 export * from './recommend';

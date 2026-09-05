@@ -41,6 +41,8 @@ import {
   DPR_COMPARE_SET_CHANGE_LEGACY,
   DPR_READING_DASHBOARD_DIRTY,
   DPR_READING_DASHBOARD_DIRTY_LEGACY,
+  DPR_IDEA_BANK_CHANGE,
+  DPR_IDEA_BANK_CHANGE_LEGACY,
 } from './names';
 import type {
   DprThemeChangeDetail,
@@ -53,6 +55,7 @@ import type {
   DprDraftAutosaveDetail,
   DprCompareSetChangeDetail,
   DprReadingDashboardDirtyDetail,
+  DprIdeaBankChangeDetail,
 } from './types';
 
 /** 通用 emit helper。target 默认 document。
@@ -324,4 +327,29 @@ export function onDprReadingDashboardDirty(
   handler: (detail: DprReadingDashboardDirtyDetail) => void,
 ): () => void {
   return on(target, DPR_READING_DASHBOARD_DIRTY, handler);
+}
+
+// ---------------------------------------------------------------------------
+// dpr:idea-bank-change (legacy alias: dpr:idea-bank-change)
+//
+// 唯一合法 emit 方是 astro-src/scripts/projects-idea-bank.ts。
+// 其它模块只应该 on(...) 订阅。
+// ---------------------------------------------------------------------------
+export function emitDprIdeaBankChange(
+  target: EventTarget = document,
+  detail: DprIdeaBankChangeDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_IDEA_BANK_CHANGE,
+    detail,
+    DPR_IDEA_BANK_CHANGE_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprIdeaBankChange(
+  target: EventTarget = document,
+  handler: (detail: DprIdeaBankChangeDetail) => void,
+): () => void {
+  return on(target, DPR_IDEA_BANK_CHANGE, handler);
 }
