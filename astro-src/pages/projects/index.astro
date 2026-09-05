@@ -354,7 +354,10 @@ const PROJECT_TABS = [
       if (!list || !generateBtn) return;
 
       // 挂 idea-bank UI (idempotent, attachIdeaBankUI 返回 cleanup 函数)
-      const { attachIdeaBankUI } = await import('../scripts/projects-idea-bank');
+      // 动态 import 避免 SSR 编译含 window/document 的文件
+      const { attachIdeaBankUI } = await import(
+        /* @vite-ignore */ '../../scripts/projects-idea-bank'
+      );
       const cleanup = attachIdeaBankUI(
         document.querySelector('.ideas-tab-content') as HTMLElement,
         currentProjectId,
