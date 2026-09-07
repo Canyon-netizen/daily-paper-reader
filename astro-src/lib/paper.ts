@@ -18,6 +18,11 @@
 
 import { buildCategories, type Categories } from './taxonomies';
 import type { ConceptRef } from './types/concept';
+import type { ResourceTier, DataScale } from './types/resource-tier';
+import {
+  inferResourceTier,
+  inferDataScale,
+} from './types/resource-tier';
 import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
 import { applyPaperFilters } from './paper-filter';
@@ -141,6 +146,12 @@ export interface Paper extends PaperFrontmatter {
    *  讨论与可借鉴点)。由 translate_polaris.py 写入 .md 之后,parseFrontmatter
    *  + extractWikiArticle 抽出来。workbench 右侧详情面板就地展示。 */
   wikiContent?: string;
+  // 派生字段:基于 deep_extract.compute_requirements 推断的算力档位(目标 4)。
+  // 仅在内存中计算,不写 frontmatter(backfill 单独脚本负责 SSG / 列表筛选场景)。
+  // 'unknown' = 字段缺失或推断失败。
+  resourceTier?: ResourceTier;
+  // 派生字段:基于 deep_extract.datasets / 文本推断的数据规模。
+  dataScale?: DataScale;
 }
 
 export interface FigureEntry {
@@ -198,6 +209,11 @@ export async function readPaper(id: string): Promise<Paper | null> {
   const figures = fmFigures.length > 0
     ? fmFigures
     : (await loadFiguresFromAssetMeta(arxivId)) ?? [];
+  // 派生算力档位 / 数据规模(目标 4):纯函数推断 deep_extract.compute_requirements
+  // + limitations + datasets。SSR 期间每篇论文都会跑一次,纯函数无副作用、可缓存。
+  const deepExtract = parsed.data.deep_extract;
+  const resourceTier: ResourceTier = inferResourceTier(deepExtract);
+  const dataScale: DataScale = inferDataScale(deepExtract);
   const result: Paper = {
     ...parsed.data,
     id,
@@ -216,6 +232,9 @@ export async function readPaper(id: string): Promise<Paper | null> {
     isBroken: false,
     figures,
     tables: parseFigureList(parsed.data.tables_json),
+    // 派生字段(目标 4)
+    resourceTier,
+    dataScale,
     // Polaris 5 节中文解读(translate_polaris.py 写入),undefined = 旧论文没编译过。
 // 优先用 strict 版(5 节齐全才显示),退到老 4 节 / 不完整版本 —— workbench
 // 详情面板 / library 工作台就地展示 wiki,严格优先避免展示「半截翻译」。
