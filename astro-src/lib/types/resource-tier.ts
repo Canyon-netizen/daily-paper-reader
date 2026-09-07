@@ -154,6 +154,7 @@ export function parseFlopsCount(s: string | undefined | null): number | null {
 
 /**
  * 从 deep_extract.compute_requirements 推断算力档位。
+ * 兼容旧调用(只传 deep)+ 新调用(传 deep + 文本信号兜底)。
  *
  * 决策树(优先级从高到低):
  *   1. 文本含 'TPU v4/v5/pod' 或 flops >= 1e24  → tpu_pod
@@ -164,17 +165,26 @@ export function parseFlopsCount(s: string | undefined | null): number | null {
  *      或 gpu_hours 空 + replicability_score >= 4 → api_only
  *   6. 其它 → unknown
  *
+ * textSignals 是兜底文本源:当 deep_extract 缺失时,扫论文 tldr / motivation /
+ * method / result / conclusion / context 拼接的字符串(也用于 backfill 给存量论文
+ * 写回 resource_tier 时没有 deep_extract 的情况)。
+ *
  * SYNC WITH: scripts/backfill/_resource_tier_rules.py:infer_resource_tier
  */
-export function inferResourceTier(deep: DeepExtract | undefined | null): ResourceTier {
-  if (!deep) return 'unknown';
-  const req = deep.compute_requirements || {};
-  const limitations = (deep.limitations || []).join(' ').toLowerCase();
-  const allText = `${req.params ?? ''} ${req.gpu_hours ?? ''} ${req.model_size ?? ''} ${req.flops ?? ''} ${limitations}`.toLowerCase();
+export function inferResourceTier(
+  deep: DeepExtract | undefined | null,
+  textSignals?: string,
+): ResourceTier {
+  const req = deep?.compute_requirements || {};
+  const limitations = (deep?.limitations || []).join(' ');
+  const structuredText = `${req.params ?? ''} ${req.gpu_hours ?? ''} ${req.model_size ?? ''} ${req.flops ?? ''} ${limitations}`.toLowerCase();
+  // 拼接文本信号(tldr / method 等),作为兜底
+  const fallbackText = (textSignals ?? '').toLowerCase();
+  const allText = `${structuredText} ${fallbackText}`;
 
-  const params = parseParamsCount(req.params);
-  const gpuHours = parseCount(req.gpu_hours);
-  const flops = parseFlopsCount(req.flops);
+  const params = parseParamsCount(req.params) ?? parseParamsCountFromText(fallbackText);
+  const gpuHours = parseCount(req.gpu_hours) ?? parseCountFromText(fallbackText);
+  const flops = parseFlopsCount(req.flops) ?? parseFlopsCountFromText(fallbackText);
 
   // 1. TPU pod
   if (/tpu\s*v[45]|tpu\s*pod/.test(allText) || (flops !== null && flops >= 1e24)) {
@@ -199,11 +209,50 @@ export function inferResourceTier(deep: DeepExtract | undefined | null): Resourc
   // 5. api_only
   const apiSignals = /\b(api|inference|zero-?shot|few-?shot|prompt|gpt-?4|claude|gemini|llm-?as-?a-?service)\b/i.test(allText);
   if (apiSignals) return 'api_only';
-  if (gpuHours === null && deep.replicability_score !== undefined && deep.replicability_score >= 4) {
+  if (gpuHours === null && deep?.replicability_score !== undefined && deep.replicability_score >= 4) {
     return 'api_only';
   }
 
   return 'unknown';
+}
+
+/** 从兜底文本中提 params 信号,如 "7B parameters" / "trained a 340M model"。 */
+function parseParamsCountFromText(text: string): number | null {
+  if (!text) return null;
+  // 优先匹配带"params/parameters/model"上下文的数字
+  const m = text.match(/(\d+(?:\.\d+)?)\s*([bBmMkK]?)\s*(?:params?|parameters?|model)/);
+  if (m) {
+    const base = parseFloat(m[1]);
+    const suffix = m[2].toLowerCase();
+    if (suffix === 'k') return base * 1e3;
+    if (suffix === 'm') return base * 1e6;
+    if (suffix === 'b') return base * 1e9;
+    return base * 1e6;
+  }
+  return null;
+}
+
+/** 从兜底文本中提 gpu_hours 信号,如 "trained for 200 GPU hours"。 */
+function parseCountFromText(text: string): number | null {
+  if (!text) return null;
+  const m = text.match(/(\d+(?:\.\d+)?)\s*([kKmMbB]?)\s*(?:gpu|hours|h)/);
+  if (m) {
+    const base = parseFloat(m[1]);
+    const suffix = m[2].toLowerCase();
+    if (suffix === 'k') return base * 1e3;
+    if (suffix === 'm') return base * 1e6;
+    if (suffix === 'b') return base * 1e9;
+    return base;
+  }
+  return null;
+}
+
+/** 从兜底文本中提 flops 信号,如 "1.5e23 FLOPs"。 */
+function parseFlopsCountFromText(text: string): number | null {
+  if (!text) return null;
+  const em = text.match(/(\d+(?:\.\d+)?)\s*e\s*\+?(\d+)/);
+  if (em) return parseFloat(em[1]) * Math.pow(10, parseInt(em[2], 10));
+  return null;
 }
 
 /**
@@ -216,37 +265,32 @@ export function inferResourceTier(deep: DeepExtract | undefined | null): Resourc
  *   - '<10k' / 'few thousand' → small
  *   - 其它 → unknown
  *
+ * textSignals 兜底文本(同 inferResourceTier)。
+ *
  * SYNC WITH: scripts/backfill/_resource_tier_rules.py:infer_data_scale
  */
-export function inferDataScale(deep: DeepExtract | undefined | null): DataScale {
-  if (!deep) return 'unknown';
-  const datasets = deep.datasets || [];
-  const allText = datasets
+export function inferDataScale(
+  deep: DeepExtract | undefined | null,
+  textSignals?: string,
+): DataScale {
+  const datasets = deep?.datasets || [];
+  const datasetText = datasets
     .map((d) => `${d.name ?? ''} ${d.size ?? ''}`)
-    .join(' ')
-    .toLowerCase();
+    .join(' ');
+  const allText = `${datasetText} ${textSignals ?? ''}`.toLowerCase().trim();
+  if (allText === '') return 'unknown';
 
-  if (allText === '' || allText.trim() === '') return 'unknown';
-
-  // web_scale
   if (/web[- ]scale|internet[- ]scale|common\s*crawl|laion|billion\s*images?|trillion/.test(allText)) {
     return 'web_scale';
   }
-
-  // large
   if (/[>＞]\s*1m|\bmillion\b|\b\d+\s*m\+|1m\+|100k\+|10m\+/.test(allText)) {
     return 'large';
   }
-
-  // medium
   if (/10k|thousand|\bk\b(?!ilo)|\d+\s*k\b/.test(allText)) {
     return 'medium';
   }
-
-  // small
   if (/[<＜]\s*10k|few\s*thousand|hundred|\d{1,3}\s*sample/.test(allText)) {
     return 'small';
   }
-
   return 'unknown';
 }
