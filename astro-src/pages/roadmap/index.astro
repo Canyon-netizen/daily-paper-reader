@@ -1,0 +1,160 @@
+---
+// astro-src/pages/roadmap/index.astro
+//
+// Research roadmap timeline view - lists all roadmaps and provides detail view.
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { listRoadmaps, getRoadmap, getAllRoadmapIds } from '../../lib/roadmap';
+import '../../styles/roadmap.css';
+
+export function getStaticPaths() {
+  const ids = getAllRoadmapIds();
+  return ids.map((id) => ({ params: { id }, props: { id } }));
+}
+
+const { id } = Astro.props;
+const roadmap = id ? getRoadmap(id) : null;
+const summaries = listRoadmaps();
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout
+  title={roadmap ? `${roadmap.titleZh || roadmap.title} · 研究路线图` : "研究路线图 · Daily Paper Reader"}
+  description={roadmap?.descriptionZh || roadmap?.description || "长期研究目标时间线"}
+>
+  <Navbar />
+
+  <main class="roadmap-page">
+    {!roadmap && (
+      <header class="roadmap-hero">
+        <h1>研究路线图</h1>
+        <p class="lead">
+          长期研究目标时间线。按季度拆解目标,追踪进度与关联想法/实验。
+        </p>
+      </header>
+    )}
+
+    {!roadmap && summaries.length > 0 && (
+      <div class="roadmap-list">
+        {summaries.map((s) => (
+          <a class="roadmap-card" href={base + '/roadmap/' + s.id + '/'}>
+            <div class="roadmap-card-header">
+              <span class="roadmap-type-badge" data-type={s.type}>
+                {s.type === 'phd' ? 'PhD' : s.type === 'industry' ? '工业' : '个人'}
+              </span>
+              <span class="roadmap-owner">{s.owner}</span>
+            </div>
+            <h2 class="roadmap-card-title">{s.titleZh || s.title}</h2>
+            <p class="roadmap-card-desc">{s.descriptionZh || s.description}</p>
+            <div class="roadmap-card-meta">
+              <span class="roadmap-dates">
+                {s.startDate} ~ {s.endDate}
+              </span>
+              <span class="roadmap-progress">
+                {s.completedGoals}/{s.totalGoals} 已完成
+              </span>
+            </div>
+            <div class="roadmap-progress-bar">
+              <div
+                class="roadmap-progress-fill"
+                style={"width: " + (s.totalGoals > 0 ? (s.completedGoals / s.totalGoals * 100) : 0) + "%"}
+              ></div>
+            </div>
+          </a>
+        ))}
+      </div>
+    )}
+
+    {!roadmap && summaries.length === 0 && (
+      <div class="roadmap-empty">
+        <div class="roadmap-empty-icon">🗺️</div>
+        <h3>暂无研究路线图</h3>
+        <p>在 <code>docs/roadmap/</code> 目录下创建 Markdown 文件来添加路线图。</p>
+      </div>
+    )}
+
+    {roadmap && (
+      <div class="roadmap-detail">
+        <header class="roadmap-detail-header">
+          <a href={base + '/roadmap/'} class="roadmap-back-link">← 所有路线图</a>
+          <div class="roadmap-detail-title-row">
+            <h1>{roadmap.titleZh || roadmap.title}</h1>
+            <span class="roadmap-type-badge" data-type={roadmap.type}>
+              {roadmap.type === 'phd' ? 'PhD' : roadmap.type === 'industry' ? '工业' : '个人'}
+            </span>
+          </div>
+          <p class="roadmap-detail-desc">{roadmap.descriptionZh || roadmap.description}</p>
+          <div class="roadmap-detail-meta">
+            <span>负责人: {roadmap.owner}</span>
+            <span>周期: {roadmap.startDate} ~ {roadmap.endDate}</span>
+            {roadmap.tags.length > 0 && (
+              <span>标签: {roadmap.tags.join(', ')}</span>
+            )}
+          </div>
+        </header>
+
+        <div class="roadmap-timeline">
+          {roadmap.quarters.map((q, qIdx) => (
+            <section class="roadmap-quarter" data-quarter={q.id}>
+              <header class="roadmap-quarter-header">
+                <span class="roadmap-quarter-label">{q.id}</span>
+                <h2 class="roadmap-quarter-title">{q.titleZh || q.title}</h2>
+              </header>
+              <div class="roadmap-goals">
+                {q.goals.map((g) => (
+                  <div class="roadmap-goal" data-status={g.status} data-priority={g.priority}>
+                    <div class="roadmap-goal-header">
+                      <span class="roadmap-goal-id">G{g.id}</span>
+                      <span class="roadmap-goal-status" data-status={g.status}>
+                        {g.status === 'completed' ? '✓' : g.status === 'in-progress' ? '◐' : '○'}
+                      </span>
+                    </div>
+                    <h3 class="roadmap-goal-title">{g.titleZh || g.title}</h3>
+                    {g.description && (
+                      <p class="roadmap-goal-desc">{g.descriptionZh || g.description}</p>
+                    )}
+                    <div class="roadmap-goal-meta">
+                      <span class="roadmap-goal-priority" data-priority={g.priority}>
+                        {g.priority === 'high' ? '高' : g.priority === 'medium' ? '中' : '低'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+
+        {roadmap.linked_ideas.length > 0 && (
+          <section class="roadmap-links">
+            <h3>关联想法</h3>
+            <ul class="roadmap-link-list">
+              {roadmap.linked_ideas.map((ideaId) => (
+                <li><a href={base + '/ideas/' + ideaId + '/'}>{ideaId}</a></li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {roadmap.linked_experiments.length > 0 && (
+          <section class="roadmap-links">
+            <h3>关联实验</h3>
+            <ul class="roadmap-link-list">
+              {roadmap.linked_experiments.map((expId) => (
+                <li><a href={base + '/experiments/' + expId + '/'}>{expId}</a></li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+    )}
+  </main>
+
+  <Footer />
+
+  <script>
+    import '../../scripts/roadmap-ui';
+  </script>
+</BaseLayout>

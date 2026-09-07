@@ -1,0 +1,120 @@
+---
+// /ideas/ — Ideas list page (grid of idea cards)
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/ideas.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// SSR-side: we can't read localStorage, so just render an empty shell
+// The client-side JS (ideas-ui.ts) will hydrate and load ideas from localStorage
+---
+
+<BaseLayout
+  title="想法 · Daily Paper Reader"
+  description="记录和管理你的研究想法 — 从论文阅读中产生的 idea、工作实验计划、写作素材。"
+>
+  <Navbar />
+
+  <main class="ideas-page">
+    <header class="ideas-hero">
+      <h1>想法</h1>
+      <p class="lead">
+        记录和管理你的 <strong>研究想法</strong>。
+        从论文阅读中产生的 idea、实验计划、写作素材，都在这里。
+      </p>
+    </header>
+
+    <div class="ideas-actionbar">
+      <div class="ideas-filter" data-ideas-filter>
+        <button type="button" class="filter-pill active" data-idea-filter="all">全部</button>
+        <button type="button" class="filter-pill" data-idea-filter="draft">草稿</button>
+        <button type="button" class="filter-pill" data-idea-filter="active">进行中</button>
+        <button type="button" class="filter-pill" data-idea-filter="promoted">推荐</button>
+        <button type="button" class="filter-pill" data-idea-filter="archived">归档</button>
+      </div>
+      <span class="ideas-count" data-idea-count>加载中...</span>
+      <button type="button" class="btn btn-primary btn-sm" data-open-new-idea>
+        ➕ 新建想法
+      </button>
+    </div>
+
+    <div id="ideas-grid" class="ideas-grid">
+      <!-- Client-side rendered -->
+      <noscript>
+        <p class="ideas-nojs">
+          想法功能需要 JavaScript 渲染 — 数据存在浏览器 localStorage。
+        </p>
+      </noscript>
+    </div>
+  </main>
+
+  <Footer />
+
+  <!-- New Idea Modal -->
+  <dialog id="idea-modal" class="idea-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>新建想法</h2>
+        <button type="button" class="modal-close" aria-label="关闭">×</button>
+      </div>
+      <form id="idea-form" class="idea-form">
+        <div class="form-group">
+          <label for="idea-title">标题</label>
+          <input
+            type="text"
+            id="idea-title"
+            name="title"
+            required
+            placeholder="例如: Transformer 注意力机制的可解释性改进"
+            maxlength="100"
+          />
+        </div>
+        <div class="form-group">
+          <label for="idea-description">描述</label>
+          <textarea
+            id="idea-description"
+            name="description"
+            required
+            rows="6"
+            placeholder="详细描述这个想法的背景、目标和预期价值..."
+          ></textarea>
+        </div>
+        <div class="form-group">
+          <label for="idea-related-papers">关联论文 (arXiv ID, 逗号分隔)</label>
+          <input
+            type="text"
+            id="idea-related-papers"
+            name="relatedPapers"
+            placeholder="1706.03762, 2008.11826"
+          />
+        </div>
+        <div class="form-group">
+          <label for="idea-tags">标签 (逗号分隔)</label>
+          <input
+            type="text"
+            id="idea-tags"
+            name="tags"
+            placeholder="architecture, theory, nlp"
+          />
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost modal-cancel">取消</button>
+          <button type="submit" class="btn btn-primary">创建想法</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <script>
+    import '../../scripts/ideas-ui';
+    import { updateCounts } from '../../scripts/ideas-ui';
+
+    // Initialize counts on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      updateCounts();
+    });
+  </script>
+</BaseLayout>

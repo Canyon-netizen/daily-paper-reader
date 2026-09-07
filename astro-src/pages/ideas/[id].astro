@@ -1,0 +1,271 @@
+---
+// /ideas/[id]/ — Idea detail page
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/ideas.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// SSR-side: render a shell that the client will hydrate
+// The idea ID comes from the URL path
+const { id } = Astro.params;
+
+// For SSR, we pass the ID to the client which will load from localStorage
+---
+
+<BaseLayout
+  title={`想法详情 · Daily Paper Reader`}
+  description="想法详情页"
+>
+  <Navbar />
+
+  <main class="idea-detail-page">
+    <div class="idea-detail-container" data-idea-id={id}>
+      <a href={base + '/ideas/'} class="back-link">← 所有想法</a>
+
+      <div id="idea-detail-content">
+        <!-- Client-side rendered -->
+        <noscript>
+          <p class="ideas-nojs">
+            想法详情需要 JavaScript 渲染 — 数据存在浏览器 localStorage。
+          </p>
+        </noscript>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+
+  <script define:vars={{ ideaId: id, baseUrl: base }}>
+    import { getIdea, updateIdea, deleteIdea } from '../../lib/ideas';
+    import type { Idea, IdeaStatus } from '../../lib/ideas/types';
+
+    const statusLabels: Record<IdeaStatus, string> = {
+      draft: '草稿',
+      active: '进行中',
+      promoted: '已推荐',
+      archived: '已归档',
+    };
+    const statusIcons: Record<IdeaStatus, string> = {
+      draft: '📝',
+      active: '🚀',
+      promoted: '⭐',
+      archived: '📦',
+    };
+
+    function renderDetail(idea: Idea): void {
+      const container = document.getElementById('idea-detail-content');
+      if (!container) return;
+
+      const date = new Date(idea.updatedAt).toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      const createdDate = new Date(idea.createdAt).toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+
+      const papersHtml = idea.relatedPapers.length > 0
+        ? `<div class="idea-detail-section">
+            <h4>关联论文</h4>
+            <div class="idea-papers-list">
+              ${idea.relatedPapers.map((pid) => `
+                <a href="${baseUrl}/papers/${pid}/" class="idea-paper-link" target="_blank">
+                  <span class="paper-id">${pid}</span>
+                  <span class="paper-arrow">→</span>
+                </a>
+              `).join('')}
+            </div>
+          </div>`
+        : '';
+
+      const conceptsHtml = idea.relatedConcepts.length > 0
+        ? `<div class="idea-detail-section">
+            <h4>关联概念</h4>
+            <div class="idea-concepts-list">
+              ${idea.relatedConcepts.map((slug) => `
+                <a href="${baseUrl}/wiki/concepts/${slug}/" class="idea-concept-link">${slug}</a>
+              `).join('')}
+            </div>
+          </div>`
+        : '';
+
+      const tagsHtml = idea.tags.length > 0
+        ? `<div class="idea-detail-tags">
+            ${idea.tags.map((t) => `<span class="idea-detail-tag">${escapeHtml(t)}</span>`).join('')}
+          </div>`
+        : '';
+
+      container.innerHTML = `
+        <div class="idea-detail-header">
+          <div class="idea-detail-status">
+            <span class="status-icon">${statusIcons[idea.status]}</span>
+            <span class="status-label">${statusLabels[idea.status]}</span>
+          </div>
+          <h1 class="idea-detail-title">${escapeHtml(idea.title)}</h1>
+          ${tagsHtml}
+        </div>
+
+        <div class="idea-detail-meta">
+          <span>创建于 ${createdDate}</span>
+          <span>更新于 ${date}</span>
+        </div>
+
+        <div class="idea-detail-body">
+          <div class="idea-detail-section">
+            <h4>描述</h4>
+            <div class="idea-description-content">${escapeHtml(idea.description)}</div>
+          </div>
+
+          ${papersHtml}
+          ${conceptsHtml}
+        </div>
+
+        <div class="idea-detail-actions">
+          <button type="button" class="btn btn-ghost" data-edit-idea>✏️ 编辑</button>
+          <div class="idea-status-actions">
+            ${idea.status !== 'active' ? `<button type="button" class="btn btn-sm" data-status="active">🚀 进行中</button>` : ''}
+            ${idea.status !== 'promoted' ? `<button type="button" class="btn btn-sm" data-status="promoted">⭐ 推荐</button>` : ''}
+            ${idea.status !== 'archived' ? `<button type="button" class="btn btn-sm" data-status="archived">📦 归档</button>` : ''}
+            ${idea.status !== 'draft' ? `<button type="button" class="btn btn-sm" data-status="draft">📝 草稿</button>` : ''}
+          </div>
+          <button type="button" class="btn btn-danger-ghost" data-delete-idea>🗑️ 删除</button>
+        </div>
+      `;
+
+      // Attach event listeners
+      container.querySelector<HTMLButtonElement>('[data-edit-idea]')?.addEventListener('click', () => {
+        openEditModal(idea);
+      });
+
+      container.querySelectorAll<HTMLButtonElement>('[data-status]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const newStatus = btn.dataset.status as IdeaStatus;
+          if (newStatus) {
+            updateIdea(idea.id, { status: newStatus });
+            const updated = getIdea(idea.id);
+            if (updated) renderDetail(updated);
+          }
+        });
+      });
+
+      container.querySelector<HTMLButtonElement>('[data-delete-idea]')?.addEventListener('click', () => {
+        if (confirm('确定要删除这个想法吗?')) {
+          deleteIdea(idea.id);
+          window.location.href = baseUrl + '/ideas/';
+        }
+      });
+    }
+
+    function openEditModal(idea: Idea): void {
+      const modal = document.getElementById('idea-edit-modal') || createEditModal();
+      const form = modal.querySelector<HTMLFormElement>('#idea-edit-form');
+      if (!form) return;
+
+      (form.querySelector('#edit-idea-title') as HTMLInputElement).value = idea.title;
+      (form.querySelector('#edit-idea-description') as HTMLTextAreaElement).value = idea.description;
+      (form.querySelector('#edit-idea-tags') as HTMLInputElement).value = idea.tags.join(', ');
+      (form.querySelector('#edit-idea-papers') as HTMLInputElement).value = idea.relatedPapers.join(', ');
+
+      modal.classList.add('active');
+
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+        const title = formData.get('title') as string;
+        const description = formData.get('description') as string;
+        const tagsStr = formData.get('tags') as string;
+        const papersStr = formData.get('relatedPapers') as string;
+
+        const tags = tagsStr ? tagsStr.split(',').map((t) => t.trim()).filter(Boolean) : [];
+        const relatedPapers = papersStr
+          ? papersStr.split(',').map((p) => p.trim().replace(/^(\d+\.\d+v?\d*).*$/, '$1')).filter(Boolean)
+          : [];
+
+        updateIdea(idea.id, { title, description, tags, relatedPapers });
+        const updated = getIdea(idea.id);
+        if (updated) {
+          renderDetail(updated);
+        }
+        modal.classList.remove('active');
+      };
+
+      modal.querySelector('.modal-close')?.addEventListener('click', () => {
+        modal.classList.remove('active');
+      });
+    }
+
+    function createEditModal(): HTMLElement {
+      const modal = document.createElement('dialog');
+      modal.id = 'idea-edit-modal';
+      modal.className = 'idea-modal';
+      modal.innerHTML = `
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>编辑想法</h2>
+            <button type="button" class="modal-close" aria-label="关闭">×</button>
+          </div>
+          <form id="idea-edit-form">
+            <div class="form-group">
+              <label for="edit-idea-title">标题</label>
+              <input type="text" id="edit-idea-title" name="title" required maxlength="100" />
+            </div>
+            <div class="form-group">
+              <label for="edit-idea-description">描述</label>
+              <textarea id="edit-idea-description" name="description" required rows="6"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-idea-papers">关联论文 (arXiv ID, 逗号分隔)</label>
+              <input type="text" id="edit-idea-papers" name="relatedPapers" placeholder="1706.03762, 20088.11826" />
+            </div>
+            <div class="form-group">
+              <label for="edit-idea-tags">标签 (逗号分隔)</label>
+              <input type="text" id="edit-idea-tags" name="tags" placeholder="architecture, theory" />
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn btn-ghost modal-cancel">取消</button>
+              <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.classList.remove('active');
+      });
+
+      return modal;
+    }
+
+    function escapeHtml(str: string): string {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // Initialize
+    const idea = getIdea(ideaId);
+    if (idea) {
+      renderDetail(idea);
+    } else {
+      const container = document.getElementById('idea-detail-content');
+      if (container) {
+        container.innerHTML = `
+          <div class="idea-not-found">
+            <h2>想法不存在</h2>
+            <p>找不到 ID 为 "${ideaId}" 的想法。</p>
+            <a href="${baseUrl}/ideas/" class="btn btn-primary">返回想法列表</a>
+          </div>
+        `;
+      }
+    }
+  </script>
+</BaseLayout>
