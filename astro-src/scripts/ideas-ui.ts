@@ -197,6 +197,20 @@ function setupNewIdeaButton(): void {
   document.querySelector<HTMLButtonElement>('[data-open-new-idea]')?.addEventListener('click', () => {
     openIdeaModal();
   });
+
+  // Check for prefill data from URL params (e.g., from paper detail page)
+  const urlParams = new URLSearchParams(window.location.search);
+  const prefillTitle = urlParams.get('prefill_title');
+  const prefillPapers = urlParams.get('prefill_papers');
+
+  if (prefillTitle || prefillPapers) {
+    // Auto-open the modal with prefill data
+    setTimeout(() => {
+      openIdeaModal(prefillTitle || '', prefillPapers || '');
+      // Clear URL params to avoid re-opening on refresh
+      window.history.replaceState({}, '', window.location.pathname);
+    }, 100);
+  }
 }
 
 /** Setup modal handlers */
@@ -233,11 +247,20 @@ function setupModalHandlers(): void {
 }
 
 /** Open the idea modal */
-function openIdeaModal(): void {
+function openIdeaModal(prefillTitle: string = '', prefillPapers: string = ''): void {
   const modal = document.getElementById('idea-modal');
   const form = document.getElementById('idea-form') as HTMLFormElement;
   if (modal && form) {
     form.reset();
+    // Pre-fill form fields if data provided
+    if (prefillTitle) {
+      const titleInput = form.querySelector('#idea-title') as HTMLInputElement;
+      if (titleInput) titleInput.value = prefillTitle;
+    }
+    if (prefillPapers) {
+      const papersInput = form.querySelector('#idea-related-papers') as HTMLInputElement;
+      if (papersInput) papersInput.value = prefillPapers;
+    }
     modal.classList.add('active');
     (form.querySelector('input[name="title"]') as HTMLInputElement)?.focus();
   }

@@ -185,6 +185,14 @@ const tabTitle = plainZh || plainEn || id;
                       hidden
                       aria-label="隐藏或恢复这篇论文"
                     >🗑 隐藏</button>
+                    <button
+                      type="button"
+                      id="save-as-idea-btn"
+                      class="save-as-idea-btn"
+                      aria-label="把这篇论文保存为想法"
+                      data-arxiv-id={paper.canonicalArxivId || paper.arxivId || ' '}
+                      data-title={plainZh || plainEn || ' '}
+                    >💡 保存为想法</button>
                   </div>
                 )}
               </div>
@@ -1111,6 +1119,20 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
         if (!question) return;
         window.postMessage({ type: 'dpr-ask-question', question }, '*');
       });
+
+      // 保存为想法按钮
+      document.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest('#save-as-idea-btn') as HTMLButtonElement;
+        if (!btn) return;
+        const arxivId = btn.dataset.arxivId;
+        const title = btn.dataset.title;
+        if (!arxivId || arxivId === ' ') return;
+        // 跳转到 ideas 页面并预填数据
+        const params = new URLSearchParams();
+        params.set('prefill_title', title || '');
+        params.set('prefill_papers', arxivId);
+        window.location.href = `/ideas/?${params.toString()}`;
+      });
     })();
 
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
@@ -1215,6 +1237,23 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
   }
   .paper-hide-btn--hidden:hover {
     background: color-mix(in srgb, var(--accent) 8%, var(--bg-elevated));
+  }
+  /* 保存为想法按钮 */
+  .save-as-idea-btn {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--accent);
+    cursor: pointer;
+    transition: all 150ms;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .save-as-idea-btn:hover {
+    background: var(--accent-soft);
+    border-color: var(--accent);
   }
   .paper-meta-line {
     font-size: 0.85rem;

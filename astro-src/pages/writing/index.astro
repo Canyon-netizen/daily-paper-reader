@@ -4,9 +4,13 @@
 // Displays all writings from localStorage with filter by type/status.
 // Follows pattern from /libraries/index.astro.
 
+import type { GetStaticPaths } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
+import { defaultPaperRepository } from '../../lib/paper-repository';
+import { flattenCategories } from '../../lib/paper';
+import { paperPlainTitle } from '../../lib/title';
 import '../../styles/writing.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
@@ -14,6 +18,23 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 // SSR cannot read localStorage, so we pass empty initial state.
 // Client-side JS will hydrate with actual writings.
 const initialWritingsJson = '[]';
+
+// Embed paper data for citation picker search
+const paperRepo = defaultPaperRepository;
+const allPapers = await paperRepo.list({ dedup: true, base });
+const clientPapers = allPapers.map((p) => ({
+  id: p.id,
+  title: paperPlainTitle(p.title, p.title_plain),
+  title_zh: paperPlainTitle(p.title_zh, p.title_zh_plain),
+  authors: p.authors || '',
+  date: p.date || '',
+  pdf: p.pdf || '',
+  tags: flattenCategories(p.categories),
+  tldr: p.tldr || '',
+  arxivId: p.arxivId || '',
+  slug: p.slug || '',
+}));
+const papersPayload = { papers: clientPapers };
 ---
 
 <BaseLayout
@@ -93,6 +114,9 @@ const initialWritingsJson = '[]';
       </div>
     </div>
   </div>
+
+  <!-- 客户端数据载体 — citation picker 搜索从这里读论文数据 -->
+  <script id="papers-data" type="application/json" set:html={JSON.stringify(papersPayload)} />
 
   <script>
     import '../../scripts/writing-ui';

@@ -470,14 +470,40 @@ async function initCitationPickerSearch(): Promise<void> {
   const resultsContainer = document.getElementById('citation-search-results');
   if (!searchInput || !resultsContainer) return;
 
-  // Load papers from localStorage
+  // Load papers from page-embedded data (injected by SSR)
   let papers: any[] = [];
   try {
-    const stored = localStorage.getItem('dpr_papers_v1');
-    if (stored) {
-      papers = Object.values(JSON.parse(stored));
+    const papersDataEl = document.getElementById('papers-data');
+    if (papersDataEl) {
+      const payload = JSON.parse(papersDataEl.textContent || '{}');
+      papers = payload.papers || [];
     }
   } catch { /* ignore */ }
+
+  // If no papers embedded, try user's library papers from localStorage
+  if (papers.length === 0) {
+    try {
+      // Try to get papers from user libraries in localStorage
+      const libsData = localStorage.getItem('dpr_user_libraries_v1');
+      if (libsData) {
+        const doc = JSON.parse(libsData);
+        const libraries = doc.libraries || {};
+        // Collect all paper IDs from all libraries
+        const paperIds = new Set<string>();
+        for (const lib of Object.values(libraries) as any[]) {
+          for (const pid of lib.paperIds || []) {
+            paperIds.add(pid);
+          }
+        }
+        // Convert to paper-like objects for citation picker
+        papers = Array.from(paperIds).map(id => ({
+          arxivId: id,
+          title: `arXiv: ${id}`,
+          authors: [],
+        }));
+      }
+    } catch { /* ignore */ }
+  }
 
   // Filter papers as user types
   const filterAndRender = async () => {
@@ -771,6 +797,57 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
+// Setup metadata edit modal
+function setupMetadataEdit(): void {
+  const editBtn = document.querySelector('[data-edit-metadata]');
+  const modal = document.getElementById('metadata-edit-modal');
+  const form = document.getElementById('metadata-edit-form') as HTMLFormElement;
+  const closeBtns = document.querySelectorAll('[data-close-metadata-modal]');
+
+  if (!editBtn || !modal || !currentWriting) return;
+
+  // Open modal and populate fields
+  editBtn.addEventListener('click', () => {
+    const titleInput = document.getElementById('edit-title') as HTMLInputElement;
+    const typeSelect = document.getElementById('edit-type') as HTMLSelectElement;
+    const venueInput = document.getElementById('edit-venue') as HTMLInputElement;
+
+    if (titleInput) titleInput.value = currentWriting!.title;
+    if (typeSelect) typeSelect.value = currentWriting!.type || 'paper';
+    if (venueInput) venueInput.value = currentWriting!.targetVenue || '';
+
+    modal.classList.add('open');
+  });
+
+  // Close handlers
+  closeBtns.forEach(btn => {
+    btn.addEventListener('click', () => modal.classList.remove('open'));
+  });
+
+  modal.querySelector('.modal-backdrop')?.addEventListener('click', () => {
+    modal.classList.remove('open');
+  });
+
+  // Form submit
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const titleInput = document.getElementById('edit-title') as HTMLInputElement;
+    const typeSelect = document.getElementById('edit-type') as HTMLSelectElement;
+    const venueInput = document.getElementById('edit-venue') as HTMLInputElement;
+
+    if (titleInput?.value) {
+      updateWriting(currentWriting!.id, {
+        title: titleInput.value,
+        type: typeSelect?.value as Writing['type'],
+        targetVenue: venueInput?.value,
+      });
+      currentWriting = getWriting(currentWriting!.id);
+      renderDetailPage();
+      modal.classList.remove('open');
+    }
+  });
+}
+
 // Initialize based on page
 function init(): void {
   // Check if we're on list or detail page
@@ -785,6 +862,7 @@ function init(): void {
     // Detail page
     initDetailPage();
     setupSave();
+    setupMetadataEdit();
     setupStatusChange();
     setupDelete();
     setupCitationPicker();

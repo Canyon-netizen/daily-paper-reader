@@ -640,16 +640,83 @@
   .experiment-modal {
     width: 95vw;
   }
-  
+
   .experiment-form .form-row {
     grid-template-columns: 1fr;
   }
-  
+
   .exp-detail-actions {
     flex-direction: column;
   }
-  
+
   .exp-status-actions {
     flex-wrap: wrap;
+  }
+}
+
+/* Variable form rows */
+.exp-variables-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.exp-variable-row {
+  padding: 0.75rem;
+  background: var(--bg-muted, #f9f9f9);
+  border-radius: 8px;
+}
+
+.exp-variable-fields {
+  display: grid;
+  grid-template-columns: 1fr 120px auto auto 32px;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.exp-variable-fields input,
+.exp-variable-fields select {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 4px;
+  font-size: 0.85rem;
+  background: var(--bg, #fff);
+}
+
+.exp-variable-fields .var-name-input {
+  min-width: 120px;
+}
+
+.exp-variable-fields .var-desc-input {
+  min-width: 150px;
+}
+
+.exp-variable-fields .var-values-input {
+  min-width: 120px;
+}
+
+.btn-remove-var {
+  background: none;
+  border: none;
+  color: var(--fg-subtle, #999);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 1;
+}
+
+.btn-remove-var:hover {
+  color: #dc2626;
+}
+
+@media (max-width: 768px) {
+  .exp-variable-fields {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .btn-remove-var {
+    grid-column: 2;
+    justify-self: end;
   }
 }

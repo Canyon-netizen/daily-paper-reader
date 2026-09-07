@@ -27,6 +27,7 @@ export function initExperimentsUI(): void {
   setupFilterButtons();
   setupNewExperimentButton();
   setupModalHandlers();
+  setupVariableHandlers();
   updateCounts();
 
   // If prefill from idea, open modal immediately
@@ -245,6 +246,27 @@ function setupModalHandlers(): void {
       ? relatedIdeasStr.split(',').map((id) => id.trim()).filter(Boolean)
       : [];
 
+    // Extract variables from form
+    const variables: Experiment['variables'] = [];
+    const container = document.getElementById('exp-variables-container');
+    if (container) {
+      Array.from(container.children).forEach((el) => {
+        const varNameInput = el.querySelector('[name^="var_name_"]') as HTMLInputElement;
+        const varTypeSelect = el.querySelector('[name^="var_type_"]') as HTMLSelectElement;
+        const varDescInput = el.querySelector('[name^="var_desc_"]') as HTMLInputElement;
+        const varValuesInput = el.querySelector('[name^="var_values_"]') as HTMLInputElement;
+
+        if (varNameInput?.value) {
+          variables.push({
+            name: varNameInput.value,
+            type: (varTypeSelect?.value as 'independent' | 'dependent' | 'controlled') || 'independent',
+            description: varDescInput?.value || '',
+            values: varValuesInput?.value ? varValuesInput.value.split(',').map(v => v.trim()).filter(Boolean) : undefined,
+          });
+        }
+      });
+    }
+
     const newExp = createExperiment(title, hypothesis, method, titleZh, hypothesisZh, methodZh);
     updateExperiment(newExp.id, {
       expectedResults,
@@ -252,6 +274,7 @@ function setupModalHandlers(): void {
       tags,
       relatedPapers,
       relatedIdeas,
+      variables,
     });
 
     closeModal();
@@ -321,6 +344,55 @@ function escapeHtml(str: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/** Setup variable add/remove handlers */
+function setupVariableHandlers(): void {
+  const addBtn = document.getElementById('add-variable-btn');
+  const container = document.getElementById('exp-variables-container');
+
+  addBtn?.addEventListener('click', () => {
+    if (!container) return;
+    const varIndex = container.children.length;
+    const varEl = document.createElement('div');
+    varEl.className = 'exp-variable-row';
+    varEl.dataset.varIndex = String(varIndex);
+    varEl.innerHTML = `
+      <div class="exp-variable-fields">
+        <input type="text" name="var_name_${varIndex}" placeholder="变量名" class="var-name-input" required />
+        <select name="var_type_${varIndex}" class="var-type-select">
+          <option value="independent">自变量</option>
+          <option value="dependent">因变量</option>
+          <option value="controlled">控制变量</option>
+        </select>
+        <input type="text" name="var_desc_${varIndex}" placeholder="描述" class="var-desc-input" />
+        <input type="text" name="var_values_${varIndex}" placeholder="取值 (逗号分隔)" class="var-values-input" />
+        <button type="button" class="btn-remove-var" title="删除变量">×</button>
+      </div>
+    `;
+    container.appendChild(varEl);
+
+    // Remove button handler
+    varEl.querySelector('.btn-remove-var')?.addEventListener('click', () => {
+      varEl.remove();
+      reindexVariables();
+    });
+  });
+}
+
+/** Reindex variable field names after deletion */
+function reindexVariables(): void {
+  const container = document.getElementById('exp-variables-container');
+  if (!container) return;
+  Array.from(container.children).forEach((el, idx) => {
+    el.dataset.varIndex = String(idx);
+    const inputs = el.querySelectorAll('input, select');
+    inputs.forEach((input) => {
+      const name = input.getAttribute('name') || '';
+      const field = name.replace(/_\d+$/, '');
+      input.setAttribute('name', `${field}_${idx}`);
+    });
+  });
 }
 
 /** Utility: truncate text */
