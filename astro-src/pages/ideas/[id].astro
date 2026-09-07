@@ -41,12 +41,19 @@ const { id } = Astro.params;
   <script define:vars={{ ideaId: id, baseUrl: base }}>
     import { getIdea, updateIdea, deleteIdea } from '../../lib/ideas';
     import type { Idea, IdeaStatus } from '../../lib/ideas/types';
+    import { renderMarkdownBody } from '../../lib/markdown/render';
 
     const statusLabels: Record<IdeaStatus, string> = {
       draft: '草稿',
       active: '进行中',
       promoted: '已推荐',
       archived: '已归档',
+    };
+    const statusTooltips: Record<IdeaStatus, string> = {
+      draft: '起草中的想法，尚未开始验证',
+      active: '正在验证或探索的想法',
+      promoted: '已验证成功，值得分享或进一步发展',
+      archived: '已搁置或不再活跃的想法',
     };
     const statusIcons: Record<IdeaStatus, string> = {
       draft: '📝',
@@ -105,7 +112,8 @@ const { id } = Astro.params;
         <div class="idea-detail-header">
           <div class="idea-detail-status">
             <span class="status-icon">${statusIcons[idea.status]}</span>
-            <span class="status-label">${statusLabels[idea.status]}</span>
+            <span class="status-label" title="${statusTooltips[idea.status]}">${statusLabels[idea.status]}</span>
+            <span class="status-tooltip" title="${statusTooltips[idea.status]}">?</span>
           </div>
           <h1 class="idea-detail-title">${escapeHtml(idea.title)}</h1>
           ${tagsHtml}
@@ -119,7 +127,7 @@ const { id } = Astro.params;
         <div class="idea-detail-body">
           <div class="idea-detail-section">
             <h4>描述</h4>
-            <div class="idea-description-content">${escapeHtml(idea.description)}</div>
+            <div class="idea-description-content">${renderMarkdownBody(idea.description)}</div>
           </div>
 
           ${papersHtml}

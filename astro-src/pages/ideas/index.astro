@@ -30,10 +30,22 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     <div class="ideas-actionbar">
       <div class="ideas-filter" data-ideas-filter>
         <button type="button" class="filter-pill active" data-idea-filter="all">全部</button>
-        <button type="button" class="filter-pill" data-idea-filter="draft">草稿</button>
-        <button type="button" class="filter-pill" data-idea-filter="active">进行中</button>
-        <button type="button" class="filter-pill" data-idea-filter="promoted">推荐</button>
-        <button type="button" class="filter-pill" data-idea-filter="archived">归档</button>
+        <button type="button" class="filter-pill" data-idea-filter="draft">
+          草稿
+          <span class="status-tooltip" data-tooltip="起草中的想法，尚未开始验证">?</span>
+        </button>
+        <button type="button" class="filter-pill" data-idea-filter="active">
+          进行中
+          <span class="status-tooltip" data-tooltip="正在验证或探索的想法">?</span>
+        </button>
+        <button type="button" class="filter-pill" data-idea-filter="promoted">
+          推荐
+          <span class="status-tooltip" data-tooltip="已验证成功，值得分享或进一步发展">?</span>
+        </button>
+        <button type="button" class="filter-pill" data-idea-filter="archived">
+          归档
+          <span class="status-tooltip" data-tooltip="已搁置或不再活跃的想法">?</span>
+        </button>
       </div>
       <span class="ideas-count" data-idea-count>加载中...</span>
       <button type="button" class="btn btn-primary btn-sm" data-open-new-idea>
@@ -83,7 +95,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           ></textarea>
         </div>
         <div class="form-group">
-          <label for="idea-related-papers">关联论文 (arXiv ID, 逗号分隔)</label>
+          <label for="idea-related-papers">
+            关联论文 (arXiv ID, 逗号分隔)
+            <span class="field-hint">支持如 1706.03762, 2008.11826</span>
+          </label>
           <input
             type="text"
             id="idea-related-papers"

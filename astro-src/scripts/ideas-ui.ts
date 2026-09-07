@@ -12,6 +12,7 @@ import {
 } from '../lib/ideas';
 
 let currentFilter: IdeaStatus | 'all' = 'all';
+let lastStatusChange: { ideaId: string; oldStatus: IdeaStatus; timeout: number } | null = null;
 
 /** Initialize the Ideas UI */
 export function initIdeasUI(): void {
@@ -31,6 +32,36 @@ function renderIdeaGrid(): void {
     : listIdeas().filter((i) => i.status === currentFilter);
 
   if (ideas.length === 0) {
+    // Show sample data for new users
+    const isFirstVisit = !localStorage.getItem('dpr_has_ideas');
+    if (isFirstVisit && currentFilter === 'all') {
+      container.innerHTML = `
+        <div class="ideas-empty">
+          <div class="ideas-empty-icon">💡</div>
+          <h3 class="ideas-empty-title">还没有想法</h3>
+          <p class="ideas-empty-desc">
+            点击右上角「+ 新建想法」开始记录你的研究 idea。
+          </p>
+          <div class="ideas-sample">
+            <p class="ideas-sample-label">示例想法:</p>
+            <div class="idea-card idea-card--draft">
+              <div class="idea-card-header">
+                <span class="idea-status-icon">📝</span>
+                <span class="idea-status-label">草稿</span>
+              </div>
+              <h3 class="idea-title">探索 Transformer 的高效注意力机制</h3>
+              <p class="idea-description">研究如何通过稀疏注意力或线性注意力降低 O(n²) 计算复杂度，在长文档场景下提升推理效率...</p>
+              <div class="idea-tags">
+                <span class="idea-tag">architecture</span>
+                <span class="idea-tag">efficiency</span>
+              </div>
+            </div>
+            <p class="ideas-sample-hint">这是示例，点击「+ 新建想法」创建你自己的</p>
+          </div>
+        </div>
+      `;
+      return;
+    }
     container.innerHTML = `
       <div class="ideas-empty">
         <div class="ideas-empty-icon">💡</div>
@@ -42,6 +73,9 @@ function renderIdeaGrid(): void {
     `;
     return;
   }
+
+  // Mark that user has created at least one idea
+  localStorage.setItem('dpr_has_ideas', 'true');
 
   container.innerHTML = ideas.map((idea) => renderIdeaCard(idea)).join('');
 
@@ -57,7 +91,22 @@ function renderIdeaGrid(): void {
         e.stopPropagation();
         const newStatus = btn.dataset.status as IdeaStatus;
         if (newStatus) {
-          updateIdea(id, { status: newStatus });
+          const idea = getIdea(id);
+          if (idea) {
+            // Store for undo
+            if (lastStatusChange) {
+              clearTimeout(lastStatusChange.timeout);
+            }
+            lastStatusChange = {
+              ideaId: id,
+              oldStatus: idea.status,
+              timeout: window.setTimeout(() => {
+                lastStatusChange = null;
+              }, 5000),
+            };
+            updateIdea(id, { status: newStatus });
+            showUndoToast(idea.title, idea.status, newStatus);
+          }
           renderIdeaGrid();
           updateCounts();
         }
@@ -234,6 +283,39 @@ function escapeHtml(str: string): string {
 /** Utility: truncate text */
 function truncate(str: string, len: number): string {
   return str.length > len ? str.slice(0, len) + '...' : str;
+}
+
+/** Show undo toast after status change */
+function showUndoToast(title: string, oldStatus: string, newStatus: string): void {
+  const existing = document.querySelector('.undo-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'undo-toast';
+  toast.innerHTML = `
+    <span>状态已改为 <strong>${newStatus}</strong></span>
+    <button type="button" class="undo-btn">撤销</button>
+  `;
+
+  const undoBtn = toast.querySelector('.undo-btn');
+  undoBtn?.addEventListener('click', () => {
+    if (lastStatusChange) {
+      updateIdea(lastStatusChange.ideaId, { status: lastStatusChange.oldStatus });
+      clearTimeout(lastStatusChange.timeout);
+      lastStatusChange = null;
+      renderIdeaGrid();
+      updateCounts();
+    }
+    toast.remove();
+  });
+
+  document.body.appendChild(toast);
+
+  // Auto-remove after timeout
+  setTimeout(() => {
+    if (toast.parentNode) toast.remove();
+    lastStatusChange = null;
+  }, 5000);
 }
 
 // Auto-initialize when DOM is ready
