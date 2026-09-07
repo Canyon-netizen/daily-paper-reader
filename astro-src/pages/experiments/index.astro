@@ -1,0 +1,128 @@
+---
+// /experiments/ — 实验列表页
+//
+// 结构化实验设计:hypothesis/method/variables/results。
+// 卡片网格 + 状态过滤(全部/规划中/进行中/已完成/失败/暂停)。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { buildExperimentDigests } from '../../lib/experiments';
+import type { ExperimentStatus } from '../../lib/experiments/types';
+import '../../styles/experiments.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// 状态过滤参数
+const url = Astro.url;
+const statusParam = url.searchParams.get('status') as ExperimentStatus | null;
+const statusFilter = statusParam || 'all';
+
+const digests = buildExperimentDigests();
+const experiments = statusFilter === 'all'
+  ? digests
+  : digests.filter((d) => d.experiment.status === statusFilter);
+
+const statusCounts = {
+  all: digests.length,
+  planning: digests.filter((d) => d.experiment.status === 'planning').length,
+  running: digests.filter((d) => d.experiment.status === 'running').length,
+  completed: digests.filter((d) => d.experiment.status === 'completed').length,
+  failed: digests.filter((d) => d.experiment.status === 'failed').length,
+  paused: digests.filter((d) => d.experiment.status === 'paused').length,
+};
+
+const statusLabels: Record<string, string> = {
+  all: '全部',
+  planning: '规划中',
+  running: '进行中',
+  completed: '已完成',
+  failed: '失败',
+  paused: '暂停',
+};
+---
+
+<BaseLayout
+  title="实验设计 · Daily Paper Reader"
+  description="结构化实验设计:hypothesis, method, variables, results。对比消融实验、模型对比、用户研究等。"
+>
+  <Navbar />
+
+  <main class="experiments-page">
+    <header class="experiments-hero">
+      <h1>实验设计</h1>
+      <p class="lead">
+        结构化实验:hypothesis / method / variables / results。
+        跟踪消融实验、模型对比、用户研究等完整实验流程。
+        共 <strong>{digests.length}</strong> 个实验。
+      </p>
+    </header>
+
+    <div class="experiments-actionbar">
+      <span class="exp-segmented" data-status-filter>
+        <button class="active" type="button" data-status-value="all">全部 ({statusCounts.all})</button>
+        <button type="button" data-status-value="planning">规划中 ({statusCounts.planning})</button>
+        <button type="button" data-status-value="running">进行中 ({statusCounts.running})</button>
+        <button type="button" data-status-value="completed">已完成 ({statusCounts.completed})</button>
+        <button type="button" data-status-value="failed">失败 ({statusCounts.failed})</button>
+        <button type="button" data-status-value="paused">暂停 ({statusCounts.paused})</button>
+      </span>
+      <span class="experiments-actionbar-spacer"></span>
+    </div>
+
+    {experiments.length === 0 ? (
+      <div class="experiments-empty">
+        <div class="experiments-empty-icon">🔬</div>
+        <h3 class="experiments-empty-title">没有匹配的实验</h3>
+        <p class="experiments-empty-desc">试试选择其他状态过滤条件。</p>
+      </div>
+    ) : (
+      <div class="experiments-grid">
+        {experiments.map((d) => (
+          <a class="exp-card" href={base + '/experiments/' + d.experiment.id + '/'}>
+            <div class="exp-card-header">
+              <h2 class="exp-title">{d.experiment.title}</h2>
+              <span class={`exp-status exp-status--${d.experiment.status}`}>
+                {statusLabels[d.experiment.status] || d.experiment.status}
+              </span>
+            </div>
+            <p class="exp-title-zh">{d.experiment.titleZh}</p>
+            <p class="exp-hypothesis">{d.experiment.hypothesis}</p>
+            <div class="exp-tags">
+              {d.experiment.tags.slice(0, 4).map((t) => (
+                <span class="exp-tag">{t}</span>
+              ))}
+            </div>
+            <div class="exp-meta">
+              <span>📄 {d.paperCount} 篇相关论文</span>
+              <span>更新于 {d.latestDate}</span>
+            </div>
+          </a>
+        ))}
+      </div>
+    )}
+  </main>
+
+  <Footer />
+
+  <script>
+    // Client-side status filter
+    const buttons = document.querySelectorAll<HTMLButtonElement>('[data-status-filter] button');
+    const baseUrl = window.location.pathname.replace(/\/$/, '');
+
+    buttons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const status = btn.dataset.statusValue || 'all';
+
+        // Update active state
+        buttons.forEach((b) => b.classList.toggle('active', b === btn));
+
+        // Update URL and reload for SSR re-render
+        const newUrl = status === 'all'
+          ? baseUrl
+          : `${baseUrl}?status=${status}`;
+        window.location.href = newUrl;
+      });
+    });
+  </script>
+</BaseLayout>

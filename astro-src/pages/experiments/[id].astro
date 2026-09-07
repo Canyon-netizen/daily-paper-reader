@@ -1,0 +1,150 @@
+---
+// /experiments/<id>/ — 实验详情页
+//
+// 完整展示:hypothesis, method, variables, expected_results, actual_results, status.
+// 对照 Polaris ExperimentDetail 页面。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { getExperiment } from '../../lib/experiments';
+import '../../styles/experiments.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const { EXPERIMENTS } = await import('../../lib/experiments');
+  return EXPERIMENTS.map((e) => ({ params: { id: e.id } }));
+}
+
+const { id } = Astro.params;
+const experiment = getExperiment(id!);
+
+if (!experiment) {
+  return Astro.redirect(base + '/experiments/');
+}
+
+const statusLabels: Record<string, string> = {
+  planning: '规划中',
+  running: '进行中',
+  completed: '已完成',
+  failed: '失败',
+  paused: '暂停',
+};
+
+const typeLabels: Record<string, string> = {
+  independent: '自变量',
+  dependent: '因变量',
+  controlled: '控制变量',
+};
+---
+
+<BaseLayout
+  title={`${experiment.title} · 实验详情`}
+  description={`${experiment.hypothesis}`}
+>
+  <Navbar />
+
+  <main class="exp-detail">
+    <a class="exp-back-link" href={base + '/experiments/'}>← 所有实验</a>
+
+    <header class="exp-detail-header">
+      <h1>{experiment.title}</h1>
+      <p class="title-zh">{experiment.titleZh}</p>
+      <div class="exp-detail-meta">
+        <span class={`exp-status exp-status--${experiment.status}`}>
+          {statusLabels[experiment.status] || experiment.status}
+        </span>
+        <span>负责人: {experiment.owner}</span>
+        <span>创建于 {experiment.createdAt}</span>
+        <span>更新于 {experiment.updatedAt}</span>
+      </div>
+    </header>
+
+    <!-- Hypothesis -->
+    <section class="exp-section">
+      <h2 class="exp-section-title">实验假设</h2>
+      <p>{experiment.hypothesis}</p>
+      <p style="margin-top: 0.5rem; color: var(--fg-subtle, #666);">{experiment.hypothesisZh}</p>
+    </section>
+
+    <!-- Method -->
+    <section class="exp-section">
+      <h2 class="exp-section-title">实验方法</h2>
+      <p>{experiment.method}</p>
+      <p style="margin-top: 0.5rem; color: var(--fg-subtle, #666);">{experiment.methodZh}</p>
+    </section>
+
+    <!-- Variables -->
+    <section class="exp-section">
+      <h2 class="exp-section-title">变量设计</h2>
+      <div class="exp-variables">
+        {experiment.variables.map((v) => (
+          <div class="exp-variable">
+            <span class="exp-variable-name">{v.name}</span>
+            <span class={`exp-variable-type exp-variable-type--${v.type}`}>
+              {typeLabels[v.type] || v.type}
+            </span>
+            <span class="exp-variable-desc">{v.description}</span>
+            {v.values && (
+              <span class="exp-variable-values">
+                取值: {v.values.join(' / ')}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- Results -->
+    <section class="exp-section">
+      <h2 class="exp-section-title">实验结果</h2>
+      <div class="exp-results">
+        <div class="exp-results-expected">
+          <div class="exp-results-label">预期结果</div>
+          <div class="exp-results-content">
+            <p>{experiment.expectedResults}</p>
+            <p style="color: var(--fg-subtle, #666); margin-top: 0.25rem;">{experiment.expectedResultsZh}</p>
+          </div>
+        </div>
+        {experiment.actualResults && (
+          <div class="exp-results-actual">
+            <div class="exp-results-label">实际结果</div>
+            <div class="exp-results-content">
+              <p>{experiment.actualResults}</p>
+              <p style="color: var(--fg-subtle, #666); margin-top: 0.25rem;">{experiment.actualResultsZh}</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
+
+    <!-- Tags -->
+    {experiment.tags.length > 0 && (
+      <section class="exp-section">
+        <h2 class="exp-section-title">标签</h2>
+        <div class="exp-tags">
+          {experiment.tags.map((t) => (
+            <span class="exp-tag">{t}</span>
+          ))}
+        </div>
+      </section>
+    )}
+
+    <!-- Related Papers -->
+    {experiment.relatedPapers.length > 0 && (
+      <section class="exp-section">
+        <h2 class="exp-section-title">相关论文</h2>
+        <div class="exp-papers">
+          {experiment.relatedPapers.map((paperId) => (
+            <a class="exp-paper-link" href={`${base}/papers/${paperId}/`}>
+              📄 {paperId}
+            </a>
+          ))}
+        </div>
+      </section>
+    )}
+  </main>
+
+  <Footer />
+</BaseLayout>
