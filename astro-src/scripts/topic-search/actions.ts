@@ -10,6 +10,7 @@ import { loadSettings, loadSelection, type LLMConfig } from '../settings';
 import { $, escapeHtml } from '../../lib/dom-utils';
 import { canonicalArxivId as canonicalId } from '../../lib/dom-utils';
 import type { Candidate, SubQ, Summary, TopicSession } from '../../lib/schemas';
+import type { ResourceTier } from '../../lib/types/resource-tier';
 import { decomposeIdea, searchForDirection, summarizeOne, chatWithReport, validateSubqHitCount, SUMMARIZE_CONCURRENCY, PDF_PREFETCH_CONCURRENCY, pdfTextCache, prefetchOnePdf } from './pipeline';
 import { setStatus, setStatusErrorWithAction, clearStatus, renderBanner, clearBanner } from './status';
 import { generateTopicReport, startIncrementalReportTimer, stopIncrementalReportTimer, formatEta } from './report-markdown';
@@ -27,6 +28,25 @@ export function setCurrent(s: TopicSession | null): void {
 
 /** 本模块的 current 与 orchestrator / render 共享同一对象引用。 */
 let current: TopicSession | null = null;
+
+/** 阶段 3 算力档位筛选:'all' 或 ResourceTier 之一。写 session 并 re-render。 */
+export function setCandResourceFilter(filter: ResourceTier | 'all'): void {
+  if (!current) return;
+  // 接收任意字符串,只接受白名单内的值(防止 UI/旧代码塞脏值)
+  const allowed: ReadonlyArray<ResourceTier | 'all'> = [
+    'all',
+    'api_only',
+    'single_gpu',
+    'multi_gpu',
+    'cluster',
+    'tpu_pod',
+    'unknown',
+  ];
+  if (!(allowed as readonly string[]).includes(filter)) return;
+  current.candResourceFilter = filter;
+  persistSession(current);
+  renderCandStage();
+}
 
 async function doGenerateReport(): Promise<void> {
   if (!current) return;

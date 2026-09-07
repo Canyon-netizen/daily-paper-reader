@@ -14,6 +14,8 @@
 import { loadSelection, loadSettings, type SelectionItem } from '../settings';
 import { $, escapeHtml } from '../../lib/dom-utils';
 import { computeFacetCoverage, FACET_CATEGORY_LABELS, type FacetCategory, type TopicReport, type TopicSession } from '../../lib/schemas';
+import type { ResourceTier } from '../../lib/types/resource-tier';
+import { TIER_LABELS, inferResourceTier } from '../../lib/types/resource-tier';
 import { setStatus, clearStatus } from './status';
 import { chatWithPaper } from './pipeline';
 import { persistSession, MAX_QA_PER_PAPER, MAX_QA_FOR_REPORT } from './store';
@@ -264,6 +266,22 @@ export function renderCandStage(): void {
   }
   if (empty) empty.hidden = Object.values(current.candidatesBySubq).some((arr) => arr.length > 0);
   if (!list) return;
+  // 算力档位筛选条
+  const filter = current.candResourceFilter ?? 'all';
+  const filterBar = `
+    <div class="cand-filter-bar">
+      <label class="cand-filter-label">算力档位筛选:</label>
+      <select class="cand-filter-select" data-act="cand-tier-filter">
+        ${(['all', 'api_only', 'single_gpu', 'multi_gpu', 'cluster', 'tpu_pod', 'unknown'] as const)
+          .map(
+            (t) =>
+              `<option value="${t}" ${filter === t ? 'selected' : ''}>${t === 'all' ? '全部档位' : TIER_LABELS[t as ResourceTier]}</option>`,
+          )
+          .join('')}
+      </select>
+      <span class="cand-filter-hint">仅基于已总结论文的文本推断;无 summary 的候选显示「未知」灰色</span>
+    </div>
+  `;
   // 合并种子探索 subqs(seeds-based, 父 subqId 为空字符串)的候选放在最前面
   const seedsBasedSubqs = current.subqs.filter((sq) => sq.source === 'seeds');
   const seedsBlock = seedsBasedSubqs.length > 0
@@ -273,7 +291,18 @@ export function renderCandStage(): void {
     .filter((sq) => sq.source !== 'seeds')
     .map((sq) => renderCandidateGroupFor(sq.id))
     .join('');
-  list.innerHTML = seedsBlock + blocks;
+  list.innerHTML = filterBar + seedsBlock + blocks;
+}
+
+/** 从已有 summaries 派生候选论文的算力档位。无 summary → unknown。 */
+function getCandidateTier(arxivId: string): ResourceTier {
+  if (!current) return 'unknown';
+  const s = current.summaries.find((x) => x.arxivId === arxivId);
+  if (!s) return 'unknown';
+  const r = s.summary;
+  const text = [r.tldr, r.method, r.result, r.conclusion].filter(Boolean).join(' ');
+  if (!text.trim()) return 'unknown';
+  return inferResourceTier(undefined, text);
 }
 
 export function renderCandidateGroupFor(subqId: string): string {
@@ -282,17 +311,27 @@ export function renderCandidateGroupFor(subqId: string): string {
   const cands = current?.candidatesBySubq[subqId] ?? [];
   const isSeeds = sq.source === 'seeds';
   const headerLabel = isSeeds ? `🌱 种子探索: ${escapeHtml(sq.label)}` : escapeHtml(sq.label);
-  const items = cands.map((c) => `
-    <label class="cand-row" data-arxiv="${escapeHtml(c.arxivId)}">
-      <input type="checkbox" data-act="cand-toggle" data-subq="${escapeHtml(subqId)}" data-arxiv="${escapeHtml(c.arxivId)}" ${c.selected ? 'checked' : ''}>
-      <span class="cand-title">${escapeHtml(c.entry.title)}</span>
-      <span class="cand-id">arXiv:${escapeHtml(c.arxivId)}</span>
-    </label>
-  `).join('');
+  const filter = current?.candResourceFilter ?? 'all';
+  const items = cands
+    .map((c) => {
+      const tier = getCandidateTier(c.arxivId);
+      const chip = `<span class="cand-tier-chip cand-tier-${tier}" title="${escapeHtml(tier)}">${escapeHtml(TIER_LABELS[tier])}</span>`;
+      const hidden = filter !== 'all' && tier !== filter;
+      return `
+        <label class="cand-row ${hidden ? 'cand-hidden' : ''}" data-arxiv="${escapeHtml(c.arxivId)}" data-tier="${tier}">
+          <input type="checkbox" data-act="cand-toggle" data-subq="${escapeHtml(subqId)}" data-arxiv="${escapeHtml(c.arxivId)}" ${c.selected ? 'checked' : ''}>
+          <span class="cand-title">${escapeHtml(c.entry.title)}</span>
+          <span class="cand-id">arXiv:${escapeHtml(c.arxivId)}</span>
+          ${chip}
+        </label>
+      `;
+    })
+    .join('');
   const aiBtn = isSeeds ? '' : `<button type="button" class="topic-btn ghost cand-ai-btn" data-act="ai-filter-cand" data-subq="${escapeHtml(subqId)}">🤖 AI 筛论文</button>`;
+  const visibleCount = cands.filter((c) => filter === 'all' || getCandidateTier(c.arxivId) === filter).length;
   return `
     <fieldset class="cand-group" data-subq="${escapeHtml(subqId)}">
-      <legend>${headerLabel} <span class="cand-count">(${cands.filter((c) => c.selected).length}/${cands.length})</span> ${aiBtn}</legend>
+      <legend>${headerLabel} <span class="cand-count">(${cands.filter((c) => c.selected).length}/${cands.length} · 显示 ${visibleCount})</span> ${aiBtn}</legend>
       ${items || '<div class="cand-empty">(无候选 — 可能是搜索失败或 query 太冷门)</div>'}
     </fieldset>
   `;

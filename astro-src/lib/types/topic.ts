@@ -45,6 +45,9 @@ export interface TopicSession {
   candidatesBySubq: Record<string, Candidate[]>;
   /** 阶段 3 子方向 group 折叠状态:subqId → 是否展开。 */
   candGroupExpanded?: Record<string, boolean>;
+  /** 阶段 3 算力档位筛选器:'all' 显示全部;指定档位只显示该档位(可总结过)或显示 chip「未知」的候选。
+   *  默认 'all'(旧 session 无此字段 → undefined,UI 视作 'all')。 */
+  candResourceFilter?: ResourceTier | 'all';
   summaries: Summary[];
   chats: Record<string, ChatMsg[]>;
   /** 报告追问历史(阶段 5)。 */
