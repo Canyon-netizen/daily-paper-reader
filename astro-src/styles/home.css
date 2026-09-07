@@ -607,3 +607,70 @@
   .home .stat-value-sm { font-size: 0.85rem; }
   .home .section-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
 }
+
+/* ============================================================
+ * Research Workflow Section (2026-09-07)
+ * ============================================================ */
+.libraries-page .research-workflow-section {
+  max-width: var(--shell-max-width, 1100px);
+  margin: 0 auto 2.5rem;
+  padding: 0 1.5rem;
+}
+.libraries-page .workflow-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+  color: var(--fg);
+}
+.libraries-page .workflow-desc {
+  color: var(--fg-muted);
+  margin: 0 0 1.25rem;
+  font-size: 0.95rem;
+}
+.libraries-page .workflow-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+.libraries-page .workflow-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.25rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  transition: all var(--transition);
+}
+.libraries-page .workflow-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+}
+.libraries-page .workflow-icon {
+  font-size: 1.75rem;
+  margin-bottom: 0.5rem;
+}
+.libraries-page .workflow-label {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--fg);
+  margin-bottom: 0.25rem;
+}
+.libraries-page .workflow-desc-sm {
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+}
+
+@media (max-width: 720px) {
+  .libraries-page .workflow-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 480px) {
+  .libraries-page .workflow-cards {
+    grid-template-columns: 1fr 1fr;
+  }
+}

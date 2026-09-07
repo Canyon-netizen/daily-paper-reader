@@ -71,6 +71,36 @@ const newToday = items.filter((p) => p.date === today).length;
       </div>
     </header>
 
+    <!-- 研究工作流快捷入口 (2026-09-07) -->
+    <section class="research-workflow-section">
+      <h2 class="workflow-title">研究工作流</h2>
+      <p class="workflow-desc">
+        从想法到实验、写作、路线图 — 完整的研究生命周期管理
+      </p>
+      <div class="workflow-cards">
+        <a href={base + '/ideas/'} class="workflow-card">
+          <span class="workflow-icon">💡</span>
+          <span class="workflow-label">想法</span>
+          <span class="workflow-desc-sm">记录研究灵感</span>
+        </a>
+        <a href={base + '/experiments/'} class="workflow-card">
+          <span class="workflow-icon">🔬</span>
+          <span class="workflow-label">实验</span>
+          <span class="workflow-desc-sm">设计实验验证</span>
+        </a>
+        <a href={base + '/writing/'} class="workflow-card">
+          <span class="workflow-icon">✍️</span>
+          <span class="workflow-label">写作</span>
+          <span class="workflow-desc-sm">撰写论文笔记</span>
+        </a>
+        <a href={base + '/roadmap/'} class="workflow-card">
+          <span class="workflow-icon">🗺️</span>
+          <span class="workflow-label">路线图</span>
+          <span class="workflow-desc-sm">规划长期目标</span>
+        </a>
+      </div>
+    </section>
+
     <!-- 阅读仪表板 strip: 客户端水合,显示 3 个 KPI + 跳 /dashboard/ -->
     <section id="dashboard-strip-mount" class="dashboard-strip-mount" aria-label="阅读状态概览"></section>
     <script type="application/json" id="home-papers-data" set:html={JSON.stringify(items.map(p => ({
