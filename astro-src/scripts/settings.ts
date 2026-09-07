@@ -500,8 +500,16 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   minimax: {
     label: 'MiniMax',
     baseUrl: 'https://api.minimaxi.com/v1',
-    defaultModel: 'MiniMax-Text-01',
-    models: ['MiniMax-Text-01', 'abab6.5s-chat', 'abab5.5-chat'],
+    // 默认 MiniMax-M3(2026-09 MiniMax 主力推理模型,OpenAI 兼容 /v1/chat/completions 端点)。
+    // 老模型保留在 models 里作 fallback,用户切走再切回不会丢选项。
+    defaultModel: 'MiniMax-M3',
+    models: [
+      'MiniMax-M3',
+      'MiniMax-M2',
+      'MiniMax-Text-01',
+      'abab6.5s-chat',
+      'abab5.5-chat',
+    ],
   },
   openai: {
     label: 'OpenAI',

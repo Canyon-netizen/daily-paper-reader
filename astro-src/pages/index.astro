@@ -57,7 +57,13 @@ const newToday = items.filter((p) => p.date === today).length;
       </p>
       <div class="libraries-shortcuts" aria-label="状态">
         <span class="shortcut">📅 今日新增 <strong>{newToday}</strong></span>
-        <span class="shortcut">🕒 最近更新 {lastUpdated || '—'}</span>
+        {/* lastUpdated 是 { label, isFallback, hint? } 对象(2026-08-02 拆出后),
+            直接插值会被 Astro 渲染成 "[object Object]"。这里显式用 .label。
+            isFallback=true 时加"(数据截止)"副标让用户知道是兜底口径。 */}
+        <span
+          class={`shortcut ${lastUpdated.isFallback ? 'shortcut--fallback' : ''}`}
+          title={lastUpdated.hint || ''}
+        >🕒 最近更新 {lastUpdated.label}{lastUpdated.isFallback ? ' · 数据截止' : ''}</span>
         <a class="shortcut" href={base + '/papers/'}>📚 全部论文</a>
         <a class="shortcut" href={base + '/topic/'}>🎯 主题探索</a>
         <a class="shortcut" href={base + '/projects/'}>📂 项目工作区</a>
