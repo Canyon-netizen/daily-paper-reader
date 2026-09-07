@@ -102,6 +102,17 @@ const serverLLMConfigJson = serverLLMConfig ? JSON.stringify(serverLLMConfig) : 
     <link rel="icon" type="image/x-icon" href={`${siteBase}favicon.ico`} sizes="any" />
     <link rel="icon" type="image/png" href={`${siteBase}icon.png`} />
 
+    <!-- 学术化字体栈 (2026-09-07):
+         Source Serif 4 (正文,衬线) + Inter (UI 控件,无衬线) + JetBrains Mono (代码 / 元数据)
+         + Noto Serif SC / Noto Sans SC (中文衬线 / 无衬线,优先用衬线)
+         Google Fonts 子集化减少体积,display=swap 防 FOUC。 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300..900;1,8..60,300..900&family=Noto+Serif+SC:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap"
+    />
+
     <!-- LLM 预填配置 (2026-09-07):从 .env 注入,客户端 llm-bootstrap.ts 自动写
          localStorage。仅当 .env 含 MINIMAX_API_KEY 时存在,生产部署无此 script。 -->
     <script id="dpr-server-llm-config" type="application/json" set:html={serverLLMConfigJson}></script>
