@@ -38,3 +38,20 @@ export type {
   TopicReportDimension,
   TopicReportDimensionPaper,
 } from './topic';
+
+export type {
+  ResourceTier,
+  DataScale,
+  Difficulty,
+} from './resource-tier';
+export {
+  TIER_ORDER,
+  TIER_LABELS,
+  TIER_BADGE_LABELS,
+  DATA_SCALE_LABELS,
+  parseCount,
+  parseParamsCount,
+  parseFlopsCount,
+  inferResourceTier,
+  inferDataScale,
+} from './resource-tier';
