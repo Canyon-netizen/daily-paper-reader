@@ -117,13 +117,11 @@ export function parseCount(s: string | undefined | null): number | null {
  */
 export function parseParamsCount(s: string | undefined | null): number | null {
   if (!s || typeof s !== 'string') return null;
+  // 先试 E 指数(如 '1.5e9')— 比主 regex 更严格的优先级
+  const eMatch = s.match(/(\d+(?:\.\d+)?)\s*e\s*\+?(\d+)/i);
+  if (eMatch) return parseFloat(eMatch[1]) * Math.pow(10, parseInt(eMatch[2], 10));
   const m = s.match(/(\d+(?:\.\d+)?)\s*([bBmMkK]?)\s*(?:params?|parameters?)?/i);
-  if (!m) {
-    // 兜底:试 e 指数, 如 "1.5e9"
-    const eMatch = s.match(/(\d+(?:\.\d+)?)\s*e\s*\+?(\d+)/i);
-    if (eMatch) return parseFloat(eMatch[1]) * Math.pow(10, parseInt(eMatch[2], 10));
-    return null;
-  }
+  if (!m) return null;
   const base = parseFloat(m[1]);
   const suffix = m[2].toLowerCase();
   if (suffix === 'k') return base * 1e3;
@@ -286,11 +284,12 @@ export function inferDataScale(
   if (/[>＞]\s*1m|\bmillion\b|\b\d+\s*m\+|1m\+|100k\+|10m\+/.test(allText)) {
     return 'large';
   }
-  if (/10k|thousand|\bk\b(?!ilo)|\d+\s*k\b/.test(allText)) {
-    return 'medium';
-  }
+  // small 必须先于 medium(< 10k 不能被 medium 抢先)
   if (/[<＜]\s*10k|few\s*thousand|hundred|\d{1,3}\s*sample/.test(allText)) {
     return 'small';
+  }
+  if (/(?<![<＜])\s*10k|thousand|\bk\b(?!ilo)|\d+\s*k\b/.test(allText)) {
+    return 'medium';
   }
   return 'unknown';
 }

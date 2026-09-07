@@ -85,8 +85,8 @@
 - **🧪 实验室论文主页**：沉淀团队关注的论文脉络与阅读结果。
 - **📚 日常阅读工作台**：把发现、阅读、问答、总结集中到一个入口。
 - **🔬 单论文精读**：把 PDF / arXiv ID 丢进 paper-analyzer，得到中文摘要 + 动机 / 方法 / 结果 / 结论四段笔记 + TLDR，不用打开额外窗口。
-
-
+- **🧭 按算力分层提方向**：`/topic/` 主题报告显式给出主题级算力档位（`api_only` / `single_gpu` / `multi_gpu` / `cluster` / `tpu_pod`）+ 每个 dimension 末尾「研究思路」（`idea` + `pipeline` 步骤 + 难度 + 预估耗时），告诉读者"这个方向大概需要多少算力、能怎么入手"。
+- **🌱 找前沿方向**：主题报告含结构化 `frontierDirections[]`（区别于 `gaps`），每条带关联论文 ID，告诉你"哪些方向已经有人在做、但还没收敛"。
 
 ## 🌐 站点地图
 
@@ -97,7 +97,7 @@
 | `/` | 首页：编辑精选（近 7 天 Top 6）+ 发布日期日历（联动年 / 月切换）+ 按 `task` 标签归类的完整主题列表 + 工作流介绍 + 统计 | `components/DailyCalendar.astro`、`scripts/index-filter.ts`、`scripts/paper-selection.ts`；日历数据 `listPapers({sortBy:'date', dedup:true})`，精选数据 `listPapers({sinceDays:7, sortBy:'score', limit:6})` |
 | `/papers/` | 论文库：可搜索 / 按标签筛选的全量列表 + 论文详情抽屉 + 用户标签编辑 / 隐藏管理 | `components/PaperLibrary.astro`；用户标签 / 隐藏论文可同步到 Gist |
 | `/papers/<slug>/` | 单篇详情：摘要 + 速览 + 全文笔记 + 图集 + **paper-chat 全文模式**（本地 `.txt` 优先，ar5iv 兜底） | `scripts/paper-chat.ts`、`scripts/paper-fulltext.ts`、`scripts/paper-figures.ts`、`scripts/paper-hide.ts` |
-| `/topic/` | 主题探索：5 阶段状态机（思路 → 拆解 → 搜索 → 总结 → 报告）+ 多轮追问；复用 paper-analyzer 的 LLM / arXiv 链路 | `scripts/topic-search.ts`；会话存 `localStorage` |
+| `/topic/` | 主题探索：5 阶段状态机（思路 → 拆解 → 搜索 → 总结 → 报告）+ 多轮追问；复用 paper-analyzer 的 LLM / arXiv 链路；**主题报告含前沿方向 `frontierDirections` + 主题级算力档位 `resourceTier` + 每个 dimension 的研究思路 `researchApproach` + 锚点跳转 nextSteps** | `scripts/topic-search.ts`；会话存 `localStorage`；字段定义见 [`astro-src/lib/types/topic.ts`](astro-src/lib/types/topic.ts) |
 | `/libraries/` | **文献库**：公共主题库（rl / multi-agent / llm-agent / reasoning / computer-vision 等 7 个硬编码方向）+ 用户自建文献库（`statement` / `rubric` / `anchors` / 入库阈值）；详情页 3 tab：论文 / 概念 / 笔记。三层抽象对照 Polaris [`docs/literature-management.md`](../../Polaris/docs/literature-management.md)，DPR 端权威见 [`docs/library-architecture.md`](docs/library-architecture.md) | `lib/libraries.ts`（公共库）+ `lib/user-libraries/`（用户库 CRUD + commit 漏斗）+ `lib/library/relevance.ts`（LLM 评分）+ `lib/library/graph.ts`（概念图谱）+ `scripts/library-ingest.ts`（arXiv 拉取 + 评分） |
 | `/paper-analyzer/` | 长文精读：上传 PDF / arXiv 搜索 / 历史笔记 3 个 tab；走 PDF.js 抽正文 + LLM 4 段笔记 + chunking 应对超大 PDF；arXiv 结果支持手动或自动同步到 GitHub | `scripts/paper-analyzer.ts`（导出 `searchArxiv` / `fetchArxivPdf` / `callLLM` / `SYSTEM_PROMPT`，被 `/topic/` 复用） |
 | `/conferences/` | 会议论文拉取：选会议 + 年份 → 调 GitHub REST `workflow_dispatch` 触发 `conference-init.yml` → 轮询 run 状态 | 直接 fetch `api.github.com`；不走本机后端 |
@@ -112,6 +112,41 @@
 - **论文笔记写入**：`/paper-analyzer/` 的 arXiv 分析结果可手动点「📤 保存到 GitHub」，也可在 `/settings/` 开启「论文分析 — 自动同步」；两种方式都会触发 `save-paper.yml`，把笔记写入 `docs/papers/<id>-<slug>.md`。自动同步默认关闭，仅对 arXiv 分析生效，并需要具备仓库 / Actions 写权限的 GitHub PAT。
 
 ---
+
+## 📊 字段表（论文 / 主题报告）
+
+> 这两段字段是 LLM / 后端往 markdown / JSON 里写入或派生出来的可消费结构。**改动前先确认修改波及的 6 个触碰点（type → prompt → normalize → HTML render → Markdown serialize → chatWithReport sysContext）**，否则容易漏。
+
+### 论文 frontmatter（`docs/papers/<date>/<arxiv-id>-<slug>.md`）
+
+| 字段 | 类型 | 来源 | 用途 |
+|---|---|---|---|
+| `tldr` / `motivation` / `method` / `result` / `conclusion` | string | LLM (`paper-analyzer`) | 速读 4-5 段 |
+| `context` | string | LLM | 主题语境（用户提的"主体部分过于狭窄"反馈后加宽） |
+| `contributions` | string[] | LLM (内存) | 研究贡献列表，**不写 frontmatter**，只在速读正文 `## 研究贡献` 段显示 |
+| `deep_extract` | object | LLM (`paper_deep_extract.py`) | 结构化抽取：`compute_requirements {params, gpu_hours, model_size, flops}` + `replicability_score` + `datasets[]` + `limitations[]` |
+| `resource_tier` | enum | **派生**(`inferResourceTier(deep, text)`) | 算力档位；`api_only` / `single_gpu` / `multi_gpu` / `cluster` / `tpu_pod` / `unknown`。由 backfill 写盘 |
+| `data_scale` | enum | **派生**(`inferDataScale(deep, text)`) | 数据规模；`small` / `medium` / `large` / `web_scale` / `unknown` |
+
+阈值表与文本兜底逻辑见 [`astro-src/lib/types/resource-tier.ts`](astro-src/lib/types/resource-tier.ts) + Python 镜像 [`scripts/backfill/_resource_tier_rules.py`](scripts/backfill/_resource_tier_rules.py)；阈值表改一边时**必须同步另一边**。
+
+### 主题报告（`TopicReport`，`/topic/` 阶段 5）
+
+| 字段 | 类型 | 来源 | 用途 |
+|---|---|---|---|
+| `overview` | string | LLM | 主题总览，2-3 段 |
+| `dimensions[]` | array | LLM | 横向对比维度（2-6 个），每个含 `papers[]` |
+| `dimensions[].researchApproach` | object | LLM | **目标 5**：每个 dimension 末尾的研究思路 `{idea, pipeline[], difficulty, estimatedTimeWeeks?, tiedNextStep?}` |
+| `methodsComparison` | string | LLM | 跨论文方法对比综览 |
+| `sharedFindings[]` | string[] | LLM | 共同发现 |
+| `frontierDirections[]` | object[] | LLM | **目标 3**：前沿方向，每个 `{name, description, paperArxivIds[]}`；区别于 `gaps`（没人做 vs 有人做未收敛） |
+| `gaps[]` | string[] | LLM | 研究空白 |
+| `nextSteps[]` | object[] | LLM | **目标 5**：下一步建议，每个 `{id, text, tiedDimensionName?}`；HTML 用 `<li id="nextstep-<id>">` 作 anchor，dimension 的 `tiedNextStep` 反向链接 |
+| `resourceTier` | enum | LLM | **目标 4**：主题级算力档位（综合覆盖论文的 `compute_requirements`） |
+
+`nextSteps` 旧 schema 是 `string[]` → 入口 `normalizeReportTopic` 自动迁移成 `{id: "ns_N", text}` 对象，旧 localStorage session 不挂。
+
+字段定义：[`astro-src/lib/types/topic.ts`](astro-src/lib/types/topic.ts)；6 个触碰点详见 plan [`C:\Users\admin\.claude\plans\fuzzy-floating-lemon.md`](C:/Users/admin/.claude/plans/fuzzy-floating-lemon.md)。
 
 ## 🛠️ 开发约定
 

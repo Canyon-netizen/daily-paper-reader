@@ -43,6 +43,10 @@ def parse_params_count(s: Optional[str]) -> Optional[float]:
     """解析 params 字符串,如 '7B' / '340M parameters' → 数字(单位:参数量)。"""
     if not s or not isinstance(s, str):
         return None
+    # 先试 E 指数(如 '1.5e9')— 比 _PARAMS_RE 更严格的优先级
+    em = _E_NOTATION_RE.match(s)
+    if em:
+        return float(em.group(1)) * (10 ** int(em.group(2)))
     m = _PARAMS_RE.match(s)
     if m:
         base = float(m.group(1))
@@ -55,10 +59,6 @@ def parse_params_count(s: Optional[str]) -> Optional[float]:
             return base * 1e9
         # 无单位默认 M(百万)
         return base * 1e6
-    # 兜底:e 指数
-    em = _E_NOTATION_RE.match(s)
-    if em:
-        return float(em.group(1)) * (10 ** int(em.group(2)))
     return None
 
 
@@ -243,8 +243,9 @@ def infer_data_scale(deep: Optional[dict], text_signals: Optional[str] = None) -
         return "web_scale"
     if re.search(r"[>＞]\s*1m|\bmillion\b|\b\d+\s*m\+|1m\+|100k\+|10m\+", all_text):
         return "large"
-    if re.search(r"10k|thousand|\bk\b(?!ilo)|\d+\s*k\b", all_text):
-        return "medium"
+    # small 必须先于 medium(< 10k 不能被 medium 抢先)
     if re.search(r"[<＜]\s*10k|few\s*thousand|hundred|\d{1,3}\s*sample", all_text):
         return "small"
+    if re.search(r"(?<![<＜])\s*10k|thousand|\bk\b(?!ilo)|\d+\s*k\b", all_text):
+        return "medium"
     return "unknown"
