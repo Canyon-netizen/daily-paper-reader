@@ -1,0 +1,225 @@
+/* astro-src/styles/projects-highlights.css
+ *
+ * /projects/ 高亮 tab 样式 —— 走学术报风格:
+ *   - 衬线正文(text / quote)+ 等宽 meta(日期 / 计数)
+ *   - 米白底 + 深墨 fg,左侧 1px ink 边线代替圆角卡片
+ *   - note 区域左缩进 + 灰底,呼应引用块 / 边注
+ *   - 删 / 编辑悬浮显示,不抢戏
+ */
+
+/* shell —— 占满 tab-panel 内容区 */
+.phl-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+/* 工具栏 —— 搜索 + 统计 */
+.phl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 4px;
+  background: var(--bg-elevated, #fff);
+}
+.phl-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 3px;
+  background: var(--bg, #fafafa);
+  color: var(--fg, #1a1a1a);
+  font: inherit;
+  font-size: 0.95rem;
+}
+.phl-search:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent, #7c5cff) 35%, transparent);
+  outline-offset: -1px;
+  border-color: var(--accent, #7c5cff);
+  background: var(--bg-elevated, #fff);
+}
+.phl-stats {
+  flex: 0 0 auto;
+  font-family: var(--font-mono, ui-monospace, "JetBrains Mono", monospace);
+  font-size: 0.78rem;
+  color: var(--fg-subtle, #6b7280);
+  white-space: nowrap;
+}
+
+/* 列表 */
+.phl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* 单卡 —— 用左竖线 + 米白底,代替通用"卡片"风格 */
+.phl-card {
+  position: relative;
+  padding: 1rem 1.1rem 0.85rem 1.3rem;
+  background: var(--bg-elevated, #fdfcf8);
+  border: 1px solid var(--border, #e5e7eb);
+  border-left: 3px solid var(--accent, #7c5cff);
+  border-radius: 2px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.phl-card:hover {
+  border-left-color: var(--fg, #1a1a1a);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* 引用块 —— 高亮原文 */
+.phl-quote {
+  margin: 0 0 0.7rem 0;
+  padding: 0.4rem 0 0.4rem 0.85rem;
+  border-left: 2px solid color-mix(in srgb, var(--accent, #7c5cff) 40%, transparent);
+  font-family: var(--font-serif, "Source Serif Pro", "Noto Serif SC", Georgia, serif);
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--fg, #1a1a1a);
+  letter-spacing: 0.005em;
+  font-style: italic;
+}
+
+/* note —— 跟 quote 区分:实底色 + 等宽小字 */
+.phl-note {
+  margin: 0 0 0.65rem 0.85rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.88rem;
+  line-height: 1.55;
+  border-radius: 2px;
+  border: 1px dashed transparent;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: var(--font-serif, "Source Serif Pro", "Noto Serif SC", Georgia, serif);
+}
+.phl-note--readonly {
+  background: color-mix(in srgb, var(--accent, #7c5cff) 7%, var(--bg, #fafafa));
+  border-color: color-mix(in srgb, var(--accent, #7c5cff) 25%, transparent);
+  color: var(--fg, #1a1a1a);
+}
+.phl-note--empty {
+  color: var(--fg-subtle, #9ca3af);
+  cursor: text;
+  font-style: italic;
+}
+.phl-note--editing {
+  outline: 2px solid var(--accent, #7c5cff);
+  outline-offset: -2px;
+  background: var(--bg-elevated, #fff);
+  border-color: var(--accent, #7c5cff);
+  font-style: normal;
+  color: var(--fg, #1a1a1a);
+  cursor: text;
+  min-height: 1.5em;
+}
+.phl-note:focus { outline: none; }
+
+/* meta —— paper link + date + delete */
+.phl-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.82rem;
+  color: var(--fg-subtle, #6b7280);
+}
+.phl-paper-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--accent, #7c5cff);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid transparent;
+}
+.phl-paper-link:hover {
+  border-bottom-color: var(--accent, #7c5cff);
+}
+.phl-date {
+  flex: 0 0 auto;
+  font-family: var(--font-mono, ui-monospace, "JetBrains Mono", monospace);
+  font-size: 0.74rem;
+  color: var(--fg-subtle, #9ca3af);
+}
+.phl-del {
+  flex: 0 0 auto;
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.95rem;
+  color: var(--fg-subtle, #9ca3af);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.phl-del:hover {
+  color: #b91c1c;
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+/* empty / no-match */
+.phl-empty,
+.phl-no-match {
+  margin: 1.5rem 0;
+  padding: 1.2rem 1rem;
+  text-align: center;
+  font-family: var(--font-serif, "Source Serif Pro", "Noto Serif SC", Georgia, serif);
+  font-size: 0.95rem;
+  color: var(--fg-muted, #6b7280);
+  background: var(--bg, #fafafa);
+  border: 1px dashed var(--border, #e5e7eb);
+  border-radius: 4px;
+  line-height: 1.7;
+}
+.phl-empty a {
+  color: var(--accent, #7c5cff);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* dark mode 兼容 */
+@media (prefers-color-scheme: dark) {
+  .phl-card {
+    background: var(--bg-elevated, #1f1f23);
+    border-left-color: var(--accent, #9d7bff);
+  }
+  .phl-note--readonly {
+    background: color-mix(in srgb, var(--accent, #9d7bff) 12%, transparent);
+  }
+  .phl-search {
+    background: var(--bg, #16161a);
+  }
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 600px) {
+  .phl-toolbar { flex-direction: column; align-items: stretch; }
+  .phl-stats { text-align: right; }
+  .phl-card { padding: 0.85rem 0.9rem 0.7rem 1.05rem; }
+  .phl-quote { font-size: 0.95rem; }
+}
+
+/* 项目页 高亮 tab 头(mount 之前的描述区) */
+.highlights-tab-content .highlights-header {
+  margin: 0 0 1rem 0;
+}
+.highlights-tab-content .highlights-header h3 {
+  margin: 0 0 0.35rem 0;
+  font-family: var(--font-serif, "Source Serif Pro", "Noto Serif SC", Georgia, serif);
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+}
+.highlights-tab-content .highlights-sub {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--fg-muted, #6b7280);
+  font-family: var(--font-serif, "Source Serif Pro", "Noto Serif SC", Georgia, serif);
+  line-height: 1.6;
+}
+.highlights-mount { width: 100%; }

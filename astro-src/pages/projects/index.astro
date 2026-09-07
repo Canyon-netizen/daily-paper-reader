@@ -9,6 +9,7 @@ import Navbar from '../../components/Navbar.astro';
 import '../../styles/projects.css';
 import '../../styles/writing.css';
 import '../../styles/ideas.css';
+import '../../styles/projects-highlights.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
@@ -174,7 +175,7 @@ const PROJECT_TABS = [
         </div>
       </div>
 
-      <!-- Highlights tab panel (placeholder) -->
+      <!-- Highlights tab panel (Phase B → 升级到聚合视图,见 projects-highlights-ui.ts) -->
       <div
         class="tab-panel"
         id="panel-highlights"
@@ -183,7 +184,13 @@ const PROJECT_TABS = [
         hidden
       >
         <div class="highlights-tab-content">
-          <p class="highlights-placeholder">高亮聚合（Phase B MVP）</p>
+          <div class="highlights-header">
+            <h3>🧩 论文高亮</h3>
+            <p class="highlights-sub">
+              聚合本项目所有论文的全文高亮 + 注释。回论文页选段文字 → 「🖍 添加高亮」即可入库。
+            </p>
+          </div>
+          <div id="highlights-mount" class="highlights-mount"></div>
         </div>
       </div>
     </section>
@@ -330,6 +337,7 @@ const PROJECT_TABS = [
       renderPapersTab();
       renderWritingTab();
       renderIdeasTab();
+      renderHighlightsTab();
     }
 
     // Render tabs
@@ -363,6 +371,21 @@ const PROJECT_TABS = [
         currentProjectId,
       );
       // 切换 tab 时 cleanup — 简化: 用 pagehide
+      window.addEventListener('pagehide', () => cleanup(), { once: true });
+    }
+
+    // Render highlights tab (project-level aggregation + inline note edit)
+    async function renderHighlightsTab(): Promise<void> {
+      if (!currentProjectId) return;
+      const mount = document.getElementById('highlights-mount') as HTMLElement | null;
+      if (!mount) return;
+      // 每次打开项目都重新挂载(避免上次 projectId 残留)
+      mount.innerHTML = '';
+      delete mount.dataset.phlMounted;
+      const { attachHighlightsUI } = await import(
+        /* @vite-ignore */ '../../scripts/projects-highlights-ui'
+      );
+      const { cleanup } = attachHighlightsUI(mount, currentProjectId);
       window.addEventListener('pagehide', () => cleanup(), { once: true });
     }
 
