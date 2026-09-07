@@ -136,6 +136,7 @@ const { id } = Astro.params;
 
         <div class="idea-detail-actions">
           <button type="button" class="btn btn-ghost" data-edit-idea>✏️ 编辑</button>
+          <button type="button" class="btn btn-primary" data-create-experiment>🔬 创建实验</button>
           <div class="idea-status-actions">
             ${idea.status !== 'active' ? `<button type="button" class="btn btn-sm" data-status="active">🚀 进行中</button>` : ''}
             ${idea.status !== 'promoted' ? `<button type="button" class="btn btn-sm" data-status="promoted">⭐ 推荐</button>` : ''}
@@ -149,6 +150,15 @@ const { id } = Astro.params;
       // Attach event listeners
       container.querySelector<HTMLButtonElement>('[data-edit-idea]')?.addEventListener('click', () => {
         openEditModal(idea);
+      });
+
+      container.querySelector<HTMLButtonElement>('[data-create-experiment]')?.addEventListener('click', () => {
+        // Navigate to experiments page with prefill data via URL params
+        const params = new URLSearchParams();
+        params.set('from_idea', idea.id);
+        params.set('title', idea.title);
+        params.set('hypothesis', idea.description);
+        window.location.href = `${baseUrl}/experiments/?${params.toString()}`;
       });
 
       container.querySelectorAll<HTMLButtonElement>('[data-status]').forEach((btn) => {

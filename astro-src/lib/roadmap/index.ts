@@ -107,6 +107,20 @@ function parseGoalsFromContent(content: string): RoadmapGoal[] {
         currentGoal.descriptionZh = descZhMatch[1].trim();
         continue;
       }
+
+      // Issue #26: Parse due date
+      const dueDateMatch = trimmed.match(/^\*\*(DueDate|截止日期)\*\*:\s*(\d{4}-\d{2}-\d{2})/);
+      if (dueDateMatch) {
+        currentGoal.dueDate = dueDateMatch[2];
+        continue;
+      }
+
+      // Issue #8: Parse sprint
+      const sprintMatch = trimmed.match(/^\*\*(Sprint|Sprint 周期)\*\*:\s*(.+)$/);
+      if (sprintMatch) {
+        currentGoal.sprint = sprintMatch[2].trim();
+        continue;
+      }
     }
   }
 
@@ -133,6 +147,10 @@ function parseQuartersFromContent(content: string): RoadmapQuarter[] {
     const yearMatch = qContent.match(/(20\d{2})/);
     const year = yearMatch ? parseInt(yearMatch[1]) : new Date().getFullYear();
 
+    // Issue #8: Extract granularity from quarter header
+    const granularityMatch = qContent.match(/\[(quarter|month|sprint)\]/i);
+    const granularity = granularityMatch ? granularityMatch[1].toLowerCase() as RoadmapQuarter['granularity'] : 'quarter';
+
     const goals = parseGoalsFromContent(qContent);
 
     quarters.push({
@@ -141,6 +159,7 @@ function parseQuartersFromContent(content: string): RoadmapQuarter[] {
       quarter: qNum as 1 | 2 | 3 | 4,
       title,
       titleZh: title, // Could be enhanced with explicit zh title
+      granularity,
       goals,
     });
   }
@@ -245,4 +264,84 @@ export function getAllRoadmapIds(): string[] {
   return fs.readdirSync(ROADMAP_DIR)
     .filter(f => f.endsWith('.md'))
     .map(f => f.replace('.md', ''));
+}
+
+// ========== Client-side localStorage functions (Issue #6, #7) ==========
+
+const ROADMAP_STORAGE_KEY = 'dpr_roadmaps';
+
+/** Get all roadmaps from localStorage (client-side only) */
+export function getClientRoadmaps(): Roadmap[] {
+  if (typeof window === 'undefined') return [];
+  const stored = localStorage.getItem(ROADMAP_STORAGE_KEY);
+  if (!stored) return [];
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return [];
+  }
+}
+
+/** Save roadmaps to localStorage (client-side only) */
+export function saveClientRoadmaps(roadmaps: Roadmap[]): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(ROADMAP_STORAGE_KEY, JSON.stringify(roadmaps));
+}
+
+/** Create a new roadmap (client-side) */
+export function createRoadmap(data: Omit<Roadmap, 'id' | 'createdAt' | 'updatedAt'>): Roadmap {
+  const roadmaps = getClientRoadmaps();
+  const id = `roadmap-${Date.now()}`;
+  const now = new Date().toISOString();
+  const newRoadmap: Roadmap = {
+    ...data,
+    id,
+    createdAt: now,
+    updatedAt: now,
+  };
+  roadmaps.push(newRoadmap);
+  saveClientRoadmaps(roadmaps);
+  return newRoadmap;
+}
+
+/** Update an existing roadmap (client-side) */
+export function updateRoadmap(id: string, updates: Partial<Roadmap>): Roadmap | null {
+  const roadmaps = getClientRoadmaps();
+  const idx = roadmaps.findIndex(r => r.id === id);
+  if (idx === -1) return null;
+  roadmaps[idx] = {
+    ...roadmaps[idx],
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+  saveClientRoadmaps(roadmaps);
+  return roadmaps[idx];
+}
+
+/** Update goal status (client-side) - Issue #7 */
+export function updateGoalStatus(roadmapId: string, quarterId: string, goalId: string, status: RoadmapGoal['status']): Roadmap | null {
+  const roadmaps = getClientRoadmaps();
+  const roadmap = roadmaps.find(r => r.id === roadmapId);
+  if (!roadmap) return null;
+
+  const quarter = roadmap.quarters.find(q => q.id === quarterId);
+  if (!quarter) return null;
+
+  const goal = quarter.goals.find(g => g.id === goalId);
+  if (!goal) return null;
+
+  goal.status = status;
+  roadmap.updatedAt = new Date().toISOString();
+  saveClientRoadmaps(roadmaps);
+  return roadmap;
+}
+
+/** Delete a roadmap (client-side) */
+export function deleteRoadmap(id: string): boolean {
+  const roadmaps = getClientRoadmaps();
+  const idx = roadmaps.findIndex(r => r.id === id);
+  if (idx === -1) return false;
+  roadmaps.splice(idx, 1);
+  saveClientRoadmaps(roadmaps);
+  return true;
 }

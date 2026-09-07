@@ -51,10 +51,58 @@ export interface Experiment {
   updatedAt: string;
   /** 实验负责人 */
   owner: string;
+  /** 关联的想法 ID */
+  relatedIdeas?: string[];
 }
 
 export interface ExperimentDigest {
   experiment: Experiment;
   paperCount: number;
   latestDate: string;
+}
+
+/** localStorage key for experiments */
+export const EXPERIMENTS_KEY = 'dpr_experiments';
+
+/** Schema version for migration */
+export const EXPERIMENTS_SCHEMA_VERSION = 1;
+
+export interface ExperimentsDoc {
+  schemaVersion: number;
+  experiments: Record<string, Experiment>;
+}
+
+/** Create new experiment data with defaults */
+export function createExperimentData(
+  title: string,
+  hypothesis: string,
+  method: string,
+  titleZh: string = '',
+  hypothesisZh: string = '',
+  methodZh: string = ''
+): Experiment {
+  const now = new Date().toISOString().split('T')[0];
+  const idBase = title.toLowerCase()
+    .replace(/[^a-z0-9一-龥]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return {
+    id: `${idBase}-${Date.now()}`,
+    title,
+    titleZh: titleZh || title,
+    hypothesis,
+    hypothesisZh: hypothesisZh || hypothesis,
+    method,
+    methodZh: methodZh || method,
+    variables: [],
+    expectedResults: '',
+    expectedResultsZh: '',
+    status: 'planning',
+    relatedPapers: [],
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+    owner: 'User',
+    relatedIdeas: [],
+  };
 }

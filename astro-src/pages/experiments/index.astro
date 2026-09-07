@@ -3,43 +3,17 @@
 //
 // 结构化实验设计:hypothesis/method/variables/results。
 // 卡片网格 + 状态过滤(全部/规划中/进行中/已完成/失败/暂停)。
+// 支持客户端创建/编辑实验 (localStorage)。
 
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
-import { buildExperimentDigests } from '../../lib/experiments';
-import type { ExperimentStatus } from '../../lib/experiments/types';
 import '../../styles/experiments.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
-// 状态过滤参数
-const url = Astro.url;
-const statusParam = url.searchParams.get('status') as ExperimentStatus | null;
-const statusFilter = statusParam || 'all';
-
-const digests = buildExperimentDigests();
-const experiments = statusFilter === 'all'
-  ? digests
-  : digests.filter((d) => d.experiment.status === statusFilter);
-
-const statusCounts = {
-  all: digests.length,
-  planning: digests.filter((d) => d.experiment.status === 'planning').length,
-  running: digests.filter((d) => d.experiment.status === 'running').length,
-  completed: digests.filter((d) => d.experiment.status === 'completed').length,
-  failed: digests.filter((d) => d.experiment.status === 'failed').length,
-  paused: digests.filter((d) => d.experiment.status === 'paused').length,
-};
-
-const statusLabels: Record<string, string> = {
-  all: '全部',
-  planning: '规划中',
-  running: '进行中',
-  completed: '已完成',
-  failed: '失败',
-  paused: '暂停',
-};
+// SSR-side: we can't read localStorage, so just render an empty shell
+// The client-side JS (experiments-ui.ts) will hydrate and load experiments from localStorage
 ---
 
 <BaseLayout
@@ -54,75 +28,165 @@ const statusLabels: Record<string, string> = {
       <p class="lead">
         结构化实验:hypothesis / method / variables / results。
         跟踪消融实验、模型对比、用户研究等完整实验流程。
-        共 <strong>{digests.length}</strong> 个实验。
       </p>
     </header>
 
     <div class="experiments-actionbar">
-      <span class="exp-segmented" data-status-filter>
-        <button class="active" type="button" data-status-value="all">全部 ({statusCounts.all})</button>
-        <button type="button" data-status-value="planning">规划中 ({statusCounts.planning})</button>
-        <button type="button" data-status-value="running">进行中 ({statusCounts.running})</button>
-        <button type="button" data-status-value="completed">已完成 ({statusCounts.completed})</button>
-        <button type="button" data-status-value="failed">失败 ({statusCounts.failed})</button>
-        <button type="button" data-status-value="paused">暂停 ({statusCounts.paused})</button>
-      </span>
-      <span class="experiments-actionbar-spacer"></span>
+      <div class="exp-segmented" data-exp-filter>
+        <button type="button" data-exp-filter="all">全部</button>
+        <button type="button" data-exp-filter="planning">规划中</button>
+        <button type="button" data-exp-filter="running">进行中</button>
+        <button type="button" data-exp-filter="completed">已完成</button>
+        <button type="button" data-exp-filter="failed">失败</button>
+        <button type="button" data-exp-filter="paused">暂停</button>
+      </div>
+      <span class="exp-count" data-exp-count>加载中...</span>
+      <button type="button" class="btn btn-primary btn-sm" data-open-new-experiment>
+        ➕ 新建实验
+      </button>
     </div>
 
-    {experiments.length === 0 ? (
-      <div class="experiments-empty">
-        <div class="experiments-empty-icon">🔬</div>
-        <h3 class="experiments-empty-title">没有匹配的实验</h3>
-        <p class="experiments-empty-desc">试试选择其他状态过滤条件。</p>
-      </div>
-    ) : (
-      <div class="experiments-grid">
-        {experiments.map((d) => (
-          <a class="exp-card" href={base + '/experiments/' + d.experiment.id + '/'}>
-            <div class="exp-card-header">
-              <h2 class="exp-title">{d.experiment.title}</h2>
-              <span class={`exp-status exp-status--${d.experiment.status}`}>
-                {statusLabels[d.experiment.status] || d.experiment.status}
-              </span>
-            </div>
-            <p class="exp-title-zh">{d.experiment.titleZh}</p>
-            <p class="exp-hypothesis">{d.experiment.hypothesis}</p>
-            <div class="exp-tags">
-              {d.experiment.tags.slice(0, 4).map((t) => (
-                <span class="exp-tag">{t}</span>
-              ))}
-            </div>
-            <div class="exp-meta">
-              <span>📄 {d.paperCount} 篇相关论文</span>
-              <span>更新于 {d.latestDate}</span>
-            </div>
-          </a>
-        ))}
-      </div>
-    )}
+    <div id="experiments-grid" class="experiments-grid">
+      <!-- Client-side rendered -->
+      <noscript>
+        <p class="experiments-nojs">
+          实验功能需要 JavaScript 渲染 — 数据存在浏览器 localStorage。
+        </p>
+      </noscript>
+    </div>
   </main>
 
   <Footer />
 
+  <!-- New Experiment Modal -->
+  <dialog id="experiment-modal" class="experiment-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>新建实验</h2>
+        <button type="button" class="modal-close" aria-label="关闭">×</button>
+      </div>
+      <form id="experiment-form" class="experiment-form">
+        <div class="form-group">
+          <label for="exp-title">实验标题 (英文)</label>
+          <input
+            type="text"
+            id="exp-title"
+            name="title"
+            required
+            placeholder="例如: Ablation Study: LLM Scaling Laws"
+            maxlength="150"
+          />
+        </div>
+        <div class="form-group">
+          <label for="exp-title-zh">实验标题 (中文)</label>
+          <input
+            type="text"
+            id="exp-title-zh"
+            name="titleZh"
+            placeholder="例如: 消融实验:LLM Scaling Laws"
+            maxlength="150"
+          />
+        </div>
+        <div class="form-group">
+          <label for="exp-hypothesis">实验假设 (英文)</label>
+          <textarea
+            id="exp-hypothesis"
+            name="hypothesis"
+            required
+            rows="3"
+            placeholder="描述你的实验假设..."
+          ></textarea>
+        </div>
+        <div class="form-group">
+          <label for="exp-hypothesis-zh">实验假设 (中文)</label>
+          <textarea
+            id="exp-hypothesis-zh"
+            name="hypothesisZh"
+            rows="2"
+            placeholder="中文描述..."
+          ></textarea>
+        </div>
+        <div class="form-group">
+          <label for="exp-method">实验方法 (英文)</label>
+          <textarea
+            id="exp-method"
+            name="method"
+            required
+            rows="3"
+            placeholder="描述实验方法、数据集、评估指标..."
+          ></textarea>
+        </div>
+        <div class="form-group">
+          <label for="exp-method-zh">实验方法 (中文)</label>
+          <textarea
+            id="exp-method-zh"
+            name="methodZh"
+            rows="2"
+            placeholder="中文描述..."
+          ></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="exp-expected-results">预期结果 (英文)</label>
+            <textarea
+              id="exp-expected-results"
+              name="expectedResults"
+              rows="2"
+              placeholder="预期实验结果..."
+            ></textarea>
+          </div>
+          <div class="form-group">
+            <label for="exp-expected-results-zh">预期结果 (中文)</label>
+            <textarea
+              id="exp-expected-results-zh"
+              name="expectedResultsZh"
+              rows="2"
+              placeholder="中文描述..."
+            ></textarea>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="exp-related-ideas">关联想法 (ID, 逗号分隔)</label>
+          <input
+            type="text"
+            id="exp-related-ideas"
+            name="relatedIdeas"
+            placeholder="idea-xxx, idea-yyy"
+          />
+        </div>
+        <div class="form-group">
+          <label for="exp-related-papers">关联论文 (arXiv ID, 逗号分隔)</label>
+          <input
+            type="text"
+            id="exp-related-papers"
+            name="relatedPapers"
+            placeholder="1706.03762, 2008.11826"
+          />
+        </div>
+        <div class="form-group">
+          <label for="exp-tags">标签 (逗号分隔)</label>
+          <input
+            type="text"
+            id="exp-tags"
+            name="tags"
+            placeholder="ablation, scaling, benchmark"
+          />
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost modal-cancel">取消</button>
+          <button type="submit" class="btn btn-primary">创建实验</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
   <script>
-    // Client-side status filter
-    const buttons = document.querySelectorAll<HTMLButtonElement>('[data-status-filter] button');
-    const baseUrl = window.location.pathname.replace(/\/$/, '');
+    import '../../scripts/experiments-ui';
+    import { updateCounts } from '../../scripts/experiments-ui';
 
-    buttons.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const status = btn.dataset.statusValue || 'all';
-
-        // Update active state
-        buttons.forEach((b) => b.classList.toggle('active', b === btn));
-
-        // Update URL and reload for SSR re-render
-        const newUrl = status === 'all'
-          ? baseUrl
-          : `${baseUrl}?status=${status}`;
-        window.location.href = newUrl;
-      });
+    // Initialize counts on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      updateCounts();
     });
   </script>
 </BaseLayout>

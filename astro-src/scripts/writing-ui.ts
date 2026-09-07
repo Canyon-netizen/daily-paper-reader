@@ -3,7 +3,7 @@
 // Handles:
 // - Loading/rendering writings from localStorage
 // - Creating new writings
-// - Editing sections
+// - Editing sections with markdown preview
 // - Managing citations
 // - Status changes
 // - Version history
@@ -19,6 +19,10 @@ import {
   removeCitation,
 } from '../lib/writing';
 import type { Writing, WritingStatus, WritingType, WritingSection, PaperRef } from '../lib/writing/types';
+
+// Check if marked is available (will be loaded from CDN)
+declare const marked: any;
+declare const katex: any;
 
 // Status labels
 const STATUS_LABELS: Record<WritingStatus, string> = {
@@ -49,8 +53,37 @@ function initListPage(): void {
   if (writings.length === 0) {
     (grid as HTMLElement).style.display = 'none';
     (emptyState as HTMLElement).style.display = 'block';
+
+    // Show sample data for new users
+    const isFirstVisit = !localStorage.getItem('dpr_has_writings');
+    if (isFirstVisit) {
+      const container = document.querySelector('#all-writings');
+      if (container) {
+        container.insertAdjacentHTML('beforeend', `
+          <div class="writing-sample" data-writing-sample>
+            <p class="writing-sample-label">示例写作:</p>
+            <div class="writing-card">
+              <div class="writing-card-header">
+                <h2 class="writing-card-title">Transformer 注意力机制综述</h2>
+                <span class="writing-card-type">综述</span>
+              </div>
+              <span class="writing-card-status draft">草稿</span>
+              <p class="writing-card-abstract">系统回顾自注意力机制在自然语言处理中的发展，从原始 Transformer 到现代变体...</p>
+              <div class="writing-card-meta">
+                <span>📝 8 章节</span>
+                <span>📚 12 引用</span>
+              </div>
+            </div>
+            <p class="writing-sample-hint">这是示例，点击「➕ 新建写作」创建你自己的</p>
+          </div>
+        `);
+      }
+    }
     return;
   }
+
+  // Mark that user has created at least one writing
+  localStorage.setItem('dpr_has_writings', 'true');
 
   (emptyState as HTMLElement).style.display = 'none';
   (grid as HTMLElement).style.display = 'grid';
@@ -186,25 +219,56 @@ function renderDetailPage(): void {
   renderVersions();
 }
 
-// Render sections
+// Render sections with markdown preview support
 function renderSections(): void {
   const container = document.querySelector('[data-sections-container]');
   if (!container || !currentWriting) return;
 
-  container.innerHTML = currentWriting.sections.map((section, idx) => `
-    <div class="writing-section" data-section-id="${section.id}">
-      <div class="writing-section-header">
-        <h3 class="writing-section-title">${escapeHtml(section.title)}</h3>
-        <span class="writing-section-toggle">${section.content ? '✓ 已填写' : '空'}</span>
+  // Word count guidance by section type
+  const wordCountGuidance: Record<string, string> = {
+    abstract: '200-300 字',
+    introduction: '800-1500 字',
+    method: '1000-2000 字',
+    experiments: '1500-3000 字',
+    results: '1000-2000 字',
+    discussion: '800-1500 字',
+    conclusion: '200-500 字',
+    references: '按引用格式',
+  };
+
+  container.innerHTML = currentWriting.sections.map((section, idx) => {
+    const mode = markdownPreviewMode[section.id] || 'edit';
+    const wordCount = countWords(section.content);
+    const guidance = wordCountGuidance[section.id] || '';
+    const hasContent = section.content.length > 0;
+
+    return `
+      <div class="writing-section" data-section-id="${section.id}">
+        <div class="writing-section-header">
+          <h3 class="writing-section-title">${escapeHtml(section.title)}</h3>
+          <div class="writing-section-actions">
+            <span class="writing-section-wordcount">${wordCount} 字 ${guidance ? `· ${guidance}` : ''}</span>
+            <button type="button" class="btn btn-ghost btn-xs section-mode-toggle" data-toggle-mode="${section.id}">
+              ${mode === 'edit' ? '👁️ 预览' : '✏️ 编辑'}
+            </button>
+            <span class="writing-section-status">${hasContent ? '✓ 已填写' : '空'}</span>
+          </div>
+        </div>
+        <div class="writing-section-content ${mode}">
+          ${mode === 'edit' ? `
+            <textarea
+              placeholder="在此输入 ${section.title} 内容...（支持 Markdown 和 LaTeX，例：$x^2$ 或 $$E=mc^2$$）"
+              data-section-content="${section.id}"
+            >${escapeHtml(section.content)}</textarea>
+          ` : `
+            <div class="writing-section-preview markdown-body" data-section-preview="${section.id}">
+              ${renderMarkdown(section.content) || '<p class="muted">无内容</p>'}
+            </div>
+          `}
+        </div>
       </div>
-      <div class="writing-section-content">
-        <textarea
-          placeholder="在此输入 ${section.title} 内容..."
-          data-section-content="${section.id}"
-        >${escapeHtml(section.content)}</textarea>
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 
   // Setup section change listeners
   container.querySelectorAll<HTMLTextAreaElement>('[data-section-content]').forEach(textarea => {
@@ -215,12 +279,29 @@ function renderSections(): void {
       const section = currentWriting.sections.find(s => s.id === sectionId);
       if (section) {
         section.content = textarea.value;
+        // Update word count display
+        const wordCountEl = container.querySelector(`[data-section-id="${sectionId}"] .writing-section-wordcount`);
+        if (wordCountEl) {
+          const wordCount = countWords(textarea.value);
+          const guidance = wordCountGuidance[sectionId] || '';
+          wordCountEl.textContent = `${wordCount} 字 ${guidance ? `· ${guidance}` : ''}`;
+        }
+      }
+    });
+  });
+
+  // Setup mode toggle listeners
+  container.querySelectorAll<HTMLButtonElement>('[data-toggle-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sectionId = btn.getAttribute('data-toggle-mode');
+      if (sectionId) {
+        toggleSectionMode(sectionId);
       }
     });
   });
 }
 
-// Render citations
+// Render citations with paper titles
 function renderCitations(): void {
   const container = document.querySelector('[data-citations-list]');
   if (!container || !currentWriting) return;
@@ -235,12 +316,18 @@ function renderCitations(): void {
   container.innerHTML = citations.map(c => `
     <div class="writing-citation" data-citation-arxiv="${c.arxivId}">
       <div class="writing-citation-info">
-        <span class="writing-citation-arxiv">arXiv: ${escapeHtml(c.arxivId)}</span>
+        <span class="writing-citation-arxiv"><a href="/papers/${c.arxivId}/" target="_blank">arXiv: ${escapeHtml(c.arxivId)}</a></span>
+        <span class="writing-citation-title" data-citation-title="${c.arxivId}">加载中...</span>
         ${c.context ? `<span class="writing-citation-context">${escapeHtml(c.context)}</span>` : ''}
       </div>
       <button type="button" class="writing-citation-remove" data-remove-citation="${c.arxivId}">移除</button>
     </div>
   `).join('');
+
+  // Load paper titles asynchronously
+  citations.forEach(c => {
+    loadPaperTitle(c.arxivId);
+  });
 
   // Setup remove citation listeners
   container.querySelectorAll<HTMLButtonElement>('[data-remove-citation]').forEach(btn => {
@@ -252,6 +339,189 @@ function renderCitations(): void {
       renderCitations();
     });
   });
+}
+
+// Load paper title from localStorage
+const paperTitleCache: Record<string, string> = {};
+
+async function loadPaperTitle(arxivId: string): Promise<void> {
+  // Check cache first
+  if (paperTitleCache[arxivId]) {
+    updatePaperTitleElement(arxivId, paperTitleCache[arxivId]);
+    return;
+  }
+
+  try {
+    // Try to get from papers stored in localStorage (same as idea module)
+    const stored = localStorage.getItem('dpr_papers_v1');
+    if (stored) {
+      const papers = JSON.parse(stored);
+      const paper = papers[arxivId] || papers[arxivId.replace(/^arxiv:/, '')];
+      if (paper?.title) {
+        paperTitleCache[arxivId] = paper.title;
+        updatePaperTitleElement(arxivId, paper.title);
+        return;
+      }
+    }
+
+    // If not found locally, try fetching from the papers API
+    const response = await fetch(`/api/papers/${arxivId}`);
+    if (response.ok) {
+      const paper = await response.json();
+      if (paper?.title) {
+        paperTitleCache[arxivId] = paper.title;
+        updatePaperTitleElement(arxivId, paper.title);
+        return;
+      }
+    }
+
+    // Not found
+    updatePaperTitleElement(arxivId, '（论文未找到）');
+  } catch {
+    updatePaperTitleElement(arxivId, '（加载失败）');
+  }
+}
+
+function updatePaperTitleElement(arxivId: string, title: string): void {
+  const el = document.querySelector(`[data-citation-title="${arxivId}"]`);
+  if (el) {
+    el.textContent = title;
+  }
+}
+
+// Setup citation picker
+function setupCitationPicker(): void {
+  const addBtn = document.querySelector('[data-add-citation]');
+  const arxivInput = document.getElementById('citation-arxiv-id') as HTMLInputElement;
+  const contextInput = document.getElementById('citation-context') as HTMLInputElement;
+
+  if (!addBtn || !arxivInput) return;
+
+  addBtn.addEventListener('click', () => {
+    if (!currentWriting) return;
+
+    const arxivId = arxivInput.value.trim();
+    if (!arxivId) {
+      alert('请输入 arXiv ID');
+      return;
+    }
+
+    // Normalize arxiv ID (remove version suffix)
+    const normalizedId = arxivId.replace(/v\d+$/, '');
+    const context = contextInput?.value.trim();
+
+    addCitation(currentWriting.id, normalizedId, context);
+    currentWriting = getWriting(currentWriting.id);
+    renderCitations();
+
+    // Clear inputs
+    arxivInput.value = '';
+    if (contextInput) contextInput.value = '';
+  });
+
+  // Add search button to open citation picker modal
+  const searchBtn = document.querySelector('[data-open-citation-picker]');
+  if (searchBtn) {
+    searchBtn.addEventListener('click', () => {
+      openCitationPickerModal();
+    });
+  }
+}
+
+// Citation picker modal
+function openCitationPickerModal(): void {
+  const modal = document.getElementById('citation-picker-modal');
+  if (modal) {
+    modal.classList.add('open');
+    initCitationPickerSearch();
+  }
+}
+
+function closeCitationPickerModal(): void {
+  const modal = document.getElementById('citation-picker-modal');
+  if (modal) {
+    modal.classList.remove('open');
+  }
+}
+
+// Setup modal close handlers
+function setupModalCloseHandlers(): void {
+  // Close citation picker on backdrop click
+  document.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.matches('[data-close-modal]') || target.closest('[data-close-modal]')) {
+      closeCitationPickerModal();
+    }
+    if (target.matches('[data-close-citation-picker]') || target.closest('[data-close-citation-picker]')) {
+      closeCitationPickerModal();
+    }
+  });
+
+  // Close on Escape key
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeCitationPickerModal();
+    }
+  });
+}
+
+async function initCitationPickerSearch(): Promise<void> {
+  const searchInput = document.getElementById('citation-search-input') as HTMLInputElement;
+  const resultsContainer = document.getElementById('citation-search-results');
+  if (!searchInput || !resultsContainer) return;
+
+  // Load papers from localStorage
+  let papers: any[] = [];
+  try {
+    const stored = localStorage.getItem('dpr_papers_v1');
+    if (stored) {
+      papers = Object.values(JSON.parse(stored));
+    }
+  } catch { /* ignore */ }
+
+  // Filter papers as user types
+  const filterAndRender = async () => {
+    const query = searchInput.value.toLowerCase().trim();
+    if (!query) {
+      resultsContainer.innerHTML = '<p class="muted">输入关键词搜索论文</p>';
+      return;
+    }
+
+    const filtered = papers.filter(p =>
+      p.title?.toLowerCase().includes(query) ||
+      p.authors?.some((a: string) => a.toLowerCase().includes(query)) ||
+      p.arxivId?.toLowerCase().includes(query)
+    ).slice(0, 20);
+
+    if (filtered.length === 0) {
+      resultsContainer.innerHTML = '<p class="muted">未找到匹配的论文</p>';
+      return;
+    }
+
+    resultsContainer.innerHTML = filtered.map(p => `
+      <div class="citation-picker-result" data-select-citation="${p.arxivId}">
+        <div class="citation-picker-result-title">${escapeHtml(p.title || '无标题')}</div>
+        <div class="citation-picker-result-meta">arXiv: ${escapeHtml(p.arxivId || '')} · ${escapeHtml(p.authors?.slice(0, 3).join(', ') || '')}</div>
+      </div>
+    `).join('');
+
+    // Add click handlers
+    resultsContainer.querySelectorAll<HTMLElement>('[data-select-citation]').forEach(el => {
+      el.addEventListener('click', () => {
+        const arxivId = el.getAttribute('data-select-citation');
+        if (arxivId && currentWriting) {
+          addCitation(currentWriting.id, arxivId.replace(/v\d+$/, ''));
+          currentWriting = getWriting(currentWriting.id);
+          renderCitations();
+          closeCitationPickerModal();
+        }
+      });
+    });
+  };
+
+  searchInput.addEventListener('input', filterAndRender);
+  // Initial state
+  resultsContainer.innerHTML = '<p class="muted">输入关键词搜索论文</p>';
 }
 
 // Render versions
@@ -280,6 +550,59 @@ function countWords(text: string): number {
   const englishWords = text.match(/[a-zA-Z]+/g) || [];
   const chineseChars = text.match(/[一-龥]/g) || [];
   return englishWords.length + chineseChars.length;
+}
+
+// Render markdown content with preview mode
+let markdownPreviewMode: Record<string, 'edit' | 'preview'> = {};
+
+function renderMarkdown(text: string): string {
+  if (!text) return '';
+
+  try {
+    // First render LaTeX (inline and block)
+    let rendered = text
+      // Block math: $$...$$
+      .replace(/\$\$([^$]+)\$\$/g, (_, math) => {
+        try {
+          return katex?.renderToString(math, { displayMode: true, throwOnError: false })
+            || `<pre>${escapeHtml(math)}</pre>`;
+        } catch {
+          return `<pre>${escapeHtml(math)}</pre>`;
+        }
+      })
+      // Inline math: $...$
+      .replace(/\$([^$\n]+)\$/g, (_, math) => {
+        try {
+          return katex?.renderToString(math, { displayMode: false, throwOnError: false })
+            || escapeHtml(math);
+        } catch {
+          return escapeHtml(math);
+        }
+      });
+
+    // Then render markdown (if marked is available)
+    if (typeof marked !== 'undefined' && marked.parse) {
+      rendered = marked.parse(rendered);
+    } else {
+      // Fallback: escape HTML and convert basic markdown
+      rendered = escapeHtml(text)
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\n/g, '<br>');
+    }
+
+    return rendered;
+  } catch {
+    return escapeHtml(text);
+  }
+}
+
+// Toggle between edit and preview mode
+function toggleSectionMode(sectionId: string): void {
+  const current = markdownPreviewMode[sectionId] || 'edit';
+  markdownPreviewMode[sectionId] = current === 'edit' ? 'preview' : 'edit';
+  renderSections();
 }
 
 // Setup modal functionality
@@ -464,7 +787,8 @@ function init(): void {
     setupSave();
     setupStatusChange();
     setupDelete();
-    setupAddCitation();
+    setupCitationPicker();
+    setupModalCloseHandlers();
   }
 }
 

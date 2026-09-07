@@ -1,18 +1,13 @@
 // astro-src/lib/experiments/index.ts
 //
 // Data access for structured experiments.
+// Supports both hardcoded defaults and localStorage persistence.
 
-import type { Experiment, ExperimentDigest, ExperimentStatus } from './types';
+import type { Experiment, ExperimentDigest, ExperimentStatus, ExperimentsDoc } from './types';
+import { EXPERIMENTS_KEY, EXPERIMENTS_SCHEMA_VERSION, createExperimentData } from './types';
 
-/** 全局实验清单.
- *
- * 对照 Polaris ExperimentsPage:
- *   - 实验是结构化的 hypothesis/method/variables/results 设计
- *   - 可关联多篇论文
- *   - 有状态流转: planning → running → completed/failed/paused
- *
- * 新增实验:在 EXPERIMENTS 加一条,不需要新代码路径。 */
-export const EXPERIMENTS: Experiment[] = [
+/** Default experiments (for initial data) */
+const DEFAULT_EXPERIMENTS: Experiment[] = [
   {
     id: 'ablation-llm-scale',
     title: 'Ablation Study: LLM Scaling Laws in Instruction Tuning',
@@ -36,6 +31,7 @@ export const EXPERIMENTS: Experiment[] = [
     createdAt: '2026-01-15',
     updatedAt: '2026-06-20',
     owner: 'DPR',
+    relatedIdeas: [],
   },
   {
     id: 'model-comparison-gpt4o-vs-sonnet',
@@ -60,6 +56,7 @@ export const EXPERIMENTS: Experiment[] = [
     createdAt: '2026-02-10',
     updatedAt: '2026-07-15',
     owner: 'DPR',
+    relatedIdeas: [],
   },
   {
     id: 'user-study-rag-accuracy',
@@ -82,6 +79,7 @@ export const EXPERIMENTS: Experiment[] = [
     createdAt: '2026-05-01',
     updatedAt: '2026-09-01',
     owner: 'DPR',
+    relatedIdeas: [],
   },
   {
     id: 'prompt-engineering-chain-of-thought',
@@ -103,6 +101,7 @@ export const EXPERIMENTS: Experiment[] = [
     createdAt: '2026-03-20',
     updatedAt: '2026-08-10',
     owner: 'DPR',
+    relatedIdeas: [],
   },
   {
     id: 'hyperparameter-learning-rate-llm',
@@ -127,21 +126,122 @@ export const EXPERIMENTS: Experiment[] = [
     createdAt: '2026-04-05',
     updatedAt: '2026-07-30',
     owner: 'DPR',
+    relatedIdeas: [],
   },
 ];
 
-const BY_ID = new Map<string, Experiment>(EXPERIMENTS.map((e) => [e.id, e]));
-
-export function getExperiment(id: string): Experiment | null {
-  return BY_ID.get(id) || null;
+/** Load experiments from localStorage or return defaults */
+export function loadExperiments(): ExperimentsDoc {
+  if (typeof window === 'undefined') {
+    return { schemaVersion: EXPERIMENTS_SCHEMA_VERSION, experiments: {} };
+  }
+  try {
+    const raw = localStorage.getItem(EXPERIMENTS_KEY);
+    if (raw) {
+      const doc = JSON.parse(raw) as ExperimentsDoc;
+      if (doc.schemaVersion === EXPERIMENTS_SCHEMA_VERSION) {
+        return doc;
+      }
+    }
+  } catch (e) {
+    console.warn('[experiments] Failed to load experiments:', e);
+  }
+  // Initialize with defaults if no stored data
+  const defaultDoc: ExperimentsDoc = {
+    schemaVersion: EXPERIMENTS_SCHEMA_VERSION,
+    experiments: {},
+  };
+  DEFAULT_EXPERIMENTS.forEach((exp) => {
+    defaultDoc.experiments[exp.id] = exp;
+  });
+  return defaultDoc;
 }
 
-/** 获取实验摘要列表.
- *
- * @param items 可选,传入论文列表以计算相关论文数
- */
+/** Save experiments to localStorage */
+export function saveExperiments(doc: ExperimentsDoc): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(EXPERIMENTS_KEY, JSON.stringify(doc));
+  } catch (e) {
+    console.error('[experiments] Failed to save experiments:', e);
+  }
+}
+
+/** Get all experiments as array */
+export function getAllExperiments(): Experiment[] {
+  const doc = loadExperiments();
+  return Object.values(doc.experiments).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** Get experiment by ID */
+export function getExperiment(id: string): Experiment | null {
+  const doc = loadExperiments();
+  return doc.experiments[id] || null;
+}
+
+/** Create a new experiment */
+export function createExperiment(
+  title: string,
+  hypothesis: string,
+  method: string,
+  titleZh: string = '',
+  hypothesisZh: string = '',
+  methodZh: string = ''
+): Experiment {
+  const doc = loadExperiments();
+  const experiment = createExperimentData(title, hypothesis, method, titleZh, hypothesisZh, methodZh);
+
+  // Ensure unique ID
+  let finalId = experiment.id;
+  let counter = 1;
+  while (doc.experiments[finalId]) {
+    finalId = `${experiment.id.split('-').slice(0, -1).join('-')}-${counter}`;
+    counter++;
+  }
+  experiment.id = finalId;
+
+  doc.experiments[finalId] = experiment;
+  saveExperiments(doc);
+  return experiment;
+}
+
+/** Update an existing experiment */
+export function updateExperiment(id: string, partial: Partial<Experiment>): Experiment | null {
+  const doc = loadExperiments();
+  const experiment = doc.experiments[id];
+  if (!experiment) return null;
+
+  const updated = { ...experiment, ...partial, updatedAt: new Date().toISOString().split('T')[0] };
+  doc.experiments[id] = updated;
+  saveExperiments(doc);
+  return updated;
+}
+
+/** Delete an experiment */
+export function deleteExperiment(id: string): boolean {
+  const doc = loadExperiments();
+  if (!doc.experiments[id]) return false;
+  delete doc.experiments[id];
+  saveExperiments(doc);
+  return true;
+}
+
+/** Get experiment count by status */
+export function getExperimentCounts(): Record<ExperimentStatus, number> {
+  const experiments = getAllExperiments();
+  return {
+    planning: experiments.filter((e) => e.status === 'planning').length,
+    running: experiments.filter((e) => e.status === 'running').length,
+    completed: experiments.filter((e) => e.status === 'completed').length,
+    failed: experiments.filter((e) => e.status === 'failed').length,
+    paused: experiments.filter((e) => e.status === 'paused').length,
+  };
+}
+
+/** 获取实验摘要列表. */
 export function buildExperimentDigests(): ExperimentDigest[] {
-  return EXPERIMENTS.map((e) => ({
+  const experiments = getAllExperiments();
+  return experiments.map((e) => ({
     experiment: e,
     paperCount: e.relatedPapers.length,
     latestDate: e.updatedAt,
@@ -150,11 +250,11 @@ export function buildExperimentDigests(): ExperimentDigest[] {
 
 /** 按状态过滤实验 */
 export function filterByStatus(status: ExperimentStatus | 'all'): Experiment[] {
-  if (status === 'all') return EXPERIMENTS;
-  return EXPERIMENTS.filter((e) => e.status === status);
+  if (status === 'all') return getAllExperiments();
+  return getAllExperiments().filter((e) => e.status === status);
 }
 
 /** 按标签过滤实验 */
 export function filterByTag(tag: string): Experiment[] {
-  return EXPERIMENTS.filter((e) => e.tags.includes(tag));
+  return getAllExperiments().filter((e) => e.tags.includes(tag));
 }

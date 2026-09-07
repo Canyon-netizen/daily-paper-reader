@@ -11,6 +11,8 @@ export interface RoadmapGoal {
   descriptionZh: string;
   status: 'pending' | 'in-progress' | 'completed';
   priority: 'high' | 'medium' | 'low';
+  dueDate?: string; // ISO date for milestone tracking
+  sprint?: string; // e.g., "Sprint 1", "Sprint 2" for industry workflow
 }
 
 /** A quarter within a roadmap */
@@ -20,6 +22,7 @@ export interface RoadmapQuarter {
   quarter: 1 | 2 | 3 | 4;
   title: string;
   titleZh: string;
+  granularity: 'quarter' | 'month' | 'sprint'; // Issue #8: support different granularity
   goals: RoadmapGoal[];
 }
 

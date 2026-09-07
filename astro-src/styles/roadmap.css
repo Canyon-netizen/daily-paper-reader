@@ -1,5 +1,26 @@
 /* astro-src/styles/roadmap.css */
 
+/* Primary button */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.2s;
+}
+
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
 /* Page layout */
 .roadmap-page {
   max-width: 1200px;
@@ -401,4 +422,238 @@
 :root[data-theme="dark"] .roadmap-empty {
   background: var(--bg-elevated, #1f2937);
   border-color: var(--border-default, #374151);
+}
+
+/* ========== Modal Styles ========== */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-overlay.active {
+  display: flex;
+}
+
+.modal-content {
+  background: var(--bg-elevated, #fff);
+  border-radius: 12px;
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+}
+
+.modal-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--fg-subtle, #6b7280);
+  cursor: pointer;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.modal-close:hover {
+  background: var(--bg-default, #f3f4f6);
+  color: var(--fg-default, #111);
+}
+
+.modal-content h2 {
+  margin: 0 0 1.25rem;
+  font-size: 1.25rem;
+}
+
+/* Form styles */
+.form-group {
+  margin-bottom: 1rem;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--fg-secondary, #4b5563);
+  margin-bottom: 0.375rem;
+}
+
+.form-group input,
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg-default, #fff);
+  color: var(--fg-default, #111);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+/* ========== Progress Dashboard ========== */
+.roadmap-dashboard {
+  background: var(--bg-elevated, #fff);
+  border: 1px solid var(--border-default, #e5e7eb);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.dashboard-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.dashboard-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.dashboard-progress-bar {
+  width: 120px;
+  height: 8px;
+  background: var(--bg-default, #f3f4f6);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.dashboard-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+
+.dashboard-progress-text {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--fg-secondary, #4b5563);
+  min-width: 2.5rem;
+}
+
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.stat-card {
+  background: var(--bg-default, #f9fafb);
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+}
+
+.stat-card .stat-value {
+  display: block;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--fg-default, #111);
+}
+
+.stat-card .stat-label {
+  font-size: 0.75rem;
+  color: var(--fg-subtle, #6b7280);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.stat-card.completed .stat-value {
+  color: #10b981;
+}
+
+.stat-card.in-progress .stat-value {
+  color: #f59e0b;
+}
+
+.stat-card.pending .stat-value {
+  color: #6b7280;
+}
+
+/* ========== Example Section ========== */
+.roadmap-example {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: var(--bg-default, #f9fafb);
+  border-radius: 8px;
+  text-align: left;
+}
+
+.roadmap-example h4 {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  color: var(--fg-secondary, #4b5563);
+}
+
+.roadmap-example ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.roadmap-example li {
+  margin-bottom: 0.5rem;
+  color: var(--fg-secondary, #4b5563);
+  font-size: 0.9rem;
+}
+
+/* Goal due date display */
+.roadmap-goal-due {
+  font-size: 0.75rem;
+  color: var(--fg-subtle, #6b7280);
+  margin-top: 0.375rem;
+}
+
+.roadmap-goal-due.overdue {
+  color: #dc2626;
+}
+
+/* Sprint badge */
+.roadmap-goal-sprint {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.4rem;
+  background: #dbeafe;
+  color: #1e40af;
+  border-radius: 3px;
+  margin-left: 0.5rem;
 }

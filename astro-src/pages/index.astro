@@ -197,6 +197,63 @@ const newToday = items.filter((p) => p.date === today).length;
   <Footer />
   <NewLibraryModal />
 
+  <!-- Welcome Modal for first-time users -->
+  <dialog id="welcome-modal" class="welcome-modal">
+    <div class="welcome-modal-content">
+      <div class="welcome-header">
+        <span class="welcome-icon">👋</span>
+        <h2>欢迎使用 Daily Paper Reader</h2>
+      </div>
+      <p class="welcome-desc">
+        这是一个面向科研工作者的论文阅读与管理工具。从论文发现到实验设计、写作输出，帮你建立完整的研究工作流。
+      </p>
+      <div class="welcome-features">
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">📚</span>
+          <div>
+            <strong>文献库</strong>
+            <p>按主题/领域组织论文，追踪最新 arXiv 论文</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">💡</span>
+          <div>
+            <strong>想法</strong>
+            <p>记录研究灵感，关联论文，管理想法生命周期</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">🔬</span>
+          <div>
+            <strong>实验</strong>
+            <p>结构化实验设计，验证你的研究假设</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">✍️</span>
+          <div>
+            <strong>写作</strong>
+            <p>论文、笔记、综述写作空间，集成引用管理</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">🗺️</span>
+          <div>
+            <strong>路线图</strong>
+            <p>长期研究目标规划，按季度追踪进度</p>
+          </div>
+        </div>
+      </div>
+      <div class="welcome-footer">
+        <label class="welcome-dont-show">
+          <input type="checkbox" id="welcome-dont-show" />
+          下次不再显示
+        </label>
+        <button type="button" class="btn btn-primary" id="welcome-close">开始使用</button>
+      </div>
+    </div>
+  </dialog>
+
   <script>
     import '../scripts/user-libraries-ui';
     import { mountDashboardStrip } from '../scripts/dashboard-strip';
@@ -205,5 +262,38 @@ const newToday = items.filter((p) => p.date === today).length;
     if (mount && Array.isArray(itemsForStrip)) {
       mountDashboardStrip(mount, itemsForStrip);
     }
+
+    // Welcome modal for first-time users
+    (function initWelcomeModal() {
+      const dontShowKey = 'dpr_hide_welcome';
+      if (localStorage.getItem(dontShowKey)) return;
+
+      const modal = document.getElementById('welcome-modal') as HTMLDialogElement;
+      const closeBtn = document.getElementById('welcome-close');
+      const dontShowCheckbox = document.getElementById('welcome-dont-show') as HTMLInputElement;
+
+      if (!modal || !closeBtn) return;
+
+      // Show modal after a short delay
+      setTimeout(() => {
+        modal.showModal();
+      }, 800);
+
+      closeBtn.addEventListener('click', () => {
+        modal.close();
+        if (dontShowCheckbox?.checked) {
+          localStorage.setItem(dontShowKey, 'true');
+        }
+      });
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          modal.close();
+          if (dontShowCheckbox?.checked) {
+            localStorage.setItem(dontShowKey, 'true');
+          }
+        }
+      });
+    })();
   </script>
 </BaseLayout>

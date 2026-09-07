@@ -33,6 +33,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <p class="lead">
           长期研究目标时间线。按季度拆解目标,追踪进度与关联想法/实验。
         </p>
+        <!-- Issue #6: Add "New Roadmap" button -->
+        <button id="create-roadmap-btn" class="btn-primary">
+          + 新建路线图
+        </button>
       </header>
     )}
 
@@ -71,12 +75,20 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       <div class="roadmap-empty">
         <div class="roadmap-empty-icon">🗺️</div>
         <h3>暂无研究路线图</h3>
-        <p>在 <code>docs/roadmap/</code> 目录下创建 Markdown 文件来添加路线图。</p>
+        <p>点击上方「新建路线图」按钮创建您的研究路线图,或参考下方示例。</p>
+        <div class="roadmap-example">
+          <h4>示例路线图结构</h4>
+          <ul>
+            <li><strong>PhD 路线图</strong> - 博士研究阶段目标，按季度规划</li>
+            <li><strong>工业路线图</strong> - 支持 Sprint 周期，适合敏捷开发</li>
+            <li><strong>个人路线图</strong> - 长期学习与研究方向</li>
+          </ul>
+        </div>
       </div>
     )}
 
     {roadmap && (
-      <div class="roadmap-detail">
+      <div class="roadmap-detail" data-roadmap-id={roadmap.id}>
         <header class="roadmap-detail-header">
           <a href={base + '/roadmap/'} class="roadmap-back-link">← 所有路线图</a>
           <div class="roadmap-detail-title-row">
@@ -95,6 +107,22 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           </div>
         </header>
 
+        <!-- Issue #25: Progress Dashboard -->
+        <div id="roadmap-dashboard" class="roadmap-dashboard">
+          <div class="dashboard-header">
+            <h3>进度概览</h3>
+            <div class="dashboard-progress">
+              <div class="dashboard-progress-bar">
+                <div class="dashboard-progress-fill" style="width: 0%"></div>
+              </div>
+              <span class="dashboard-progress-text">0%</span>
+            </div>
+          </div>
+          <div class="dashboard-stats">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
         <div class="roadmap-timeline">
           {roadmap.quarters.map((q, qIdx) => (
             <section class="roadmap-quarter" data-quarter={q.id}>
@@ -111,7 +139,11 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
                         {g.status === 'completed' ? '✓' : g.status === 'in-progress' ? '◐' : '○'}
                       </span>
                     </div>
-                    <h3 class="roadmap-goal-title">{g.titleZh || g.title}</h3>
+                    <h3 class="roadmap-goal-title">
+                      {g.titleZh || g.title}
+                      {/* Issue #8: Show sprint badge */}
+                      {g.sprint && <span class="roadmap-goal-sprint">{g.sprint}</span>}
+                    </h3>
                     {g.description && (
                       <p class="roadmap-goal-desc">{g.descriptionZh || g.description}</p>
                     )}
@@ -119,6 +151,12 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
                       <span class="roadmap-goal-priority" data-priority={g.priority}>
                         {g.priority === 'high' ? '高' : g.priority === 'medium' ? '中' : '低'}
                       </span>
+                      {/* Issue #26: Show due date */}
+                      {g.dueDate && (
+                        <span class="roadmap-goal-due">
+                          📅 {g.dueDate}
+                        </span>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -153,6 +191,99 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
   </main>
 
   <Footer />
+
+  <!-- Issue #6: Create Roadmap Modal -->
+  <div id="create-roadmap-modal" class="modal-overlay">
+    <div class="modal-content">
+      <button id="modal-close" class="modal-close">&times;</button>
+      <h2>新建路线图</h2>
+      <form id="create-roadmap-form">
+        <div class="form-group">
+          <label for="title">标题 (English)</label>
+          <input type="text" id="title" name="title" required placeholder="e.g., PhD Research Plan">
+        </div>
+        <div class="form-group">
+          <label for="titleZh">中文标题</label>
+          <input type="text" id="titleZh" name="titleZh" placeholder="博士研究计划">
+        </div>
+        <div class="form-group">
+          <label for="description">描述 (English)</label>
+          <textarea id="description" name="description" rows="2" placeholder="Research objectives and scope"></textarea>
+        </div>
+        <div class="form-group">
+          <label for="descriptionZh">中文描述</label>
+          <textarea id="descriptionZh" name="descriptionZh" rows="2" placeholder="研究目标与范围"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="type">类型</label>
+            <select id="type" name="type">
+              <option value="personal">个人</option>
+              <option value="phd">PhD</option>
+              <option value="industry">工业</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="owner">负责人</label>
+            <input type="text" id="owner" name="owner" value="User">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="startDate">开始日期</label>
+            <input type="date" id="startDate" name="startDate" value="2026-01-01">
+          </div>
+          <div class="form-group">
+            <label for="endDate">结束日期</label>
+            <input type="date" id="endDate" name="endDate" value="2026-12-31">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="tags">标签 (逗号分隔)</label>
+          <input type="text" id="tags" name="tags" placeholder="research, ml, nlp">
+        </div>
+        <button type="submit" class="btn-primary">创建路线图</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Issue #7: Goal Edit Modal -->
+  <div id="goal-edit-modal" class="modal-overlay">
+    <div class="modal-content">
+      <button id="goal-modal-close" class="modal-close">&times;</button>
+      <h2>编辑目标</h2>
+      <form id="goal-edit-form">
+        <input type="hidden" id="edit-goal-id" name="goalId">
+        <div class="form-group">
+          <label for="edit-goal-title">标题</label>
+          <input type="text" id="edit-goal-title" name="title" required>
+        </div>
+        <div class="form-group">
+          <label for="edit-goal-desc">描述</label>
+          <textarea id="edit-goal-desc" name="description" rows="3"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="edit-goal-status">状态</label>
+            <select id="edit-goal-status" name="status">
+              <option value="pending">待开始</option>
+              <option value="in-progress">进行中</option>
+              <option value="completed">已完成</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="edit-goal-priority">优先级</label>
+            <select id="edit-goal-priority" name="priority">
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary">保存更改</button>
+      </form>
+    </div>
+  </div>
 
   <script>
     import '../../scripts/roadmap-ui';

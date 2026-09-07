@@ -24,17 +24,17 @@ const isActive = (target: string): boolean => {
 // 收藏夹,概念上与公共主题库是同一层。Polaris 也没有「我的图书馆」单一路由,
 // 只在 /libraries 一次展示公共 + 个人。
 const links = [
-  { href: '/libraries/',      label: '文献库',      match: '/libraries' },
-  { href: '/papers/',         label: '全部论文',    match: '/papers' },
-  { href: '/graph/',          label: '引用图',      match: '/graph' },
-  { href: '/topic/',          label: '主题探索',    match: '/topic' },
-  { href: '/conferences/',    label: '会议',        match: '/conferences' },
-  { href: '/concepts/',       label: '概念',        match: '/concepts' },
-  { href: '/ideas/',          label: '想法',        match: '/ideas' },
-  { href: '/experiments/',    label: '实验',        match: '/experiments' },
-  { href: '/writing/',        label: '写作',        match: '/writing' },
-  { href: '/roadmap/',       label: '路线图',      match: '/roadmap' },
-  { href: '/settings/',       label: '设置',        match: '/settings' },
+  { href: '/libraries/',      label: '文献库',      match: '/libraries', tooltip: '按主题/领域组织的论文集合' },
+  { href: '/papers/',        label: '全部论文',    match: '/papers', tooltip: '浏览所有收录的论文' },
+  { href: '/graph/',         label: '引用图',      match: '/graph', tooltip: '论文引用关系可视化' },
+  { href: '/topic/',         label: '主题探索',    match: '/topic', tooltip: '深度主题研究与报告生成' },
+  { href: '/conferences/',   label: '会议',        match: '/conferences', tooltip: '顶会论文追踪 (NeurIPS/ICLR/ICML)' },
+  { href: '/concepts/',      label: '概念',        match: '/concepts', tooltip: '领域核心概念知识图谱' },
+  { href: '/ideas/',         label: '想法',        match: '/ideas', tooltip: '记录研究灵感与思考' },
+  { href: '/experiments/',   label: '实验',        match: '/experiments', tooltip: '设计实验验证想法' },
+  { href: '/writing/',        label: '写作',        match: '/writing', tooltip: '撰写论文、笔记、综述' },
+  { href: '/roadmap/',       label: '路线图',      match: '/roadmap', tooltip: '规划长期研究目标与里程碑' },
+  { href: '/settings/',      label: '设置',        match: '/settings', tooltip: 'API 密钥与 Gist 同步配置' },
 ];
 ---
 
@@ -56,6 +56,7 @@ const links = [
           href={base + l.href}
           class={isActive(l.match) ? 'active' : ''}
           aria-current={isActive(l.match) ? 'page' : undefined}
+          title={l.tooltip}
         >{l.label}</a>
       ))}
       <a
