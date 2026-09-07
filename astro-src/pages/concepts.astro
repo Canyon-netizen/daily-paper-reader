@@ -34,8 +34,10 @@ import '../styles/concepts-graph.css';
 
     <section id="concepts-grid" class="concepts-grid" data-state="loading">
       <p class="concepts-empty" id="concepts-empty" hidden>
-        暂未启用概念图谱 — 在 <code>config.yaml</code> 打开 <code>concepts.enabled</code> 后,
-        重跑 Step 6 即可生成 <code>wiki/concepts/*.md</code> 与 <code>_index.json</code>。
+        暂未生成概念图谱 — 概念由 <code>src/concept_index.py::rebuild()</code> 产出
+        <code>wiki/concepts/_index.json</code> / <code>_graph.json</code> / <code><slug>.md</code>。
+        流水线里 Step 6 生成 frontmatter 后再调一次 <code>concept_index.rebuild()</code> 即可,
+        详细步骤见 <a href="https://github.com/Canyon-netizen/daily-paper-reader/blob/main/docs/concepts-system.md">docs/concepts-system.md</a>。
       </p>
     </section>
 
