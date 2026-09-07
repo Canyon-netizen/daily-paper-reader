@@ -4,6 +4,16 @@
 // Shows a single writing with editable sections and citation management.
 // Client-side only (localStorage) - SSR shows shell that hydrates.
 
+// Generate static paths from docs/writing/*.md files
+export const getStaticPaths: GetStaticPaths = async () => {
+  const writings = [
+    'scaling-laws-workshop',
+    'transformer-attention-explained',
+    'multimodal-efficiency-proposal',
+  ];
+  return writings.map((id) => ({ params: { id } }));
+};
+
 import type { GetStaticPaths } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
