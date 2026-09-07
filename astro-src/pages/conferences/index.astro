@@ -1,21 +1,42 @@
 ---
-// /conferences/ — 会议论文拉取 UI(F1)
+// /conferences/ — 会议论文:浏览 + 触发 双层 UI(2026-09 重构)
 //
-// 这个页面提供"按会议拉取论文到 Supabase"的触发按钮,通过 GitHub REST
-// workflow_dispatch 触发 .github/workflows/conference-init.yml(跑 init_<conf>.py:
-// fetch + embedding + upsert 到 Supabase)。流程:
+// 这个页面把会议论文的 UI 拆成两层:
+//
+//   ┌─────────────────────────────────────────────────┐
+//   │ 已收录论文(浏览层 · 主内容)                       │
+//   │  - SSR 聚合 defaultPaperRepository.listAll()     │
+//   │    按 venue 分桶,显示「会议名 + 收录 N 篇 + 已接  │
+//   │    受 M 篇」+ 跳转 /papers/?venue=<encoded>       │
+//   │  - 0 篇的会议显示「暂无收录」+ 引导去下方 trigger  │
+//   └─────────────────────────────────────────────────┘
+//   ┌─────────────────────────────────────────────────┐
+//   │ 拉取参数(触发层 · admin,默认折叠)                 │
+//   │  - 6 个 trigger 卡片 + 批量按钮 + GitHub dispatch │
+//   │  - 不动 conferences.ts::bindConfTriggers          │
+//   └─────────────────────────────────────────────────┘
+//
+// 浏览层数据走 SSR 一次性聚合,触发层用 details 折叠,让用户进入页面
+// 第一眼看到的是「现在有哪些会议 + 多少篇」而不是 admin 按钮。
+//
+// 复用现有 export:
+//   - defaultPaperRepository.listAll() ([paper-repository/Phase D])
+//   - 跳转 /papers/?venue=<encoded> 走 lib/paper-filter 的 filterByVenue
+//
+// 触发层(F1)沿用原 trigger UI,只是迁到 <details> 内:
 //   1. 用户选会议 + 年份 → 点"立即拉取"
-//   2. 前端 POST api.github.com/.../workflows/conference-init.yml/dispatches
+//   2. POST api.github.com/.../workflows/conference-init.yml/dispatches
 //      inputs: {conferences, year_end, year_count, skip_fetch}
 //   3. 轮询 /actions/workflows/conference-init.yml/runs 看 status / conclusion
 //   4. 完成后给出 GitHub Actions run 链接
 //
-// 前提:需在 /settings/ 页面填 GitHub PAT(勾 repo + workflow scope);
+// 前提:触发层需在 /settings/ 页面填 GitHub PAT(勾 repo + workflow scope);
 // owner/repo 也从 settings 的 GitHubRepo 配置读(默认 Canyon-netizen/daily-paper-reader)。
 
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
+import { defaultPaperRepository } from '../../lib/paper-repository';
 import '../../styles/page.css';
 import '../../styles/settings.css';
 
@@ -27,82 +48,171 @@ const CONFERENCES = [
   { id: 'icml', label: 'ICML', desc: 'ICML OpenReview 投稿' },
   { id: 'neurips', label: 'NeurIPS', desc: 'NeurIPS OpenReview 投稿' },
 ] as const;
+
+// 浏览层:按 venue 聚合。venue 形如 "ICML 2025" / "NeurIPS 2024"。
+// SSR 阶段一次性 listAll 然后 reduce。
+const allPapers = await defaultPaperRepository.listAll();
+interface VenueBucket {
+  venue: string;          // "ICML 2025"
+  conferenceKey: string;   // 推到小写主键 "icml 2025"
+  paperCount: number;
+  acceptedCount: number;
+}
+const venueBuckets = new Map<string, VenueBucket>();
+for (const p of allPapers) {
+  const v = (p.venue || '').trim();
+  if (!v) continue;
+  const key = v.toLowerCase();
+  let b = venueBuckets.get(key);
+  if (!b) {
+    b = { venue: v, conferenceKey: key, paperCount: 0, acceptedCount: 0 };
+    venueBuckets.set(key, b);
+  }
+  b.paperCount += 1;
+  if (p.accepted) b.acceptedCount += 1;
+}
+const venueList = [...venueBuckets.values()].sort((a, b) => {
+  // 按 venue 字符串倒序 → 最新会议在前("NeurIPS 2025" > "NeurIPS 2024")
+  if (a.venue < b.venue) return 1;
+  if (a.venue > b.venue) return -1;
+  return 0;
+});
+const papersWithVenue = allPapers.filter((p) => (p.venue || '').trim()).length;
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 ---
 
 <BaseLayout
-  title="会议论文拉取 · Daily Paper Reader"
-  description="按会议触发 init_<conf>.py,拉取最新论文并同步到 Supabase。"
+  title="会议论文 · Daily Paper Reader"
+  description="按会议浏览已收录论文 + 触发 GitHub Actions 拉取新批次。"
 >
   <Navbar />
 
   <main class="settings-page">
     <header class="settings-page-header">
-      <strong>会议论文拉取</strong> · 选会议 + 年份,点"立即拉取"通过 GitHub Actions 跑
-      <code>init_&lt;conf&gt;.py</code> (fetch + embedding + upsert 到 Supabase)。
-      需先在 <a href={`${import.meta.env.BASE_URL}settings/`}>设置页</a> 填 GitHub PAT(勾 <code>repo</code> + <code>workflow</code> 权限)。
-      <br />
-      <strong>NeurIPS / ICLR / ICML</strong> 还需要 OpenReview 凭证(在配 Gist 时一并填 <code>OPENREVIEW_USERNAME / OPENREVIEW_PASSWORD</code>);
-      没有可先勾选"跳过 fetch"只跑 sync,或去 <a href="https://openreview.net" target="_blank" rel="noopener">openreview.net</a> 注册。
+      <strong>会议论文</strong> · 先看已收录,再去触发拉取。
+      数据来自 <code>docs/papers/</code> 的 frontmatter(<code>venue</code> + <code>accepted</code> 字段),
+      真实拉取走下方 admin 区。
     </header>
 
+    {/* 浏览层 */}
     <section class="settings-card">
-      <h2 class="settings-card-title">拉取参数</h2>
+      <h2 class="settings-card-title">
+        已收录论文
+        <span class="conf-browse-meta">
+          {venueList.length === 0
+            ? '暂无收录'
+            : `${venueList.length} 个会议 / ${papersWithVenue} 篇`}
+        </span>
+      </h2>
       <p class="settings-card-sub">
-        <code>--year-end</code> 决定抓哪一年;<code>--year-count</code> 决定往前抓几年。
-        默认 2025 / 3 = 抓 2023-2025。NeurIPS 会自动用 <code>format_years_token</code> 拼接年份范围。
+        按 <code>venue</code> 字段聚合。每张卡片展示该会议年内已收录论文数 + 已接受篇数;
+        点「查看论文」跳到 <code>/papers/</code> 列表(已用 venue 过滤)。
       </p>
 
-      <div class="settings-field">
-        <label for="conf-year-end">Year End</label>
-        <input type="number" id="conf-year-end" min="2010" max="2099" value="2025" />
-        <span class="settings-field-hint">默认 2025 (当前年)</span>
-      </div>
-
-      <div class="settings-field">
-        <label for="conf-year-count">Year Count</label>
-        <input type="number" id="conf-year-count" min="1" max="20" value="3" />
-        <span class="settings-field-hint">默认 3 年</span>
-      </div>
-
-      <div class="settings-field">
-        <label>
-          <input type="checkbox" id="conf-skip-fetch" />
-          跳过 fetch,只重跑 sync (复用已有 raw archive 文件)
-        </label>
-      </div>
+      {venueList.length === 0 ? (
+        <p class="conf-empty">
+          仓库里还没有任何带 <code>venue</code> 字段的论文。先用下方「拉取参数」从
+          OpenReview / Anthology 拉一批,或手动在 paper frontmatter 里加 <code>venue</code>。
+        </p>
+      ) : (
+        <div class="conf-grid conf-browse-grid">
+          {venueList.map((b) => {
+            // 关联到 CONFERENCES id 以便下方 trigger 折叠时反向查找
+            const conf = CONFERENCES.find((c) => b.conferenceKey.startsWith(c.id));
+            return (
+              <div class="conf-browse-card" data-venue={b.venue}>
+                <div class="conf-browse-head">
+                  <span class="conf-card-label">{b.venue}</span>
+                  {conf && <span class="conf-browse-tag">来自 {conf.label}</span>}
+                </div>
+                <div class="conf-browse-stats">
+                  <span class="conf-browse-stat">
+                    <strong>{b.paperCount}</strong> 篇
+                  </span>
+                  <span class="conf-browse-stat">
+                    <strong>{b.acceptedCount}</strong> 已接受
+                  </span>
+                </div>
+                <a
+                  class="settings-action-btn primary conf-browse-link"
+                  href={`${base}/papers/?venue=${encodeURIComponent(b.venue)}`}
+                >
+                  查看论文 →
+                </a>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
 
-    <section class="settings-card">
-      <h2 class="settings-card-title">选择会议</h2>
-      <div class="conf-grid">
-        {CONFERENCES.map((c) => (
-          <div class="conf-card" data-conf-id={c.id} data-conf-label={c.label}>
-            <div class="conf-card-head">
-              <span class="conf-card-label">{c.label}</span>
-              <button
-                type="button"
-                class="settings-action-btn primary conf-trigger-btn"
-                data-conf={c.id}
-              >立即拉取</button>
+    {/* 触发层(admin,默认折叠) */}
+    <details class="settings-card conf-trigger-section">
+      <summary class="conf-trigger-summary">
+        <strong>拉取参数(admin)</strong> · 选会议 + 年份,点"立即拉取"通过 GitHub Actions 跑
+        <code>init_<conf>.py</code>
+        <span class="conf-trigger-hint">点击展开</span>
+      </summary>
+
+      <div class="conf-trigger-body">
+        <p class="settings-card-sub">
+          需先在 <a href={`${base}/settings/`}>设置页</a> 填 GitHub PAT(勾 <code>repo</code> + <code>workflow</code> 权限)。
+          <strong>NeurIPS / ICLR / ICML</strong> 还需要 OpenReview 凭证(在配 Gist 时一并填
+          <code>OPENREVIEW_USERNAME / OPENREVIEW_PASSWORD</code>);
+          没有可先勾选"跳过 fetch"只跑 sync。
+        </p>
+
+        <div class="settings-field">
+          <label for="conf-year-end">Year End</label>
+          <input type="number" id="conf-year-end" min="2010" max="2099" value="2025" />
+          <span class="settings-field-hint">默认 2025 (当前年)</span>
+        </div>
+
+        <div class="settings-field">
+          <label for="conf-year-count">Year Count</label>
+          <input type="number" id="conf-year-count" min="1" max="20" value="3" />
+          <span class="settings-field-hint">默认 3 年</span>
+        </div>
+
+        <div class="settings-field">
+          <label>
+            <input type="checkbox" id="conf-skip-fetch" />
+            跳过 fetch,只重跑 sync (复用已有 raw archive 文件)
+          </label>
+        </div>
+
+        <h3 class="settings-card-subtitle">选择会议</h3>
+        <div class="conf-grid">
+          {CONFERENCES.map((c) => (
+            <div class="conf-card" data-conf-id={c.id} data-conf-label={c.label}>
+              <div class="conf-card-head">
+                <span class="conf-card-label">{c.label}</span>
+                <button
+                  type="button"
+                  class="settings-action-btn primary conf-trigger-btn"
+                  data-conf={c.id}
+                >立即拉取</button>
+              </div>
+              <p class="conf-card-desc">{c.desc}</p>
+              <div class="conf-card-status" data-conf-status={c.id}>
+                <span class="conf-status-label">未运行</span>
+              </div>
             </div>
-            <p class="conf-card-desc">{c.desc}</p>
-            <div class="conf-card-status" data-conf-status={c.id}>
-              <span class="conf-status-label">未运行</span>
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
+
+        <p class="settings-card-sub" style="margin-top: 1rem;">
+          也可以选多个会议批量跑(下方按钮)。GitHub Actions 里串行执行每个
+          <code>init_<conf>.py</code>,任意一个失败整体 exit 1。
+        </p>
+        <button type="button" class="settings-action-btn primary" id="conf-batch-btn">
+          拉取全部 6 个会议
+        </button>
       </div>
+    </details>
 
-      <p class="settings-card-sub" style="margin-top: 1rem;">
-        也可以选多个会议批量跑(下方按钮)。GitHub Actions 里串行执行每个
-        <code>init_&lt;conf&gt;.py</code>,任意一个失败整体 exit 1。
-      </p>
-      <button type="button" class="settings-action-btn primary" id="conf-batch-btn">
-        拉取全部 6 个会议
-      </button>
-    </section>
-
-    <a class="settings-page-back" href={import.meta.env.BASE_URL}>← 返回首页</a>
+    <a class="settings-page-back" href={base}>← 返回首页</a>
   </main>
 
   <Footer />
@@ -114,6 +224,77 @@ const CONFERENCES = [
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 1rem;
   }
+  /* 浏览层卡片 */
+  .conf-browse-meta {
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--fg-muted);
+    margin-left: 0.6rem;
+  }
+  .conf-browse-grid { margin-top: 0.5rem; }
+  .conf-browse-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.85rem 1rem;
+    background: var(--bg-elevated);
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .conf-browse-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .conf-browse-tag {
+    font-size: 0.72rem;
+    color: var(--fg-subtle);
+    background: var(--bg);
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+  }
+  .conf-browse-stats {
+    display: flex;
+    gap: 0.85rem;
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+  }
+  .conf-browse-stat strong { color: var(--fg); font-size: 1.05rem; margin-right: 0.15rem; }
+  .conf-browse-link {
+    align-self: flex-start;
+    text-decoration: none;
+    font-size: 0.85rem;
+  }
+  .conf-empty {
+    margin: 1rem 0;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+  }
+  /* 触发层(折叠) */
+  .conf-trigger-section { margin-top: 1.25rem; }
+  .conf-trigger-summary {
+    cursor: pointer;
+    padding: 0.85rem 1.25rem;
+    font-size: 0.95rem;
+    list-style: none;
+  }
+  .conf-trigger-summary::-webkit-details-marker { display: none; }
+  .conf-trigger-summary::before {
+    content: "▸";
+    margin-right: 0.4rem;
+    color: var(--fg-muted);
+    transition: transform 0.15s;
+  }
+  details[open] > .conf-trigger-summary::before { transform: rotate(90deg); }
+  .conf-trigger-hint {
+    margin-left: 0.5rem;
+    font-size: 0.78rem;
+    color: var(--fg-subtle);
+  }
+  .conf-trigger-body { padding: 0 1.25rem 1.25rem; }
+  /* 触发层原 trigger 卡片(保留) */
   .conf-card {
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -144,6 +325,11 @@ const CONFERENCES = [
   .conf-card-status.is-success { color: var(--success); }
   .conf-card-status.is-failure { color: var(--danger); }
   .conf-card-status a { color: inherit; text-decoration: underline; }
+  .settings-card-subtitle {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 1rem 0 0.4rem;
+  }
 </style>
 
 <script>
