@@ -1,30 +1,30 @@
-/* PR-5 v2 concept graph (cytoscape) styles */
+/* PR-5 v2 concept graph (cytoscape) styles
+ *
+ * 2026-09-07 调整:
+ *   - 放大图谱(70vh / 560px min)+ 占据 viewport 主区域
+ *   - 去掉下方概念索引卡片网格(图谱本身就是主视图,卡片是冗余信息密度)
+ *   - fcose 弹力布局:节点可拖,周围节点会被力推动重新平衡
+ *
+ * 设计原则:
+ *   - 图谱是页面主视图,占满 viewport,toolbar + legend 是辅助
+ *   - 与 /libraries/ 风格保持一致(顶部 hero / 底部 footer)
+ */
+
+/* ===== 图谱 section(占满 viewport) ===== */
 .concepts-graph-section {
-  margin-top: var(--space-8);
-  padding: var(--space-4);
+  margin-top: var(--space-4, 16px);
+  padding: var(--space-3, 12px);
   background: var(--bg-elevated, #fff);
   border: 1px solid var(--border, #e5e7eb);
   border-radius: var(--radius-lg, 8px);
-}
-
-.concepts-graph-title {
-  margin: 0 0 var(--space-3, 12px) 0;
-  font-size: var(--font-md, 14px);
-  font-weight: 600;
-  color: var(--fg, #1f2937);
-}
-
-/* 概念索引卡片网格标题 — 跟图谱标题同级,呼应 re-order 后结构 */
-.concepts-grid-title {
-  margin: 0 0 var(--space-3, 12px) 0;
-  font-size: var(--font-md, 14px);
-  font-weight: 600;
-  color: var(--fg, #1f2937);
+  display: flex;
+  flex-direction: column;
 }
 
 .concepts-graph {
   width: 100%;
-  height: 420px;
+  /* 弹力图占满 viewport 主区域,既显大气又留有 toolbar / legend 的视觉权重 */
+  height: clamp(560px, 70vh, 880px);
   background: var(--bg, #fafafa);
   border-radius: var(--radius-md, 6px);
   border: 1px dashed var(--border, #e5e7eb);
@@ -32,13 +32,52 @@
   overflow: hidden;
 }
 
-/* ===== Responsive ===== */
+/* 图谱图例(category 色板 + 共现边 + 交互提示) */
+.concepts-graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 1rem;
+  margin-top: var(--space-3, 12px);
+  padding: 0.55rem 0.85rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  background: var(--bg, #fafafa);
+  font-size: 0.8rem;
+  color: var(--fg-muted, #6b7280);
+}
+.concepts-graph-legend .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.concepts-graph-legend .legend-dot {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  display: inline-block;
+}
+.concepts-graph-legend .legend-line {
+  width: 1.1rem;
+  height: 2px;
+  background: #94a3b8;
+  display: inline-block;
+  border-radius: 1px;
+}
+.concepts-graph-legend .legend-tip {
+  margin-left: auto;
+  font-style: italic;
+  color: var(--fg-subtle, #9ca3af);
+}
 @media (max-width: 720px) {
-  .concepts-graph-section { padding: var(--space-3, 12px); margin-top: var(--space-6, 24px); }
-  .concepts-graph-title { font-size: var(--font-sm, 13px); }
-  .concepts-graph { height: 320px; }
+  .concepts-graph-legend .legend-tip { margin-left: 0; width: 100%; }
+  .concepts-graph { height: clamp(420px, 65vh, 720px); }
 }
 @media (max-width: 480px) {
-  .concepts-graph-section { padding: var(--space-2, 8px); margin-top: var(--space-4, 16px); }
-  .concepts-graph { height: 260px; }
+  .concepts-graph { height: 420px; }
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 720px) {
+  .concepts-graph-section { padding: var(--space-2, 8px); margin-top: var(--space-3, 12px); }
 }

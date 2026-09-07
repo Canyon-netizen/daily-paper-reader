@@ -2,7 +2,6 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import Navbar from '../components/Navbar.astro';
 import Footer from '../components/Footer.astro';
-import { loadConceptIndex, searchConcepts, sortConceptsByHeat } from '../lib/concept_graph';
 import '../styles/page.css';
 import '../styles/concepts-graph.css';
 ---
@@ -15,9 +14,9 @@ import '../styles/concepts-graph.css';
 
   <main class="concepts-page">
     <header class="concepts-intro">
-      <strong>概念图谱</strong> · 从收录的论文笔记中提炼的核心概念。
-      每个概念附带「出处论文」和「反向链接」段,
-      通过 <code>[[wikilink]]</code> 与 Obsidian / VSCode 兼容。
+      <strong>概念图谱</strong> · 从收录的论文笔记中提炼的核心概念共现网络。
+      节点大小 = 出处论文数,边 = 两个概念在同一篇论文里同时出现。
+      拖动节点可推动周围概念重新排布,点击节点跳到概念详情页。
       <a class="concepts-intro-link" href={import.meta.env.BASE_URL + 'papers/'}>(论文库 →)</a>
     </header>
 
@@ -26,28 +25,19 @@ import '../styles/concepts-graph.css';
         type="search"
         id="concept-search"
         class="concepts-search"
-        placeholder="搜索概念 (display_name / slug / category)..."
+        placeholder="搜索概念,在图里高亮..."
         autocomplete="off"
       />
       <span class="concepts-count" id="concepts-count"></span>
     </section>
 
-    {/* 概念图谱 (PR-5 v2 cytoscape) — 主视图放在最上面,符合「图谱」字面预期。
-        之前 grid 在前 graph 在后,用户只滚到一半看到卡片网格以为「是表格」,
-        现在 graph 先出再 grid 索引。 */}
+    {/* 主视图:弹力图(fcose 持续受力模拟) + 图例
+        - 高度 70vh,最小 560px,占满 viewport
+        - 之前把卡片网格放在下面被用户说"为啥还有下面这个文字内容",
+          这次直接去掉,只保留图本身;搜索框改成"图内高亮"而非"列表过滤"。 */}
     <section class="concepts-graph-section">
-      <h3 class="concepts-graph-title">🕸️ 概念图谱(cytoscape)</h3>
       <div id="concepts-graph" class="concepts-graph"></div>
-    </section>
-
-    <section id="concepts-grid" class="concepts-grid" data-state="loading">
-      <h3 class="concepts-grid-title">📚 概念索引</h3>
-      <p class="concepts-empty" id="concepts-empty" hidden>
-        暂未生成概念图谱 — 概念由 <code>src/concept_index.py::rebuild()</code> 产出
-        <code>wiki/concepts/_index.json</code> / <code>_graph.json</code> / <code><slug>.md</code>。
-        流水线里 Step 6 生成 frontmatter 后再调一次 <code>concept_index.rebuild()</code> 即可,
-        详细步骤见 <a href="https://github.com/Canyon-netizen/daily-paper-reader/blob/main/docs/concepts-system.md">docs/concepts-system.md</a>。
-      </p>
+      <div class="concepts-graph-legend" id="concepts-graph-legend"></div>
     </section>
   </main>
 
@@ -55,159 +45,273 @@ import '../styles/concepts-graph.css';
 </BaseLayout>
 
 <script>
-  import { searchConcepts, sortConceptsByHeat, type ConceptMeta } from '../lib/concept_graph';
+  /** Category → 颜色(对应 CSS .concept-card[data-cat=] 的 hue 一致) */
+  const CATEGORY_COLOR: Record<string, string> = {
+    method: '#7c5cff',
+    problem: '#ef4444',
+    dataset: '#0891b2',
+    metric: '#059669',
+    methodology: '#d97706',
+    task: '#0284c7',
+    other: '#9ca3af',
+  };
+  const CATEGORY_LABEL: Record<string, string> = {
+    method: 'method · 方法',
+    problem: 'problem · 问题',
+    dataset: 'dataset · 数据集',
+    metric: 'metric · 指标',
+    methodology: 'methodology · 方法论',
+    task: 'task · 任务',
+    other: 'other · 其它',
+  };
 
-  const grid = document.getElementById('concepts-grid') as HTMLElement | null;
-  const emptyEl = document.getElementById('concepts-empty') as HTMLElement | null;
-  const countEl = document.getElementById('concepts-count') as HTMLElement | null;
-  const searchEl = document.getElementById('concept-search') as HTMLInputElement | null;
+  type RawNode = {
+    id: string;
+    label?: string;
+    kind?: string;
+    weight?: number;
+    category?: string;
+  };
+  type RawEdge = { source?: string; target?: string; kind?: string };
 
-  let allConcepts: ConceptMeta[] = [];
+  let cy: any = null;
+  let allConceptIds: string[] = [];
 
-  function render(list: ConceptMeta[]) {
-    if (!grid) return;
-    if (!list.length) {
-      grid.innerHTML = '';
-      if (emptyEl) emptyEl.hidden = false;
-      if (countEl) countEl.textContent = '0 个概念';
-      grid.dataset.state = 'empty';
-      return;
-    }
-    if (emptyEl) emptyEl.hidden = true;
-    grid.dataset.state = 'ready';
+  /** 拉 _graph.json + 过滤 paper 节点 + 客户端重算 concept→concept 共现边 */
+  async function fetchAndBuildGraph() {
     const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
-    grid.innerHTML = list
+    const res = await fetch(`${base}/wiki/concepts/_graph.json`);
+    if (!res.ok) return null;
+    const graph = await res.json();
+    const nodes: RawNode[] = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const edges: RawEdge[] = Array.isArray(graph?.edges) ? graph.edges : [];
+    if (!nodes.length) return null;
+
+    const concepts = nodes.filter((n) => n.kind === 'concept');
+    const conceptIds = new Set(concepts.map((c) => c.id));
+    if (!concepts.length) return null;
+
+    // paper → 它提到的 concepts
+    const paperToConcepts = new Map<string, string[]>();
+    for (const e of edges) {
+      if (!e.source || !e.target) continue;
+      if (!conceptIds.has(e.target)) continue;
+      if (!paperToConcepts.has(e.source)) paperToConcepts.set(e.source, []);
+      paperToConcepts.get(e.source)!.push(e.target);
+    }
+
+    // concept → concept 共现边
+    const cooccur = new Map<string, number>();
+    let papersUsed = 0;
+    for (const cs of paperToConcepts.values()) {
+      if (cs.length < 2) continue;
+      papersUsed++;
+      cs.sort();
+      for (let i = 0; i < cs.length; i++) {
+        for (let j = i + 1; j < cs.length; j++) {
+          const key = `${cs[i]}||${cs[j]}`;
+          cooccur.set(key, (cooccur.get(key) || 0) + 1);
+        }
+      }
+    }
+
+    const conceptElements = concepts.map((c) => ({
+      data: {
+        id: c.id,
+        label: c.label || c.id,
+        kind: 'concept',
+        weight: c.weight || 1,
+        category: c.category || 'other',
+        color: CATEGORY_COLOR[c.category || 'other'] || CATEGORY_COLOR.other,
+      },
+    }));
+    const edgeElements: any[] = [];
+    let idx = 0;
+    for (const [key, count] of cooccur.entries()) {
+      const [a, b] = key.split('||');
+      edgeElements.push({
+        data: { id: `ce${idx++}`, source: a, target: b, kind: 'cooccur', weight: count },
+      });
+    }
+
+    return { concepts, conceptElements, edgeElements, papersUsed };
+  }
+
+  /** 渲染图例 ——
+   *  category 色板 + 共现边示意 + 交互提示(可拖动 / 滚轮缩放 / 高亮邻居 / 搜索) */
+  function renderLegend(conceptCount: number, edgeCount: number, papersUsed: number) {
+    const legendEl = document.getElementById('concepts-graph-legend');
+    if (!legendEl) return;
+    const order = ['method', 'problem', 'dataset', 'metric', 'methodology', 'task', 'other'];
+    const catItems = order
       .map(
-        (c) => `
-        <a class="concept-card" data-cat="${escapeAttr(c.category)}" href="${base}/wiki/concepts/${encodeURIComponent(c.slug)}/">
-          <div class="concept-name">${escapeHtml(c.display_name)}</div>
-          <div class="concept-meta">
-            <span class="concept-cat">${escapeHtml(c.category)}</span>
-            <span class="concept-count">${c.paper_count || 0} 篇论文</span>
-          </div>
-        </a>`,
+        (cat) => `
+        <span class="legend-item">
+          <span class="legend-dot" style="background:${CATEGORY_COLOR[cat] || CATEGORY_COLOR.other};"></span>
+          <span>${CATEGORY_LABEL[cat] || cat}</span>
+        </span>`,
       )
       .join('');
-    if (countEl) countEl.textContent = `${list.length} 个概念`;
-  }
-
-  function escapeHtml(s: string): string {
-    return String(s || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }
-  function escapeAttr(s: string): string {
-    return escapeHtml(s);
+    legendEl.innerHTML = `
+      ${catItems}
+      <span class="legend-item">
+        <span class="legend-line"></span>
+        <span>共现(同篇论文)</span>
+      </span>
+      <span class="legend-tip">${conceptCount} 概念 · ${edgeCount} 共现边 · ${papersUsed} 论文驱动 · 拖动节点 / 滚轮缩放 / 点击节点跳转</span>
+    `;
   }
 
   async function init() {
-    const res = await fetch(
-      `${(import.meta.env.BASE_URL || '/').replace(/\/$/, '')}/wiki/concepts/_index.json`,
-    );
-    if (res.ok) {
-      try {
-        const data = await res.json();
-        allConcepts = Array.isArray(data) ? data : (data?.concepts || []);
-      } catch {
-        allConcepts = [];
-      }
-    } else {
-      allConcepts = [];
+    const data = await fetchAndBuildGraph();
+    if (!data) {
+      renderLegend(0, 0, 0);
+      const countEl = document.getElementById('concepts-count');
+      if (countEl) countEl.textContent = '暂未生成概念图谱';
+      return;
     }
-    render(sortConceptsByHeat(allConcepts));
+    const { concepts, conceptElements, edgeElements, papersUsed } = data;
+    allConceptIds = concepts.map((c) => c.id);
 
-    searchEl?.addEventListener('input', () => {
-      const q = searchEl.value || '';
-      render(sortConceptsByHeat(searchConcepts(q, allConcepts)));
-    });
-
-    // PR-5 v2: 加载 _graph.json 并用 cytoscape 渲染
-    loadConceptGraph().catch((e) => console.warn('[concepts] graph load failed:', e));
-  }
-
-  /**
-   * PR-5 v2: 用 cytoscape 渲染 _graph.json 里的 nodes + edges。
-   *
-   * 节点分两类:
-   *   - concept 节点(紫色大点):有 paper_count / category / 显示名
-   *   - paper 节点(灰色小点):只有 paper_id / title
-   * 边只有一种 "mentions"(paper → concept)。
-   *
-   * 失败(无 graph.json / 无 cytoscape / 节点空)→ 静默跳过,不破坏主 grid。
-   */
-  async function loadConceptGraph(): Promise<void> {
-    const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
-    const res = await fetch(`${base}/wiki/concepts/_graph.json`);
-    if (!res.ok) return;
-    const graph = await res.json();
-    const nodes = graph?.nodes || [];
-    const edges = graph?.edges || [];
-    if (!nodes.length) return;
+    // 动态 import cytoscape + fcose(避免 SSR 报错;fcose 提供持续受力模拟,
+    // 拖动节点时周围的边和节点会跟着"弹"过去,符合用户要的"弹力图"语义)。
+    let cytoscape: any;
+    let fcose: any;
+    try {
+      cytoscape = (await import('cytoscape')).default;
+      fcose = (await import('cytoscape-fcose')).default;
+    } catch (e) {
+      console.warn('[concepts] cytoscape/fcose not available:', e);
+      return;
+    }
+    cytoscape.use(fcose);
 
     const container = document.getElementById('concepts-graph');
     if (!container) return;
 
-    // 动态 import cytoscape(避免 build 时 SSR 报错)
-    let cytoscape: any;
-    try {
-      cytoscape = (await import('cytoscape')).default;
-    } catch (e) {
-      console.warn('[concepts] cytoscape not available:', e);
-      return;
-    }
-
-    const cy = cytoscape({
+    cy = cytoscape({
       container,
-      elements: [
-        ...nodes.map((n: any) => ({ data: { id: n.id, label: n.label, kind: n.kind, weight: n.weight || 1, category: n.category || 'other' } })),
-        ...edges.map((e: any, i: number) => ({ data: { id: `e${i}`, source: e.source, target: e.target, kind: e.kind } })),
-      ],
+      elements: [...conceptElements, ...edgeElements],
       style: [
         {
           selector: 'node[kind = "concept"]',
           style: {
-            'background-color': '#7c5cff',
+            'background-color': 'data(color)',
             'label': 'data(label)',
-            'font-size': '11px',
+            'font-size': '12px',
+            'font-weight': 600,
             'color': '#1f2937',
             'text-valign': 'bottom',
-            'text-margin-y': 4,
-            'width': 'mapData(weight, 1, 10, 16, 40)',
-            'height': 'mapData(weight, 1, 10, 16, 40)',
+            'text-halign': 'center',
+            'text-margin-y': 6,
+            'width': 'mapData(weight, 1, 50, 18, 56)',
+            'height': 'mapData(weight, 1, 50, 18, 56)',
             'text-background-color': '#fff',
-            'text-background-opacity': 0.85,
-            'text-background-padding': 2,
+            'text-background-opacity': 0.9,
+            'text-background-padding': 3,
+            'text-background-shape': 'roundrectangle',
+            'text-wrap': 'wrap',
+            'text-max-width': '110px',
+            'border-color': '#fff',
+            'border-width': 2,
+            'border-opacity': 0.6,
           },
         },
         {
-          selector: 'node[kind = "paper"]',
+          selector: 'node[kind = "concept"]:selected',
           style: {
-            'background-color': '#9ca3af',
-            'label': '',
-            'width': 5,
-            'height': 5,
+            'border-color': '#1f2937',
+            'border-width': 3,
+            'border-opacity': 1,
+            'background-blacken': -0.15,
           },
         },
         {
-          selector: 'edge',
+          selector: 'node[kind = "concept"].faded',
+          style: { opacity: 0.15 },
+        },
+        {
+          selector: 'node[kind = "concept"].matched',
           style: {
-            'line-color': '#cbd5e1',
-            'width': 1,
+            'border-color': '#f59e0b',
+            'border-width': 3,
+            'border-opacity': 1,
+          },
+        },
+        {
+          selector: 'edge[kind = "cooccur"]',
+          style: {
+            'line-color': '#94a3b8',
+            'width': 'mapData(weight, 1, 10, 1, 5)',
             'curve-style': 'straight',
-            'opacity': 0.6,
+            'opacity': 0.55,
           },
+        },
+        {
+          selector: 'edge.faded',
+          style: { opacity: 0.06 },
         },
       ],
-      layout: { name: 'cose', animate: false, fit: true, padding: 20 },
+      layout: {
+        name: 'fcose',
+        animate: true,
+        animationDuration: 600,
+        randomize: true,
+        fit: true,
+        padding: 40,
+        nodeSeparation: 90,
+        idealEdgeLength: 110,
+        nodeRepulsion: 8000,
+        gravity: 0.25,
+        gravityRangeCompound: 1.5,
+        numIter: 2500,
+        tile: true,
+        // 关键:drag any node 时启用持续模拟,其它节点会被弹力推动
+        // (fcose 内置支持,无需自己写拖拽 handler)
+      },
+      wheelSensitivity: 0.2,
+      // 节点默认可拖动;拖动时 cytoscape 自动维持 edge 弹性
+      // (fcose 在 drag 时会重新局部施加 force 推动邻居)
     });
 
-    // 点击 concept 节点 → 跳详情页(对齐现有 card 行为)
+    // 点击 concept 节点 → 跳详情页
     cy.on('tap', 'node[kind = "concept"]', (evt: any) => {
       const slug = evt.target.id();
+      const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       window.location.href = `${base}/wiki/concepts/${encodeURIComponent(slug)}/`;
     });
+
+    // hover 高亮邻居
+    cy.on('mouseover', 'node[kind = "concept"]', (evt: any) => {
+      const node = evt.target;
+      const nhd = node.closedNeighborhood();
+      cy.elements().not(nhd).addClass('faded');
+    });
+    cy.on('mouseout', 'node[kind = "concept"]', () => {
+      cy.elements().removeClass('faded');
+    });
+
+    // 搜索:输入文字 → 把 label 匹配的节点加 .matched,其它 .faded
+    const searchEl = document.getElementById('concept-search') as HTMLInputElement | null;
+    const countEl = document.getElementById('concepts-count');
+    if (countEl) countEl.textContent = `${concepts.length} 个概念`;
+    searchEl?.addEventListener('input', () => {
+      const q = (searchEl.value || '').trim().toLowerCase();
+      if (!q) {
+        cy.elements().removeClass('faded matched');
+        return;
+      }
+      cy.nodes().forEach((n: any) => {
+        const label = (n.data('label') || '').toLowerCase();
+        const id = (n.id() || '').toLowerCase();
+        const hit = label.includes(q) || id.includes(q);
+        if (hit) n.removeClass('faded').addClass('matched');
+        else n.addClass('faded').removeClass('matched');
+      });
+      cy.edges().addClass('faded');
+    });
+
+    renderLegend(concepts.length, edgeElements.length, papersUsed);
   }
 
   init();
