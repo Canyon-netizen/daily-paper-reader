@@ -1,6 +1,8 @@
 ---
 // 全站基础 layout
 // 集中处理 head / meta / theme 防 FOUC,具体页面通过 slot 注入 body
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import '../styles/global.css';
 
 interface Props {
@@ -16,6 +18,64 @@ const {
 } = Astro.props;
 const siteBase = import.meta.env.BASE_URL;
 const fullTitle = title.includes('Daily Paper Reader') ? title : `${title} · Daily Paper Reader`;
+
+// LLM 预填配置 (2026-09-07) — 本地部署 / 测试时把 .env 里的 MiniMax 配置
+// 通过 SSR 注入到 HTML,客户端 llm-bootstrap.ts 读到后写入 localStorage,
+// 这样 /paper-analyzer/ /topic/ /paper-chat/ 等所有 LLM 调用无需手动进设置页。
+//
+// 安全注意:
+//   - 仅 SSR 期间读 .env,客户端 bundle 不包含 API key(除了 HTML 注入)
+//   - 仅当 .env 存在且 MINIMAX_API_KEY 非空时注入,避免污染公共部署
+//   - 生产 Cloudflare Pages 部署不会读到这里(.env 不在容器里),所以公共站点
+//     不会有这个 <script>;只有本地 dev / build-with-env 时才生效
+interface ServerLLMConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  provider: string;
+  corsProxy: string;  // 默认 Cloudflare Pages 公开代理,浏览器跨域兜底
+}
+function readEnvLLMConfig(): ServerLLMConfig | null {
+  try {
+    // Astro SSR 时 process.cwd() = 仓库根,直接读 .env
+    // (astro 5 会 bundle base layout,import.meta.url 在 dev/build 时指向临时路径,
+    //  用相对路径 .. 解析不可靠)
+    const envPath = join(process.cwd(), '.env');
+    const txt = readFileSync(envPath, 'utf8');
+    const env: Record<string, string> = {};
+    for (const line of txt.split(/\r?\n/)) {
+      if (!line || line.startsWith('#')) continue;
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/i);
+      if (!m) continue;
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      env[m[1].toUpperCase()] = v;
+    }
+    const apiKey = env.MINIMAX_API_KEY || env.LLM_API_KEY || '';
+    // OpenAI 兼容格式 `https://api.minimaxi.com/v1` 才能让客户端 callChatCompletion 直接调通
+    // (基址 .env 写的是 `https://api.minimaxi.com/anthropic`,那是 Anthropic Messages 端点,
+    //  浏览器侧 callChatCompletion 用的是 /v1/chat/completions,所以这里统一规范化成 /v1)。
+    const baseUrl = 'https://api.minimaxi.com/v1';
+    // 模型名 `minimax/<X>` 是路由前缀,客户端实际请求时 callLLMRaw 会剥掉前缀。
+    // 直连 MiniMax API 时,模型名是 `MiniMax-M3`(裸名)。
+    const model = (env.LLM_MODEL || 'MiniMax-M3').replace(/^minimax\//, '');
+    if (!apiKey) return null;
+    return {
+      apiKey,
+      baseUrl,
+      model,
+      provider: 'minimax',
+      // 默认代理: 公开 Cloudflare Pages worker(用于浏览器直接 fetch 跨域时兜底)
+      corsProxy: env.DPR_CORS_PROXY || 'https://daily-paper-reader.pages.dev/api/proxy',
+    };
+  } catch {
+    return null;
+  }
+}
+const serverLLMConfig = readEnvLLMConfig();
+const serverLLMConfigJson = serverLLMConfig ? JSON.stringify(serverLLMConfig) : 'null';
 ---
 
 <!DOCTYPE html>
@@ -41,6 +101,11 @@ const fullTitle = title.includes('Daily Paper Reader') ? title : `${title} · Da
 
     <link rel="icon" type="image/x-icon" href={`${siteBase}favicon.ico`} sizes="any" />
     <link rel="icon" type="image/png" href={`${siteBase}icon.png`} />
+
+    <!-- LLM 预填配置 (2026-09-07):从 .env 注入,客户端 llm-bootstrap.ts 自动写
+         localStorage。仅当 .env 含 MINIMAX_API_KEY 时存在,生产部署无此 script。 -->
+    <script id="dpr-server-llm-config" type="application/json" set:html={serverLLMConfigJson}></script>
+
     <slot name="head" />
   </head>
   <body class={bodyClass}>
@@ -56,6 +121,51 @@ const fullTitle = title.includes('Daily Paper Reader') ? title : `${title} · Da
             document.documentElement.setAttribute('data-theme', 'dark');
           }
         } catch (e) { /* ignore */ }
+      })();
+
+      // LLM 配置 bootstrap (2026-09-07) — 从 SSR 注入的 <script id="dpr-server-llm-config">
+      // 读 .env 的 MiniMax 配置,预填到 localStorage (3 个兼容 key),让所有 LLM
+      // 调用立即可用。仅在 localStorage 未设置时填充,绝不覆盖用户已有配置。
+      (function() {
+        try {
+          const el = document.getElementById('dpr-server-llm-config');
+          if (!el) return; // 公共部署 / .env 无 API key → 没有这个 script
+          const cfg = JSON.parse(el.textContent || 'null');
+          if (!cfg || !cfg.apiKey) return;
+
+          const storageKeys = [
+            'dpr_analyzer_v1',        // settings.ts::loadSettings (主)
+            'dpr_settings',           // [arxiv].astro inline scripts (方法对比/深度抽取)
+            'dpr_llm_config',         // projects-idea-bank.ts (idea bank)
+          ];
+          const value = JSON.stringify({
+            apiKey: cfg.apiKey,
+            baseUrl: cfg.baseUrl,
+            model: cfg.model,
+          });
+          let populated = 0;
+          for (const k of storageKeys) {
+            if (!localStorage.getItem(k)) {
+              localStorage.setItem(k, value);
+              populated++;
+            }
+          }
+          if (populated > 0) {
+            console.info(`[dpr-bootstrap] LLM config pre-filled from .env (${populated} keys)`);
+          }
+
+          // provider 预设指向 minimax,让 settings 页 UI 显示正确
+          if (!localStorage.getItem('dpr_analyzer_provider_v1')) {
+            localStorage.setItem('dpr_analyzer_provider_v1', cfg.provider || 'minimax');
+          }
+
+          // CORS 代理: 默认填公开 worker,除非用户已自配
+          if (cfg.corsProxy && !localStorage.getItem('dpr_analyzer_proxy_v1')) {
+            localStorage.setItem('dpr_analyzer_proxy_v1', cfg.corsProxy);
+          }
+        } catch (e) {
+          console.warn('[dpr-bootstrap] failed:', e);
+        }
       })();
 
       // 跨论文对比浮动按钮(全局)
