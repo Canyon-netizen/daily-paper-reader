@@ -1,261 +1,532 @@
-/* astro-src/styles/writing.css
- *
- * Writing workspace styles for project draft editor.
- * Uses existing CSS variables from global.css.
- */
+/* /styles/writing.css — Writing module styles */
 
-/* Draft editor container */
-.draft-editor-container {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  width: 100%;
+:root {
+  --writing-hue: 270; /* Purple */
+  --writing-color: hsl(var(--writing-hue), 70%, 55%);
 }
 
-/* Toolbar */
-.draft-toolbar {
+/* Writing page layout */
+.writing-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+}
+
+.writing-hero {
+  margin-bottom: var(--space-6);
+}
+
+.writing-hero h1 {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: var(--space-2);
+}
+
+.writing-hero .lead {
+  color: var(--fg-subtle);
+  font-size: 1.1rem;
+  max-width: 600px;
+}
+
+/* Action bar */
+.writing-actionbar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
   flex-wrap: wrap;
-  padding: 0.5rem;
-  background: var(--surface-2, #f5f5f5);
-  border-radius: 6px;
 }
 
-.draft-title-input {
-  flex: 1;
-  min-width: 200px;
-  padding: 0.375rem 0.5rem;
-  font-size: 1rem;
-  font-weight: 500;
-  border: 1px solid var(--border, #ddd);
-  border-radius: 4px;
-  background: var(--bg, #fff);
-  color: var(--fg, #333);
+.writing-segmented {
+  display: inline-flex;
+  background: var(--bg-muted);
+  border-radius: var(--radius-md);
+  padding: 2px;
 }
 
-.draft-title-input:focus {
-  outline: none;
-  border-color: var(--accent, #0066cc);
+.writing-segmented button {
+  padding: var(--space-2) var(--space-4);
+  border: none;
+  background: transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  transition: all 0.15s ease;
 }
 
-.draft-word-count {
-  font-family: var(--font-mono, monospace);
-  font-size: 0.8rem;
-  color: var(--fg-muted, #666);
+.writing-segmented button:hover {
+  color: var(--fg);
+}
+
+.writing-segmented button.active {
+  background: var(--bg-elevated);
+  color: var(--fg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Writing grid */
+.writing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-4);
+}
+
+.writing-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--writing-color);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  transition: all 0.15s ease;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+
+.writing-card:hover {
+  border-color: var(--writing-color);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.writing-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.writing-card-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0;
+}
+
+.writing-card-type {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  background: var(--bg-muted);
+  border-radius: var(--radius-sm);
+  color: var(--fg-subtle);
   white-space: nowrap;
 }
 
-.draft-save-status {
-  font-size: 0.8rem;
-  color: var(--fg-muted, #666);
-  white-space: nowrap;
-}
-
-.draft-save-status.saving {
-  color: var(--accent, #0066cc);
-}
-
-.draft-save-status.saved {
-  color: var(--success, #28a745);
-}
-
-/* Main textarea */
-.draft-editor {
-  width: 100%;
-  min-height: 400px;
-  padding: 1rem;
-  font-family: var(--font-mono, monospace);
-  font-size: 0.95rem;
-  line-height: 1.6;
-  border: 1px solid var(--border, #ddd);
-  border-radius: 6px;
-  background: var(--bg, #fff);
-  color: var(--fg, #333);
-  resize: vertical;
-  tab-size: 2;
-}
-
-.draft-editor:focus {
-  outline: none;
-  border-color: var(--accent, #0066cc);
-  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
-}
-
-.draft-editor::placeholder {
-  color: var(--fg-muted, #999);
-}
-
-/* Export status */
-.draft-export-status {
-  font-size: 0.8rem;
-  color: var(--fg-muted, #666);
-  padding: 0.25rem 0;
-}
-
-.draft-export-status.success {
-  color: var(--success, #28a745);
-}
-
-.draft-export-status.error {
-  color: var(--error, #dc3545);
-}
-
-/* Cite chip (inline pill showing paper title) */
-.draft-cite-chip {
+.writing-card-status {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.125rem 0.5rem;
-  font-size: 0.85rem;
-  background: var(--accent-bg, #e6f0ff);
-  color: var(--accent, #0066cc);
-  border-radius: 12px;
-  white-space: nowrap;
-}
-
-.draft-cite-chip .cite-chip-id {
-  font-family: var(--font-mono, monospace);
-  font-size: 0.75rem;
-}
-
-.draft-cite-chip .cite-chip-title {
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Cite autocomplete popup */
-.cite-autocomplete-popup {
-  background: var(--bg, #fff);
-  border: 1px solid var(--border, #ddd);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  max-height: 300px;
-  overflow-y: auto;
-  z-index: 1000;
-}
-
-.cite-autocomplete-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  padding: 0.5rem 0.75rem;
-  cursor: pointer;
-  border-bottom: 1px solid var(--border, #eee);
-}
-
-.cite-autocomplete-item:last-child {
-  border-bottom: none;
-}
-
-.cite-autocomplete-item:hover,
-.cite-autocomplete-item.is-selected {
-  background: var(--surface-2, #f5f5f5);
-}
-
-.cite-autocomplete-id {
-  font-family: var(--font-mono, monospace);
+  gap: 4px;
   font-size: 0.8rem;
-  color: var(--accent, #0066cc);
-}
-
-.cite-autocomplete-title {
-  font-size: 0.85rem;
-  color: var(--fg, #333);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Draft item in list */
-.draft-item {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.75rem;
-  background: var(--surface-2, #f5f5f5);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.draft-item:hover {
-  background: var(--surface-3, #ebebeb);
-}
-
-.draft-item.active {
-  border-left: 3px solid var(--accent, #0066cc);
-}
-
-.draft-title {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
   font-weight: 500;
-  color: var(--fg, #333);
 }
 
-.draft-meta {
+.writing-card-status.draft {
+  background: hsl(45, 80%, 85%);
+  color: hsl(45, 60%, 35%);
+}
+
+.writing-card-status.review {
+  background: hsl(200, 80%, 85%);
+  color: hsl(200, 60%, 35%);
+}
+
+.writing-card-status.final {
+  background: hsl(140, 60%, 85%);
+  color: hsl(140, 50%, 30%);
+}
+
+.writing-card-abstract {
+  color: var(--fg-subtle);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: var(--space-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.writing-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   font-size: 0.8rem;
-  color: var(--fg-muted, #666);
+  color: var(--fg-subtle);
 }
 
-/* Writing tab content */
-.writing-tab-content {
-  padding: 1rem 0;
+.writing-card-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.writing-header {
+.writing-card-citations {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Empty state */
+.writing-empty {
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.writing-empty-icon {
+  font-size: 3rem;
+  margin-bottom: var(--space-3);
+}
+
+.writing-empty-title {
+  font-size: 1.25rem;
+  margin-bottom: var(--space-2);
+}
+
+.writing-empty-desc {
+  color: var(--fg-subtle);
+  margin-bottom: var(--space-4);
+}
+
+/* Detail page */
+.writing-detail {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+}
+
+.writing-detail-header {
+  margin-bottom: var(--space-6);
+}
+
+.writing-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--fg-subtle);
+  text-decoration: none;
+  font-size: 0.9rem;
+  margin-bottom: var(--space-4);
+}
+
+.writing-detail-back:hover {
+  color: var(--fg);
+}
+
+.writing-detail-title {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: var(--space-2);
+}
+
+.writing-detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  color: var(--fg-subtle);
+  font-size: 0.9rem;
+}
+
+.writing-detail-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* Sections editor */
+.writing-sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.writing-section {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.writing-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-muted);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
 }
 
-.writing-header h3 {
-  margin: 0;
-  font-size: 1.1rem;
+.writing-section-title {
+  font-size: 1rem;
   font-weight: 600;
+  margin: 0;
 }
 
-.writing-drafts-list {
+.writing-section-toggle {
+  color: var(--fg-subtle);
+  font-size: 0.8rem;
+}
+
+.writing-section-content {
+  padding: var(--space-4);
+}
+
+.writing-section-content textarea {
+  width: 100%;
+  min-height: 200px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.writing-section-content textarea:focus {
+  outline: none;
+  border-color: var(--writing-color);
+  box-shadow: 0 0 0 2px hsla(var(--writing-hue), 70%, 55%, 0.2);
+}
+
+/* Citations panel */
+.writing-citations {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin-top: var(--space-6);
+}
+
+.writing-citations h3 {
+  font-size: 1rem;
+  margin-bottom: var(--space-3);
+}
+
+.writing-citation-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-2);
 }
 
-/* Empty state for drafts */
-.writing-drafts-empty {
-  text-align: center;
-  padding: 2rem;
-  color: var(--fg-muted, #666);
-}
-
-.writing-drafts-empty .empty-icon {
-  font-size: 2rem;
-  margin-bottom: 0.5rem;
-}
-
-/* Export button */
-.button.export-btn {
-  display: inline-flex;
+.writing-citation {
+  display: flex;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.375rem 0.75rem;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-muted);
+  border-radius: var(--radius-md);
   font-size: 0.9rem;
+}
+
+.writing-citation-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.writing-citation-arxiv {
+  font-family: monospace;
+  color: var(--fg-subtle);
+}
+
+.writing-citation-context {
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+}
+
+.writing-citation-remove {
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg-subtle);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 0.8rem;
+}
+
+.writing-citation-remove:hover {
+  background: var(--bg-elevated);
+  color: var(--fg);
+}
+
+/* Add citation input */
+.writing-add-citation {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.writing-add-citation input {
+  flex: 1;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.9rem;
+}
+
+.writing-add-citation input:focus {
+  outline: none;
+  border-color: var(--writing-color);
+}
+
+/* Abstract section */
+.writing-abstract {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.writing-abstract h3 {
+  font-size: 1rem;
+  margin-bottom: var(--space-2);
+}
+
+.writing-abstract textarea {
+  width: 100%;
+  min-height: 100px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+/* Modal for new writing */
+.writing-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.2s ease;
+}
+
+.writing-modal.open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.writing-modal-content {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  width: 100%;
+  max-width: 480px;
+  box-shadow: var(--shadow-xl);
+}
+
+.writing-modal h2 {
+  font-size: 1.25rem;
+  margin-bottom: var(--space-4);
+}
+
+.writing-modal-field {
+  margin-bottom: var(--space-4);
+}
+
+.writing-modal-field label {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-bottom: var(--space-1);
+}
+
+.writing-modal-field input,
+.writing-modal-field select {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.95rem;
+}
+
+.writing-modal-field input:focus,
+.writing-modal-field select:focus {
+  outline: none;
+  border-color: var(--writing-color);
+}
+
+.writing-modal-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* Word count display */
+.writing-wordcount {
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+  margin-top: var(--space-2);
+}
+
+/* Version history */
+.writing-versions {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.writing-versions h3 {
+  font-size: 1rem;
+  margin-bottom: var(--space-3);
+}
+
+.writing-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.writing-version {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-muted);
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+}
+
+.writing-version-date {
+  color: var(--fg-subtle);
 }
 
 /* Responsive */
 @media (max-width: 640px) {
-  .draft-toolbar {
-    flex-direction: column;
-    align-items: stretch;
+  .writing-grid {
+    grid-template-columns: 1fr;
   }
 
-  .draft-title-input {
-    min-width: 100%;
+  .writing-detail {
+    padding: var(--space-4) var(--space-2);
   }
 
-  .draft-editor {
-    min-height: 300px;
+  .writing-detail-title {
+    font-size: 1.5rem;
   }
 }

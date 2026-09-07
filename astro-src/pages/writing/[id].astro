@@ -1,0 +1,98 @@
+---
+// /writing/[id]/ — Writing detail page (full draft view with sections)
+//
+// Shows a single writing with editable sections and citation management.
+// Client-side only (localStorage) - SSR shows shell that hydrates.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/writing.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// Get the ID from URL - for static build, we'll use getStaticPaths
+const { id } = Astro.params;
+
+// For SSR, pass the ID. Client-side will fetch the actual data.
+const writingId = id || '';
+---
+
+<BaseLayout
+  title="写作详情 · Daily Paper Reader"
+  description="写作详情页"
+>
+  <Navbar />
+
+  <main class="writing-detail" data-writing-id={writingId}>
+    <a class="writing-detail-back" href={base + '/writing/'}>
+      ← 所有写作
+    </a>
+
+    <header class="writing-detail-header">
+      <h1 class="writing-detail-title" data-writing-title>加载中...</h1>
+      <div class="writing-detail-meta">
+        <span class="writing-card-type" data-writing-type>—</span>
+        <span class="writing-card-status draft" data-writing-status>草稿</span>
+        <span data-writing-venue></span>
+        <span data-writing-updated></span>
+        <span class="writing-wordcount" data-writing-wordcount>0 字</span>
+      </div>
+      <div class="writing-detail-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-save-writing>💾 保存</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-change-status>改变状态</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-delete-writing>🗑️ 删除</button>
+      </div>
+    </header>
+
+    <!-- Abstract -->
+    <section class="writing-abstract">
+      <h3>摘要</h3>
+      <textarea
+        id="writing-abstract"
+        placeholder="输入论文摘要..."
+        data-writing-abstract
+      ></textarea>
+    </section>
+
+    <!-- Sections -->
+    <section class="writing-sections" data-sections-container>
+      <!-- Sections will be rendered by client-side JS -->
+    </section>
+
+    <!-- Citations -->
+    <section class="writing-citations">
+      <h3>引用论文</h3>
+      <div class="writing-citation-list" data-citations-list>
+        <!-- Citations will be rendered by client-side JS -->
+      </div>
+      <div class="writing-add-citation">
+        <input
+          type="text"
+          id="citation-arxiv-id"
+          placeholder="输入 arXiv ID (如: 1706.03762)"
+        />
+        <input
+          type="text"
+          id="citation-context"
+          placeholder="引用上下文 (可选)"
+        />
+        <button type="button" class="btn btn-primary btn-sm" data-add-citation>添加引用</button>
+      </div>
+    </section>
+
+    <!-- Version history -->
+    <section class="writing-versions" data-versions-section>
+      <h3>版本历史</h3>
+      <div class="writing-version-list" data-versions-list>
+        <!-- Versions will be rendered by client-side JS -->
+      </div>
+    </section>
+  </main>
+
+  <Footer />
+
+  <script>
+    import '../../scripts/writing-ui';
+  </script>
+</BaseLayout>

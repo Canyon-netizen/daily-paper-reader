@@ -1,0 +1,100 @@
+---
+// /writing/ — Writing list page (drafts in progress)
+//
+// Displays all writings from localStorage with filter by type/status.
+// Follows pattern from /libraries/index.astro.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/writing.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// SSR cannot read localStorage, so we pass empty initial state.
+// Client-side JS will hydrate with actual writings.
+const initialWritingsJson = '[]';
+---
+
+<BaseLayout
+  title="写作 · Daily Paper Reader"
+  description="论文草稿写作空间 — 管理你的论文、笔记、综述和翻译。"
+>
+  <Navbar />
+
+  <main class="writing-page">
+    <header class="writing-hero">
+      <h1>写作</h1>
+      <p class="lead">
+        论文草稿写作空间。管理你的论文、笔记、综述和翻译，集成论文引用，跟踪版本历史。
+      </p>
+    </header>
+
+    <div class="writing-actionbar">
+      <span class="writing-segmented" data-type-filter data-type-filter-target="#all-writings">
+        <button class="active" type="button" data-type-value="all">全部</button>
+        <button type="button" data-type-value="paper">论文</button>
+        <button type="button" data-type-value="note">笔记</button>
+        <button type="button" data-type-value="review">综述</button>
+        <button type="button" data-type-value="translation">翻译</button>
+      </span>
+      <span class="writing-segmented" data-status-filter data-status-filter-target="#all-writings">
+        <button class="active" type="button" data-status-value="all">全部状态</button>
+        <button type="button" data-status-value="draft">草稿</button>
+        <button type="button" data-status-value="review">审核中</button>
+        <button type="button" data-status-value="final">已完成</button>
+      </span>
+      <span style="flex: 1;"></span>
+      <button type="button" class="btn btn-primary btn-sm" data-open-new-writing>
+        ➕ 新建写作
+      </button>
+    </div>
+
+    <div id="all-writings" data-writings-json={initialWritingsJson}>
+      <div class="writing-grid"></div>
+      <div class="writing-empty" data-empty-state style="display: none;">
+        <div class="writing-empty-icon">✍️</div>
+        <h3 class="writing-empty-title">还没有写作</h3>
+        <p class="writing-empty-desc">
+          点右上角「➕ 新建写作」开始你的第一篇论文或笔记。
+        </p>
+        <button type="button" class="btn btn-primary btn-sm" data-open-new-writing>➕ 新建写作</button>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+
+  <!-- New Writing Modal -->
+  <div class="writing-modal" id="new-writing-modal">
+    <div class="writing-modal-content">
+      <h2>新建写作</h2>
+      <div class="writing-modal-field">
+        <label for="new-writing-title">标题</label>
+        <input type="text" id="new-writing-title" placeholder="输入写作标题..." />
+      </div>
+      <div class="writing-modal-field">
+        <label for="new-writing-type">类型</label>
+        <select id="new-writing-type">
+          <option value="paper">论文</option>
+          <option value="section">章节</option>
+          <option value="note">笔记</option>
+          <option value="review">综述</option>
+          <option value="translation">翻译</option>
+        </select>
+      </div>
+      <div class="writing-modal-field">
+        <label for="new-writing-venue">目标期刊/会议 (可选)</label>
+        <input type="text" id="new-writing-venue" placeholder="例如: ICML 2027" />
+      </div>
+      <div class="writing-modal-actions">
+        <button type="button" class="btn btn-ghost btn-sm" data-close-modal>取消</button>
+        <button type="button" class="btn btn-primary btn-sm" data-create-writing>创建</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    import '../../scripts/writing-ui';
+  </script>
+</BaseLayout>
