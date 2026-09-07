@@ -371,24 +371,44 @@ export async function sendChat(card: HTMLElement): Promise<void> {
 }
 
 export function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionItem[]): string {
-  const dimBlocks = r.dimensions.map((d) => `
-    <section class="report-dim">
-      <h3>${escapeHtml(d.name)}</h3>
-      ${d.description ? `<p class="report-dim-desc">${escapeHtml(d.description)}</p>` : ''}
-      <ul class="report-dim-papers">
-        ${d.papers.map((p) => `
-          <li>
-            <strong>arXiv:${escapeHtml(p.arxivId)}</strong>
-            <span class="report-role">${escapeHtml(p.role)}</span>
-            <span class="report-key">${escapeHtml(p.key)}</span>
-            ${p.method ? `<div class="report-method">方法: ${escapeHtml(p.method)}</div>` : ''}
-            ${p.result ? `<div class="report-result">结果: ${escapeHtml(p.result)}</div>` : ''}
-            ${p.note ? `<div class="report-note">注: ${escapeHtml(p.note)}</div>` : ''}
-          </li>
-        `).join('')}
-      </ul>
-    </section>
-  `).join('');
+  const dimBlocks = r.dimensions.map((d) => {
+    const ra = d.researchApproach;
+    const approachBlock = ra
+      ? `<div class="report-approach">
+          <h4>研究思路</h4>
+          <p><strong>核心思路</strong>: ${escapeHtml(ra.idea)}</p>
+          <p><strong>实施步骤</strong>:
+            <ol class="report-approach-pipeline">
+              ${ra.pipeline.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}
+            </ol>
+          </p>
+          <p class="report-approach-meta">
+            <span class="report-approach-difficulty report-difficulty-${escapeHtml(ra.difficulty)}">难度: ${escapeHtml(ra.difficulty)}</span>
+            ${ra.estimatedTimeWeeks ? `<span class="report-approach-time">预估 ${ra.estimatedTimeWeeks} 周</span>` : ''}
+            ${ra.tiedNextStep ? `<a class="report-approach-link" href="#nextstep-${escapeHtml(ra.tiedNextStep)}">↗ 对应建议 #${escapeHtml(ra.tiedNextStep)}</a>` : ''}
+          </p>
+        </div>`
+      : '';
+    return `
+      <section class="report-dim">
+        <h3>${escapeHtml(d.name)}</h3>
+        ${d.description ? `<p class="report-dim-desc">${escapeHtml(d.description)}</p>` : ''}
+        <ul class="report-dim-papers">
+          ${d.papers.map((p) => `
+            <li>
+              <strong>arXiv:${escapeHtml(p.arxivId)}</strong>
+              <span class="report-role">${escapeHtml(p.role)}</span>
+              <span class="report-key">${escapeHtml(p.key)}</span>
+              ${p.method ? `<div class="report-method">方法: ${escapeHtml(p.method)}</div>` : ''}
+              ${p.result ? `<div class="report-result">结果: ${escapeHtml(p.result)}</div>` : ''}
+              ${p.note ? `<div class="report-note">注: ${escapeHtml(p.note)}</div>` : ''}
+            </li>
+          `).join('')}
+        </ul>
+        ${approachBlock}
+      </section>
+    `;
+  }).join('');
 
   // 前沿方向(目标 3)
   const frontierSection = r.frontierDirections && r.frontierDirections.length
@@ -430,7 +450,12 @@ export function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionIte
       ${r.sharedFindings.length ? `<section class="report-shared"><h3>共同发现</h3><ul>${r.sharedFindings.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul></section>` : ''}
       ${frontierSection}
       ${r.gaps.length ? `<section class="report-gaps"><h3>研究空白</h3><ul>${r.gaps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul></section>` : ''}
-      ${r.nextSteps.length ? `<section class="report-next"><h3>下一步建议</h3><ul>${r.nextSteps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul></section>` : ''}
+      ${r.nextSteps.length ? `<section class="report-next"><h3>下一步建议</h3><ol>${r.nextSteps.map((s) => `
+        <li id="nextstep-${escapeHtml(s.id)}">
+          <strong>[${escapeHtml(s.id)}]</strong> ${escapeHtml(s.text)}
+          ${s.tiedDimensionName ? `<span class="report-next-tie">对应维度: ${escapeHtml(s.tiedDimensionName)}</span>` : ''}
+        </li>
+      `).join('')}</ol></section>` : ''}
       ${referenceSeeds ? `<section class="report-seeds"><h3>参考论文 (${referenceSeeds.length} 篇)</h3><ul>${referenceSeeds.map((s) => `<li>arXiv:${escapeHtml(s.arxivId)} — ${escapeHtml(s.title)}</li>`).join('')}</ul></section>` : ''}
     </div>
   `;
@@ -442,7 +467,7 @@ export function renderReportNextStepsHTML(): string {
   return `
     <section class="report-next-steps">
       <h3>建议下一步</h3>
-      <ol>${r.nextSteps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ol>
+      <ol>${r.nextSteps.map((s) => `<li id="nextstep-${escapeHtml(s.id)}"><strong>[${escapeHtml(s.id)}]</strong> ${escapeHtml(s.text)}</li>`).join('')}</ol>
       <div class="report-next-actions">
         <button type="button" class="topic-btn ghost" data-act="regenerate-report">🔄 重新生成</button>
         <button type="button" class="topic-btn ghost" data-act="copy-report-md">📋 复制 Markdown</button>

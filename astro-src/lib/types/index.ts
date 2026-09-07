@@ -38,6 +38,7 @@ export type {
   TopicReportDimension,
   TopicReportDimensionPaper,
   TopicReportFrontierDirection,
+  ResearchApproach,
 } from './topic';
 
 export type {

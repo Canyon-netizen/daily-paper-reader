@@ -785,7 +785,14 @@ export async function chatWithReport(
               (p.result ? `\n    结果:${p.result}` : '') +
               (p.note ? `\n    注:${p.note}` : ''),
           )
-          .join('\n'),
+          .join('\n') +
+        (d.researchApproach
+          ? `\n  [研究思路] ${d.researchApproach.idea}` +
+            ` | 难度:${d.researchApproach.difficulty}` +
+            (d.researchApproach.estimatedTimeWeeks ? ` | ${d.researchApproach.estimatedTimeWeeks}w` : '') +
+            (d.researchApproach.tiedNextStep ? ` | tiedNextStep=${d.researchApproach.tiedNextStep}` : '') +
+            `\n  [实施步骤] ${d.researchApproach.pipeline.join(' → ')}`
+          : ''),
     )
     .join('\n');
   const sysContext =
@@ -803,7 +810,12 @@ export async function chatWithReport(
         }).join('\n')}\n\n`
       : '') +
     (report.gaps.length ? `[研究空白]\n${report.gaps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
-    (report.nextSteps.length ? `[下一步建议]\n${report.nextSteps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
+    (report.nextSteps.length
+      ? `[下一步建议]\n${report.nextSteps.map((s, i) => {
+          const tie = s.tiedDimensionName ? ` (tiedDim=${s.tiedDimensionName})` : '';
+          return `  ${i + 1}. [${s.id}]${tie} ${s.text}`;
+        }).join('\n')}\n\n`
+      : '') +
     `[可引用的论文速览(节选)] —— 供你(模型)在回答细节问题时交叉验证:\n` +
     summaries
       .slice(0, 30)

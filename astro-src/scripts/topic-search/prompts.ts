@@ -214,10 +214,19 @@ TLDR / 方法 / 结果 / 结论 / 主题语境),以及一个研究主题的种�
           - method: 字符串,≤ 60 字(可省略)
           - result: 字符串,≤ 60 字(可省略)
           - note: 字符串,≤ 60 字(可省略)
+      - researchApproach: 对象(目标 5),可省略,若给则含:
+          - idea: 字符串,核心思路,≤ 80 字
+          - pipeline: 字符串数组,2-5 步实施步骤,每步 ≤ 40 字
+          - difficulty: 字符串,必须是 "low" / "medium" / "high"
+          - estimatedTimeWeeks: 数字,1-52 周(可省略)
+          - tiedNextStep: 字符串,引用 nextSteps[].id(可省略)
   - methodsComparison: 字符串,跨论文方法对比综览(2-4 段),≤ 300 字,整合所有论文的 method_pros_cons,归纳共性模式和差异
   - sharedFindings: 字符串数组,3-6 条共同发现,每条 ≤ 60 字
   - gaps: 字符串数组,2-5 条研究空白,每条 ≤ 60 字
-  - nextSteps: 字符串数组,3-5 条下一步建议,每条 ≤ 60 字
+  - nextSteps: 数组,3-5 条下一步建议,每个元素:
+      - id: 字符串,稳定 ID(可用 "ns_1" / "ns_2" 这种命名)
+      - text: 字符串,建议文本,≤ 60 字
+      - tiedDimensionName: 字符串,对应的 dimension.name(可省略)
   - frontierDirections: 数组,0-4 条前沿研究方向,每个元素:
       - name: 字符串,方向名(≤ 12 字)
       - description: 字符串,方向说明(≤ 60 字),点出"这个方向与已有论文的差距 / 为什么值得做"

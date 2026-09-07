@@ -103,10 +103,26 @@ export interface TopicReportDimensionPaper {
   note?: string;      // 截断 120
 }
 
+/** 研究思路(目标 5 的核心交付):把"做这个方向"拆成 idea + pipeline + 难度。 */
+export interface ResearchApproach {
+  /** 一句话核心思路:这个维度可以怎样入手/借鉴(≤ 80 字)。 */
+  idea: string;
+  /** 实施步骤:每步 ≤ 40 字,2-5 步。 */
+  pipeline: string[];
+  /** 实施难度(low / medium / high):对个人研究者或小团队。 */
+  difficulty: 'low' | 'medium' | 'high';
+  /** 预估耗时(周),1-52。LLM 估不出来时省略。 */
+  estimatedTimeWeeks?: number;
+  /** 对应的 nextStep.id(双向 anchor),可省略。 */
+  tiedNextStep?: string;
+}
+
 export interface TopicReportDimension {
   name: string;                                  // 截断 30
   description?: string;                          // 截断 160
   papers: TopicReportDimensionPaper[];           // ≥ 1
+  /** 目标 5:这个维度对应的研究思路(LLM 输出,可省略)。 */
+  researchApproach?: ResearchApproach;
 }
 
 export interface TopicReport {
@@ -115,7 +131,9 @@ export interface TopicReport {
   methodsComparison?: string;                     // 截断 600
   sharedFindings: string[];                      // 截断 120/条, 最长 8
   gaps: string[];                                // 截断 120/条, 最长 6
-  nextSteps: string[];                           // 截断 120/条, 最长 6
+  /** 下一步建议:每条带稳定 id + 文本,可被 dimension.researchApproach.tiedNextStep 反向引用(目标 5)。
+   *  旧 session 可能是 string[] → normalizeReportTopic 入口兼容迁移成对象。 */
+  nextSteps: Array<{ id: string; text: string; tiedDimensionName?: string }>;
   /** 前沿研究方向:聚合论文里"还没充分做"或"可能拓展"的方向,显式结构化(目标 3)。
    *  name 方向名,description 一句话解释(≤ 80 字),paperArxivIds 关联论文 ID。 */
   frontierDirections?: TopicReportFrontierDirection[];   // 0-4 条
