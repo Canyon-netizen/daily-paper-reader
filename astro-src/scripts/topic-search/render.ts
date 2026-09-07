@@ -389,11 +389,35 @@ export function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionIte
       </ul>
     </section>
   `).join('');
+
+  // 前沿方向(目标 3)
+  const frontierSection = r.frontierDirections && r.frontierDirections.length
+    ? `<section class="report-frontier">
+        <h3>前沿方向</h3>
+        <ul class="report-frontier-list">
+          ${r.frontierDirections.map((f) => `
+            <li>
+              <strong>${escapeHtml(f.name)}</strong>
+              <span class="report-frontier-desc">${escapeHtml(f.description)}</span>
+              ${f.paperArxivIds.length
+                ? `<div class="report-frontier-papers">关联: arXiv:${f.paperArxivIds.map(escapeHtml).join(', arXiv:')}</div>`
+                : ''}
+            </li>
+          `).join('')}
+        </ul>
+      </section>`
+    : '';
+
+  // 算力档位 chip
+  const tier = r.resourceTier ?? 'unknown';
   return `
     <div class="report-block">
       <header class="report-header">
         <h2>主题报告</h2>
-        <div class="report-meta">生成于 ${new Date(r.generatedAt).toLocaleString()} · 整合 ${r.relatedArxivIds.length} 篇论文</div>
+        <div class="report-meta">
+          生成于 ${new Date(r.generatedAt).toLocaleString()} · 整合 ${r.relatedArxivIds.length} 篇论文
+          <span class="report-tier-badge report-tier-${escapeHtml(tier)}" title="主题级算力档位">算力档位: ${escapeHtml(tier)}</span>
+        </div>
       </header>
       <section class="report-overview">
         <h3>总览</h3>
@@ -404,6 +428,7 @@ export function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionIte
         ${dimBlocks}
       </section>
       ${r.sharedFindings.length ? `<section class="report-shared"><h3>共同发现</h3><ul>${r.sharedFindings.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul></section>` : ''}
+      ${frontierSection}
       ${r.gaps.length ? `<section class="report-gaps"><h3>研究空白</h3><ul>${r.gaps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul></section>` : ''}
       ${r.nextSteps.length ? `<section class="report-next"><h3>下一步建议</h3><ul>${r.nextSteps.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}</ul></section>` : ''}
       ${referenceSeeds ? `<section class="report-seeds"><h3>参考论文 (${referenceSeeds.length} 篇)</h3><ul>${referenceSeeds.map((s) => `<li>arXiv:${escapeHtml(s.arxivId)} — ${escapeHtml(s.title)}</li>`).join('')}</ul></section>` : ''}

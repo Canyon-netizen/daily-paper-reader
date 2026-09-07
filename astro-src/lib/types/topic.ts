@@ -11,6 +11,7 @@
 import type { AnalysisResult, ArxivEntry } from '../../scripts/paper-analyzer';
 import type { SubQ } from './subq';
 import type { Facet } from './facet';
+import type { ResourceTier } from './resource-tier';
 
 export interface Candidate {
   arxivId: string;
@@ -115,7 +116,19 @@ export interface TopicReport {
   sharedFindings: string[];                      // 截断 120/条, 最长 8
   gaps: string[];                                // 截断 120/条, 最长 6
   nextSteps: string[];                           // 截断 120/条, 最长 6
+  /** 前沿研究方向:聚合论文里"还没充分做"或"可能拓展"的方向,显式结构化(目标 3)。
+   *  name 方向名,description 一句话解释(≤ 80 字),paperArxivIds 关联论文 ID。 */
+  frontierDirections?: TopicReportFrontierDirection[];   // 0-4 条
+  /** 主题级算力档位:综合覆盖论文的 compute_requirements 得出(目标 4)。 */
+  resourceTier?: ResourceTier;                   // 默认 'unknown'
   generatedAt: number;
   relatedArxivIds: string[];
   incrementallyAddedArxivIds?: string[];
+}
+
+/** 单条前沿方向(目标 3 的核心交付)。 */
+export interface TopicReportFrontierDirection {
+  name: string;                                  // 截断 24
+  description: string;                           // 截断 80
+  paperArxivIds: string[];                       // 关联论文 ID(去版本号)
 }

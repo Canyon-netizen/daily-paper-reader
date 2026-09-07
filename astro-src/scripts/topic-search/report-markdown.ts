@@ -9,12 +9,29 @@
 import { loadSettings, type LLMConfig } from '../settings';
 import { canonicalArxivId as canonicalId } from '../../lib/dom-utils';
 import { resolveRoute } from '../../lib/llm';
-import type { Summary, TopicReport, TopicReportDimension, TopicReportDimensionPaper, TopicSession } from '../../lib/schemas';
+import type { Summary, TopicReport, TopicReportDimension, TopicReportDimensionPaper, TopicReportFrontierDirection, TopicSession } from '../../lib/schemas';
+import type { ResourceTier } from '../../lib/types/resource-tier';
 import { getActiveReportPrompt } from './prompts';
 import { callLLMRaw } from './llm-call';
 import { S } from './state';
 import { setStatus, clearStatus } from './status';
 import { persistSession } from './store';
+
+const RESOURCE_TIER_ENUM: ReadonlyArray<ResourceTier> = [
+  'api_only',
+  'single_gpu',
+  'multi_gpu',
+  'cluster',
+  'tpu_pod',
+  'unknown',
+];
+
+function normalizeResourceTier(raw: unknown): ResourceTier {
+  const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return (RESOURCE_TIER_ENUM as readonly string[]).includes(s)
+    ? (s as ResourceTier)
+    : 'unknown';
+}
 
 // 主题报告增量追加节流（同 session 内 N 篇并发完成时，8 秒内最多触发 1 次）。
 export const REPORT_INC_THROTTLE_MS = 8000;
@@ -89,6 +106,28 @@ function normalizeReportTopic(obj: any, prev: TopicReport | undefined, mode: 'fu
   const relatedSet = new Set<string>();
   for (const d of dims) for (const p of d.papers) relatedSet.add(p.arxivId);
   const related: string[] = [...relatedSet];
+
+  // frontierDirections(目标 3):独立数组,只收 LLM 给的 ≥1 关联论文 + name 非空的
+  const frontierArr: TopicReportFrontierDirection[] = [];
+  if (Array.isArray(obj.frontierDirections)) {
+    for (const f of obj.frontierDirections) {
+      const name = truncReport(f?.name, 24);
+      if (!name) continue;
+      const description = truncReport(f?.description, 80) || '';
+      const ids: string[] = [];
+      if (Array.isArray(f?.paperArxivIds)) {
+        for (const raw of f.paperArxivIds) {
+          const id = canonicalId(String(raw ?? '').trim());
+          if (id) ids.push(id);
+        }
+      }
+      // 关联论文必须 ≥1:没有就丢弃(避免空架子)
+      if (ids.length === 0) continue;
+      frontierArr.push({ name, description, paperArxivIds: ids });
+      if (frontierArr.length >= 4) break;
+    }
+  }
+
   const prevIds = new Set(prev?.relatedArxivIds ?? []);
   return {
     overview: truncReport(obj.overview, 800) || '(未生成总览)',
@@ -97,6 +136,8 @@ function normalizeReportTopic(obj: any, prev: TopicReport | undefined, mode: 'fu
     sharedFindings: arrOf('sharedFindings', 8),
     gaps: arrOf('gaps', 6),
     nextSteps: arrOf('nextSteps', 6),
+    frontierDirections: frontierArr,
+    resourceTier: normalizeResourceTier(obj.resourceTier),
     generatedAt: Date.now(),
     relatedArxivIds: related,
     incrementallyAddedArxivIds:
@@ -264,7 +305,8 @@ export function buildReportMarkdown(): string | null {
     `> 生成于 ${new Date(r.generatedAt).toLocaleString()} · 整合 ${r.relatedArxivIds.length} 篇论文` +
       (r.incrementallyAddedArxivIds && r.incrementallyAddedArxivIds.length
         ? ` · 本次新增 ${r.incrementallyAddedArxivIds.length} 篇`
-        : ''),
+        : '') +
+      ` · 算力档位: ${r.resourceTier ?? 'unknown'}`,
   );
   lines.push('');
   lines.push('## 主题总览');
@@ -316,6 +358,17 @@ export function buildReportMarkdown(): string | null {
   if (r.sharedFindings.length) {
     lines.push('## 共同发现');
     r.sharedFindings.forEach((s) => lines.push(`- ${s}`));
+    lines.push('');
+  }
+  // 前沿方向(目标 3):显式结构化方向,独立于 gaps
+  if (r.frontierDirections && r.frontierDirections.length) {
+    lines.push('## 前沿方向');
+    r.frontierDirections.forEach((f) => {
+      lines.push(`- **${f.name}** — ${f.description || '(无说明)'}`);
+      if (f.paperArxivIds.length) {
+        lines.push(`  - 关联: arXiv:${f.paperArxivIds.join(', arXiv:')}`);
+      }
+    });
     lines.push('');
   }
   if (r.gaps.length) {

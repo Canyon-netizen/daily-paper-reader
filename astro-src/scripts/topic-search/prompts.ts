@@ -218,6 +218,13 @@ TLDR / 方法 / 结果 / 结论 / 主题语境),以及一个研究主题的种�
   - sharedFindings: 字符串数组,3-6 条共同发现,每条 ≤ 60 字
   - gaps: 字符串数组,2-5 条研究空白,每条 ≤ 60 字
   - nextSteps: 字符串数组,3-5 条下一步建议,每条 ≤ 60 字
+  - frontierDirections: 数组,0-4 条前沿研究方向,每个元素:
+      - name: 字符串,方向名(≤ 12 字)
+      - description: 字符串,方向说明(≤ 60 字),点出"这个方向与已有论文的差距 / 为什么值得做"
+      - paperArxivIds: 字符串数组,关联的论文 ID(去掉版本号)
+  - resourceTier: 字符串,主题级算力档位。必须是以下之一:
+      "api_only" / "single_gpu" / "multi_gpu" / "cluster" / "tpu_pod" / "unknown"
+      综合覆盖论文的训练/推理需求判断;信息不足时填 "unknown"
 
 【归纳纪律 — 非常重要】
 - dimensions 是"归纳出来的横向比较轴",不要每个论文一个维度;当 M>3 时尤其要合并
@@ -226,6 +233,19 @@ TLDR / 方法 / 结果 / 结论 / 主题语境),以及一个研究主题的种�
 - overview 不要照抄单篇 TLDR,要写"这堆论文研究的是什么 / 主要分歧点 / 适用场景"
 - sharedFindings 是"多篇一致或收敛的方向",gaps 是"论文没解决或互相矛盾的地方",
   nextSteps 给读者(下一步读什么 / 哪个方向有空间)
+- frontierDirections 是**显式归纳的前沿方向** — 区别于 gaps:
+    gaps 是"还没人做的空白",frontierDirections 是"有人开始做、但还没收敛 / 有拓展空间"的方向
+    例如:"基于 RLHF 的多模态对齐"是 frontierDirection(2-3 篇在做,但方案多样未收敛);
+    "缺少中文医疗领域 benchmark"是 gap(完全没人做)。
+    每条 frontierDirection 必须挂上 ≥1 篇真实论文 ID。
+  不知道时输出空数组 [];不要硬凑
+- resourceTier 选择指南:
+    api_only: 论文几乎都调现有大模型 API,无需训练
+    single_gpu: 训练/微调单卡消费级 GPU(≤ 24GB)可完成
+    multi_gpu: 需要多卡工作站或单节点 8 卡 H100/A100
+    cluster: 需要几十到几百卡的集群
+    tpu_pod: 涉及 TPU pod 或 > 1000 卡 GPU 集群
+    unknown: 信息不足 / 论文类型混合难以判断
 - 当 incrementalMode = true 时,你会收到 prevDimensions 列表 — 把它当作"已经发现的维度",
   新的 dimensions 应优先复用 / 扩展已有维度,只在确实无法归入时才新增;
   newPapers 请确保每篇都至少进 1 个维度
