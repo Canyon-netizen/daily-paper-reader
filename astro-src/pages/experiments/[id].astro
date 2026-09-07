@@ -1,150 +1,383 @@
 ---
-// /experiments/<id>/ — 实验详情页
+// /experiments/[id]/ — Experiment detail page
 //
 // 完整展示:hypothesis, method, variables, expected_results, actual_results, status.
-// 对照 Polaris ExperimentDetail 页面。
+// 支持客户端编辑 (localStorage)。
 
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
-import { getExperiment } from '../../lib/experiments';
 import '../../styles/experiments.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
-export async function getStaticPaths() {
-  const { EXPERIMENTS } = await import('../../lib/experiments');
-  return EXPERIMENTS.map((e) => ({ params: { id: e.id } }));
-}
-
+// SSR-side: pass the ID to client which will load from localStorage
 const { id } = Astro.params;
-const experiment = getExperiment(id!);
-
-if (!experiment) {
-  return Astro.redirect(base + '/experiments/');
-}
-
-const statusLabels: Record<string, string> = {
-  planning: '规划中',
-  running: '进行中',
-  completed: '已完成',
-  failed: '失败',
-  paused: '暂停',
-};
-
-const typeLabels: Record<string, string> = {
-  independent: '自变量',
-  dependent: '因变量',
-  controlled: '控制变量',
-};
 ---
 
 <BaseLayout
-  title={`${experiment.title} · 实验详情`}
-  description={`${experiment.hypothesis}`}
+  title={`实验详情 · Daily Paper Reader`}
+  description="实验详情页"
 >
   <Navbar />
 
-  <main class="exp-detail">
-    <a class="exp-back-link" href={base + '/experiments/'}>← 所有实验</a>
+  <main class="exp-detail-page">
+    <div class="exp-detail-container" data-exp-id={id}>
+      <a href={base + '/experiments/'} class="exp-back-link">← 所有实验</a>
 
-    <header class="exp-detail-header">
-      <h1>{experiment.title}</h1>
-      <p class="title-zh">{experiment.titleZh}</p>
-      <div class="exp-detail-meta">
-        <span class={`exp-status exp-status--${experiment.status}`}>
-          {statusLabels[experiment.status] || experiment.status}
-        </span>
-        <span>负责人: {experiment.owner}</span>
-        <span>创建于 {experiment.createdAt}</span>
-        <span>更新于 {experiment.updatedAt}</span>
+      <div id="exp-detail-content">
+        <!-- Client-side rendered -->
+        <noscript>
+          <p class="experiments-nojs">
+            实验详情需要 JavaScript 渲染 — 数据存在浏览器 localStorage。
+          </p>
+        </noscript>
       </div>
-    </header>
-
-    <!-- Hypothesis -->
-    <section class="exp-section">
-      <h2 class="exp-section-title">实验假设</h2>
-      <p>{experiment.hypothesis}</p>
-      <p style="margin-top: 0.5rem; color: var(--fg-subtle, #666);">{experiment.hypothesisZh}</p>
-    </section>
-
-    <!-- Method -->
-    <section class="exp-section">
-      <h2 class="exp-section-title">实验方法</h2>
-      <p>{experiment.method}</p>
-      <p style="margin-top: 0.5rem; color: var(--fg-subtle, #666);">{experiment.methodZh}</p>
-    </section>
-
-    <!-- Variables -->
-    <section class="exp-section">
-      <h2 class="exp-section-title">变量设计</h2>
-      <div class="exp-variables">
-        {experiment.variables.map((v) => (
-          <div class="exp-variable">
-            <span class="exp-variable-name">{v.name}</span>
-            <span class={`exp-variable-type exp-variable-type--${v.type}`}>
-              {typeLabels[v.type] || v.type}
-            </span>
-            <span class="exp-variable-desc">{v.description}</span>
-            {v.values && (
-              <span class="exp-variable-values">
-                取值: {v.values.join(' / ')}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    </section>
-
-    <!-- Results -->
-    <section class="exp-section">
-      <h2 class="exp-section-title">实验结果</h2>
-      <div class="exp-results">
-        <div class="exp-results-expected">
-          <div class="exp-results-label">预期结果</div>
-          <div class="exp-results-content">
-            <p>{experiment.expectedResults}</p>
-            <p style="color: var(--fg-subtle, #666); margin-top: 0.25rem;">{experiment.expectedResultsZh}</p>
-          </div>
-        </div>
-        {experiment.actualResults && (
-          <div class="exp-results-actual">
-            <div class="exp-results-label">实际结果</div>
-            <div class="exp-results-content">
-              <p>{experiment.actualResults}</p>
-              <p style="color: var(--fg-subtle, #666); margin-top: 0.25rem;">{experiment.actualResultsZh}</p>
-            </div>
-          </div>
-        )}
-      </div>
-    </section>
-
-    <!-- Tags -->
-    {experiment.tags.length > 0 && (
-      <section class="exp-section">
-        <h2 class="exp-section-title">标签</h2>
-        <div class="exp-tags">
-          {experiment.tags.map((t) => (
-            <span class="exp-tag">{t}</span>
-          ))}
-        </div>
-      </section>
-    )}
-
-    <!-- Related Papers -->
-    {experiment.relatedPapers.length > 0 && (
-      <section class="exp-section">
-        <h2 class="exp-section-title">相关论文</h2>
-        <div class="exp-papers">
-          {experiment.relatedPapers.map((paperId) => (
-            <a class="exp-paper-link" href={`${base}/papers/${paperId}/`}>
-              📄 {paperId}
-            </a>
-          ))}
-        </div>
-      </section>
-    )}
+    </div>
   </main>
 
   <Footer />
+
+  <script define:vars={{ expId: id, baseUrl: base }}>
+    import { getExperiment, updateExperiment } from '../../lib/experiments';
+    import type { Experiment, ExperimentStatus, ExperimentVariable } from '../../lib/experiments/types';
+
+    const statusLabels: Record<ExperimentStatus, string> = {
+      planning: '规划中',
+      running: '进行中',
+      completed: '已完成',
+      failed: '失败',
+      paused: '暂停',
+    };
+
+    const typeLabels: Record<string, string> = {
+      independent: '自变量',
+      dependent: '因变量',
+      controlled: '控制变量',
+    };
+
+    function renderDetail(exp: Experiment): void {
+      const container = document.getElementById('exp-detail-content');
+      if (!container) return;
+
+      const date = new Date(exp.updatedAt).toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+      const createdDate = new Date(exp.createdAt).toLocaleDateString('zh-CN', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+      });
+
+      // Related papers
+      const papersHtml = exp.relatedPapers.length > 0
+        ? `<section class="exp-section">
+            <h2 class="exp-section-title">相关论文</h2>
+            <div class="exp-papers">
+              ${exp.relatedPapers.map((pid) => `
+                <a class="exp-paper-link" href="${baseUrl}/papers/${pid}/">
+                  📄 ${pid}
+                </a>
+              `).join('')}
+            </div>
+          </section>`
+        : '';
+
+      // Related ideas
+      const ideasHtml = exp.relatedIdeas && exp.relatedIdeas.length > 0
+        ? `<section class="exp-section">
+            <h2 class="exp-section-title">关联想法</h2>
+            <div class="exp-ideas">
+              ${exp.relatedIdeas.map((ideaId) => `
+                <a class="exp-idea-link" href="${baseUrl}/ideas/${ideaId}/">
+                  💡 ${ideaId}
+                </a>
+              `).join('')}
+            </div>
+          </section>`
+        : '';
+
+      // Tags
+      const tagsHtml = exp.tags.length > 0
+        ? `<section class="exp-section">
+            <h2 class="exp-section-title">标签</h2>
+            <div class="exp-tags">
+              ${exp.tags.map((t) => `<span class="exp-tag">${escapeHtml(t)}</span>`).join('')}
+            </div>
+          </section>`
+        : '';
+
+      // Variables
+      const variablesHtml = exp.variables.length > 0
+        ? `<section class="exp-section">
+            <h2 class="exp-section-title">变量设计</h2>
+            <div class="exp-variables">
+              ${exp.variables.map((v) => `
+                <div class="exp-variable">
+                  <span class="exp-variable-name">${escapeHtml(v.name)}</span>
+                  <span class="exp-variable-type exp-variable-type--${v.type}">
+                    ${typeLabels[v.type] || v.type}
+                  </span>
+                  <span class="exp-variable-desc">${escapeHtml(v.description)}</span>
+                  ${v.values ? `<span class="exp-variable-values">取值: ${v.values.join(' / ')}</span>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          </section>`
+        : '';
+
+      // Results
+      const resultsHtml = `<section class="exp-section">
+        <h2 class="exp-section-title">实验结果</h2>
+        <div class="exp-results">
+          <div class="exp-results-expected">
+            <div class="exp-results-label">预期结果</div>
+            <div class="exp-results-content">
+              <p>${escapeHtml(exp.expectedResults || '暂无')}</p>
+              <p style="color: var(--fg-subtle, #666); margin-top: 0.25rem;">${escapeHtml(exp.expectedResultsZh || '暂无')}</p>
+            </div>
+          </div>
+          ${exp.actualResults ? `
+          <div class="exp-results-actual">
+            <div class="exp-results-label">实际结果</div>
+            <div class="exp-results-content">
+              <p>${escapeHtml(exp.actualResults)}</p>
+              <p style="color: var(--fg-subtle, #666); margin-top: 0.25rem;">${escapeHtml(exp.actualResultsZh || '')}</p>
+            </div>
+          </div>
+          ` : ''}
+        </div>
+      </section>`;
+
+      container.innerHTML = `
+        <header class="exp-detail-header">
+          <h1>${escapeHtml(exp.title)}</h1>
+          <p class="title-zh">${escapeHtml(exp.titleZh)}</p>
+          <div class="exp-detail-meta">
+            <span class="exp-status exp-status--${exp.status}">
+              ${statusLabels[exp.status]}
+            </span>
+            <span>负责人: ${escapeHtml(exp.owner)}</span>
+            <span>创建于 ${createdDate}</span>
+            <span>更新于 ${date}</span>
+          </div>
+        </header>
+
+        <!-- Hypothesis -->
+        <section class="exp-section">
+          <h2 class="exp-section-title">实验假设</h2>
+          <p>${escapeHtml(exp.hypothesis)}</p>
+          <p style="margin-top: 0.5rem; color: var(--fg-subtle, #666);">${escapeHtml(exp.hypothesisZh)}</p>
+        </section>
+
+        <!-- Method -->
+        <section class="exp-section">
+          <h2 class="exp-section-title">实验方法</h2>
+          <p>${escapeHtml(exp.method)}</p>
+          <p style="margin-top: 0.5rem; color: var(--fg-subtle, #666);">${escapeHtml(exp.methodZh)}</p>
+        </section>
+
+        ${variablesHtml}
+        ${resultsHtml}
+        ${tagsHtml}
+        ${papersHtml}
+        ${ideasHtml}
+
+        <div class="exp-detail-actions">
+          <button type="button" class="btn btn-primary" data-edit-experiment>✏️ 编辑实验</button>
+          <div class="exp-status-actions">
+            ${exp.status !== 'running' ? `<button type="button" class="btn btn-sm" data-status="running">▶️ 开始</button>` : ''}
+            ${exp.status !== 'completed' ? `<button type="button" class="btn btn-sm" data-status="completed">✅ 完成</button>` : ''}
+            ${exp.status !== 'paused' ? `<button type="button" class="btn btn-sm" data-status="paused">⏸️ 暂停</button>` : ''}
+            ${exp.status !== 'failed' ? `<button type="button" class="btn btn-sm" data-status="failed">❌ 失败</button>` : ''}
+          </div>
+        </div>
+      `;
+
+      // Attach event listeners
+      container.querySelector<HTMLButtonElement>('[data-edit-experiment]')?.addEventListener('click', () => {
+        openEditModal(exp);
+      });
+
+      container.querySelectorAll<HTMLButtonElement>('[data-status]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const newStatus = btn.dataset.status as ExperimentStatus;
+          if (newStatus) {
+            updateExperiment(exp.id, { status: newStatus });
+            const updated = getExperiment(exp.id);
+            if (updated) renderDetail(updated);
+          }
+        });
+      });
+    }
+
+    function openEditModal(exp: Experiment): void {
+      const modal = document.getElementById('exp-edit-modal') || createEditModal();
+      const form = modal.querySelector<HTMLFormElement>('#exp-edit-form');
+      if (!form) return;
+
+      (form.querySelector('#edit-exp-title') as HTMLInputElement).value = exp.title;
+      (form.querySelector('#edit-exp-title-zh') as HTMLInputElement).value = exp.titleZh;
+      (form.querySelector('#edit-exp-hypothesis') as HTMLTextAreaElement).value = exp.hypothesis;
+      (form.querySelector('#edit-exp-hypothesis-zh') as HTMLTextAreaElement).value = exp.hypothesisZh;
+      (form.querySelector('#edit-exp-method') as HTMLTextAreaElement).value = exp.method;
+      (form.querySelector('#edit-exp-method-zh') as HTMLTextAreaElement).value = exp.methodZh;
+      (form.querySelector('#edit-exp-expected-results') as HTMLTextAreaElement).value = exp.expectedResults || '';
+      (form.querySelector('#edit-exp-expected-results-zh') as HTMLTextAreaElement).value = exp.expectedResultsZh || '';
+      (form.querySelector('#edit-exp-actual-results') as HTMLTextAreaElement).value = exp.actualResults || '';
+      (form.querySelector('#edit-exp-actual-results-zh') as HTMLTextAreaElement).value = exp.actualResultsZh || '';
+      (form.querySelector('#edit-exp-tags') as HTMLInputElement).value = exp.tags.join(', ');
+      (form.querySelector('#edit-exp-papers') as HTMLInputElement).value = exp.relatedPapers.join(', ');
+      (form.querySelector('#edit-exp-ideas') as HTMLInputElement).value = (exp.relatedIdeas || []).join(', ');
+
+      modal.classList.add('active');
+
+      form.onsubmit = (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+
+        const tags = (formData.get('tags') as string)
+          ? (formData.get('tags') as string).split(',').map((t) => t.trim()).filter(Boolean)
+          : [];
+        const relatedPapers = (formData.get('relatedPapers') as string)
+          ? (formData.get('relatedPapers') as string).split(',').map((p) => p.trim().replace(/^(\d+\.\d+v?\d*).*$/, '$1')).filter(Boolean)
+          : [];
+        const relatedIdeas = (formData.get('relatedIdeas') as string)
+          ? (formData.get('relatedIdeas') as string).split(',').map((id) => id.trim()).filter(Boolean)
+          : [];
+
+        updateExperiment(exp.id, {
+          title: formData.get('title') as string,
+          titleZh: formData.get('titleZh') as string,
+          hypothesis: formData.get('hypothesis') as string,
+          hypothesisZh: formData.get('hypothesisZh') as string,
+          method: formData.get('method') as string,
+          methodZh: formData.get('methodZh') as string,
+          expectedResults: formData.get('expectedResults') as string,
+          expectedResultsZh: formData.get('expectedResultsZh') as string,
+          actualResults: formData.get('actualResults') as string || undefined,
+          actualResultsZh: formData.get('actualResultsZh') as string || undefined,
+          tags,
+          relatedPapers,
+          relatedIdeas,
+        });
+
+        const updated = getExperiment(exp.id);
+        if (updated) {
+          renderDetail(updated);
+        }
+        modal.classList.remove('active');
+      };
+
+      modal.querySelector('.modal-close')?.addEventListener('click', () => {
+        modal.classList.remove('active');
+      });
+    }
+
+    function createEditModal(): HTMLElement {
+      const modal = document.createElement('dialog');
+      modal.id = 'exp-edit-modal';
+      modal.className = 'experiment-modal';
+      modal.innerHTML = `
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>编辑实验</h2>
+            <button type="button" class="modal-close" aria-label="关闭">×</button>
+          </div>
+          <form id="exp-edit-form">
+            <div class="form-group">
+              <label for="edit-exp-title">实验标题 (英文)</label>
+              <input type="text" id="edit-exp-title" name="title" required maxlength="150" />
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-title-zh">实验标题 (中文)</label>
+              <input type="text" id="edit-exp-title-zh" name="titleZh" maxlength="150" />
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-hypothesis">实验假设 (英文)</label>
+              <textarea id="edit-exp-hypothesis" name="hypothesis" required rows="3"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-hypothesis-zh">实验假设 (中文)</label>
+              <textarea id="edit-exp-hypothesis-zh" name="hypothesisZh" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-method">实验方法 (英文)</label>
+              <textarea id="edit-exp-method" name="method" required rows="3"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-method-zh">实验方法 (中文)</label>
+              <textarea id="edit-exp-method-zh" name="methodZh" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-expected-results">预期结果 (英文)</label>
+              <textarea id="edit-exp-expected-results" name="expectedResults" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-expected-results-zh">预期结果 (中文)</label>
+              <textarea id="edit-exp-expected-results-zh" name="expectedResultsZh" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-actual-results">实际结果 (英文)</label>
+              <textarea id="edit-exp-actual-results" name="actualResults" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-actual-results-zh">实际结果 (中文)</label>
+              <textarea id="edit-exp-actual-results-zh" name="actualResultsZh" rows="2"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-ideas">关联想法 (ID, 逗号分隔)</label>
+              <input type="text" id="edit-exp-ideas" name="relatedIdeas" placeholder="idea-xxx" />
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-papers">关联论文 (arXiv ID, 逗号分隔)</label>
+              <input type="text" id="edit-exp-papers" name="relatedPapers" placeholder="1706.03762" />
+            </div>
+            <div class="form-group">
+              <label for="edit-exp-tags">标签 (逗号分隔)</label>
+              <input type="text" id="edit-exp-tags" name="tags" placeholder="ablation, scaling" />
+            </div>
+            <div class="form-actions">
+              <button type="button" class="btn btn-ghost modal-cancel">取消</button>
+              <button type="submit" class="btn btn-primary">保存</button>
+            </div>
+          </form>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.classList.remove('active');
+      });
+
+      return modal;
+    }
+
+    function escapeHtml(str: string): string {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // Initialize
+    const exp = getExperiment(expId);
+    if (exp) {
+      renderDetail(exp);
+    } else {
+      const container = document.getElementById('exp-detail-content');
+      if (container) {
+        container.innerHTML = `
+          <div class="exp-not-found">
+            <h2>实验不存在</h2>
+            <p>找不到 ID 为 "${expId}" 的实验。</p>
+            <a href="${baseUrl}/experiments/" class="btn btn-primary">返回实验列表</a>
+          </div>
+        `;
+      }
+    }
+  </script>
 </BaseLayout>
