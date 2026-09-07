@@ -47,8 +47,9 @@ function parseWikilinkContent(content: string): { name: string; alias: string | 
 /** 行内 markdown 渲染:KaTeX 公式 + 粗体 / 斜体 / 行内 code / 图片 / 链接 / wikilink。 */
 export function renderInline(
   s: string,
-  opts: { wikilinkResolver?: Map<string, WikilinkTarget> } = {},
+  opts: { wikilinkResolver?: Map<string, WikilinkTarget>; base?: string } = {},
 ): string {
+  const base = opts.base ?? '';
   const subs: string[] = [];
   const placeholder = (html: string): string => {
     subs.push(html);
@@ -88,7 +89,7 @@ export function renderInline(
         return ` <span class="wikilink--missing">[[${escaped}]]</span> `;
       }
       const slugEscaped = escapeHtml(target.slug);
-      const html = ` <a class="wikilink" href="/wiki/concepts/${slugEscaped}/">${escaped}</a> `;
+      const html = ` <a class="wikilink" href="${base}/wiki/concepts/${slugEscaped}/">${escaped}</a> `;
       subs.push(html);
       return ` WLINK${subs.length - 1} `;
     });
