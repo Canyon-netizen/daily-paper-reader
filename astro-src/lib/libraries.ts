@@ -17,6 +17,7 @@
 // 复用 lib/paper.ts:listPapers + lib/paper-filter.ts:filterByTag。
 
 import type { PaperListItem } from './paper';
+import { LEGACY_TAG_PREFIX } from './paper';
 
 export interface Library {
   /** kebab-case,作为 URL 段,如 'rl' / 'llm-agent' / 'alignment' */
@@ -124,6 +125,28 @@ export const LIBRARIES: Library[] = [
     curator: 'DPR',
     hue: 'sky',
   },
+  {
+    id: 'alignment',
+    title: 'Alignment & Interpretability',
+    titleZh: '对齐与可解释性',
+    description: 'Steering vectors, latent space intervention, mechanistic interpretability, activation steering, preference alignment.',
+    descriptionZh: '引导向量、潜空间干预、机制可解释性、激活引导、偏好对齐。',
+    tags: ['task:intervention', 'method:intervention', 'task:steering', 'method:steering'],
+    dimension: 'task',
+    curator: 'DPR',
+    hue: 'amber',
+  },
+  {
+    id: 'self-distillation',
+    title: 'Self-Distillation & Self-Improvement',
+    titleZh: '自蒸馏与模型自改进',
+    description: 'On-policy self-distillation, self-rewarding, self-play fine-tuning, model self-evolution without external labels.',
+    descriptionZh: '在线自蒸馏、自奖励、自博弈微调、无外部标签的模型自进化。',
+    tags: ['task:self-distillation', 'method:self-distillation'],
+    dimension: 'method',
+    curator: 'DPR',
+    hue: 'rose',
+  },
 ];
 
 const BY_ID = new Map<string, Library>(LIBRARIES.map((l) => [l.id, l]));
@@ -178,11 +201,22 @@ export function buildLibraryDigests(items: PaperListItem[]): LibraryDigest[] {
 }
 
 function flattenTags(p: PaperListItem): string[] {
-  if (!p.categories) return [];
+  // 优先从 categories.{venue,task,method,type} 抽 `dim:label` 形式 tag(新格式)
+  // —— 这是 buildLibraryDigests / selectLibraryPapers / resolveTaskKey 共用的口径。
   const out: string[] = [];
-  const cats = p.categories as Record<string, string[] | undefined>;
+  const cats = (p.categories || {}) as Record<string, string[] | undefined>;
   for (const dim of ['venue', 'task', 'method', 'type'] as const) {
     for (const label of cats[dim] || []) out.push(`${dim}:${label}`);
+  }
+  // 兜底:老格式 papers 经常 categories 全空,只在 `tags: ['query:rl']` 写 query topic
+  // —— 不读这里会导致 555+ 篇 rl/mas/game-ai 论文"应有归属但实际无库",
+  // 修复(2026-09-07)后这些论文会自动归入对应 LIBRARIES。
+  // query: 前缀的语义:arXiv 抓取阶段的兴趣主题 key,与 task 维度等价,
+  // 所以剥前缀后当 task:xxx 处理。
+  for (const tag of p.tags || []) {
+    if (tag.startsWith(LEGACY_TAG_PREFIX)) {
+      out.push(`task:${tag.slice(LEGACY_TAG_PREFIX.length)}`);
+    }
   }
   return out;
 }
