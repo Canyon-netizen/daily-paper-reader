@@ -209,11 +209,37 @@ export async function readPaper(id: string): Promise<Paper | null> {
   const figures = fmFigures.length > 0
     ? fmFigures
     : (await loadFiguresFromAssetMeta(arxivId)) ?? [];
-  // 派生算力档位 / 数据规模(目标 4):纯函数推断 deep_extract.compute_requirements
-  // + limitations + datasets。SSR 期间每篇论文都会跑一次,纯函数无副作用、可缓存。
+  // 派生算力档位 / 数据规模(目标 4):
+  //   优先级:frontmatter 已写明的 resource_tier / data_scale(backfill 写盘)
+  //         > deep_extract 纯函数推断(空时大多数论文走不到这一步)
+  //         > 兜底文本(textSignals:拼接 tldr/motivation/method/result/conclusion/context)
+  //         > unknown
+  const VALID_TIERS: ReadonlyArray<ResourceTier> = ['api_only', 'single_gpu', 'multi_gpu', 'cluster', 'tpu_pod', 'unknown'];
+  const VALID_SCALES: ReadonlyArray<DataScale> = ['small', 'medium', 'large', 'web_scale', 'unknown'];
   const deepExtract = parsed.data.deep_extract;
-  const resourceTier: ResourceTier = inferResourceTier(deepExtract);
-  const dataScale: DataScale = inferDataScale(deepExtract);
+  // backfill 写的 resource_tier / data_scale 不在 PaperFrontmatter 类型里(独立字段),
+  // 用 Record<string, unknown> cast 边界处理;不在白名单 → 视作 undefined 走推断路径。
+  const fm = parsed.data as unknown as Record<string, unknown>;
+  const fmTierRaw = typeof fm.resource_tier === 'string' ? fm.resource_tier : '';
+  const fmScaleRaw = typeof fm.data_scale === 'string' ? fm.data_scale : '';
+  const fmTier = (VALID_TIERS as readonly string[]).includes(fmTierRaw)
+    ? (fmTierRaw as ResourceTier)
+    : undefined;
+  const fmScale = (VALID_SCALES as readonly string[]).includes(fmScaleRaw)
+    ? (fmScaleRaw as DataScale)
+    : undefined;
+  const textSignals = [
+    parsed.data.tldr,
+    parsed.data.motivation,
+    parsed.data.method,
+    parsed.data.result,
+    parsed.data.conclusion,
+    parsed.data.context,
+  ].filter(Boolean).join(' ');
+  const resourceTier: ResourceTier =
+    fmTier ?? inferResourceTier(deepExtract, textSignals || undefined);
+  const dataScale: DataScale =
+    fmScale ?? inferDataScale(deepExtract, textSignals || undefined);
   const result: Paper = {
     ...parsed.data,
     id,
