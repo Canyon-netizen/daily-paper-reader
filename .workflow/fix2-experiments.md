@@ -1,7 +1,7 @@
 # Fix Report: Experiments Round 2
 
 **Date:** 2026-09-07
-**Commit:** `fix(experiments): address user feedback round 2`
+**Commit:** `686d2c22` - fix(ideas): address user feedback round 2
 
 ---
 
@@ -34,7 +34,7 @@
 1. First try to load from page-embedded `#papers-data` script (same data source as `/papers/` page)
 2. Fall back to localStorage for backwards compatibility
 
-**Code change:**
+**Code change (scripts/writing-ui.ts:476-489):**
 ```typescript
 // Load papers from page-embedded data (same as papers/index.astro)
 let papers: any[] = [];
@@ -62,7 +62,7 @@ try {
 
 **Code changes:**
 - `pages/experiments/index.astro`: Added `#exp-variables-container` and `#add-variable-btn`
-- `scripts/experiments-ui.ts`: Added `setupVariableHandlers()` and updated form submit to collect variables
+- `scripts/experiments-ui.ts`: Added `setupVariableHandlers()` at line 350 and updated form submit to collect variables
 - `styles/experiments.css`: Added `.exp-variables-container`, `.exp-variable-row`, `.exp-variable-fields` styles
 
 ---
@@ -78,7 +78,7 @@ try {
 
 **Code changes:**
 - `pages/writing/[id].astro`: Added edit button + modal HTML
-- `scripts/writing-ui.ts`: Added `setupMetadataEdit()` function
+- `scripts/writing-ui.ts`: Added `setupMetadataEdit()` function at line 801
 
 ---
 
