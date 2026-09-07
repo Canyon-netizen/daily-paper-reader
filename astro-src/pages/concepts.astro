@@ -32,18 +32,22 @@ import '../styles/concepts-graph.css';
       <span class="concepts-count" id="concepts-count"></span>
     </section>
 
+    {/* 概念图谱 (PR-5 v2 cytoscape) — 主视图放在最上面,符合「图谱」字面预期。
+        之前 grid 在前 graph 在后,用户只滚到一半看到卡片网格以为「是表格」,
+        现在 graph 先出再 grid 索引。 */}
+    <section class="concepts-graph-section">
+      <h3 class="concepts-graph-title">🕸️ 概念图谱(cytoscape)</h3>
+      <div id="concepts-graph" class="concepts-graph"></div>
+    </section>
+
     <section id="concepts-grid" class="concepts-grid" data-state="loading">
+      <h3 class="concepts-grid-title">📚 概念索引</h3>
       <p class="concepts-empty" id="concepts-empty" hidden>
         暂未生成概念图谱 — 概念由 <code>src/concept_index.py::rebuild()</code> 产出
         <code>wiki/concepts/_index.json</code> / <code>_graph.json</code> / <code><slug>.md</code>。
         流水线里 Step 6 生成 frontmatter 后再调一次 <code>concept_index.rebuild()</code> 即可,
         详细步骤见 <a href="https://github.com/Canyon-netizen/daily-paper-reader/blob/main/docs/concepts-system.md">docs/concepts-system.md</a>。
       </p>
-    </section>
-
-    <section class="concepts-graph-section">
-      <h3 class="concepts-graph-title">概念图谱(cytoscape)</h3>
-      <div id="concepts-graph" class="concepts-graph"></div>
     </section>
   </main>
 
