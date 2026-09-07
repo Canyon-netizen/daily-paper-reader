@@ -11,6 +11,7 @@ import { readPaper, listPapers, listAllPaperIds, flattenCategories } from '../..
 import { renderMarkdownBody, renderTitleHtml } from '../../lib/markdown';
 import { paperPlainTitle } from '../../lib/title';
 import { buildConceptIndex, buildWikilinkResolver } from '../../lib/concepts-index';
+import { TIER_BADGE_LABELS, TIER_LABELS, DATA_SCALE_LABELS } from '../../lib/types/resource-tier';
 import '../../styles/paper-chat.css';
 import '../../styles/hidden-toast.css';
 import '../../styles/paper-selection.css';
@@ -120,6 +121,21 @@ const tabTitle = plainZh || plainEn || id;
                 <div class="paper-meta-line">
                   arXiv {paper.arxivId}
                   {paper.date && <span> · 发布 {paper.date}</span>}
+                  {/* 算力档位 + 数据规模 badge(2026-09-07 backfill 字段)。
+                      派生自 frontmatter resource_tier / data_scale → readPaper 内存挂载;
+                      tier 为 'unknown' 时降级为低饱和度灰色 + title 显示推断失败原因。 */}
+                  {paper.resourceTier && (
+                    <span
+                      class={`paper-tier-chip paper-tier-chip--${paper.resourceTier}`}
+                      title={`算力档位: ${TIER_LABELS[paper.resourceTier]}`}
+                    >⚡ {TIER_BADGE_LABELS[paper.resourceTier]}</span>
+                  )}
+                  {paper.dataScale && (
+                    <span
+                      class={`paper-scale-chip paper-scale-chip--${paper.dataScale}`}
+                      title={`数据规模: ${DATA_SCALE_LABELS[paper.dataScale]}`}
+                    >📦 {DATA_SCALE_LABELS[paper.dataScale]}</span>
+                  )}
                 </div>
                 {!paper.isBroken && (
                   <div class="paper-header-actions">
@@ -1236,6 +1252,49 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
     border-radius: var(--radius-sm);
     font-weight: 700;
   }
+
+  /* 算力档位 chip(2026-09-07)— 5 档按算力递增加深底色,unknown 降级灰色。
+     从低到高: api_only < single_gpu < multi_gpu < cluster < tpu_pod
+     颜色用绿/蓝/橙/红/紫渐变,unknown 用中性灰,跟 venue-badge 同级但不抢主色。 */
+  .paper-tier-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    padding: 0.05em 0.55em;
+    margin-left: 0.6em;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    font-weight: 600;
+    line-height: 1.5;
+    cursor: help;
+  }
+  .paper-tier-chip--api_only    { color: #15803d; background: #dcfce7; border-color: #86efac; }
+  .paper-tier-chip--single_gpu  { color: #1d4ed8; background: #dbeafe; border-color: #93c5fd; }
+  .paper-tier-chip--multi_gpu   { color: #c2410c; background: #ffedd5; border-color: #fdba74; }
+  .paper-tier-chip--cluster     { color: #b91c1c; background: #fee2e2; border-color: #fca5a5; }
+  .paper-tier-chip--tpu_pod     { color: #7e22ce; background: #f3e8ff; border-color: #d8b4fe; }
+  .paper-tier-chip--unknown     { color: var(--fg-muted); background: var(--bg-elevated); border-color: var(--border); font-weight: 400; }
+
+  /* 数据规模 chip — 4 档 + unknown,跟 tier chip 视觉权重一致 */
+  .paper-scale-chip {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.02em;
+    padding: 0.05em 0.55em;
+    margin-left: 0.35em;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    font-weight: 500;
+    line-height: 1.5;
+    cursor: help;
+  }
+  .paper-scale-chip--small      { color: #0e7490; background: #ecfeff; border-color: #67e8f9; }
+  .paper-scale-chip--medium     { color: #0369a1; background: #e0f2fe; border-color: #7dd3fc; }
+  .paper-scale-chip--large      { color: #4338ca; background: #e0e7ff; border-color: #a5b4fc; }
+  .paper-scale-chip--web_scale  { color: #6d28d9; background: #ede9fe; border-color: #c4b5fd; font-weight: 600; }
+  .paper-scale-chip--unknown    { color: var(--fg-muted); background: var(--bg-elevated); border-color: var(--border); font-weight: 400; }
   .tag {
     display: inline-block;
     background: var(--tag-bg);
