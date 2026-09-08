@@ -1,0 +1,68 @@
+# Multi-agent research loop runner — manual + weekly cron dry-run.
+# Mirrors .github/workflows/topic-v2.yml shape: 0 npm deps, Node 20, dry-run by default.
+name: agents
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # 周一 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      session_id:
+        description: "可选: 指定 session id;留空则处理所有 sessions"
+        required: false
+        default: ""
+      max_rounds:
+        description: "最大轮数(默认 3)"
+        required: false
+        default: "3"
+      judge_mode:
+        description: "judge 模式: stub / llm (stub = dry-run,无 LLM call)"
+        required: false
+        default: "stub"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      JUDGE_MODE: ${{ github.event.inputs.judge_mode || 'stub' }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run agents orchestrator (default cron / no inputs)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.session_id == '' && github.event.inputs.judge_mode == '')
+        run: node astro-src/scripts/agents-run.mjs --all --dry-run --max-rounds 1 --limit 5
+
+      - name: Run agents orchestrator (with session_id, dry-run)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.session_id != '' && (github.event.inputs.judge_mode == '' || github.event.inputs.judge_mode == 'stub')
+        run: node astro-src/scripts/agents-run.mjs --session ${{ github.event.inputs.session_id }} --dry-run --max-rounds ${{ github.event.inputs.max_rounds }}
+
+      - name: Run agents orchestrator (with session_id + llm judge)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.judge_mode == 'llm'
+        run: node astro-src/scripts/agents-run.mjs --session ${{ github.event.inputs.session_id }} --max-rounds ${{ github.event.inputs.max_rounds }}
+
+      - name: Commit archive/<session_id>/rounds/ if changed
+        run: |
+          if [ -d archive ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add archive/
+            if git diff --staged --quiet; then
+              echo "No archive changes to commit"
+            else
+              git commit -m "agents: update archive/<session_id>/rounds/ [skip ci]"
+              git push
+            fi
+          else
+            echo "No archive/ directory yet"
+          fi
