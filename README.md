@@ -104,6 +104,7 @@
 | `/paper-analyzer/` | 长文精读：上传 PDF / arXiv 搜索 / 历史笔记 3 个 tab；走 PDF.js 抽正文 + LLM 4 段笔记 + chunking 应对超大 PDF；arXiv 结果支持手动或自动同步到 GitHub | `scripts/paper-analyzer.ts`（导出 `searchArxiv` / `fetchArxivPdf` / `callLLM` / `SYSTEM_PROMPT`，被 `/topic/` 复用） |
 | `/conferences/` | 会议论文拉取：选会议 + 年份 → 调 GitHub REST `workflow_dispatch` 触发 `conference-init.yml` → 轮询 run 状态 | 直接 fetch `api.github.com`；不走本机后端 |
 | `/settings/` | 一站式浏览器配置 + Gist 同步：LLM / arXiv 类目 / GitHub PAT / 论文分析自动同步 / 长文精读 / 主题列表 / CORS 代理 / 用户标签 / 已隐藏论文 / 重置 | `scripts/settings.ts`（核心 localStorage 读写中枢，所有页面共用）+ `scripts/settings-page.ts` |
+| `/agents/` | **多智能体控制台**:Designer → Feedback → Gate → Modifier 闭环,可视化每轮 proposal + critique + applied,localStorage 存 round 历史;纯前端,LTM/Stub LLM 切换 | `astro-src/lib/agents/{orchestrator,designer,feedback,modifier,gate,types}.ts` + `astro-src/pages/agents/index.astro` + `astro-src/scripts/agents-run.mjs`(CLI 镜像) |
 | `/tutorial/` | 使用教程 | — |
 | `/zotero-usage/` | Zotero Connector 集成说明 | — |
 
@@ -677,6 +678,90 @@ node --test astro-src/scripts/elo-debate-mirror.test.mjs
 
 - 周日 04:00 UTC cron → dry-run 跑全部 sessions(默认 5 个 cap)
 - GitHub UI → Actions → topic-v2 → Run workflow → 填 `session_id` + `judge_mode`(llm = 真跑,dry-run = stub)
+
+---
+
+## 🤖 多智能体科研自动化
+
+> 在 topic-v2 的"思路辩论"之上,加一层 **Designer / Feedback / Modifier** 三智能体闭环,自动驱动上游 `lib/{ideas,experiments,writing,roadmap}` 的 CRUD。0 后端,纯前端 + Node CLI 共享同一份 orchestrator。
+
+### 三个智能体的角色
+
+| 智能体 | 职责 | 复用组件 |
+|---|---|---|
+| **Designer** | 读 project 状态 + 候选论文 → 提出 3-8 条 `Proposal`(add_paper / create_draft / experiment_plan / literature_review / rebuttal) | `astro-src/lib/agents/designer.ts` |
+| **Feedback** | 3 persona(methodologist / engineer / skeptic)平行评分 + Swiss-pair Elo(沿用 `lib/elo-debate`)→ 输出 `Critique` | `astro-src/lib/agents/feedback.ts` + `astro-src/lib/elo-debate.ts` |
+| **Modifier** | 通过 gate 的 proposal 翻译成上游模块调用(`createIdea` / `createExperiment` / `createWriting` / `addPaperToStage`),并 append activity audit | `astro-src/lib/agents/modifier.ts` |
+
+### Gate 阈值
+
+`astro-src/lib/agents/gate.ts:GATE_THRESHOLDS` 三档预设(默认 balanced):
+
+| 预设 | promoted(minScore+minElo) | candidate | sketch |
+|---|---|---|---|
+| conservative | 8.5 + 1280 | 7.0 + 1250 | ≥ 5.0 |
+| **balanced**(默认) | 8.0 + 1280 | 6.0 + 1232 | ≥ 4.0 |
+| aggressive | 7.0 + 1232 | 5.0 + 1200 | ≥ 3.0 |
+
+外加 `applySafetyOverride()`:risk 含"不可逆 / 数据丢失 / catastrophic"等关键词的 proposal 即使 promoted 也会降级到 candidate,留给人类 review。
+
+### 数据流
+
+```
+  Project (UserLibrary v5)
+     ↓ input (candidates + user_goal)
+  Designer ────► Proposal[] (3-8 条)
+     ↓
+  Feedback ────► Critique[] (3 persona 评分 + Elo)
+     ↓
+  Gate ──────► verdicts (promoted / candidate / sketch / rejected)
+     ↓
+  Modifier ──► UpstreamAdapter.{createIdea, createExperiment, createWriting, addPaperToProject, appendActivity}
+     ↓
+  archive/<session_id>/rounds/round_<NNN>.json (CLI 落盘)
+  localStorage dpr_agents_rounds_<sid> (浏览器落盘)
+```
+
+### CLI Runner
+
+```bash
+# 全 sessions dry-run(无 key 也能跑通,stub LLM caller)
+node astro-src/scripts/agents-run.mjs --all --dry-run --max-rounds 1 --limit 5
+
+# 单 session 真跑(需 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL)
+node astro-src/scripts/agents-run.mjs --session my-research --rounds 3 --preset balanced
+
+# 仅基于已有 JSONs 重生成 digest(不调 LLM)
+node astro-src/scripts/agents-run.mjs --session my-research --digest-only
+```
+
+每 round 落 `archive/<session>/rounds/round_<NNN>.json`(RoundRecord 含 designer/feedback/gate/modifier 4 段),session 结束写 `digest_<YYYYMMDD>.md`(git-trackable,人类可读)。
+
+### 浏览器入口 `/agents/`
+
+打开 `/agents/`,填 Session ID → 选 preset → 点"▶️ 跑一轮"。每轮结果渲染为卡片:
+- 📝 Designer proposals(类型 + 标题 + rationale + effort + risk)
+- 🎯 Feedback critiques(score badge + m/e/s 三 persona 分 + 锐评)
+- 🚦 Gate 桶(promoted/candidate/sketch/rejected 计数)
+- ✏️ Modifier applied + skipped(可视化具体调用)
+
+round 历史存 `localStorage:dpr_agents_rounds_<sid>`,刷新可续;无 LLM key 时 fallback 到 stub,空跑也能看到完整闭环。
+
+### 与 topic-v2 / 上游模块的关系
+
+| | topic-v2 | agents |
+|---|---|---|
+| 输入 | paper 的 limitations | project + 用户目标 |
+| 核心算法 | Elo + Swiss pair | Elo + 多 persona critique(沿用同一个 Elo) |
+| 输出 | `archive/<sid>/debate/idea_*.json` + `digest_*.md` | `archive/<sid>/rounds/round_NNN.json` + `digest_*.md` |
+| Modifier 目标 | 不写(只辩论) | 写上游 `ideas/experiments/writings/roadmap` |
+| 时间维度 | 一次性辩论 | 跨 rounds 累积 + 早停检测(连续空轮自动停) |
+
+两者共用 `astro-src/lib/elo-debate.{ts,mjs}`(Elo K=32 / Swiss pair / ELO_INITIAL=1200),避免算法漂移。
+
+### 设计文档
+
+详见 [.claude/plans/multi-agent-research-loop.md](.claude/plans/multi-agent-research-loop.md)。
 
 ---
 
