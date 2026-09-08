@@ -174,10 +174,15 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     function renderRound(rec: RoundRecord): HTMLDivElement {
       const div = document.createElement('div');
       div.className = 'agents-round-card';
+      div.dataset.roundIndex = String(rec.round);
       div.innerHTML = `
         <header class="agents-round-header">
           <h3>Round ${rec.round}</h3>
-          <span class="agents-round-meta">${new Date(rec.started_at).toLocaleString()} · ${rec.feedback.total_tokens} tok</span>
+          <span class="agents-round-meta">
+            ${new Date(rec.started_at).toLocaleString()} · ${rec.feedback.total_tokens} tok
+            <button class="button small agents-export-btn" data-fmt="json" title="导出此 round 的完整 JSON">📥 JSON</button>
+            <button class="button small agents-export-btn" data-fmt="md" title="导出此 round 的人可读 digest">📥 digest.md</button>
+          </span>
         </header>
         <div class="agents-round-section">
           <h4>📝 Designer (${rec.designer.proposals.length} proposals)</h4>
@@ -268,7 +273,85 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         empty.hidden = true;
         $('agents-rounds').hidden = false;
         for (const rec of records) list.appendChild(renderRound(rec));
+        wireExportButtons(records);
       }
+    }
+
+    function wireExportButtons(records: RoundRecord[]) {
+      const list = $('agents-round-list');
+      list.querySelectorAll<HTMLButtonElement>('.agents-export-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.closest<HTMLElement>('.agents-round-card')?.dataset.roundIndex);
+          const rec = records.find((r) => r.round === idx);
+          if (!rec) return;
+          const fmt = btn.dataset.fmt;
+          if (fmt === 'json') exportRoundJson(rec);
+          else if (fmt === 'md') exportRoundDigest(rec);
+        });
+      });
+    }
+
+    function exportRoundJson(rec: RoundRecord) {
+      const filename = `agents-round-${rec.project_id || 'session'}-${String(rec.round).padStart(3, '0')}.json`;
+      downloadAsFile(JSON.stringify(rec, null, 2), filename, 'application/json');
+    }
+
+    function exportRoundDigest(rec: RoundRecord) {
+      const lines: string[] = [];
+      lines.push(`# Round ${rec.round} digest — ${rec.project_id || 'session'}`);
+      lines.push('');
+      lines.push(`- started_at: ${new Date(rec.started_at).toISOString()}`);
+      lines.push(`- gate preset: ${rec.gate.preset}`);
+      lines.push(`- designer proposals: ${rec.designer.proposals.length}`);
+      lines.push(`- feedback critiques: ${rec.feedback.critiques.length}`);
+      lines.push(`- applied: ${rec.modifier.applied.length}, skipped: ${rec.modifier.skipped.length}`);
+      lines.push('');
+      lines.push('## Designer proposals');
+      for (const p of rec.designer.proposals) {
+        lines.push(`### [${p.type}] ${p.title}`);
+        lines.push(`**Rationale:** ${p.rationale}`);
+        lines.push(`**Risk:** ${p.risk} · **Effort:** ${p.estimated_effort}`);
+        lines.push('');
+      }
+      lines.push('## Feedback scores');
+      for (const c of rec.feedback.critiques) {
+        const p = rec.designer.proposals.find((x) => x.id === c.proposal_id);
+        lines.push(`- ${p?.title ?? c.proposal_id}: total=${c.total.toFixed(1)} (m=${c.scores.methodologist} e=${c.scores.engineer} s=${c.scores.skeptic})`);
+        lines.push(`  - ${c.critique}`);
+      }
+      lines.push('');
+      lines.push('## Gate decision');
+      for (const v of rec.gate.verdicts) {
+        const p = rec.designer.proposals.find((x) => x.id === v.proposal_id);
+        lines.push(`- ${p?.title ?? v.proposal_id} → **${v.decision}** (score=${v.score.toFixed(1)}, elo=${v.elo})`);
+      }
+      lines.push('');
+      lines.push('## Modifier actions');
+      for (const a of rec.modifier.applied) {
+        const title = a.payload.title ?? a.payload.writing_id ?? a.payload.experiment_id ?? '';
+        lines.push(`- [${a.kind}] ${title}`);
+      }
+      if (rec.modifier.skipped.length > 0) {
+        lines.push('');
+        lines.push('## Skipped');
+        for (const s of rec.modifier.skipped) {
+          lines.push(`- ${s.proposal_id}: ${s.reason}`);
+        }
+      }
+      const filename = `agents-round-${rec.project_id || 'session'}-${String(rec.round).padStart(3, '0')}.md`;
+      downloadAsFile(lines.join('\n'), filename, 'text/markdown');
+    }
+
+    function downloadAsFile(content: string, filename: string, mime: string) {
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
     async function runOnce() {
@@ -352,8 +435,14 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       const cur = loadSessionId();
       sessionPicker.innerHTML = '<option value="">— 新建 / 输入 —</option>' +
         sessions.map((s) => {
+          const recs = loadRounds(s);
+          const roundCount = recs.length;
+          const appliedCount = recs.reduce((acc, r) => acc + r.modifier.applied.length, 0);
+          const label = roundCount > 0
+            ? `${s} · ${roundCount} round${roundCount === 1 ? '' : 's'} · ${appliedCount} applied`
+            : s;
           const sel = s === cur ? ' selected' : '';
-          return `<option value="${escapeHtml(s)}"${sel}>${escapeHtml(s)}</option>`;
+          return `<option value="${escapeHtml(s)}"${sel}>${escapeHtml(label)}</option>`;
         }).join('');
     }
 
