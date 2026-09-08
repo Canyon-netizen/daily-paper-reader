@@ -1,0 +1,292 @@
+---
+// astro-src/pages/agents/index.astro
+//
+// Multi-agent research loop console.
+// Lists recent sessions + their latest round state. Drives Designer →
+// Feedback → Modifier from the browser via the same orchestrator the CLI uses.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="多智能体控制台">
+  <Navbar />
+  <main class="shell agents-shell">
+    <header class="agents-header">
+      <h1>🤖 多智能体控制台</h1>
+      <p class="agents-sub">
+        Designer 提出候选 → Feedback 多 persona 评分 → Gate 过滤 → Modifier 调用上游 ideas/experiments/writings。
+        无 LLM Key 时跑 dry-run(stub);有 Key 时接 OpenAI 兼容端点。
+      </p>
+    </header>
+
+    <section class="agents-controls">
+      <div class="agents-controls-row">
+        <label>
+          <span>Session ID</span>
+          <input id="agents-session-id" type="text" placeholder="my-research-project" />
+        </label>
+        <label>
+          <span>Gate 阈值</span>
+          <select id="agents-preset">
+            <option value="balanced" selected>balanced</option>
+            <option value="conservative">conservative</option>
+            <option value="aggressive">aggressive</option>
+          </select>
+        </label>
+        <label>
+          <span>最大轮数</span>
+          <input id="agents-max-rounds" type="number" min="1" max="20" value="3" />
+        </label>
+        <label class="agents-checkbox">
+          <input id="agents-dry-run" type="checkbox" checked />
+          <span>Dry-run (无 LLM 调用)</span>
+        </label>
+        <button class="button primary" id="agents-run-btn">▶️ 跑一轮</button>
+      </div>
+    </section>
+
+    <section class="agents-status" id="agents-status" hidden>
+      <p class="agents-status-text" id="agents-status-text">就绪</p>
+    </section>
+
+    <section class="agents-rounds" id="agents-rounds">
+      <h2>本会话 round 历史</h2>
+      <div id="agents-round-list"></div>
+    </section>
+
+    <section class="agents-empty" id="agents-empty">
+      <p>暂无 round。在上方填 Session ID + 点"跑一轮"开始。</p>
+    </section>
+  </main>
+
+  <script>
+    import { runRounds, memoryRoundSink } from '../../lib/agents/orchestrator';
+    import { makeBrowserAdapter } from '../../lib/agents/modifier';
+    import type { RoundRecord } from '../../lib/agents/types';
+    import { getLLMConfig } from '../settings';
+
+    const STORAGE_KEY = 'dpr_agents_session_v1';
+    const ROUNDS_KEY = (sid: string) => `dpr_agents_rounds_${sid}`;
+
+    const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
+      const el = document.getElementById(id);
+      if (!el) throw new Error(`#${id} not found`);
+      return el as T;
+    };
+
+    let currentSessionId = '';
+    let isRunning = false;
+
+    function loadSessionId(): string {
+      return localStorage.getItem(STORAGE_KEY) ?? '';
+    }
+    function saveSessionId(sid: string) {
+      localStorage.setItem(STORAGE_KEY, sid);
+    }
+
+    function loadRounds(sid: string): RoundRecord[] {
+      const raw = localStorage.getItem(ROUNDS_KEY(sid));
+      if (!raw) return [];
+      try { return JSON.parse(raw) as RoundRecord[]; } catch { return []; }
+    }
+    function saveRounds(sid: string, records: RoundRecord[]) {
+      localStorage.setItem(ROUNDS_KEY(sid), JSON.stringify(records));
+    }
+
+    function makeLLMCallerFromConfig(cfg: ReturnType<typeof getLLMConfig>) {
+      return {
+        async callLLM(opts: { system: string; user: string; model?: string; temperature?: number; max_tokens?: number }) {
+          const url = `${(cfg.baseUrl || '').replace(/\/$/, '')}/chat/completions`;
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${cfg.apiKey ?? ''}`,
+            },
+            body: JSON.stringify({
+              model: opts.model ?? cfg.model ?? 'gpt-4o-mini',
+              messages: [
+                { role: 'system', content: opts.system },
+                { role: 'user', content: opts.user },
+              ],
+              temperature: opts.temperature ?? 0.7,
+              max_tokens: opts.max_tokens ?? 1024,
+            }),
+          });
+          if (!r.ok) throw new Error(`LLM ${r.status}: ${await r.text()}`);
+          const data = await r.json();
+          return data.choices?.[0]?.message?.content ?? '';
+        },
+      };
+    }
+
+    function makeStubCaller() {
+      return {
+        async callLLM(opts: { system: string; user: string }) {
+          if (opts.system.includes('资深科研合作者')) {
+            return JSON.stringify([{
+              type: 'literature_review',
+              title: '【stub】 整理已有候选论文',
+              rationale: '(LLM 未配置;stub)',
+              evidence: { paperIds: [], quotes: [] },
+              target: { draftTitle: 'stub review' },
+              estimated_effort: 'low',
+              risk: 'dry-run',
+            }]);
+          }
+          return JSON.stringify({ score: 5, critique: '(stub feedback)' });
+        },
+      };
+    }
+
+    function renderRound(rec: RoundRecord): HTMLDivElement {
+      const div = document.createElement('div');
+      div.className = 'agents-round-card';
+      div.innerHTML = `
+        <header class="agents-round-header">
+          <h3>Round ${rec.round}</h3>
+          <span class="agents-round-meta">${new Date(rec.started_at).toLocaleString()} · ${rec.feedback.total_tokens} tok</span>
+        </header>
+        <div class="agents-round-section">
+          <h4>📝 Designer (${rec.designer.proposals.length} proposals)</h4>
+          <ul>
+            ${rec.designer.proposals.map((p) => `
+              <li>
+                <strong>[${p.type}] ${escapeHtml(p.title)}</strong>
+                <p class="muted">${escapeHtml(p.rationale)}</p>
+                <p class="meta">effort=${p.estimated_effort} risk="${escapeHtml(p.risk)}"</p>
+              </li>
+            `).join('')}
+          </ul>
+        </div>
+        <div class="agents-round-section">
+          <h4>🎯 Feedback (${rec.feedback.critiques.length} critiques)</h4>
+          <ul>
+            ${rec.feedback.critiques.map((c) => {
+              const p = rec.designer.proposals.find((x) => x.id === c.proposal_id);
+              return `
+                <li>
+                  <strong>${escapeHtml(p?.title ?? c.proposal_id)}</strong>
+                  <span class="badge badge-${c.total >= 8 ? 'high' : c.total >= 6 ? 'mid' : 'low'}">score=${c.total.toFixed(1)}</span>
+                  <span class="muted">m${c.scores.methodologist} e${c.scores.engineer} s${c.scores.skeptic}</span>
+                  <p class="muted">${escapeHtml(c.critique)}</p>
+                </li>
+              `;
+            }).join('')}
+          </ul>
+        </div>
+        <div class="agents-round-section">
+          <h4>🚦 Gate</h4>
+          <div class="agents-gate-bars">
+            <span class="badge badge-high">promoted: ${rec.gate.promoted.length}</span>
+            <span class="badge badge-mid">candidate: ${rec.gate.candidate.length}</span>
+            <span class="badge badge-low">sketch: ${rec.gate.sketch.length}</span>
+            <span class="badge badge-none">rejected: ${rec.gate.rejected.length}</span>
+          </div>
+        </div>
+        <div class="agents-round-section">
+          <h4>✏️ Modifier (applied=${rec.modifier.applied.length}, skipped=${rec.modifier.skipped.length})</h4>
+          ${rec.modifier.applied.length ? `<ul>${rec.modifier.applied.map((a) => `<li>[${a.kind}] ${escapeHtml(JSON.stringify(a.payload))}</li>`).join('')}</ul>` : '<p class="muted">无写入动作</p>'}
+        </div>
+      `;
+      return div;
+    }
+
+    function escapeHtml(s: string): string {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c] ?? c));
+    }
+
+    function refresh() {
+      const sid = currentSessionId;
+      const list = $('agents-round-list');
+      const empty = $('agents-empty');
+      list.innerHTML = '';
+      if (!sid) {
+        empty.hidden = false;
+        $('agents-rounds').hidden = true;
+        return;
+      }
+      const records = loadRounds(sid);
+      if (records.length === 0) {
+        empty.hidden = false;
+        $('agents-rounds').hidden = true;
+      } else {
+        empty.hidden = true;
+        $('agents-rounds').hidden = false;
+        for (const rec of records) list.appendChild(renderRound(rec));
+      }
+    }
+
+    async function runOnce() {
+      if (isRunning) return;
+      const sid = ($<HTMLInputElement>('agents-session-id')).value.trim();
+      if (!sid) {
+        alert('请填 Session ID');
+        return;
+      }
+      currentSessionId = sid;
+      saveSessionId(sid);
+
+      const preset = ($<HTMLSelectElement>('agents-preset')).value as 'conservative' | 'balanced' | 'aggressive';
+      const maxRounds = Number(($<HTMLInputElement>('agents-max-rounds')).value) || 3;
+      const dryRun = ($<HTMLInputElement>('agents-dry-run')).checked;
+
+      const status = $('agents-status');
+      const statusText = $('agents-status-text');
+      status.hidden = false;
+      isRunning = true;
+      statusText.textContent = `跑 round (dry=${dryRun}, preset=${preset})...`;
+
+      try {
+        const cfg = dryRun ? null : getLLMConfig();
+        const caller = dryRun || !cfg?.apiKey ? makeStubCaller() : makeLLMCallerFromConfig(cfg);
+        const adapter = await makeBrowserAdapter({ dry_run: dryRun });
+        const sink = memoryRoundSink();
+
+        const existing = loadRounds(sid);
+        const startRound = existing.length + 1;
+
+        const { records, stoppedReason } = await runRounds(
+          { caller, adapter, gatePreset: preset, maxRounds },
+          {
+            sessionId: sid,
+            input: {
+              project: { id: sid, name: sid, statement: '(browser auto-run)' },
+              candidates: [],
+              user_goal: '(browser auto-run)',
+              project_state: { paper_count: 0, draft_count: 0 },
+              round: startRound,
+            },
+            startRound,
+            onRoundComplete: async (rec) => {
+              await sink.write(rec);
+              saveRounds(sid, [...existing, ...sink.records]);
+            },
+          },
+        );
+
+        saveRounds(sid, [...existing, ...records]);
+        statusText.textContent = `完成 ${records.length} round(s), stopped: ${stoppedReason}`;
+        refresh();
+      } catch (err) {
+        statusText.textContent = `错误: ${err instanceof Error ? err.message : String(err)}`;
+      } finally {
+        isRunning = false;
+      }
+    }
+
+    // 初始化
+    const sessionInput = $<HTMLInputElement>('agents-session-id');
+    sessionInput.value = loadSessionId();
+    currentSessionId = sessionInput.value;
+    sessionInput.addEventListener('change', () => { currentSessionId = sessionInput.value; saveSessionId(sessionInput.value); refresh(); });
+    $('agents-run-btn').addEventListener('click', runOnce);
+    refresh();
+  </script>
+</BaseLayout>
