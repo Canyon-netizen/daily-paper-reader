@@ -67,7 +67,25 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     import { runRounds, memoryRoundSink } from '../../lib/agents/orchestrator';
     import { makeBrowserAdapter } from '../../lib/agents/modifier';
     import type { RoundRecord } from '../../lib/agents/types';
-    import { getLLMConfig } from '../settings';
+    import { STORAGE_KEYS } from '../../scripts/settings/storage';
+
+    // localStorage 里 LLM 配置的 shape(dpr_analyzer_v1 JSON)
+    interface BrowserLLMConfig {
+      apiKey?: string;
+      baseUrl?: string;
+      model?: string;
+      provider?: string;
+    }
+
+    function readLLMConfig(): BrowserLLMConfig {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEYS.llm);
+        if (!raw) return {};
+        return JSON.parse(raw) as BrowserLLMConfig;
+      } catch {
+        return {};
+      }
+    }
 
     const STORAGE_KEY = 'dpr_agents_session_v1';
     const ROUNDS_KEY = (sid: string) => `dpr_agents_rounds_${sid}`;
@@ -97,18 +115,22 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       localStorage.setItem(ROUNDS_KEY(sid), JSON.stringify(records));
     }
 
-    function makeLLMCallerFromConfig(cfg: ReturnType<typeof getLLMConfig>) {
+    function makeLLMCallerFromConfig(cfg: BrowserLLMConfig) {
+      const baseUrl = (cfg.baseUrl ?? '').replace(/\/$/, '');
+      const model = cfg.model ?? 'gpt-4o-mini';
+      const apiKey = cfg.apiKey ?? '';
       return {
         async callLLM(opts: { system: string; user: string; model?: string; temperature?: number; max_tokens?: number }) {
-          const url = `${(cfg.baseUrl || '').replace(/\/$/, '')}/chat/completions`;
+          if (!baseUrl || !apiKey) throw new Error('LLM 未配置:在 /settings/ 或 paper-analyzer 填 baseUrl + apiKey');
+          const url = `${baseUrl}/chat/completions`;
           const r = await fetch(url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
-              Authorization: `Bearer ${cfg.apiKey ?? ''}`,
+              Authorization: `Bearer ${apiKey}`,
             },
             body: JSON.stringify({
-              model: opts.model ?? cfg.model ?? 'gpt-4o-mini',
+              model: opts.model ?? model,
               messages: [
                 { role: 'system', content: opts.system },
                 { role: 'user', content: opts.user },
@@ -244,7 +266,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       statusText.textContent = `跑 round (dry=${dryRun}, preset=${preset})...`;
 
       try {
-        const cfg = dryRun ? null : getLLMConfig();
+        const cfg = dryRun ? null : readLLMConfig();
         const caller = dryRun || !cfg?.apiKey ? makeStubCaller() : makeLLMCallerFromConfig(cfg);
         const adapter = await makeBrowserAdapter({ dry_run: dryRun });
         const sink = memoryRoundSink();
