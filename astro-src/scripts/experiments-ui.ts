@@ -12,6 +12,7 @@ import {
   deleteExperiment,
   getExperimentCounts,
 } from '../lib/experiments';
+import { getIdea } from '../lib/ideas';
 
 let currentFilter: ExperimentStatus | 'all' = 'all';
 let lastStatusChange: { expId: string; oldStatus: ExperimentStatus; timeout: number } | null = null;
@@ -20,9 +21,23 @@ let lastStatusChange: { expId: string; oldStatus: ExperimentStatus; timeout: num
 export function initExperimentsUI(): void {
   // Check for prefill from idea
   const urlParams = new URLSearchParams(window.location.search);
-  const fromIdea = urlParams.get('from_idea');
-  const titlePrefill = urlParams.get('title');
-  const hypothesisPrefill = urlParams.get('hypothesis');
+
+  // New parameter names (preferred)
+  const prefillIdeaId = urlParams.get('prefill_idea_id');
+  const prefillTitle = urlParams.get('prefill_title');
+  const prefillHypothesis = urlParams.get('prefill_hypothesis');
+  const prefillPapers = urlParams.get('prefill_papers');
+  const prefillMethod = urlParams.get('prefill_method');
+
+  // Old parameter names (backward compatibility)
+  const fromIdea = urlParams.get('from_idea') || prefillIdeaId;
+  const titlePrefill = urlParams.get('title') || prefillTitle;
+  const hypothesisPrefill = urlParams.get('hypothesis') || prefillHypothesis;
+
+  // Parse related papers
+  const relatedPapers = prefillPapers
+    ? prefillPapers.split(',').map(p => p.trim()).filter(Boolean)
+    : [];
 
   renderExperimentGrid();
   setupFilterButtons();
@@ -37,6 +52,8 @@ export function initExperimentsUI(): void {
     openExperimentModal({
       title: titlePrefill,
       hypothesis: hypothesisPrefill || '',
+      method: prefillMethod,
+      relatedPapers,
       relatedIdeas: [fromIdea],
     });
     // Clean URL
@@ -89,7 +106,7 @@ function renderExperimentGrid(): void {
         <div class="experiments-empty-icon">🔬</div>
         <h3 class="experiments-empty-title">还没有实验</h3>
         <p class="experiments-empty-desc">
-          点击右上角「+ 新建实验」开始设计你的第一个实验，或点击下方按钮快速创建。
+          点击右上角「+ 新建实验」开始设计你的第一个实验，或从想法页面点「创建实验」快速派生。
         </p>
         <button type="button" class="btn btn-primary btn-sm" data-open-new-experiment>➕ 新建实验</button>
       </div>
@@ -146,6 +163,21 @@ function renderExperimentGrid(): void {
         updateCounts();
       }
     });
+
+    // Remove idea association button
+    card.querySelector<HTMLButtonElement>('[data-remove-idea]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ideaIdToRemove = (e.target as HTMLElement).dataset.removeIdea;
+      if (ideaIdToRemove && confirm('解除与该想法的关联？')) {
+        const exp = getExperiment(id);
+        if (exp && exp.relatedIdeas) {
+          const newRelatedIdeas = exp.relatedIdeas.filter(i => i !== ideaIdToRemove);
+          updateExperiment(id, { relatedIdeas: newRelatedIdeas });
+          renderExperimentGrid();
+        }
+      }
+    });
   });
 }
 
@@ -167,6 +199,25 @@ function renderExperimentCard(exp: Experiment): string {
        </div>`
     : '';
 
+  // Derived from idea badge
+  let derivedBadgeHtml = '';
+  if (exp.relatedIdeas && exp.relatedIdeas.length > 0) {
+    const ideaId = exp.relatedIdeas[0];
+    const idea = getIdea(ideaId);
+    if (idea) {
+      derivedBadgeHtml = `
+        <a href="${base}/ideas/${ideaId}/" class="exp-derived-badge" title="查看源想法">
+          💡 来自: ${escapeHtml(truncate(idea.title, 30))}
+        </a>`;
+    } else {
+      derivedBadgeHtml = `
+        <span class="exp-derived-badge exp-derived-badge--deleted">
+          💡 想法已删除
+          <button type="button" class="exp-derived-badge__remove" data-remove-idea="${ideaId}" title="解除关联">×</button>
+        </span>`;
+    }
+  }
+
   return `
     <a href="${base}/experiments/${exp.id}/" class="exp-card" data-exp-id="${exp.id}">
       <div class="exp-card-header">
@@ -175,6 +226,7 @@ function renderExperimentCard(exp: Experiment): string {
           ${statusLabels[exp.status]}
         </span>
       </div>
+      ${derivedBadgeHtml ? `<div class="exp-derived">${derivedBadgeHtml}</div>` : ''}
       <p class="exp-title-zh">${escapeHtml(exp.titleZh)}</p>
       <p class="exp-hypothesis">${escapeHtml(truncate(exp.hypothesis, 100))}</p>
       ${tagsHtml}
@@ -290,6 +342,8 @@ function setupModalHandlers(): void {
 function openExperimentModal(prefill?: {
   title?: string;
   hypothesis?: string;
+  method?: string;
+  relatedPapers?: string[];
   relatedIdeas?: string[];
 }): void {
   const modal = document.getElementById('experiment-modal');
@@ -303,10 +357,15 @@ function openExperimentModal(prefill?: {
     if (prefill) {
       const titleInput = form.querySelector('input[name="title"]') as HTMLInputElement;
       const hypothesisInput = form.querySelector('textarea[name="hypothesis"]') as HTMLTextAreaElement;
+      const methodInput = form.querySelector('textarea[name="method"]') as HTMLTextAreaElement;
       const relatedIdeasInput = form.querySelector('input[name="relatedIdeas"]') as HTMLInputElement;
+      const relatedPapersInput = form.querySelector('input[name="relatedPapers"]') as HTMLInputElement;
+
       if (prefill.title) titleInput.value = prefill.title;
       if (prefill.hypothesis) hypothesisInput.value = prefill.hypothesis;
+      if (prefill.method) methodInput.value = prefill.method;
       if (prefill.relatedIdeas?.length) relatedIdeasInput.value = prefill.relatedIdeas.join(', ');
+      if (prefill.relatedPapers?.length) relatedPapersInput.value = prefill.relatedPapers.join(', ');
     }
     modal.classList.add('active');
     (form.querySelector('input[name="title"]') as HTMLInputElement)?.focus();
@@ -508,10 +567,16 @@ function showUndoToast(title: string, oldStatus: string, newStatus: string): voi
 }
 
 /** Open experiment modal with prefill (for "Create from Idea") */
-export function openExperimentModalWithPrefill(title: string, hypothesis: string, ideaId: string): void {
+export function openExperimentModalWithPrefill(
+  title: string,
+  hypothesis: string,
+  ideaId: string,
+  relatedPapers?: string[]
+): void {
   openExperimentModal({
     title,
     hypothesis,
+    relatedPapers,
     relatedIdeas: [ideaId],
   });
 }

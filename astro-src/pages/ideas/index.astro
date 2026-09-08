@@ -51,6 +51,19 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       <button type="button" class="btn btn-primary btn-sm" data-open-new-idea>
         ➕ 新建想法
       </button>
+      <button type="button" class="btn btn-sm" data-batch-create-experiments>
+        🚀 批量建实验
+      </button>
+    </div>
+
+    <div id="batch-selection-bar" class="batch-selection-bar" hidden>
+      <span data-batch-count>已选 0 个</span>
+      <button type="button" class="btn btn-primary btn-sm" data-batch-create-selected>
+        🚀 批量创建实验
+      </button>
+      <button type="button" class="btn btn-ghost btn-sm" data-batch-clear>
+        清除选择
+      </button>
     </div>
 
     <div id="ideas-empty-hint" class="ideas-empty-hint" hidden>
@@ -124,6 +137,64 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <div class="form-actions">
           <button type="button" class="btn btn-ghost modal-cancel">取消</button>
           <button type="submit" class="btn btn-primary">创建想法</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Batch Create Experiments Modal -->
+  <dialog id="batch-experiment-modal" class="batch-experiment-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>批量创建实验</h2>
+        <button type="button" class="modal-close" aria-label="关闭">×</button>
+      </div>
+      <form id="batch-experiment-form" class="batch-experiment-form">
+        <div class="form-group">
+          <label for="batch-title-prefix">实验标题前缀</label>
+          <input
+            type="text"
+            id="batch-title-prefix"
+            name="titlePrefix"
+            placeholder="实验: "
+            value="实验: "
+          />
+        </div>
+        <div class="form-group">
+          <label for="batch-method">公共实验方法</label>
+          <textarea
+            id="batch-method"
+            name="method"
+            rows="3"
+            placeholder="待设计"
+          ></textarea>
+        </div>
+        <div class="form-group">
+          <label for="batch-tags">公共标签 (逗号分隔)</label>
+          <input
+            type="text"
+            id="batch-tags"
+            name="tags"
+            placeholder=""
+          />
+        </div>
+        <div class="form-group">
+          <label for="batch-description-prefix">公共描述前缀</label>
+          <textarea
+            id="batch-description-prefix"
+            name="descriptionPrefix"
+            rows="2"
+            placeholder=""
+          ></textarea>
+        </div>
+        <div id="batch-preview-container" class="batch-preview-container" hidden>
+          <h4>预览生成的实验</h4>
+          <pre id="batch-preview" class="batch-experiment-preview"></pre>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost modal-cancel">取消</button>
+          <button type="button" id="batch-preview-btn" class="btn btn-secondary">📋 预览</button>
+          <button type="submit" class="btn btn-primary">🚀 一键创建</button>
         </div>
       </form>
     </div>

@@ -160,9 +160,10 @@ const { id } = Astro.params;
       container.querySelector<HTMLButtonElement>('[data-create-experiment]')?.addEventListener('click', () => {
         // Navigate to experiments page with prefill data via URL params
         const params = new URLSearchParams();
-        params.set('from_idea', idea.id);
-        params.set('title', idea.title);
-        params.set('hypothesis', idea.description);
+        params.set('prefill_idea_id', idea.id);
+        params.set('prefill_title', idea.title);
+        params.set('prefill_hypothesis', idea.description);
+        params.set('prefill_papers', idea.relatedPapers.join(','));
         window.location.href = `${baseUrl}/experiments/?${params.toString()}`;
       });
 

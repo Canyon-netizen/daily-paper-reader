@@ -10,9 +10,11 @@ import {
   deleteIdea,
   getIdeaCounts,
 } from '../lib/ideas';
+import { createExperiment, updateExperiment } from '../lib/experiments';
 
 let currentFilter: IdeaStatus | 'all' = 'all';
 let lastStatusChange: { ideaId: string; oldStatus: IdeaStatus; timeout: number } | null = null;
+let selectedIdeaIds: Set<string> = new Set();
 
 /** Initialize the Ideas UI */
 export function initIdeasUI(): void {
@@ -20,6 +22,7 @@ export function initIdeasUI(): void {
   setupFilterButtons();
   setupNewIdeaButton();
   setupModalHandlers();
+  setupBatchOperations();
 }
 
 /** Render the idea grid */
@@ -131,6 +134,21 @@ function renderIdeaGrid(): void {
       }
     });
   });
+
+  // Checkbox event listeners
+  container.querySelectorAll<HTMLInputElement>('.idea-card-checkbox').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const ideaId = checkbox.dataset.ideaId;
+      if (ideaId) {
+        if (checkbox.checked) {
+          selectedIdeaIds.add(ideaId);
+        } else {
+          selectedIdeaIds.delete(ideaId);
+        }
+        updateBatchSelectionBar();
+      }
+    });
+  });
 }
 
 /** Render a single idea card */
@@ -165,24 +183,29 @@ function renderIdeaCard(idea: Idea): string {
        </div>`
     : '';
 
+  const isSelected = selectedIdeaIds.has(idea.id) ? 'checked' : '';
+
   return `
-    <a href="${base}/ideas/${idea.id}/" class="idea-card idea-card--${idea.status}" data-idea-id="${idea.id}">
-      <div class="idea-card-header">
-        <span class="idea-status-icon">${statusIcons[idea.status]}</span>
-        <span class="idea-status-label">${statusLabels[idea.status]}</span>
-        <span class="idea-date">${date}</span>
-      </div>
-      <h3 class="idea-title">${escapeHtml(idea.title)}</h3>
-      <p class="idea-description">${escapeHtml(truncate(idea.description, 120))}</p>
-      ${papersHtml}
-      ${tagsHtml}
-      <div class="idea-card-actions">
-        ${idea.status !== 'active' ? `<button type="button" class="btn-status" data-status="active" title="标记进行中">🚀</button>` : ''}
-        ${idea.status !== 'promoted' ? `<button type="button" class="btn-status" data-status="promoted" title="标记推荐">⭐</button>` : ''}
-        ${idea.status !== 'archived' ? `<button type="button" class="btn-status" data-status="archived" title="标记归档">📦</button>` : ''}
-        <button type="button" class="btn-delete" title="删除">🗑️</button>
-      </div>
-    </a>
+    <div class="idea-card-wrapper">
+      <input type="checkbox" class="idea-card-checkbox" data-idea-id="${idea.id}" ${isSelected} />
+      <a href="${base}/ideas/${idea.id}/" class="idea-card idea-card--${idea.status}" data-idea-id="${idea.id}">
+        <div class="idea-card-header">
+          <span class="idea-status-icon">${statusIcons[idea.status]}</span>
+          <span class="idea-status-label">${statusLabels[idea.status]}</span>
+          <span class="idea-date">${date}</span>
+        </div>
+        <h3 class="idea-title">${escapeHtml(idea.title)}</h3>
+        <p class="idea-description">${escapeHtml(truncate(idea.description, 120))}</p>
+        ${papersHtml}
+        ${tagsHtml}
+        <div class="idea-card-actions">
+          ${idea.status !== 'active' ? `<button type="button" class="btn-status" data-status="active" title="标记进行中">🚀</button>` : ''}
+          ${idea.status !== 'promoted' ? `<button type="button" class="btn-status" data-status="promoted" title="标记推荐">⭐</button>` : ''}
+          ${idea.status !== 'archived' ? `<button type="button" class="btn-status" data-status="archived" title="标记归档">📦</button>` : ''}
+          <button type="button" class="btn-delete" title="删除">🗑️</button>
+        </div>
+      </a>
+    </div>
   `;
 }
 
@@ -371,6 +394,197 @@ function showUndoToast(title: string, oldStatus: string, newStatus: string): voi
     if (toast.parentNode) toast.remove();
     lastStatusChange = null;
   }, 5000);
+}
+
+/** Setup batch operations for creating experiments from multiple ideas */
+function setupBatchOperations(): void {
+  const batchBar = document.getElementById('batch-selection-bar');
+  const batchCountEl = batchBar?.querySelector('[data-batch-count]');
+  const batchCreateBtn = document.querySelector<HTMLButtonElement>('[data-batch-create-experiments]');
+  const batchCreateSelectedBtn = batchBar?.querySelector<HTMLButtonElement>('[data-batch-create-selected]');
+  const batchClearBtn = batchBar?.querySelector<HTMLButtonElement>('[data-batch-clear]');
+  const batchModal = document.getElementById('batch-experiment-modal') as HTMLDialogElement | null;
+  const batchForm = batchModal?.querySelector<HTMLFormElement>('#batch-experiment-form');
+  const batchPreviewBtn = batchModal?.querySelector<HTMLButtonElement>('#batch-preview-btn');
+  const batchPreviewContainer = batchModal?.querySelector<HTMLElement>('#batch-preview-container');
+  const batchPreview = batchModal?.querySelector<HTMLElement>('#batch-preview');
+
+  // Open batch modal from actionbar button
+  batchCreateBtn?.addEventListener('click', () => {
+    if (selectedIdeaIds.size === 0) {
+      alert('请先在想法卡片上勾选要创建实验的想法');
+      return;
+    }
+    openBatchExperimentModal();
+  });
+
+  // Open batch modal from selection bar
+  batchCreateSelectedBtn?.addEventListener('click', () => {
+    openBatchExperimentModal();
+  });
+
+  // Clear selection
+  batchClearBtn?.addEventListener('click', () => {
+    clearIdeaSelection();
+  });
+
+  // Preview button
+  batchPreviewBtn?.addEventListener('click', () => {
+    const config = getBatchExperimentConfig();
+    const selectedIdeas = listIdeas().filter(i => selectedIdeaIds.has(i.id));
+    const preview = generateBatchPreview(selectedIdeas, config);
+    if (batchPreview) batchPreview.textContent = preview;
+    if (batchPreviewContainer) batchPreviewContainer.hidden = false;
+  });
+
+  // Form submit
+  batchForm?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const config = getBatchExperimentConfig();
+    const selectedIdeas = listIdeas().filter(i => selectedIdeaIds.has(i.id));
+
+    if (selectedIdeas.length === 0) {
+      alert('请先选择想法');
+      return;
+    }
+
+    batchCreateExperiments(selectedIdeas, config);
+    batchModal?.close();
+    clearIdeaSelection();
+  });
+
+  // Modal close handlers
+  const closeBtn = batchModal?.querySelector('.modal-close');
+  const cancelBtn = batchModal?.querySelector('.modal-cancel');
+  closeBtn?.addEventListener('click', () => batchModal?.close());
+  cancelBtn?.addEventListener('click', () => batchModal?.close());
+  batchModal?.addEventListener('click', (e) => {
+    if (e.target === batchModal) batchModal.close();
+  });
+}
+
+/** Open batch experiment modal */
+function openBatchExperimentModal(): void {
+  const modal = document.getElementById('batch-experiment-modal') as HTMLDialogElement | null;
+  const form = modal?.querySelector<HTMLFormElement>('#batch-experiment-form');
+  const previewContainer = modal?.querySelector<HTMLElement>('#batch-preview-container');
+
+  if (modal && form) {
+    form.reset();
+    // Set default values
+    (form.querySelector('#batch-title-prefix') as HTMLInputElement).value = '实验: ';
+    if (previewContainer) previewContainer.hidden = true;
+    modal.showModal();
+  }
+}
+
+/** Get batch experiment config from form */
+function getBatchExperimentConfig(): {
+  titlePrefix: string;
+  method: string;
+  tags: string;
+  descriptionPrefix: string;
+} {
+  const form = document.querySelector<HTMLFormElement>('#batch-experiment-form');
+  if (!form) {
+    return { titlePrefix: '实验: ', method: '', tags: '', descriptionPrefix: '' };
+  }
+  const formData = new FormData(form);
+  return {
+    titlePrefix: (formData.get('titlePrefix') as string) || '实验: ',
+    method: (formData.get('method') as string) || '待设计',
+    tags: (formData.get('tags') as string) || '',
+    descriptionPrefix: (formData.get('descriptionPrefix') as string) || '',
+  };
+}
+
+/** Generate preview text for batch experiments */
+function generateBatchPreview(ideas: Idea[], config: {
+  titlePrefix: string;
+  method: string;
+  tags: string;
+}): string {
+  return ideas.map(idea => {
+    const title = config.titlePrefix + idea.title;
+    const papers = idea.relatedPapers.join(', ');
+    return `• ${title}\n  论文: ${papers || '无'}\n  来自: ${idea.title}`;
+  }).join('\n\n');
+}
+
+/** Batch create experiments from selected ideas */
+function batchCreateExperiments(ideas: Idea[], config: {
+  titlePrefix: string;
+  method: string;
+  tags: string;
+  descriptionPrefix: string;
+}): void {
+  const tags = config.tags ? config.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+  for (const idea of ideas) {
+    const exp = createExperiment(
+      config.titlePrefix + idea.title,
+      config.descriptionPrefix + idea.description.substring(0, 200),
+      config.method,
+    );
+
+    // Update with related info
+    updateExperiment(exp.id, {
+      relatedIdeas: [idea.id],
+      relatedPapers: idea.relatedPapers,
+      tags: [...tags, ...idea.tags],
+      methodZh: config.method,
+    });
+  }
+
+  // Show toast and redirect
+  showToast(`已创建 ${ideas.length} 个实验`);
+  window.location.href = '/experiments/';
+}
+
+/** Show toast notification */
+function showToast(message: string): void {
+  const existing = document.querySelector('.toast-notification');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'toast-notification';
+  toast.textContent = message;
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #333;
+    color: #fff;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    z-index: 1000;
+    font-size: 0.9rem;
+  `;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+/** Update batch selection bar */
+function updateBatchSelectionBar(): void {
+  const batchBar = document.getElementById('batch-selection-bar');
+  const batchCountEl = batchBar?.querySelector('[data-batch-count]');
+
+  if (batchCountEl) {
+    batchCountEl.textContent = `已选 ${selectedIdeaIds.size} 个`;
+  }
+  if (batchBar) {
+    batchBar.hidden = selectedIdeaIds.size === 0;
+  }
+}
+
+/** Clear all idea selections */
+function clearIdeaSelection(): void {
+  selectedIdeaIds.clear();
+  document.querySelectorAll<HTMLInputElement>('.idea-checkbox').forEach(cb => {
+    cb.checked = false;
+  });
+  updateBatchSelectionBar();
 }
 
 // Auto-initialize when DOM is ready
