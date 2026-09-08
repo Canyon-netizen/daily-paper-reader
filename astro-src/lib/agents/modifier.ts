@@ -146,25 +146,35 @@ export async function makeBrowserAdapter(opts: { dry_run?: boolean } = {}): Prom
     dry_run: dry,
     async createIdea(o) {
       if (dry || !ideasMod) return { id: `stub_idea_${Date.now().toString(36)}` };
-      return ideasMod.createIdea(o.title, o.description, o.relatedPapers, o.tags, o.source as 'manual');
+      // upstream signature: (title, description, relatedPapers, tags, source)
+      const idea = ideasMod.createIdea(
+        o.title,
+        o.description,
+        o.relatedPapers,
+        o.tags,
+        (o.source as 'manual') ?? 'manual',
+      );
+      return { id: idea.id };
     },
     async createExperiment(o) {
       if (dry || !experimentsMod) return { id: `stub_exp_${Date.now().toString(36)}` };
-      // experiments API 形参:title, hypothesis, method, ..., tags, relatedPapers
-      return experimentsMod.createExperiment({
-        title: o.title,
-        titleZh: o.titleZh,
-        hypothesis: o.hypothesis,
-        hypothesisZh: '',
-        method: o.method,
-        methodZh: '',
-        variables: [],
-        expectedResults: '',
-        expectedResultsZh: '',
-        relatedPapers: o.relatedPapers,
-        tags: o.tags,
-        status: 'planning',
-      });
+      // upstream signature: (title, hypothesis, method, titleZh, hypothesisZh, methodZh)
+      const exp = experimentsMod.createExperiment(
+        o.title,
+        o.hypothesis,
+        o.method,
+        o.titleZh || o.title,
+        o.hypothesisZh || o.hypothesis,
+        o.methodZh || o.method,
+      );
+      // 追加 relatedPapers + tags(若上游 Experiment 类型有)
+      if (o.relatedPapers?.length || o.tags?.length) {
+        experimentsMod.updateExperiment?.(exp.id, {
+          relatedPapers: o.relatedPapers ?? [],
+          tags: o.tags ?? [],
+        });
+      }
+      return { id: exp.id };
     },
     async createWriting(o) {
       if (dry || !writingMod) return { id: `stub_w_${Date.now().toString(36)}` };
