@@ -36,6 +36,12 @@ export interface ResearchStats {
   currentQuarter: string;
   /** Weekly activity counts: { weekStartDate: { ideas: number, experiments: number, writings: number } } */
   weeklyActivity: Record<string, { ideas: number; experiments: number; writings: number }>;
+  /** Conversion funnel: idea → experiment → writing → published */
+  funnel: {
+    ideaToExp: { converted: number; total: number; rate: number };
+    expToWriting: { converted: number; total: number; rate: number };
+    writingToPublished: { converted: number; total: number; rate: number };
+  };
 }
 
 /** Research item for dashboard display */
@@ -66,7 +72,8 @@ export function getResearchStats(): ResearchStats {
   // Writings
   const writings = listWritings();
   const draftWritings = writings.filter(w => w.status === 'draft');
-  const finalWritings = writings.filter(w => w.status === 'final');
+  // Non-draft statuses: review, final, submitted, accepted, rejected, published
+  const finalWritings = writings.filter(w => w.status !== 'draft');
 
   // Roadmaps
   const roadmaps = listRoadmaps();
@@ -83,6 +90,9 @@ export function getResearchStats(): ResearchStats {
 
   // Weekly activity - last 8 weeks
   const weeklyActivity = computeWeeklyActivity(ideas, experiments, writings);
+
+  // Funnel: idea → experiment → writing → published
+  const funnel = computeFunnel(ideas, experiments, writings);
 
   return {
     ideas: {
@@ -104,6 +114,7 @@ export function getResearchStats(): ResearchStats {
     },
     currentQuarter,
     weeklyActivity,
+    funnel,
   };
 }
 
@@ -161,6 +172,75 @@ function getWeekStart(date: Date): string {
   const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
   d.setDate(diff);
   return d.toISOString().split('T')[0];
+}
+
+/** Compute conversion funnel: idea → experiment → writing → published */
+function computeFunnel(
+  ideas: any[],
+  experiments: any[],
+  writings: any[]
+): ResearchStats['funnel'] {
+  // Idea → Experiment: experiments with relatedIdeas
+  const ideasWithExp = new Set<string>();
+  const activeOrPromotedIdeas = ideas.filter(
+    (idea: Idea) => idea.status === 'active' || idea.status === 'promoted'
+  );
+  for (const exp of experiments) {
+    if (exp.relatedIdeas && exp.relatedIdeas.length > 0) {
+      for (const ideaId of exp.relatedIdeas) {
+        ideasWithExp.add(ideaId);
+      }
+    }
+  }
+  const activeIdeasWithExp = activeOrPromotedIdeas.filter((idea: Idea) =>
+    ideasWithExp.has(idea.id)
+  );
+  const ideaToExp = {
+    converted: activeIdeasWithExp.length,
+    total: activeOrPromotedIdeas.length,
+    rate: activeOrPromotedIdeas.length > 0
+      ? activeIdeasWithExp.length / activeOrPromotedIdeas.length
+      : 0,
+  };
+
+  // Experiment → Writing: writings with relatedExperiments
+  const expsWithWriting = new Set<string>();
+  const runningOrCompletedExps = experiments.filter(
+    (exp: Experiment) => exp.status === 'running' || exp.status === 'completed'
+  );
+  for (const w of writings) {
+    if (w.relatedExperiments && w.relatedExperiments.length > 0) {
+      for (const expId of w.relatedExperiments) {
+        expsWithWriting.add(expId);
+      }
+    }
+  }
+  const expsWithWritings = runningOrCompletedExps.filter((exp: Experiment) =>
+    expsWithWriting.has(exp.id)
+  );
+  const expToWriting = {
+    converted: expsWithWritings.length,
+    total: runningOrCompletedExps.length,
+    rate: runningOrCompletedExps.length > 0
+      ? expsWithWritings.length / runningOrCompletedExps.length
+      : 0,
+  };
+
+  // Writing → Published: final + published writings / total writings
+  const publishedWritings = writings.filter(
+    (w: Writing) => w.status === 'final' || w.status === 'published'
+  );
+  const writingToPublished = {
+    converted: publishedWritings.length,
+    total: writings.length,
+    rate: writings.length > 0 ? publishedWritings.length / writings.length : 0,
+  };
+
+  return {
+    ideaToExp,
+    expToWriting,
+    writingToPublished,
+  };
 }
 
 /** Get active ideas (status: active) */

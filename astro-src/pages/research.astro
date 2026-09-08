@@ -30,6 +30,16 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </noscript>
     </section>
 
+    <!-- Conversion Funnel -->
+    <section class="research-funnel" id="research-funnel">
+      <div class="section-header">
+        <h2>Conversion Funnel</h2>
+      </div>
+      <div class="funnel-container" id="funnel-container">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+
     <!-- Weekly Activity Timeline -->
     <section class="research-timeline" id="research-timeline">
       <div class="section-header">
@@ -96,22 +106,32 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       active: '进行中',
       running: '运行中',
       draft: '草稿',
+      review: '审核中',
+      final: '已完成',
+      submitted: '已提交',
+      accepted: '已接收',
+      rejected: '已拒绝',
+      published: '已发表',
       'in-progress': '进行中',
       pending: '待开始',
       planning: '规划中',
       completed: '已完成',
-      published: '已发布',
     };
 
     const statusColors: Record<string, string> = {
       active: '#22c55e',
       running: '#3b82f6',
       draft: '#f59e0b',
+      review: '#3b82f6',
+      final: '#22c55e',
+      submitted: '#6366f1',
+      accepted: '#10b981',
+      rejected: '#ef4444',
+      published: '#8b5cf6',
       'in-progress': '#3b82f6',
       pending: '#9ca3af',
       planning: '#9ca3af',
       completed: '#22c55e',
-      published: '#8b5cf6',
     };
 
     function renderStats(stats: any) {
@@ -192,6 +212,63 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       `;
     }
 
+    function renderFunnel(funnel: any) {
+      const container = document.getElementById('funnel-container');
+      if (!container) return;
+
+      if (!funnel) {
+        container.innerHTML = `<div class="research-empty">No funnel data yet</div>`;
+        return;
+      }
+
+      const { ideaToExp, expToWriting, writingToPublished } = funnel;
+
+      container.innerHTML = `
+        <div class="funnel-stages">
+          <div class="funnel-stage">
+            <div class="funnel-icon">💡</div>
+            <div class="funnel-label">Ideas</div>
+            <div class="funnel-count">${ideaToExp.total}</div>
+            <div class="funnel-arrow">↓</div>
+          </div>
+          <div class="funnel-stage">
+            <div class="funnel-icon">🧪</div>
+            <div class="funnel-label">Experiments</div>
+            <div class="funnel-count">${expToWriting.total}</div>
+            <div class="funnel-arrow">↓</div>
+          </div>
+          <div class="funnel-stage">
+            <div class="funnel-icon">📝</div>
+            <div class="funnel-label">Writings</div>
+            <div class="funnel-count">${writingToPublished.total}</div>
+            <div class="funnel-arrow">↓</div>
+          </div>
+          <div class="funnel-stage">
+            <div class="funnel-icon">📄</div>
+            <div class="funnel-label">Published</div>
+            <div class="funnel-count">${writingToPublished.converted}</div>
+          </div>
+        </div>
+        <div class="funnel-rates">
+          <div class="funnel-rate">
+            <span class="funnel-rate-label">Idea→Exp</span>
+            <span class="funnel-rate-value">${(ideaToExp.rate * 100).toFixed(0)}%</span>
+            <span class="funnel-rate-detail">${ideaToExp.converted}/${ideaToExp.total}</span>
+          </div>
+          <div class="funnel-rate">
+            <span class="funnel-rate-label">Exp→Writing</span>
+            <span class="funnel-rate-value">${(expToWriting.rate * 100).toFixed(0)}%</span>
+            <span class="funnel-rate-detail">${expToWriting.converted}/${expToWriting.total}</span>
+          </div>
+          <div class="funnel-rate">
+            <span class="funnel-rate-label">Writing→Published</span>
+            <span class="funnel-rate-value">${(writingToPublished.rate * 100).toFixed(0)}%</span>
+            <span class="funnel-rate-detail">${writingToPublished.converted}/${writingToPublished.total}</span>
+          </div>
+        </div>
+      `;
+    }
+
     function renderList(containerId: string, items: any[]) {
       const container = document.getElementById(containerId);
       if (!container) return;
@@ -242,6 +319,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         const dashboard = getResearchDashboard();
 
         renderStats(dashboard.stats);
+        renderFunnel(dashboard.stats.funnel);
         renderTimeline(dashboard.stats.weeklyActivity);
         renderList('ideas-list', dashboard.activeIdeas);
         renderList('experiments-list', dashboard.runningExperiments);
