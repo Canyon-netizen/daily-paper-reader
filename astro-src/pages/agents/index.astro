@@ -23,6 +23,17 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </p>
     </header>
 
+    <section class="agents-stats" id="agents-stats">
+      <div class="agents-stats-row">
+        <span class="agents-stat"><strong id="agents-stat-sessions">0</strong> sessions</span>
+        <span class="agents-stat"><strong id="agents-stat-rounds">0</strong> rounds</span>
+        <span class="agents-stat"><strong id="agents-stat-proposals">0</strong> proposals</span>
+        <span class="agents-stat"><strong id="agents-stat-promoted">0</strong> promoted</span>
+        <span class="agents-stat"><strong id="agents-stat-applied">0</strong> applied</span>
+        <span class="agents-stat agents-stat-aside" id="agents-stat-last"></span>
+      </div>
+    </section>
+
     <section class="agents-controls">
       <div class="agents-controls-row">
         <label>
@@ -260,6 +271,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       const list = $('agents-round-list');
       const empty = $('agents-empty');
       list.innerHTML = '';
+      refreshStats();
       if (!sid) {
         empty.hidden = false;
         $('agents-rounds').hidden = true;
@@ -275,6 +287,52 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         for (const rec of records) list.appendChild(renderRound(rec));
         wireExportButtons(records);
       }
+    }
+
+    function refreshStats() {
+      const allSessions = listKnownSessions();
+      let totalRounds = 0;
+      let totalProposals = 0;
+      let totalPromoted = 0;
+      let totalApplied = 0;
+      let latestTs = 0;
+      let latestSess = '';
+      for (const sid of allSessions) {
+        const recs = loadRounds(sid);
+        totalRounds += recs.length;
+        for (const r of recs) {
+          totalProposals += r.designer.proposals.length;
+          totalPromoted += r.gate.promoted.length;
+          totalApplied += r.modifier.applied.length;
+          if (r.started_at > latestTs) {
+            latestTs = r.started_at;
+            latestSess = sid;
+          }
+        }
+      }
+      $('agents-stat-sessions').textContent = String(allSessions.length);
+      $('agents-stat-rounds').textContent = String(totalRounds);
+      $('agents-stat-proposals').textContent = String(totalProposals);
+      $('agents-stat-promoted').textContent = String(totalPromoted);
+      $('agents-stat-applied').textContent = String(totalApplied);
+      const lastEl = $('agents-stat-last');
+      if (latestTs > 0) {
+        const ago = formatAgo(Date.now() - latestTs);
+        lastEl.textContent = `最近: ${latestSess} (${ago})`;
+      } else {
+        lastEl.textContent = '尚无 round';
+      }
+    }
+
+    function formatAgo(ms: number): string {
+      const s = Math.floor(ms / 1000);
+      if (s < 60) return `${s}s 前`;
+      const m = Math.floor(s / 60);
+      if (m < 60) return `${m}m 前`;
+      const h = Math.floor(m / 60);
+      if (h < 24) return `${h}h 前`;
+      const d = Math.floor(h / 24);
+      return `${d}d 前`;
     }
 
     function wireExportButtons(records: RoundRecord[]) {
