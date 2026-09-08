@@ -212,7 +212,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         </div>
         <div class="agents-round-section">
           <h4>✏️ Modifier (applied=${rec.modifier.applied.length}, skipped=${rec.modifier.skipped.length})</h4>
-          ${rec.modifier.applied.length ? `<ul>${rec.modifier.applied.map((a) => `<li>[${a.kind}] ${escapeHtml(JSON.stringify(a.payload))}</li>`).join('')}</ul>` : '<p class="muted">无写入动作</p>'}
+          ${rec.modifier.applied.length ? `<ul>${rec.modifier.applied.map((a) => {
+            const targetLink = actionTargetLink(a);
+            return `<li><span class="badge badge-mid">${a.kind}</span> ${escapeHtml(a.payload.title ?? a.payload.would_call ?? '')} ${targetLink}</li>`;
+          }).join('')}</ul>` : '<p class="muted">无写入动作</p>'}
         </div>
       `;
       return div;
@@ -222,6 +225,23 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       return String(s ?? '').replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
       }[c] ?? c));
+    }
+
+    function actionTargetLink(a: { kind: string; payload: Record<string, unknown> }): string {
+      const p = a.payload as Record<string, string>;
+      if (a.kind === 'create_draft_outline' && p.writing_id) {
+        const safe = escapeHtml(p.writing_id);
+        return `<a class="agents-link" href="/writing/${safe}/" target="_blank">→ 打开 writing</a>`;
+      }
+      if (a.kind === 'archive_round_summary' && p.experiment_id) {
+        const safe = escapeHtml(p.experiment_id);
+        return `<a class="agents-link" href="/experiments/${safe}/" target="_blank">→ 打开 experiment</a>`;
+      }
+      if (a.kind === 'add_paper_to_stage' && p.arxivId) {
+        const safe = escapeHtml(p.arxivId);
+        return `<a class="agents-link" href="/papers/${safe}/" target="_blank">→ 打开 paper</a>`;
+      }
+      return '';
     }
 
     function refresh() {
