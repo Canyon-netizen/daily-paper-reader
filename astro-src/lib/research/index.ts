@@ -34,6 +34,8 @@ export interface ResearchStats {
     active: number;
   };
   currentQuarter: string;
+  /** Weekly activity counts: { weekStartDate: { ideas: number, experiments: number, writings: number } } */
+  weeklyActivity: Record<string, { ideas: number; experiments: number; writings: number }>;
 }
 
 /** Research item for dashboard display */
@@ -79,6 +81,9 @@ export function getResearchStats(): ResearchStats {
   const now = new Date();
   const currentQuarter = `Q${Math.ceil((now.getMonth() + 1) / 3)} ${now.getFullYear()}`;
 
+  // Weekly activity - last 8 weeks
+  const weeklyActivity = computeWeeklyActivity(ideas, experiments, writings);
+
   return {
     ideas: {
       total: ideas.length,
@@ -98,7 +103,64 @@ export function getResearchStats(): ResearchStats {
       active: activeRoadmaps.length,
     },
     currentQuarter,
+    weeklyActivity,
   };
+}
+
+/** Compute weekly activity counts for the last 8 weeks */
+function computeWeeklyActivity(
+  ideas: any[],
+  experiments: any[],
+  writings: any[]
+): Record<string, { ideas: number; experiments: number; writings: number }> {
+  const result: Record<string, { ideas: number; experiments: number; writings: number }> = {};
+  const now = new Date();
+
+  // Generate last 8 weeks' start dates (Monday)
+  for (let i = 0; i < 8; i++) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - (i * 7 + date.getDay() - 1)); // Get Monday of each week
+    const weekKey = date.toISOString().split('T')[0];
+    result[weekKey] = { ideas: 0, experiments: 0, writings: 0 };
+  }
+
+  // Count ideas created each week
+  for (const idea of ideas) {
+    const createdAt = new Date(idea.createdAt);
+    const weekStart = getWeekStart(createdAt);
+    if (result[weekStart]) {
+      result[weekStart].ideas++;
+    }
+  }
+
+  // Count experiments created each week
+  for (const exp of experiments) {
+    const createdAt = new Date(exp.createdAt);
+    const weekStart = getWeekStart(createdAt);
+    if (result[weekStart]) {
+      result[weekStart].experiments++;
+    }
+  }
+
+  // Count writings created each week
+  for (const writing of writings) {
+    const createdAt = new Date(writing.createdAt);
+    const weekStart = getWeekStart(createdAt);
+    if (result[weekStart]) {
+      result[weekStart].writings++;
+    }
+  }
+
+  return result;
+}
+
+/** Get the Monday of the week for a given date */
+function getWeekStart(date: Date): string {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
+  d.setDate(diff);
+  return d.toISOString().split('T')[0];
 }
 
 /** Get active ideas (status: active) */

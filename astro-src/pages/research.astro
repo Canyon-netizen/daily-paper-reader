@@ -30,6 +30,16 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </noscript>
     </section>
 
+    <!-- Weekly Activity Timeline -->
+    <section class="research-timeline" id="research-timeline">
+      <div class="section-header">
+        <h2>Weekly Activity</h2>
+      </div>
+      <div class="timeline-container" id="timeline-container">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+
     <!-- Active Ideas -->
     <section class="research-section" id="research-ideas">
       <div class="section-header">
@@ -130,6 +140,58 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       `;
     }
 
+    function renderTimeline(weeklyActivity: Record<string, { ideas: number; experiments: number; writings: number }>) {
+      const container = document.getElementById('timeline-container');
+      if (!container) return;
+
+      if (!weeklyActivity || Object.keys(weeklyActivity).length === 0) {
+        container.innerHTML = `<div class="research-empty">No activity data yet</div>`;
+        return;
+      }
+
+      // Sort weeks from oldest to newest
+      const weeks = Object.entries(weeklyActivity).sort((a, b) => a[0].localeCompare(b[0]));
+
+      // Calculate max for scaling
+      const maxCount = Math.max(
+        1,
+        ...weeks.map(([, data]) => Math.max(data.ideas, data.experiments, data.writings))
+      );
+
+      container.innerHTML = `
+        <div class="timeline-chart">
+          ${weeks.map(([weekStart, data]) => {
+            const date = new Date(weekStart);
+            const label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const ideasHeight = (data.ideas / maxCount) * 100;
+            const experimentsHeight = (data.experiments / maxCount) * 100;
+            const writingsHeight = (data.writings / maxCount) * 100;
+
+            return `
+              <div class="timeline-week">
+                <div class="timeline-bars">
+                  <div class="timeline-bar timeline-bar--ideas" style="height: ${ideasHeight}%" title="Ideas: ${data.ideas}"></div>
+                  <div class="timeline-bar timeline-bar--experiments" style="height: ${experimentsHeight}%" title="Experiments: ${data.experiments}"></div>
+                  <div class="timeline-bar timeline-bar--writings" style="height: ${writingsHeight}%" title="Writings: ${data.writings}"></div>
+                </div>
+                <div class="timeline-label">${label}</div>
+                <div class="timeline-counts">
+                  <span class="timeline-count timeline-count--ideas">💡 ${data.ideas}</span>
+                  <span class="timeline-count timeline-count--experiments">🧪 ${data.experiments}</span>
+                  <span class="timeline-count timeline-count--writings">📝 ${data.writings}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        <div class="timeline-legend">
+          <span class="timeline-legend-item"><span class="timeline-legend-dot timeline-legend-dot--ideas"></span> Ideas</span>
+          <span class="timeline-legend-item"><span class="timeline-legend-dot timeline-legend-dot--experiments"></span> Experiments</span>
+          <span class="timeline-legend-item"><span class="timeline-legend-dot timeline-legend-dot--writings"></span> Writings</span>
+        </div>
+      `;
+    }
+
     function renderList(containerId: string, items: any[]) {
       const container = document.getElementById(containerId);
       if (!container) return;
@@ -180,6 +242,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         const dashboard = getResearchDashboard();
 
         renderStats(dashboard.stats);
+        renderTimeline(dashboard.stats.weeklyActivity);
         renderList('ideas-list', dashboard.activeIdeas);
         renderList('experiments-list', dashboard.runningExperiments);
         renderList('writings-list', dashboard.draftWritings);

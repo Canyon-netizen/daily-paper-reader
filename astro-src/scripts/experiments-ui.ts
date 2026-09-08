@@ -232,6 +232,7 @@ function renderExperimentCard(exp: Experiment): string {
       ${tagsHtml}
       <div class="exp-meta">
         <span>📄 ${exp.relatedPapers.length} 篇相关论文</span>
+        ${exp.variables && exp.variables.length > 0 ? `<span>🧪 ${exp.variables.length} 个变量</span>` : ''}
         <span>${date}</span>
       </div>
       <div class="exp-card-actions">

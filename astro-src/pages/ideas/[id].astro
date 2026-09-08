@@ -195,9 +195,11 @@ const { id } = Astro.params;
       });
 
       container.querySelector<HTMLButtonElement>('[data-delete-idea]')?.addEventListener('click', () => {
-        if (confirm('确定要删除这个想法吗?')) {
-          deleteIdea(idea.id);
-          window.location.href = baseUrl + '/ideas/';
+        if (confirm('确定要归档这个想法吗？归档后可从「已归档」筛选恢复。')) {
+          updateIdea(idea.id, { status: 'archived' });
+          // Re-fetch and re-render
+          const updated = getIdea(idea.id);
+          if (updated) renderDetail(updated);
         }
       });
     }

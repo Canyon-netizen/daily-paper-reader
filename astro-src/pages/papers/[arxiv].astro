@@ -1134,17 +1134,32 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
         window.postMessage({ type: 'dpr-ask-question', question }, '*');
       });
 
-      // 保存为想法按钮
+      // 保存为想法按钮 - 使用结构化 prefill_source_papers
       document.addEventListener('click', (e) => {
         const btn = (e.target as HTMLElement).closest('#save-as-idea-btn') as HTMLButtonElement;
         if (!btn) return;
         const arxivId = btn.dataset.arxivId;
         const title = btn.dataset.title;
         if (!arxivId || arxivId === ' ') return;
-        // 跳转到 ideas 页面并预填数据
+
+        // Build structured source papers data
+        const sourcePapers = [{
+          id: arxivId,
+          title: title || '',
+          abstract: document.querySelector('[data-tldr]')?.getAttribute('data-tldr') || '',
+          tldr: document.querySelector('[data-tldr]')?.getAttribute('data-tldr') || '',
+          motivation: document.querySelector('[data-method]')?.getAttribute('data-motivation') || '',
+          method: document.querySelector('[data-method]')?.getAttribute('data-method') || '',
+          result: document.querySelector('[data-method]')?.getAttribute('data-result') || '',
+          conclusion: document.querySelector('[data-method]')?.getAttribute('data-conclusion') || '',
+        }];
+
+        // Navigate to ideas page with structured prefill
         const params = new URLSearchParams();
         params.set('prefill_title', title || '');
         params.set('prefill_papers', arxivId);
+        // Pass structured source papers as JSON
+        params.set('prefill_source_papers', JSON.stringify(sourcePapers));
         window.location.href = `/ideas/?${params.toString()}`;
       });
     })();

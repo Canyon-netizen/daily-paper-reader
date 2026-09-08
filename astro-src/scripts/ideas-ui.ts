@@ -124,14 +124,17 @@ function renderIdeaGrid(): void {
       });
     });
 
-    // Delete button
+    // Delete button - soft delete to archived instead of hard delete
     card.querySelector<HTMLButtonElement>('.btn-delete')?.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (confirm('确定要删除这个想法吗?')) {
-        deleteIdea(id);
-        renderIdeaGrid();
-        updateCounts();
+      if (confirm('确定要归档这个想法吗？归档后可从「已归档」筛选恢复。')) {
+        const idea = getIdea(id);
+        if (idea) {
+          updateIdea(id, { status: 'archived' });
+          renderIdeaGrid();
+          updateCounts();
+        }
       }
     });
   });
@@ -236,10 +239,22 @@ function setupNewIdeaButton(): void {
   const prefillDescription = urlParams.get('prefill_description') || '';
   const prefillSource = urlParams.get('prefill_source') as IdeaSource | null;
 
-  if (prefillTitle || prefillPapers || prefillDescription) {
+  // New: support structured prefill_source_papers array (JSON encoded)
+  // Format: ?prefill_source_papers=[{"id":"xxx","title":"yyy","abstract":"zzz","tldr":"..."}]
+  let prefillSourcePapers: Array<{id: string; title?: string; abstract?: string; tldr?: string; motivation?: string; method?: string; result?: string; conclusion?: string}> = [];
+  const prefillSourcePapersStr = urlParams.get('prefill_source_papers');
+  if (prefillSourcePapersStr) {
+    try {
+      prefillSourcePapers = JSON.parse(decodeURIComponent(prefillSourcePapersStr));
+    } catch (e) {
+      console.warn('[ideas-ui] Failed to parse prefill_source_papers:', e);
+    }
+  }
+
+  if (prefillTitle || prefillPapers || prefillDescription || prefillSourcePapers.length > 0) {
     // Auto-open the modal with prefill data
     setTimeout(() => {
-      openIdeaModal(prefillTitle || '', prefillPapers || '', prefillDescription, prefillSource || undefined);
+      openIdeaModal(prefillTitle || '', prefillPapers || '', prefillDescription, prefillSource || undefined, prefillSourcePapers);
       // Clear URL params to avoid re-opening on refresh
       window.history.replaceState({}, '', window.location.pathname);
     }, 100);
@@ -293,7 +308,8 @@ function openIdeaModal(
   prefillTitle: string = '',
   prefillPapers: string = '',
   prefillDescription: string = '',
-  prefillSource?: IdeaSource
+  prefillSource?: IdeaSource,
+  prefillSourcePapers?: Array<{id: string; title?: string; abstract?: string; tldr?: string; motivation?: string; method?: string; result?: string; conclusion?: string}>
 ): void {
   const modal = document.getElementById('idea-modal');
   const form = document.getElementById('idea-form') as HTMLFormElement;
@@ -311,6 +327,16 @@ function openIdeaModal(
     if (prefillDescription) {
       const descInput = form.querySelector('#idea-description') as HTMLTextAreaElement;
       if (descInput) descInput.value = prefillDescription;
+    } else if (prefillSourcePapers && prefillSourcePapers.length > 0) {
+      // Build structured description from source papers
+      const structuredDesc = buildStructuredDescription(prefillSourcePapers);
+      const descInput = form.querySelector('#idea-description') as HTMLTextAreaElement;
+      if (descInput && structuredDesc) descInput.value = structuredDesc;
+
+      // Auto-fill related papers from source papers
+      const paperIds = prefillSourcePapers.map(p => p.id).join(', ');
+      const papersInput = form.querySelector('#idea-related-papers') as HTMLInputElement;
+      if (papersInput) papersInput.value = paperIds;
     }
     // Set pending source for form submission
     if (prefillSource) {
@@ -320,6 +346,39 @@ function openIdeaModal(
     modal.classList.add('active');
     (form.querySelector('input[name="title"]') as HTMLInputElement)?.focus();
   }
+}
+
+/** Build structured description from source papers */
+function buildStructuredDescription(papers: Array<{id: string; title?: string; abstract?: string; tldr?: string; motivation?: string; method?: string; result?: string; conclusion?: string}>): string {
+  const parts: string[] = [];
+
+  for (const paper of papers) {
+    const paperParts: string[] = [];
+
+    if (paper.title) {
+      paperParts.push(`**论文**: ${paper.title}`);
+    }
+    if (paper.tldr) {
+      paperParts.push(`**TLDR**: ${paper.tldr}`);
+    } else if (paper.abstract) {
+      paperParts.push(`**摘要**: ${paper.abstract}`);
+    }
+
+    // Add structured fields if available
+    if (paper.motivation || paper.method || paper.result || paper.conclusion) {
+      paperParts.push('\n**四段笔记**:');
+      if (paper.motivation) paperParts.push(`- 动机: ${paper.motivation}`);
+      if (paper.method) paperParts.push(`- 方法: ${paper.method}`);
+      if (paper.result) paperParts.push(`- 结果: ${paper.result}`);
+      if (paper.conclusion) paperParts.push(`- 结论: ${paper.conclusion}`);
+    }
+
+    if (paperParts.length > 0) {
+      parts.push(`## ${paper.id}\n${paperParts.join('\n')}`);
+    }
+  }
+
+  return parts.join('\n\n');
 }
 
 /** Close the idea modal */
