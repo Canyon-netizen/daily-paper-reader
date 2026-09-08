@@ -249,6 +249,19 @@ const tabTitle = plainZh || plainEn || id;
                     </span>
                   </div>
                 )}
+                {/* 概念标签:客户端从 /wiki/concepts/_graph.json 拉本论文关联的
+                    concept 节点,渲染为 chip 链接到 /wiki/concepts/<slug>/。
+                    SSR 期间 localStorage 不可用 → mount hidden + 占位,客户端 hydrate
+                    时挂载。空关联时不显示整行。 */}
+                <div
+                  class="meta-row meta-row--concepts"
+                  data-paper-concepts
+                  data-paper-arxiv-id={paper.canonicalArxivId || paper.arxivId || ' '}
+                  hidden
+                >
+                  <span class="meta-label">CONCEPTS</span>
+                  <span class="meta-value meta-concepts-chips"></span>
+                </div>
                 {paper.pdf && (
                   <div class="meta-row">
                     <span class="meta-label">PDF</span>
@@ -711,6 +724,7 @@ const tabTitle = plainZh || plainEn || id;
     import '../../scripts/user-libraries-ui.ts';
     import '../../scripts/paper-compile-ui.ts';
     import '../../scripts/paper-cross-libraries.ts';
+    import '../../scripts/paper-concepts.ts';
 
     // 方法对比:客户端 LLM 调用 + DOM 更新
     // -------------------------------------------------------
@@ -1465,6 +1479,20 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
   .tag-task { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
   .tag-method { background: #faf5ff; color: #9333ea; border: 1px solid #e9d5ff; }
   .tag-type { background: #ecfeff; color: #0891b2; border: 1px solid #a5f3fc; }
+  /* 概念 tag:橙红,区别于前 4 维 tags,鼠标 hover 触发下划线 */
+  .tag-concept {
+    background: #fff7ed;
+    color: #c2410c;
+    border: 1px solid #fed7aa;
+    text-decoration: none;
+  }
+  .tag-concept:hover { background: #ffedd5; border-color: #fb923c; text-decoration: underline; }
+  .meta-row--concepts .meta-concepts-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.4rem;
+    align-items: center;
+  }
   .tag-other { background: var(--tag-bg); color: var(--fg-muted); }
 
   /* 会议接受徽章 — 论文被会议接收时显示,非会议论文 venue="" 整体不渲染 */

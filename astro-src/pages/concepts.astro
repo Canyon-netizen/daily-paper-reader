@@ -118,7 +118,7 @@ import '../styles/concepts-graph.css';
     const conceptElements = concepts.map((c) => ({
       data: {
         id: c.id,
-        label: c.label || c.id,
+        label: cleanConceptLabel(c.label || c.id),
         kind: 'concept',
         weight: c.weight || 1,
         category: c.category || 'other',
@@ -135,6 +135,30 @@ import '../styles/concepts-graph.css';
     }
 
     return { concepts, conceptElements, edgeElements, papersUsed };
+  }
+
+  /** 清洗 concept label
+   *  - 治"论文标题被当 concept 名"(长度 > 50 + 含 ':'):取冒号前部分
+   *  - 治"label 过长"(> 40 字符):截到 ≤ 35 字符,优先在空格处断
+   *  - 治"末尾脏字符"(… / - / 空格):trim 掉
+   *  - ≤ 40 字符且无冒号:原样返回(常见合法英文概念名直接放过) */
+  function cleanConceptLabel(raw: string): string {
+    let s = (raw || '').trim();
+    if (!s) return s;
+    // 1) 论文标题模式:有冒号且超过 50 字符,取前半段
+    if (s.length > 50 && s.includes(':')) {
+      s = s.split(':')[0].trim();
+    }
+    // 2) 长度兜底 (40+ 才截)
+    if (s.length > 40) {
+      const cut = s.slice(0, 35);
+      // 优先在最后一个空格处断
+      const lastSpace = cut.lastIndexOf(' ');
+      s = (lastSpace > 12 ? cut.slice(0, lastSpace) : cut).trim() + '…';
+    }
+    // 3) 末尾脏字符
+    s = s.replace(/[…\-\s]+$/, '');
+    return s;
   }
 
   /** 渲染图例 ——
