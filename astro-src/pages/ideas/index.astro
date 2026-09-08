@@ -137,6 +137,55 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
             placeholder="architecture, theory, nlp"
           />
         </div>
+
+        <!-- Methodology Section (collapsible) -->
+        <details class="methodology-details">
+          <summary class="methodology-summary">
+            <span>方法论 (可选)</span>
+            <button type="button" class="btn btn-ghost btn-sm methodology-template-btn" data-methodology-template="observation-hypothesis">
+              📝 观察→假设 模板
+            </button>
+          </summary>
+          <div class="methodology-fields">
+            <div class="form-group">
+              <label for="idea-methodology-observation">观察 (Observation)</label>
+              <textarea
+                id="idea-methodology-observation"
+                name="methodology_observation"
+                rows="2"
+                placeholder="描述你观察到的现象..."
+              ></textarea>
+            </div>
+            <div class="form-group">
+              <label for="idea-methodology-hypothesis">假设 (Hypothesis)</label>
+              <textarea
+                id="idea-methodology-hypothesis"
+                name="methodology_hypothesis"
+                rows="2"
+                placeholder="基于观察提出的假设..."
+              ></textarea>
+            </div>
+            <div class="form-group">
+              <label for="idea-methodology-method">方法 (Method)</label>
+              <textarea
+                id="idea-methodology-method"
+                name="methodology_method"
+                rows="2"
+                placeholder="验证假设的方法..."
+              ></textarea>
+            </div>
+            <div class="form-group">
+              <label for="idea-methodology-findings">发现 (Findings)</label>
+              <textarea
+                id="idea-methodology-findings"
+                name="methodology_findings"
+                rows="2"
+                placeholder="实验发现..."
+              ></textarea>
+            </div>
+          </div>
+        </details>
+
         <div class="form-actions">
           <button type="button" class="btn btn-ghost modal-cancel">取消</button>
           <button type="submit" class="btn btn-primary">创建想法</button>

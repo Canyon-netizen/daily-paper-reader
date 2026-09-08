@@ -1107,3 +1107,46 @@
   color: var(--fg-muted);
   white-space: nowrap;
 }
+
+/* Methodology section in modal */
+.methodology-details {
+  margin-top: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg-subtle);
+}
+
+.methodology-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--fg-secondary);
+}
+
+.methodology-summary::-webkit-details-marker {
+  display: none;
+}
+
+.methodology-summary::after {
+  content: '▶';
+  font-size: 0.7rem;
+  transition: transform 0.2s;
+}
+
+.methodology-details[open] .methodology-summary::after {
+  transform: rotate(90deg);
+}
+
+.methodology-template-btn {
+  font-size: 0.75rem;
+  padding: var(--space-1) var(--space-2);
+}
+
+.methodology-fields {
+  margin-top: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+}

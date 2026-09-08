@@ -1,7 +1,7 @@
 // astro-src/scripts/ideas-ui.ts
 // Client-side interactions for Ideas module
 
-import type { Idea, IdeaStatus, IdeaSource } from '../lib/ideas/types';
+import type { Idea, IdeaStatus, IdeaSource, IdeaMethodology } from '../lib/ideas/types';
 import {
   listIdeas,
   getIdea,
@@ -290,7 +290,26 @@ function setupModalHandlers(): void {
       ? papersStr.split(',').map((p) => p.trim().replace(/^(\d+\.\d+v?\d*).*$/, '$1')).filter(Boolean)
       : [];
 
-    createIdea(title, description, relatedPapers, tags, pendingSource);
+    // Extract methodology fields
+    const methodologyObservation = formData.get('methodology_observation') as string;
+    const methodologyHypothesis = formData.get('methodology_hypothesis') as string;
+    const methodologyMethod = formData.get('methodology_method') as string;
+    const methodologyFindings = formData.get('methodology_findings') as string;
+
+    const methodology = {
+      observation: methodologyObservation || undefined,
+      hypothesis: methodologyHypothesis || undefined,
+      method: methodologyMethod || undefined,
+      findings: methodologyFindings || undefined,
+    };
+
+    // Only include methodology if any field is filled
+    const methodologyFinal = Object.values(methodology).some(v => v) ? methodology : undefined;
+
+    const newIdea = createIdea(title, description, relatedPapers, tags, pendingSource);
+    if (methodologyFinal) {
+      updateIdea(newIdea.id, { methodology: methodologyFinal });
+    }
     pendingSource = undefined;
     closeModal();
     renderIdeaGrid();
@@ -301,6 +320,26 @@ function setupModalHandlers(): void {
   (window as unknown as { __setPendingIdeaSource?: (s: IdeaSource) => void }).__setPendingIdeaSource = (s: IdeaSource) => {
     pendingSource = s;
   };
+
+  // Setup methodology template button handler
+  const templateBtn = document.querySelector('[data-methodology-template="observation-hypothesis"]');
+  templateBtn?.addEventListener('click', (e) => {
+    e.preventDefault();
+    const obsInput = document.getElementById('idea-methodology-observation') as HTMLTextAreaElement;
+    const hypInput = document.getElementById('idea-methodology-hypothesis') as HTMLTextAreaElement;
+    const details = document.querySelector('.methodology-details') as HTMLDetailsElement;
+
+    if (obsInput) {
+      obsInput.placeholder = '例如: 当前方法在大规模数据上存在计算效率问题...';
+    }
+    if (hypInput) {
+      hypInput.placeholder = '例如: 通过引入稀疏注意力机制可以降低 O(n²) 复杂度...';
+    }
+    // Open the details section if collapsed
+    if (details && !details.open) {
+      details.open = true;
+    }
+  });
 }
 
 /** Open the idea modal */

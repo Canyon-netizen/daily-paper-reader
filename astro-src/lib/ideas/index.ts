@@ -7,20 +7,32 @@ import { IDEAS_KEY, createIdeaData } from './types';
 /** Load ideas from localStorage */
 export function loadIdeas(): IdeasDoc {
   if (typeof window === 'undefined') {
-    return { schemaVersion: 1, ideas: {} };
+    return { schemaVersion: 2, ideas: {} };
   }
   try {
     const raw = localStorage.getItem(IDEAS_KEY);
     if (raw) {
       const doc = JSON.parse(raw) as IdeasDoc;
+      // Migrate from v1 to v2
       if (doc.schemaVersion === 1) {
+        doc.schemaVersion = 2;
+        // Ensure all ideas have methodology field
+        for (const idea of Object.values(doc.ideas)) {
+          if (!idea.methodology) {
+            idea.methodology = {};
+          }
+        }
+        saveIdeas(doc);
+        return doc;
+      }
+      if (doc.schemaVersion === 2) {
         return doc;
       }
     }
   } catch (e) {
     console.warn('[ideas] Failed to load ideas:', e);
   }
-  return { schemaVersion: 1, ideas: {} };
+  return { schemaVersion: 2, ideas: {} };
 }
 
 /** Save ideas to localStorage */

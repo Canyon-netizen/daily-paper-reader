@@ -79,6 +79,9 @@ const moduleFilter = Astro.url.searchParams.get('module') || 'all';
     let searchIndex = null;
     let loadingIndex = false;
 
+    // Search index cache key
+    const SEARCH_INDEX_CACHE = 'dpr_search_index_cache';
+
     // Storage keys for runtime data
     const STORAGE_KEYS = {
       ideas: 'dpr_ideas_v1',
@@ -198,7 +201,7 @@ const moduleFilter = Astro.url.searchParams.get('module') || 'all';
       return runtimeData;
     }
 
-    async function loadIndex() {
+    async function loadIndex(forceRefresh = false) {
       if (loadingIndex) return;
       loadingIndex = true;
       try {
@@ -212,6 +215,14 @@ const moduleFilter = Astro.url.searchParams.get('module') || 'all';
             entries: [...(indexData.entries || []), ...runtimeData],
             count: (indexData.entries?.length || 0) + runtimeData.length,
           };
+          // Cache the build-time index for dev
+          if (!forceRefresh) {
+            try {
+              localStorage.setItem(SEARCH_INDEX_CACHE, JSON.stringify(indexData));
+            } catch (e) {
+              console.warn('[search] Failed to cache index:', e);
+            }
+          }
         } else {
           // Fallback to runtime data only if build-time index unavailable
           console.warn('[search] Build-time index unavailable, using runtime data only');
@@ -235,6 +246,26 @@ const moduleFilter = Astro.url.searchParams.get('module') || 'all';
         };
       }
       loadingIndex = false;
+    }
+
+    // Load from cache for faster initial load in dev
+    async function loadFromCache() {
+      try {
+        const cached = localStorage.getItem(SEARCH_INDEX_CACHE);
+        if (cached) {
+          const indexData = JSON.parse(cached);
+          const runtimeData = loadRuntimeData();
+          searchIndex = {
+            ...indexData,
+            entries: [...(indexData.entries || []), ...runtimeData],
+            count: (indexData.entries?.length || 0) + runtimeData.length,
+          };
+        }
+      } catch (e) {
+        console.warn('[search] Failed to load from cache:', e);
+      }
+      // Always try to refresh from server
+      await loadIndex();
     }
 
     function escapeHtml(str) {
@@ -367,13 +398,27 @@ const moduleFilter = Astro.url.searchParams.get('module') || 'all';
     }
 
     function init() {
-      // Load index immediately
-      loadIndex().then(() => {
+      // Load index immediately (try localStorage cache first for dev)
+      loadFromCache().then(() => {
         if (initialQuery) {
           const results = search(initialQuery, initialModule);
           renderResults(results, initialQuery);
         }
       });
+
+      // Periodic refresh every 30 seconds (for dev mode - new ideas/experiments appear)
+      setInterval(() => {
+        loadIndex(true).then(() => {
+          // Re-render if there's an active query
+          const urlParams = new URLSearchParams(window.location.search);
+          const q = urlParams.get('q');
+          const module = urlParams.get('module') || 'all';
+          if (q) {
+            const results = search(q, module);
+            renderResults(results, q);
+          }
+        });
+      }, 30000);
 
       // Handle form submission
       const form = document.querySelector('.search-form');

@@ -13,6 +13,18 @@ export interface PaperRef {
 /** Source of idea creation */
 export type IdeaSource = 'paper-analyzer' | 'topic-frontier' | 'topic-approach' | 'manual';
 
+/** Methodology nested structure for idea */
+export interface IdeaMethodology {
+  /** Observation - what was observed */
+  observation?: string;
+  /** Hypothesis - derived hypothesis */
+  hypothesis?: string;
+  /** Method - methodology description */
+  method?: string;
+  /** Findings - experimental findings */
+  findings?: string;
+}
+
 /** Main Idea interface */
 export interface Idea {
   /** kebab-case slug, auto-generated from title */
@@ -21,6 +33,8 @@ export interface Idea {
   title: string;
   /** Detailed description, markdown */
   description: string;
+  /** Methodology section (optional, default collapsed) */
+  methodology?: IdeaMethodology;
   /** Lifecycle status */
   status: IdeaStatus;
   /** Papers related to this idea (canonical IDs) */
@@ -39,7 +53,7 @@ export interface Idea {
 
 /** Storage document structure */
 export interface IdeasDoc {
-  schemaVersion: 1;
+  schemaVersion: 2;
   ideas: Record<string, Idea>;
 }
 
