@@ -189,10 +189,37 @@ const links = [
     color: var(--fg-subtle);
   }
 
-  /* 极窄屏(< 920)把链接全部收起来避免折行;这里不做汉堡菜单(避免引入 JS),保留滚动 */
+  /* 极窄屏(< 920)把链接全部收起来避免折行;保留滚动但更易用 */
   @media (max-width: 920px) {
     .navbar-links a { padding: 0.4rem 0.65rem; font-size: 0.85rem; }
     .navbar-inner { gap: var(--space-3); padding: 0 var(--space-4); }
+  }
+  /* Mobile (< 640px): horizontal scroll with better visual hint */
+  @media (max-width: 640px) {
+    .navbar-links {
+      max-width: 60vw;
+      mask-image: linear-gradient(to right, black 0, black calc(100% - 32px), transparent 100%);
+      -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 32px), transparent 100%);
+    }
+    .navbar-links a { padding: 0.35rem 0.5rem; font-size: 0.8rem; }
+  }
+  /* Tooltips on touch: use title attribute as fallback, show on tap highlight */
+  @media (hover: none) and (pointer: coarse) {
+    .navbar-links a:active::after {
+      content: attr(title);
+      position: absolute;
+      bottom: -28px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      border-radius: var(--radius-sm);
+      font-size: 0.7rem;
+      white-space: nowrap;
+      z-index: 100;
+      color: var(--fg-muted);
+    }
   }
 
   .navbar-actions {

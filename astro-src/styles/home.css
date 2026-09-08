@@ -764,14 +764,46 @@
   justify-content: center;
 }
 
+/* Mobile-first: ensure workflow-cards works without .libraries-page parent */
+.workflow-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+.workflow-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.25rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  transition: all var(--transition);
+}
+.workflow-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+}
+
+@media (max-width: 900px) {
+  .workflow-cards {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
 @media (max-width: 720px) {
-  .libraries-page .workflow-cards {
+  .workflow-cards {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 @media (max-width: 640px) {
-  .libraries-page .workflow-cards {
+  .workflow-cards {
     grid-template-columns: 1fr;
+  }
+  .workflow-card {
+    padding: 1rem 0.75rem;
   }
 }
 
