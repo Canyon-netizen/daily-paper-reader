@@ -193,6 +193,11 @@ const tabTitle = plainZh || plainEn || id;
                       data-arxiv-id={paper.canonicalArxivId || paper.arxivId || ' '}
                       data-title={plainZh || plainEn || ' '}
                     >💡 保存为想法</button>
+                    <a
+                      href={`/papers/${paper.slug}/citations/`}
+                      class="citation-check-btn"
+                      aria-label="查看引用核查报告"
+                    >🔍 引用核查</a>
                   </div>
                 )}
               </div>
@@ -1283,6 +1288,24 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
   .save-as-idea-btn:hover {
     background: var(--accent-soft);
     border-color: var(--accent);
+  }
+  .citation-check-btn {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg-muted);
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 150ms;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .citation-check-btn:hover {
+    background: var(--bg-elevated);
+    border-color: var(--fg-muted);
+    color: var(--fg);
   }
   .paper-meta-line {
     font-size: 0.85rem;

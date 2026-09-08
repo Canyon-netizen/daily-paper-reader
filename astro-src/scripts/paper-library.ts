@@ -422,6 +422,14 @@
         }
         node.appendChild(tagsRow);
 
+        // 详情按钮
+        const detailBtn = document.createElement('a');
+        detailBtn.className = 'papers-list-detail-btn';
+        detailBtn.href = `/papers/${p.slug}/`;
+        detailBtn.textContent = '详情';
+        detailBtn.title = '查看论文详情页';
+        node.appendChild(detailBtn);
+
         node.addEventListener('mouseenter', () => this.highlightListItem(p.id, true));
         node.addEventListener('mouseleave', () => this.highlightListItem(p.id, false));
         node.addEventListener('click', (ev) => {

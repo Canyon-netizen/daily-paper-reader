@@ -308,6 +308,25 @@
   font-family: var(--font-mono, ui-monospace);
   opacity: 0.5;
 }
+/* row-detail-link:论文行右侧的详情入口 */
+.wb-paper-row .row-detail-link {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 0.2em 0.5em;
+  font-size: 0.7rem;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--btn-secondary-bg, #eee);
+  color: var(--btn-secondary-fg, #333);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 1;
+}
+.wb-paper-row:hover .row-detail-link {
+  opacity: 1;
+}
 
 /* ===== 详情面板 =====
  * 设计:SSR 渲染所有论文的 .wb-detail-body,但用 CSS :target 切换可见性。

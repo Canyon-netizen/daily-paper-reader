@@ -42,6 +42,12 @@ const MODULES = {
     tagField: 'tags',
     contentSection: null,
   },
+  papers: {
+    titleFields: ['title', 'title_zh'],
+    descFields: ['abstract', 'tldr'],
+    tagField: 'tags',
+    contentSection: null,
+  },
 };
 
 function readDoc(absPath) {

@@ -2638,8 +2638,19 @@ function renderResult(r: AnalysisResult, rawText: string): void {
         .map((s) => s?.replace(/\n/g, '\n') || '')
         .join('\n\n---\n\n')
     );
-    const papers = encodeURIComponent(entry.arxivId || '');
-    window.location.href = `/ideas/?prefill_title=${title}&prefill_description=${description}&prefill_papers=${papers}&prefill_source=paper-analyzer`;
+    // Use structured prefill_source_papers (JSON array)
+    const sourcePapers = [{
+      id: entry.arxivId || '',
+      title: result.title || entry.title || '',
+      abstract: result.method || '',
+      tldr: result.result || '',
+      motivation: result.motivation || '',
+      method: result.method || '',
+      result: result.result || '',
+      conclusion: result.conclusion || '',
+    }];
+    const prefillSourcePapers = encodeURIComponent(JSON.stringify(sourcePapers));
+    window.location.href = `/ideas/?prefill_title=${title}&prefill_description=${description}&prefill_source_papers=${prefillSourcePapers}&prefill_source=paper-analyzer`;
   });
 
   // "创建实验" button
