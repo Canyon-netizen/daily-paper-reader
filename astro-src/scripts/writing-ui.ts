@@ -7,6 +7,9 @@
 // - Managing citations
 // - Status changes
 // - Version history
+// - URL prefill from experiments/ideas
+// - Section pull from related ideas/experiments
+// - [cite:] autocomplete
 
 import {
   loadWritings,
@@ -20,6 +23,8 @@ import {
 } from '../lib/writing';
 import type { Writing, WritingStatus, WritingType, WritingSection, PaperRef } from '../lib/writing/types';
 import { getWritingTemplate } from '../lib/writing/templates';
+import { getExperiment } from '../lib/experiments';
+import { getIdea } from '../lib/ideas';
 
 // Check if marked is available (will be loaded from CDN)
 declare const marked: any;
@@ -43,8 +48,167 @@ const TYPE_LABELS: Record<WritingType, string> = {
 // Current writing being edited
 let currentWriting: Writing | null = null;
 
+/**
+ * Initialize prefill from URL parameters.
+ * Reads prefill_title, prefill_papers, prefill_experiment_id, prefill_idea_id, prefill_method_summary
+ * and opens the writing modal with pre-filled data.
+ */
+function initPrefillFromUrl(): void {
+  const urlParams = new URLSearchParams(window.location.search);
+
+  const prefillTitle = urlParams.get('prefill_title');
+  const prefillPapers = urlParams.get('prefill_papers');
+  const prefillExperimentId = urlParams.get('prefill_experiment_id');
+  const prefillIdeaId = urlParams.get('prefill_idea_id');
+  const prefillMethodSummary = urlParams.get('prefill_method_summary');
+
+  // If no prefill params, do nothing
+  if (!prefillTitle && !prefillExperimentId && !prefillIdeaId) {
+    return;
+  }
+
+  // Parse related papers
+  const papers = prefillPapers
+    ? prefillPapers.split(',').map(p => p.trim()).filter(Boolean)
+    : [];
+
+  // Get experiment details if experiment ID provided
+  let experimentTitle = '';
+  let experimentMethod = '';
+  if (prefillExperimentId) {
+    const exp = getExperiment(prefillExperimentId);
+    if (exp) {
+      experimentTitle = exp.title;
+      experimentMethod = exp.method || '';
+      // Also collect related papers from experiment
+      if (exp.relatedPapers && exp.relatedPapers.length > 0) {
+        for (const pid of exp.relatedPapers) {
+          if (!papers.includes(pid)) {
+            papers.push(pid);
+          }
+        }
+      }
+    }
+  }
+
+  // Get idea details if idea ID provided
+  let ideaTitle = '';
+  if (prefillIdeaId) {
+    const idea = getIdea(prefillIdeaId);
+    if (idea) {
+      ideaTitle = idea.title;
+    }
+  }
+
+  // Build title with context
+  let finalTitle = prefillTitle || '';
+  if (experimentTitle && !finalTitle.includes(experimentTitle)) {
+    finalTitle = experimentTitle + (finalTitle ? ` - ${finalTitle}` : '');
+  }
+  if (ideaTitle && !finalTitle.includes(ideaTitle)) {
+    finalTitle = ideaTitle + (finalTitle ? ` - ${finalTitle}` : '');
+  }
+
+  // Build method summary
+  let methodSummary = prefillMethodSummary || '';
+  if (!methodSummary && experimentMethod) {
+    methodSummary = experimentMethod.substring(0, 200);
+  }
+
+  // Open modal with prefill
+  openWritingModalWithPrefill({
+    title: finalTitle,
+    papers,
+    experimentId: prefillExperimentId || undefined,
+    ideaId: prefillIdeaId || undefined,
+    methodSummary,
+  });
+
+  // Clean URL after processing
+  window.history.replaceState({}, '', window.location.pathname);
+}
+
+/**
+ * Open the writing modal with pre-filled data.
+ */
+function openWritingModalWithPrefill(options: {
+  title: string;
+  papers: string[];
+  experimentId?: string;
+  ideaId?: string;
+  methodSummary?: string;
+}): void {
+  const modal = document.getElementById('new-writing-modal');
+  const openBtn = document.querySelector('[data-open-new-writing]');
+  const titleInput = document.getElementById('new-writing-title') as HTMLInputElement;
+  const typeSelect = document.getElementById('new-writing-type') as HTMLSelectElement;
+  const createBtn = document.querySelector('[data-create-writing]');
+
+  if (!modal || !openBtn || !titleInput || !createBtn) return;
+
+  // Open modal first
+  modal.classList.add('open');
+
+  // Pre-fill title
+  titleInput.value = options.title;
+  titleInput.focus();
+
+  // We'll handle the papers and experiment/idea associations after creation
+  // Store prefill data in a global for the create handler
+  (window as any).__writingPrefill = options;
+
+  // Override the create button handler temporarily
+  const originalCreateHandler = createBtn.onclick;
+  createBtn.onclick = () => {
+    // Call original handler first
+    if (originalCreateHandler) {
+      (originalCreateHandler as EventListener)();
+    }
+
+    // After creation, redirect should happen, but we need to add related data
+    const newWritingId = (window as any).__lastCreatedWritingId;
+    if (newWritingId) {
+      // Add experiment/idea associations
+      const updates: Partial<Writing> = {};
+      if (options.experimentId) {
+        updates.relatedExperiments = [options.experimentId];
+      }
+      if (options.ideaId) {
+        updates.relatedIdeas = [options.ideaId];
+      }
+      if (Object.keys(updates).length > 0) {
+        updateWriting(newWritingId, updates);
+      }
+
+      // Add papers as citations
+      for (const paperId of options.papers) {
+        addCitation(newWritingId, paperId.replace(/v\d+$/, ''));
+      }
+
+      // Pre-fill method section if method summary provided
+      if (options.methodSummary) {
+        const writing = getWriting(newWritingId);
+        if (writing) {
+          const methodSection = writing.sections.find(s => s.id === 'method');
+          if (methodSection) {
+            methodSection.content = options.methodSummary;
+            updateWriting(newWritingId, { sections: writing.sections });
+          }
+        }
+      }
+    }
+
+    // Clean up
+    delete (window as any).__writingPrefill;
+    delete (window as any).__lastCreatedWritingId;
+  };
+}
+
 // Initialize the list page
 function initListPage(): void {
+  // Check for URL prefill from experiment/idea
+  initPrefillFromUrl();
+
   const grid = document.querySelector('.writing-grid');
   const emptyState = document.querySelector('[data-empty-state]');
   if (!grid || !emptyState) return;
@@ -220,6 +384,66 @@ function renderDetailPage(): void {
   renderVersions();
 }
 
+// Section pull sources - maps section IDs to data extraction functions
+const PULL_SOURCES: Record<string, (writing: Writing) => string> = {
+  introduction: (w) => {
+    if (!w.relatedIdeas || w.relatedIdeas.length === 0) return '';
+    return w.relatedIdeas
+      .map(id => getIdea(id))
+      .filter(Boolean)
+      .map(i => `### ${i!.title}\n${i!.description}`)
+      .join('\n\n');
+  },
+  method: (w) => {
+    if (!w.relatedExperiments || w.relatedExperiments.length === 0) return '';
+    return w.relatedExperiments
+      .map(id => getExperiment(id))
+      .filter(Boolean)
+      .map(e => `### ${e!.title}\n${e!.method}`)
+      .join('\n\n');
+  },
+  experiments: (w) => {
+    if (!w.relatedExperiments || w.relatedExperiments.length === 0) return '';
+    return w.relatedExperiments
+      .map(id => getExperiment(id))
+      .filter(Boolean)
+      .map(e => {
+        const vars = e!.variables?.map(v => `- ${v.name}: ${v.range || v.description || ''}`).join('\n') || '';
+        return `### ${e!.title}\n**假设**: ${e!.hypothesis}\n\n**变量**:\n${vars}`;
+      }).join('\n\n');
+  },
+  results: (w) => {
+    if (!w.relatedExperiments || w.relatedExperiments.length === 0) return '';
+    const completed = w.relatedExperiments
+      .map(id => getExperiment(id))
+      .filter(e => e && e.status === 'completed');
+    const running = w.relatedExperiments
+      .map(id => getExperiment(id))
+      .filter(e => e && (e.status === 'planning' || e.status === 'running'));
+    const failed = w.relatedExperiments
+      .map(id => getExperiment(id))
+      .filter(e => e && e.status === 'failed');
+
+    if (failed.length > 0 && completed.length === 0 && running.length === 0) {
+      return '⚠️ 所有关联实验失败，请去实验页查看 error logs';
+    }
+    if (completed.length === 0 && running.length > 0) {
+      return '（实验进行中，结果待补）';
+    }
+    return completed
+      .map(e => `### ${e!.title}\n${e!.actualResults || '（结果未记录）'}`)
+      .join('\n\n');
+  },
+  conclusion: (w) => {
+    if (!w.relatedIdeas || w.relatedIdeas.length === 0) return '';
+    return w.relatedIdeas
+      .map(id => getIdea(id))
+      .filter(i => i && i.status === 'promoted')
+      .map(i => `### ${i!.title}\n${i!.description}\n\n**Tags**: ${i!.tags.join(', ')}`)
+      .join('\n\n');
+  },
+};
+
 // Render sections with markdown preview support
 function renderSections(): void {
   const container = document.querySelector('[data-sections-container]');
@@ -237,11 +461,15 @@ function renderSections(): void {
     references: '按引用格式',
   };
 
+  // Sections that have pull functionality
+  const pullableSections = ['introduction', 'method', 'experiments', 'results', 'conclusion'];
+
   container.innerHTML = currentWriting.sections.map((section, idx) => {
     const mode = markdownPreviewMode[section.id] || 'edit';
     const wordCount = countWords(section.content);
     const guidance = wordCountGuidance[section.id] || '';
     const hasContent = section.content.length > 0;
+    const hasPullSource = pullableSections.includes(section.id) && PULL_SOURCES[section.id];
 
     return `
       <div class="writing-section" data-section-id="${section.id}">
@@ -249,6 +477,11 @@ function renderSections(): void {
           <h3 class="writing-section-title">${escapeHtml(section.title)}</h3>
           <div class="writing-section-actions">
             <span class="writing-section-wordcount">${wordCount} 字 ${guidance ? `· ${guidance}` : ''}</span>
+            ${hasPullSource ? `
+              <button type="button" class="btn btn-ghost btn-xs writing-section-pull-btn" data-pull-section="${section.id}" title="从关联的想法/实验拉取内容">
+                📥 拉取
+              </button>
+            ` : ''}
             <button type="button" class="btn btn-ghost btn-xs section-mode-toggle" data-toggle-mode="${section.id}">
               ${mode === 'edit' ? '👁️ 预览' : '✏️ 编辑'}
             </button>
@@ -258,7 +491,7 @@ function renderSections(): void {
         <div class="writing-section-content ${mode}">
           ${mode === 'edit' ? `
             <textarea
-              placeholder="在此输入 ${section.title} 内容...（支持 Markdown 和 LaTeX，例：$x^2$ 或 $$E=mc^2$$）"
+              placeholder="在此输入 ${section.title} 内容...（支持 Markdown 和 LaTeX，例：$x^2$ 或 $$E=mc^2$），输入 [cite: 可自动补全引用"
               data-section-content="${section.id}"
             >${escapeHtml(section.content)}</textarea>
           ` : `
@@ -298,6 +531,34 @@ function renderSections(): void {
       if (sectionId) {
         toggleSectionMode(sectionId);
       }
+    });
+  });
+
+  // Setup pull button listeners
+  container.querySelectorAll<HTMLButtonElement>('[data-pull-section]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sectionId = btn.getAttribute('data-pull-section');
+      if (!sectionId || !currentWriting || !PULL_SOURCES[sectionId]) return;
+
+      const pullSource = PULL_SOURCES[sectionId];
+      const pulledContent = pullSource(currentWriting);
+
+      if (!pulledContent) {
+        alert('没有可拉取的内容。请先关联相关的想法或实验。');
+        return;
+      }
+
+      // Append to textarea
+      const textarea = container.querySelector<HTMLTextAreaElement>(`[data-section-content="${sectionId}"]`);
+      if (!textarea) return;
+
+      const separator = textarea.value ? '\n\n---\n\n' : '';
+      textarea.value = textarea.value + separator + pulledContent;
+      textarea.dispatchEvent(new Event('input'));
+
+      // Show toast
+      const charCount = pulledContent.length;
+      alert(`已追加 ${charCount} 字符，保留原有内容`);
     });
   });
 }
@@ -686,6 +947,10 @@ function setupModal(): void {
     }
 
     const writing = createWriting(title, type);
+
+    // Store ID for prefill handler
+    (window as any).__lastCreatedWritingId = writing.id;
+
     if (venue) {
       updateWriting(writing.id, { targetVenue: venue });
     }
@@ -900,10 +1165,286 @@ function init(): void {
     setupCitationPicker();
     setupModalCloseHandlers();
     setupExport();
+    // Init cite autocomplete after sections are rendered
+    setTimeout(() => initCiteAutocomplete(), 100);
   }
 }
 
+/**
+ * Simple [cite:] autocomplete for section textareas.
+ * Triggers on '[cite:' prefix and shows a popup with paper suggestions.
+ */
+interface CitePaperItem {
+  arxivId: string;
+  title: string;
+  title_zh?: string;
+}
+
+let citeAutocompletePopup: HTMLElement | null = null;
+let citeFilteredPapers: CitePaperItem[] = [];
+let citeSelectedIndex = -1;
+
+function initCiteAutocomplete(): void {
+  // Get papers from page-embedded data
+  const papersDataEl = document.getElementById('papers-data');
+  let papers: CitePaperItem[] = [];
+
+  if (papersDataEl) {
+    try {
+      const payload = JSON.parse(papersDataEl.textContent || '{}');
+      papers = (payload.papers || []).map((p: any) => ({
+        arxivId: p.arxivId || p.id,
+        title: p.title || '',
+        title_zh: p.title_zh || '',
+      }));
+    } catch { /* ignore */ }
+  }
+
+  // If no papers embedded, try user's library papers from localStorage
+  if (papers.length === 0) {
+    try {
+      const libsData = localStorage.getItem('dpr_user_libraries_v1');
+      if (libsData) {
+        const doc = JSON.parse(libsData);
+        const libraries = doc.libraries || {};
+        const paperIds = new Set<string>();
+        for (const lib of Object.values(libraries) as any[]) {
+          for (const pid of lib.paperIds || []) {
+            paperIds.add(pid);
+          }
+        }
+        papers = Array.from(paperIds).map(id => ({
+          arxivId: id,
+          title: `arXiv: ${id}`,
+        }));
+      }
+    } catch { /* ignore */ }
+  }
+
+  // Also add papers from current writing's citations
+  if (currentWriting?.citedPapers) {
+    for (const ref of currentWriting.citedPapers) {
+      if (!papers.find(p => p.arxivId === ref.arxivId)) {
+        papers.unshift({ arxivId: ref.arxivId, title: ref.context || ref.arxivId });
+      }
+    }
+  }
+
+  // Create popup element
+  function createPopup(): void {
+    if (citeAutocompletePopup) return;
+    citeAutocompletePopup = document.createElement('div');
+    citeAutocompletePopup.id = 'cite-autocomplete-popup';
+    citeAutocompletePopup.className = 'cite-autocomplete-popup';
+    citeAutocompletePopup.hidden = true;
+    document.body.appendChild(citeAutocompletePopup);
+  }
+
+  function showPopup(items: CitePaperItem[], query: string): void {
+    if (!citeAutocompletePopup) createPopup();
+    if (!citeAutocompletePopup) return;
+
+    citeFilteredPapers = items;
+    citeSelectedIndex = -1;
+
+    if (items.length === 0) {
+      citeAutocompletePopup.hidden = true;
+      return;
+    }
+
+    citeAutocompletePopup.innerHTML = items
+      .slice(0, 8)
+      .map((p, i) => {
+        const displayTitle = p.title_zh || p.title || p.arxivId;
+        return `<div class="cite-autocomplete-item" data-index="${i}" tabindex="-1">
+          <span class="cite-autocomplete-id">${p.arxivId}</span>
+          <span class="cite-autocomplete-title">${escapeHtml(displayTitle.slice(0, 60))}</span>
+        </div>`;
+      })
+      .join('');
+
+    citeAutocompletePopup.hidden = false;
+  }
+
+  function hidePopup(): void {
+    if (citeAutocompletePopup) {
+      citeAutocompletePopup.hidden = true;
+    }
+    citeFilteredPapers = [];
+    citeSelectedIndex = -1;
+  }
+
+  function insertCite(arxivId: string, textarea: HTMLTextAreaElement): void {
+    const text = textarea.value;
+    const cursorPos = textarea.selectionStart;
+    const beforeCursor = text.slice(0, cursorPos);
+    const afterCursor = text.slice(cursorPos);
+
+    const openIdx = beforeCursor.lastIndexOf('[cite:');
+    if (openIdx === -1) return;
+
+    const citeText = `[cite:${arxivId}]`;
+    const newBefore = beforeCursor.slice(0, openIdx) + citeText;
+    textarea.value = newBefore + afterCursor;
+
+    const newPos = newBefore.length;
+    textarea.setSelectionRange(newPos, newPos);
+    hidePopup();
+    textarea.focus();
+  }
+
+  function filterPapers(query: string): CitePaperItem[] {
+    if (!query) return [];
+    const q = query.toLowerCase().trim();
+    return papers
+      .filter((p) => {
+        if (p.arxivId.toLowerCase().includes(q)) return true;
+        const title = p.title?.toLowerCase() || '';
+        const titleZh = p.title_zh?.toLowerCase() || '';
+        return title.includes(q) || titleZh.includes(q);
+      })
+      .slice(0, 8);
+  }
+
+  // Attach to all section textareas
+  const container = document.querySelector('[data-sections-container]');
+  if (!container) return;
+
+  container.querySelectorAll<HTMLTextAreaElement>('[data-section-content]').forEach(textarea => {
+    // Input handler
+    const handleInput = () => {
+      const text = textarea.value;
+      const cursorPos = textarea.selectionStart;
+      const beforeCursor = text.slice(0, cursorPos);
+
+      const openIdx = beforeCursor.lastIndexOf('[cite:');
+      if (openIdx === -1) {
+        hidePopup();
+        return;
+      }
+
+      const afterOpen = beforeCursor.slice(openIdx + 6);
+      if (afterOpen.includes(']')) {
+        hidePopup();
+        return;
+      }
+
+      const query = afterOpen;
+      const items = filterPapers(query);
+
+      if (items.length > 0) {
+        // Position popup
+        const rect = textarea.getBoundingClientRect();
+        if (!citeAutocompletePopup) createPopup();
+        if (citeAutocompletePopup) {
+          citeAutocompletePopup.style.position = 'absolute';
+          citeAutocompletePopup.style.left = `${rect.left}px`;
+          citeAutocompletePopup.style.top = `${rect.bottom + 4}px`;
+          citeAutocompletePopup.style.width = `${Math.max(rect.width, 300)}px`;
+        }
+      }
+
+      showPopup(items, query);
+    };
+
+    // Keydown handler
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (!citeAutocompletePopup || citeAutocompletePopup.hidden) return;
+
+      const items = citeAutocompletePopup.querySelectorAll('.cite-autocomplete-item');
+
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          citeSelectedIndex = Math.min(citeSelectedIndex + 1, items.length - 1);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          citeSelectedIndex = Math.max(citeSelectedIndex - 1, 0);
+          break;
+        case 'Enter':
+        case 'Tab':
+          e.preventDefault();
+          if (citeSelectedIndex >= 0 && citeFilteredPapers[citeSelectedIndex]) {
+            insertCite(citeFilteredPapers[citeSelectedIndex].arxivId, textarea);
+          }
+          return;
+        case 'Escape':
+          e.preventDefault();
+          hidePopup();
+          return;
+        default:
+          return;
+      }
+
+      items.forEach((item, i) => {
+        item.classList.toggle('is-selected', i === citeSelectedIndex);
+      });
+      if (citeSelectedIndex >= 0) {
+        items[citeSelectedIndex]?.scrollIntoView({ block: 'nearest' });
+      }
+    };
+
+    // Click handler for popup items
+    const handleClick = (e: Event) => {
+      const target = e.target as HTMLElement;
+      const item = target.closest('.cite-autocomplete-item');
+      if (item) {
+        const idx = parseInt((item as HTMLElement).dataset.index || '-1', 10);
+        if (idx >= 0 && citeFilteredPapers[idx]) {
+          insertCite(citeFilteredPapers[idx].arxivId, textarea);
+        }
+      }
+    };
+
+    // Click outside to close
+    const handleDocumentClick = (e: Event) => {
+      if (citeAutocompletePopup && !citeAutocompletePopup.contains(e.target as Node) && e.target !== textarea) {
+        hidePopup();
+      }
+    };
+
+    textarea.addEventListener('input', handleInput);
+    textarea.addEventListener('keydown', handleKeydown);
+    document.addEventListener('click', handleDocumentClick);
+  });
+}
+
 // Setup export functionality
+/**
+ * Convert [cite:] syntax to markdown links in export.
+ * [cite:2301.12345] -> [2301.12345](https://arxiv.org/abs/2301.12345)
+ * [cite:2301.12345|caption] -> [caption](https://arxiv.org/abs/2301.12345)
+ * Unrecognized IDs get a comment appended.
+ */
+function convertCiteSyntax(content: string, citedPapers: PaperRef[]): string {
+  const paperIds = new Set(citedPapers.map(p => p.arxivId.toLowerCase()));
+
+  return content.replace(/\[cite:([^\]]+)\]/g, (match, capture) => {
+    const parts = capture.split('|');
+    const arxivId = parts[0].trim();
+    const caption = parts[1]?.trim();
+    const normalizedId = arxivId.replace(/v\d+$/, '');
+
+    const isKnown = paperIds.has(normalizedId.toLowerCase());
+
+    if (isKnown) {
+      const url = `https://arxiv.org/abs/${normalizedId}`;
+      if (caption) {
+        return `[${caption}](${url})`;
+      }
+      return `[${normalizedId}](${url})`;
+    } else {
+      // Unknown paper - keep as-is but add comment
+      const url = `https://arxiv.org/abs/${normalizedId}`;
+      if (caption) {
+        return `[${caption}](${url})（未加入引用列表）`;
+      }
+      return `[${normalizedId}](${url})（未加入引用列表）`;
+    }
+  });
+}
+
 function setupExport(): void {
   // Export as Markdown
   const exportMdBtn = document.querySelector('[data-export-markdown]');
@@ -925,7 +1466,9 @@ function setupExport(): void {
     // Sort sections by order
     const sortedSections = [...currentWriting.sections].sort((a, b) => a.order - b.order);
     for (const section of sortedSections) {
-      md += `## ${section.title}\n\n${section.content || '(内容待填写)'}\n\n`;
+      // Convert [cite:] syntax before exporting
+      const convertedContent = convertCiteSyntax(section.content || '(内容待填写)', currentWriting.citedPapers || []);
+      md += `## ${section.title}\n\n${convertedContent}\n\n`;
     }
 
     // Citations

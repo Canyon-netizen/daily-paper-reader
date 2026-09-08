@@ -201,6 +201,7 @@ const { id } = Astro.params;
           </div>
           <div class="exp-export-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-export-json>📋 导出 JSON</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-create-writing-from-exp>📝 创建写作</button>
           </div>
         </div>
       `;
@@ -220,6 +221,26 @@ const { id } = Astro.params;
         a.download = `${exp.id}.json`;
         a.click();
         URL.revokeObjectURL(url);
+      });
+
+      // Create Writing handler
+      container.querySelector<HTMLButtonElement>('[data-create-writing-from-exp]')?.addEventListener('click', () => {
+        const baseUrl = import.meta.env.BASE_URL || '/';
+        // Build URL params
+        const params = new URLSearchParams();
+        if (exp.title) params.set('prefill_title', exp.title);
+        if (exp.relatedPapers && exp.relatedPapers.length > 0) {
+          params.set('prefill_papers', exp.relatedPapers.join(','));
+        }
+        params.set('prefill_experiment_id', exp.id);
+        if (exp.relatedIdeas && exp.relatedIdeas.length > 0) {
+          params.set('prefill_idea_id', exp.relatedIdeas[0]);
+        }
+        if (exp.method) {
+          params.set('prefill_method_summary', exp.method.substring(0, 200));
+        }
+        // Navigate to writing list with prefill params
+        window.location.href = `${baseUrl}writing/?${params.toString()}`;
       });
 
       container.querySelectorAll<HTMLButtonElement>('[data-status]').forEach((btn) => {
