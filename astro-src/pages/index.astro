@@ -81,22 +81,34 @@ const newToday = items.filter((p) => p.date === today).length;
         <a href={base + '/ideas/'} class="workflow-card">
           <span class="workflow-icon">💡</span>
           <span class="workflow-label">想法</span>
-          <span class="workflow-desc-sm">记录研究灵感</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">记录研究灵感</span>
+            <span class="workflow-count" id="workflow-ideas-count" style="display: none;">0</span>
+          </span>
         </a>
         <a href={base + '/experiments/'} class="workflow-card">
           <span class="workflow-icon">🔬</span>
           <span class="workflow-label">实验</span>
-          <span class="workflow-desc-sm">设计实验验证</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">设计实验验证</span>
+            <span class="workflow-count" id="workflow-experiments-count" style="display: none;">0</span>
+          </span>
         </a>
         <a href={base + '/writing/'} class="workflow-card">
           <span class="workflow-icon">✍️</span>
           <span class="workflow-label">写作</span>
-          <span class="workflow-desc-sm">撰写论文笔记</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">撰写论文笔记</span>
+            <span class="workflow-count" id="workflow-writing-count" style="display: none;">0</span>
+          </span>
         </a>
         <a href={base + '/roadmap/'} class="workflow-card">
           <span class="workflow-icon">🗺️</span>
           <span class="workflow-label">路线图</span>
-          <span class="workflow-desc-sm">规划长期目标</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">规划长期目标</span>
+            <span class="workflow-count" id="workflow-roadmap-count" style="display: none;">0</span>
+          </span>
         </a>
       </div>
     </section>
@@ -257,11 +269,50 @@ const newToday = items.filter((p) => p.date === today).length;
   <script>
     import '../scripts/user-libraries-ui';
     import { mountDashboardStrip } from '../scripts/dashboard-strip';
+    import { listIdeas } from '../lib/ideas';
+    import { getAllExperiments } from '../lib/experiments';
+    import { listWritings } from '../lib/writing';
+    import { listRoadmaps } from '../lib/roadmap';
+
     const itemsForStrip = JSON.parse(document.getElementById('home-papers-data')?.textContent || '[]');
     const mount = document.getElementById('dashboard-strip-mount');
     if (mount && Array.isArray(itemsForStrip)) {
       mountDashboardStrip(mount, itemsForStrip);
     }
+
+    // Update workflow counts on home page
+    (function updateWorkflowCounts() {
+      const ideasCount = document.getElementById('workflow-ideas-count');
+      const experimentsCount = document.getElementById('workflow-experiments-count');
+      const writingCount = document.getElementById('workflow-writing-count');
+      const roadmapCount = document.getElementById('workflow-roadmap-count');
+
+      try {
+        if (ideasCount) {
+          const count = listIdeas().length;
+          ideasCount.textContent = String(count);
+          ideasCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+        if (experimentsCount) {
+          const count = getAllExperiments().length;
+          experimentsCount.textContent = String(count);
+          experimentsCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+        if (writingCount) {
+          const count = listWritings().length;
+          writingCount.textContent = String(count);
+          writingCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+        if (roadmapCount) {
+          const count = listRoadmaps().length;
+          roadmapCount.textContent = String(count);
+          roadmapCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+      } catch (e) {
+        // localStorage may not be available
+        console.debug('Workflow counts unavailable:', e);
+      }
+    })();
 
     // Welcome modal for first-time users
     (function initWelcomeModal() {

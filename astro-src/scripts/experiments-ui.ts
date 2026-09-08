@@ -3,6 +3,7 @@
 // Client interactions for experiments page.
 
 import type { Experiment, ExperimentStatus } from '../lib/experiments/types';
+import { experimentTemplates, getExperimentTemplate } from '../lib/experiments/templates';
 import {
   getAllExperiments,
   getExperiment,
@@ -28,6 +29,7 @@ export function initExperimentsUI(): void {
   setupNewExperimentButton();
   setupModalHandlers();
   setupVariableHandlers();
+  setupTemplateSelector();
   updateCounts();
 
   // If prefill from idea, open modal immediately
@@ -87,8 +89,9 @@ function renderExperimentGrid(): void {
         <div class="experiments-empty-icon">🔬</div>
         <h3 class="experiments-empty-title">还没有实验</h3>
         <p class="experiments-empty-desc">
-          点击右上角「+ 新建实验」开始设计你的第一个实验。
+          点击右上角「+ 新建实验」开始设计你的第一个实验，或点击下方按钮快速创建。
         </p>
+        <button type="button" class="btn btn-primary btn-sm" data-open-new-experiment>➕ 新建实验</button>
       </div>
     `;
     return;
@@ -293,6 +296,10 @@ function openExperimentModal(prefill?: {
   const form = document.getElementById('experiment-form') as HTMLFormElement;
   if (modal && form) {
     form.reset();
+    // Clear any existing variables
+    const variablesContainer = document.getElementById('exp-variables-container');
+    if (variablesContainer) variablesContainer.innerHTML = '';
+
     if (prefill) {
       const titleInput = form.querySelector('input[name="title"]') as HTMLInputElement;
       const hypothesisInput = form.querySelector('textarea[name="hypothesis"]') as HTMLTextAreaElement;
@@ -304,6 +311,74 @@ function openExperimentModal(prefill?: {
     modal.classList.add('active');
     (form.querySelector('input[name="title"]') as HTMLInputElement)?.focus();
   }
+}
+
+/** Handle template selection */
+function setupTemplateSelector(): void {
+  const templateSelect = document.getElementById('exp-template') as HTMLSelectElement;
+  if (!templateSelect) return;
+
+  templateSelect.addEventListener('change', () => {
+    const templateId = templateSelect.value;
+    if (!templateId) return;
+
+    const template = getExperimentTemplate(templateId);
+    if (!template) return;
+
+    // Fill form with template values
+    const form = document.getElementById('experiment-form') as HTMLFormElement;
+    if (!form) return;
+
+    (form.querySelector('input[name="title"]') as HTMLInputElement).value = template.title;
+    (form.querySelector('input[name="titleZh"]') as HTMLInputElement).value = template.titleZh;
+    (form.querySelector('textarea[name="hypothesis"]') as HTMLTextAreaElement).value = template.hypothesis;
+    (form.querySelector('textarea[name="hypothesisZh"]') as HTMLTextAreaElement).value = template.hypothesisZh;
+    (form.querySelector('textarea[name="method"]') as HTMLTextAreaElement).value = template.method;
+    (form.querySelector('textarea[name="methodZh"]') as HTMLTextAreaElement).value = template.methodZh;
+    (form.querySelector('textarea[name="expectedResults"]') as HTMLTextAreaElement).value = template.expectedResults;
+    (form.querySelector('textarea[name="expectedResultsZh"]') as HTMLTextAreaElement).value = template.expectedResultsZh;
+    (form.querySelector('input[name="tags"]') as HTMLInputElement).value = template.tags.join(', ');
+
+    // Add variables from template
+    const variablesContainer = document.getElementById('exp-variables-container');
+    if (variablesContainer) {
+      variablesContainer.innerHTML = '';
+      template.variables.forEach((v, idx) => {
+        const varEl = document.createElement('div');
+        varEl.className = 'exp-variable-row';
+        varEl.dataset.varIndex = String(idx);
+        varEl.innerHTML = `
+          <div class="exp-variable-fields">
+            <input type="text" name="var_name_${idx}" placeholder="变量名" class="var-name-input" value="${escapeHtml(v.name)}" required />
+            <select name="var_type_${idx}" class="var-type-select">
+              <option value="independent" ${v.type === 'independent' ? 'selected' : ''}>自变量</option>
+              <option value="dependent" ${v.type === 'dependent' ? 'selected' : ''}>因变量</option>
+              <option value="controlled" ${v.type === 'controlled' ? 'selected' : ''}>控制变量</option>
+            </select>
+            <input type="text" name="var_desc_${idx}" placeholder="描述" class="var-desc-input" value="${escapeHtml(v.description)}" />
+            <input type="text" name="var_values_${idx}" placeholder="取值 (逗号分隔)" class="var-values-input" value="${v.values ? v.values.join(', ') : ''}" />
+            <button type="button" class="btn-remove-var" title="删除变量">×</button>
+          </div>
+        `;
+        variablesContainer.appendChild(varEl);
+
+        // Add remove handler
+        varEl.querySelector('.btn-remove-var')?.addEventListener('click', () => {
+          varEl.remove();
+          reindexVariables();
+        });
+      });
+    }
+  });
+}
+
+/** Escape HTML helper */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Close the experiment modal */
@@ -335,15 +410,6 @@ function updateCounts(): void {
   if (completedBtn) completedBtn.textContent = `已完成 ${counts.completed}`;
   if (failedBtn) failedBtn.textContent = `失败 ${counts.failed}`;
   if (pausedBtn) pausedBtn.textContent = `暂停 ${counts.paused}`;
-}
-
-/** Utility: escape HTML */
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 /** Setup variable add/remove handlers */

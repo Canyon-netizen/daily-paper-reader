@@ -67,8 +67,9 @@ function renderIdeaGrid(): void {
         <div class="ideas-empty-icon">💡</div>
         <h3 class="ideas-empty-title">还没有想法</h3>
         <p class="ideas-empty-desc">
-          点击右上角「+ 新建想法」开始记录你的研究 idea。
+          点击右上角「+ 新建想法」开始记录你的研究 idea，或点击下方按钮快速创建。
         </p>
+        <button type="button" class="btn btn-primary btn-sm" data-open-new-idea>➕ 新建想法</button>
       </div>
     `;
     return;
