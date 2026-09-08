@@ -10,6 +10,9 @@ export interface PaperRef {
   context?: string; // Why this paper is relevant
 }
 
+/** Source of idea creation */
+export type IdeaSource = 'paper-analyzer' | 'topic-frontier' | 'topic-approach' | 'manual';
+
 /** Main Idea interface */
 export interface Idea {
   /** kebab-case slug, auto-generated from title */
@@ -26,6 +29,8 @@ export interface Idea {
   relatedConcepts: string[];
   /** User-defined tags */
   tags: string[];
+  /** Source of idea creation */
+  source?: IdeaSource;
   /** Creation timestamp (epoch ms) */
   createdAt: number;
   /** Last update timestamp (epoch ms) */
@@ -46,7 +51,8 @@ export function createIdeaData(
   title: string,
   description: string,
   relatedPapers: string[] = [],
-  tags: string[] = []
+  tags: string[] = [],
+  source?: IdeaSource
 ): Idea {
   const id = title
     .toLowerCase()
@@ -63,6 +69,7 @@ export function createIdeaData(
     relatedPapers,
     relatedConcepts: [],
     tags,
+    source,
     createdAt: now,
     updatedAt: now,
   };

@@ -410,15 +410,24 @@ export async function sendChat(card: HTMLElement): Promise<void> {
 }
 
 export function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionItem[]): string {
-  const dimBlocks = r.dimensions.map((d) => {
+  const dimBlocks = r.dimensions.map((d, dIndex) => {
     const ra = d.researchApproach;
+    // Get paper IDs for this dimension
+    const dimPaperIds = d.papers.map((p) => p.arxivId).filter(Boolean);
     const approachBlock = ra
       ? `<div class="report-approach">
           <h4>研究思路</h4>
           <p><strong>核心思路</strong>: ${escapeHtml(ra.idea)}</p>
           <p><strong>实施步骤</strong>:
             <ol class="report-approach-pipeline">
-              ${ra.pipeline.map((s) => `<li>${escapeHtml(s)}</li>`).join('')}
+              ${ra.pipeline.map((s, sIndex) => {
+                const stepTitle = `研究思路: ${ra.name || `步骤 ${sIndex + 1}`}`;
+                const stepDesc = `步骤 ${sIndex + 1}: ${s}`;
+                const papersEncoded = encodeURIComponent(dimPaperIds.join(','));
+                const titleEncoded = encodeURIComponent(stepTitle);
+                const descEncoded = encodeURIComponent(stepDesc);
+                return `<li>${escapeHtml(s)} <button type="button" class="btn-convert-approach-to-idea btn btn-xs" data-title="${titleEncoded}" data-description="${descEncoded}" data-papers="${papersEncoded}">💡 提炼为想法</button></li>`;
+              }).join('')}
             </ol>
           </p>
           <p class="report-approach-meta">
@@ -426,6 +435,7 @@ export function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionIte
             ${ra.estimatedTimeWeeks ? `<span class="report-approach-time">预估 ${ra.estimatedTimeWeeks} 周</span>` : ''}
             ${ra.tiedNextStep ? `<a class="report-approach-link" href="#nextstep-${escapeHtml(ra.tiedNextStep)}">↗ 对应建议 #${escapeHtml(ra.tiedNextStep)}</a>` : ''}
           </p>
+          <button type="button" class="btn-convert-approach-to-idea btn btn-sm" data-title="${encodeURIComponent(`研究思路: ${ra.name || d.name}`)}" data-description="${encodeURIComponent([ra.idea, ...ra.pipeline].join('\n\n'))}" data-papers="${encodeURIComponent(dimPaperIds.join(','))}">💡 提炼整个思路为想法</button>
         </div>`
       : '';
     return `
@@ -454,15 +464,21 @@ export function renderReportToHTML(r: TopicReport, referenceSeeds?: SelectionIte
     ? `<section class="report-frontier">
         <h3>前沿方向</h3>
         <ul class="report-frontier-list">
-          ${r.frontierDirections.map((f) => `
+          ${r.frontierDirections.map((f) => {
+            const titleEncoded = encodeURIComponent(`前沿方向: ${f.name}`);
+            const descEncoded = encodeURIComponent(f.description || '');
+            const papersEncoded = encodeURIComponent(f.paperArxivIds.join(','));
+            return `
             <li>
               <strong>${escapeHtml(f.name)}</strong>
               <span class="report-frontier-desc">${escapeHtml(f.description)}</span>
               ${f.paperArxivIds.length
                 ? `<div class="report-frontier-papers">关联: arXiv:${f.paperArxivIds.map(escapeHtml).join(', arXiv:')}</div>`
                 : ''}
+              <button type="button" class="btn-convert-to-idea btn btn-xs" data-title="${titleEncoded}" data-description="${descEncoded}" data-papers="${papersEncoded}">💡 提炼为想法</button>
             </li>
-          `).join('')}
+          `;
+          }).join('')}
         </ul>
       </section>`
     : '';
@@ -543,6 +559,32 @@ export function bindReportNextStepsActions(out: HTMLElement): void {
   out.querySelectorAll('[data-act="download-report-md"]').forEach((el) => {
     el.addEventListener('click', () => {
       (window as unknown as { __downloadReportAsMarkdown?: () => void }).__downloadReportAsMarkdown?.();
+    });
+  });
+
+  // Handle "提炼为想法" buttons for frontier directions
+  out.querySelectorAll('.btn-convert-to-idea').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const btn = el as HTMLButtonElement;
+      const title = decodeURIComponent(btn.dataset.title || '');
+      const description = decodeURIComponent(btn.dataset.description || '');
+      const papers = decodeURIComponent(btn.dataset.papers || '');
+      const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+      window.location.href = `${base}/ideas/?prefill_title=${encodeURIComponent(title)}&prefill_description=${encodeURIComponent(description)}&prefill_papers=${encodeURIComponent(papers)}&prefill_source=topic-frontier`;
+    });
+  });
+
+  // Handle "提炼为想法" buttons for research approach
+  out.querySelectorAll('.btn-convert-approach-to-idea').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      const btn = el as HTMLButtonElement;
+      const title = decodeURIComponent(btn.dataset.title || '');
+      const description = decodeURIComponent(btn.dataset.description || '');
+      const papers = decodeURIComponent(btn.dataset.papers || '');
+      const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+      window.location.href = `${base}/ideas/?prefill_title=${encodeURIComponent(title)}&prefill_description=${encodeURIComponent(description)}&prefill_papers=${encodeURIComponent(papers)}&prefill_source=topic-approach`;
     });
   });
 }

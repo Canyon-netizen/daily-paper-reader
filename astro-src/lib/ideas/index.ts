@@ -1,7 +1,7 @@
 // astro-src/lib/ideas/index.ts
 // Ideas module data access layer
 
-import type { Idea, IdeasDoc, IdeaStatus } from './types';
+import type { Idea, IdeasDoc, IdeaStatus, IdeaSource } from './types';
 import { IDEAS_KEY, createIdeaData } from './types';
 
 /** Load ideas from localStorage */
@@ -55,10 +55,11 @@ export function createIdea(
   title: string,
   description: string,
   relatedPapers: string[] = [],
-  tags: string[] = []
+  tags: string[] = [],
+  source?: IdeaSource
 ): Idea {
   const doc = loadIdeas();
-  const idea = createIdeaData(title, description, relatedPapers, tags);
+  const idea = createIdeaData(title, description, relatedPapers, tags, source);
 
   // Ensure unique ID
   let finalId = idea.id;

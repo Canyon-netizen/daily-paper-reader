@@ -1,7 +1,7 @@
 // astro-src/scripts/ideas-ui.ts
 // Client-side interactions for Ideas module
 
-import type { Idea, IdeaStatus } from '../lib/ideas/types';
+import type { Idea, IdeaStatus, IdeaSource } from '../lib/ideas/types';
 import {
   listIdeas,
   getIdea,
@@ -25,11 +25,17 @@ export function initIdeasUI(): void {
 /** Render the idea grid */
 function renderIdeaGrid(): void {
   const container = document.getElementById('ideas-grid');
+  const emptyHint = document.getElementById('ideas-empty-hint');
   if (!container) return;
 
   const ideas = currentFilter === 'all'
     ? listIdeas()
     : listIdeas().filter((i) => i.status === currentFilter);
+
+  // Toggle empty hint visibility
+  if (emptyHint) {
+    emptyHint.hidden = ideas.length > 0;
+  }
 
   if (ideas.length === 0) {
     // Show sample data for new users
@@ -203,11 +209,13 @@ function setupNewIdeaButton(): void {
   const urlParams = new URLSearchParams(window.location.search);
   const prefillTitle = urlParams.get('prefill_title');
   const prefillPapers = urlParams.get('prefill_papers');
+  const prefillDescription = urlParams.get('prefill_description') || '';
+  const prefillSource = urlParams.get('prefill_source') as IdeaSource | null;
 
-  if (prefillTitle || prefillPapers) {
+  if (prefillTitle || prefillPapers || prefillDescription) {
     // Auto-open the modal with prefill data
     setTimeout(() => {
-      openIdeaModal(prefillTitle || '', prefillPapers || '');
+      openIdeaModal(prefillTitle || '', prefillPapers || '', prefillDescription, prefillSource || undefined);
       // Clear URL params to avoid re-opening on refresh
       window.history.replaceState({}, '', window.location.pathname);
     }, 100);
@@ -220,6 +228,9 @@ function setupModalHandlers(): void {
   const closeBtn = modal?.querySelector('.modal-close');
   const cancelBtn = modal?.querySelector('.modal-cancel');
   const form = modal?.querySelector<HTMLFormElement>('#idea-form');
+
+  // Store source from prefill for use in form submission
+  let pendingSource: IdeaSource | undefined;
 
   closeBtn?.addEventListener('click', closeModal);
   cancelBtn?.addEventListener('click', closeModal);
@@ -240,15 +251,26 @@ function setupModalHandlers(): void {
       ? papersStr.split(',').map((p) => p.trim().replace(/^(\d+\.\d+v?\d*).*$/, '$1')).filter(Boolean)
       : [];
 
-    createIdea(title, description, relatedPapers, tags);
+    createIdea(title, description, relatedPapers, tags, pendingSource);
+    pendingSource = undefined;
     closeModal();
     renderIdeaGrid();
     updateCounts();
   });
+
+  // Expose setter for pending source (called by openIdeaModal)
+  (window as unknown as { __setPendingIdeaSource?: (s: IdeaSource) => void }).__setPendingIdeaSource = (s: IdeaSource) => {
+    pendingSource = s;
+  };
 }
 
 /** Open the idea modal */
-function openIdeaModal(prefillTitle: string = '', prefillPapers: string = ''): void {
+function openIdeaModal(
+  prefillTitle: string = '',
+  prefillPapers: string = '',
+  prefillDescription: string = '',
+  prefillSource?: IdeaSource
+): void {
   const modal = document.getElementById('idea-modal');
   const form = document.getElementById('idea-form') as HTMLFormElement;
   if (modal && form) {
@@ -261,6 +283,15 @@ function openIdeaModal(prefillTitle: string = '', prefillPapers: string = ''): v
     if (prefillPapers) {
       const papersInput = form.querySelector('#idea-related-papers') as HTMLInputElement;
       if (papersInput) papersInput.value = prefillPapers;
+    }
+    if (prefillDescription) {
+      const descInput = form.querySelector('#idea-description') as HTMLTextAreaElement;
+      if (descInput) descInput.value = prefillDescription;
+    }
+    // Set pending source for form submission
+    if (prefillSource) {
+      const setter = (window as unknown as { __setPendingIdeaSource?: (s: IdeaSource) => void }).__setPendingIdeaSource;
+      setter?.(prefillSource);
     }
     modal.classList.add('active');
     (form.querySelector('input[name="title"]') as HTMLInputElement)?.focus();

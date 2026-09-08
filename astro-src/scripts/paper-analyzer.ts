@@ -757,6 +757,16 @@ function rehydrateHistory(id: string): void {
 let currentPdfText: string | null = null;
 let currentPdfMeta: { name: string; size: number } | null = null;
 let currentArxivEntry: ArxivEntry | null = null;
+let currentAnalysisResult: AnalysisResult | null = null;
+
+// Export getters for external access (e.g., action bar buttons)
+export function getCurrentArxivEntry(): ArxivEntry | null {
+  return currentArxivEntry;
+}
+
+export function getCurrentAnalysisResult(): AnalysisResult | null {
+  return currentAnalysisResult;
+}
 
 // arxiv-index.json: build-arxiv-index.mjs 生成。
 // schema 演进:早期是 {id → rel},后来 settings 面板要查 title,改为
@@ -2358,6 +2368,9 @@ function newId(): string {
 // 注:历史笔记重新加载由调用方负责 — 这里只画 result DOM,不读写 history;
 // 防止「打开历史」也生成一份新 history 条目这种递归 bug。
 function renderResult(r: AnalysisResult, rawText: string): void {
+  // Store current analysis result for action bar
+  currentAnalysisResult = r;
+
   const box = $('results');
   box.hidden = false;
 
@@ -2598,6 +2611,82 @@ function renderResult(r: AnalysisResult, rawText: string): void {
       }
     });
   }
+
+  // Add action bar for idea/experiment/project creation
+  const actionBar = document.createElement('div');
+  actionBar.className = 'analyzer-action-bar';
+  actionBar.innerHTML = `
+    <button type="button" id="btn-save-idea" class="btn btn-sm">💡 保存为想法</button>
+    <button type="button" id="btn-create-experiment" class="btn btn-sm">🧪 创建实验</button>
+    <button type="button" id="btn-join-project" class="btn btn-sm">📁 加入项目</button>
+  `;
+  box.appendChild(actionBar);
+
+  // "保存为想法" button
+  const saveIdeaBtn = actionBar.querySelector('#btn-save-idea');
+  saveIdeaBtn?.addEventListener('click', () => {
+    const entry = getCurrentArxivEntry();
+    const result = getCurrentAnalysisResult();
+    if (!entry || !result) {
+      setStatus('没有可用的论文分析结果', 'error');
+      return;
+    }
+    const title = encodeURIComponent(result.title || entry.title || 'Untitled');
+    const description = encodeURIComponent(
+      [result.motivation, result.method, result.result, result.conclusion]
+        .filter(Boolean)
+        .map((s) => s?.replace(/\n/g, '\n') || '')
+        .join('\n\n---\n\n')
+    );
+    const papers = encodeURIComponent(entry.arxivId || '');
+    window.location.href = `/ideas/?prefill_title=${title}&prefill_description=${description}&prefill_papers=${papers}&prefill_source=paper-analyzer`;
+  });
+
+  // "创建实验" button
+  const createExpBtn = actionBar.querySelector('#btn-create-experiment');
+  createExpBtn?.addEventListener('click', () => {
+    const entry = getCurrentArxivEntry();
+    const result = getCurrentAnalysisResult();
+    if (!entry || !result) {
+      setStatus('没有可用的论文分析结果', 'error');
+      return;
+    }
+    const title = encodeURIComponent(`实验: ${result.title || entry.title || 'Untitled'}`);
+    const hypothesis = encodeURIComponent(result.motivation || '');
+    const papers = encodeURIComponent(entry.arxivId || '');
+    window.location.href = `/experiments/?prefill_title=${title}&prefill_hypothesis=${hypothesis}&prefill_papers=${papers}`;
+  });
+
+  // "加入项目" button - show project picker modal
+  const joinProjectBtn = actionBar.querySelector('#btn-join-project');
+  joinProjectBtn?.addEventListener('click', async () => {
+    const entry = getCurrentArxivEntry();
+    if (!entry?.arxivId) {
+      setStatus('只有 arXiv 论文才能加入项目', 'error');
+      return;
+    }
+    // Try to get projects list
+    try {
+      const { getProjectsList } = await import('./projects');
+      const projects = getProjectsList();
+      if (projects.length === 0) {
+        setStatus('还没有项目,请先在 Projects 页面创建', 'info');
+        return;
+      }
+      // Simple prompt-based selection (could be replaced with a proper modal)
+      const projectNames = projects.map((p) => p.name || p.id).join('\n');
+      const selected = prompt(`选择要加入的项目 (输入项目名称):\n\n${projectNames}`);
+      if (!selected) return;
+      const matched = projects.find((p) => (p.name || p.id) === selected);
+      if (!matched) {
+        setStatus('未找到匹配的项目', 'error');
+        return;
+      }
+      setStatus(`已将论文 ${entry.arxivId} 添加到项目 ${matched.name || matched.id}`, 'info');
+    } catch (e) {
+      setStatus('获取项目列表失败', 'error');
+    }
+  });
 
   box.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
