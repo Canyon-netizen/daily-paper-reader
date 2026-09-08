@@ -164,6 +164,13 @@ function initProgressDashboard() {
   const inProgressGoals = dashboard.querySelectorAll('.roadmap-goal[data-status="in-progress"]').length;
   const pendingGoals = dashboard.querySelectorAll('.roadmap-goal[data-status="pending"]').length;
 
+  // Calculate experiment progress (iter3 feedback: completed=1.0, running=0.5, planning=0.1)
+  const experimentProgress = calculateExperimentProgressFromStorage();
+
+  // Combined progress: weight goals 70%, experiments 30%
+  const goalProgress = totalGoals > 0 ? completedGoals / totalGoals : 0;
+  const combinedProgress = (goalProgress * 0.7) + (experimentProgress * 0.3);
+
   const statsEl = dashboard.querySelector('.dashboard-stats');
   if (statsEl) {
     statsEl.innerHTML = `
@@ -179,18 +186,56 @@ function initProgressDashboard() {
         <span class="stat-value">${inProgressGoals}</span>
         <span class="stat-label">进行中</span>
       </div>
-      <div class="stat-card pending">
-        <span class="stat-value">${pendingGoals}</span>
-        <span class="stat-label">待开始</span>
+      <div class="stat-card">
+        <span class="stat-value">${Math.round(experimentProgress * 100)}%</span>
+        <span class="stat-label">实验进度</span>
       </div>
     `;
   }
 
-  // Update progress bar
+  // Update progress bar with combined progress
   const progressFill = dashboard.querySelector('.dashboard-progress-fill') as HTMLElement;
-  if (progressFill && totalGoals > 0) {
-    const percent = Math.round((completedGoals / totalGoals) * 100);
+  const progressText = dashboard.querySelector('.dashboard-progress-text');
+  if (progressFill) {
+    const percent = Math.round(combinedProgress * 100);
     progressFill.style.width = `${percent}%`;
+    if (progressText) {
+      progressText.textContent = `${percent}% (目标) + ${Math.round(experimentProgress * 100)}% (实验)`;
+    }
+  }
+}
+
+/** Calculate experiment progress from localStorage */
+function calculateExperimentProgressFromStorage(): number {
+  const EXPERIMENT_STATUS_WEIGHTS: Record<string, number> = {
+    completed: 1.0,
+    running: 0.5,
+    planning: 0.1,
+    failed: 0.0,
+    paused: 0.0,
+  };
+
+  try {
+    const stored = localStorage.getItem('dpr_experiments');
+    if (!stored) return 0;
+
+    const doc = JSON.parse(stored);
+    const experiments = doc.experiments || {};
+    const experimentIds = Object.keys(experiments);
+
+    if (experimentIds.length === 0) return 0;
+
+    let totalWeight = 0;
+    for (const expId of experimentIds) {
+      const exp = experiments[expId];
+      if (exp && exp.status && EXPERIMENT_STATUS_WEIGHTS[exp.status] !== undefined) {
+        totalWeight += EXPERIMENT_STATUS_WEIGHTS[exp.status];
+      }
+    }
+
+    return totalWeight / experimentIds.length;
+  } catch {
+    return 0;
   }
 }
 

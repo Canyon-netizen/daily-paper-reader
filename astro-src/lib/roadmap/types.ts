@@ -74,6 +74,7 @@ export interface RoadmapSummary {
   totalGoals: number;
   completedGoals: number;
   inProgressGoals: number;
+  experimentProgress: number; // Weighted progress from linked experiments (0-1)
   quarters: string[];
   tags: string[];
 }

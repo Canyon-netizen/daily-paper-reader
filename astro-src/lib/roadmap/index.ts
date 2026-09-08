@@ -5,6 +5,21 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Roadmap, RoadmapSummary, RoadmapFrontmatter, RoadmapQuarter, RoadmapGoal } from './types';
+import type { ExperimentStatus } from '../experiments/types';
+
+/** Weight for experiment status in progress calculation (per iter3 feedback) */
+const EXPERIMENT_STATUS_WEIGHTS: Record<ExperimentStatus, number> = {
+  completed: 1.0,
+  running: 0.5,
+  planning: 0.1,
+  failed: 0.0,
+  paused: 0.0,
+};
+
+/** Calculate experiment progress weight */
+function getExperimentProgressWeight(status: ExperimentStatus): number {
+  return EXPERIMENT_STATUS_WEIGHTS[status] ?? 0;
+}
 
 const ROADMAP_DIR = path.join(process.cwd(), 'docs', 'roadmap');
 
@@ -223,6 +238,9 @@ export function listRoadmaps(): RoadmapSummary[] {
       }
     }
 
+    // Calculate experiment progress weight (iter3 feedback: completed=1.0, running=0.5, planning=0.1)
+    const experimentProgress = calculateExperimentProgress(roadmap.linked_experiments);
+
     summaries.push({
       id: roadmap.id,
       title: roadmap.title,
@@ -236,6 +254,7 @@ export function listRoadmaps(): RoadmapSummary[] {
       totalGoals: roadmap.quarters.reduce((sum, q) => sum + q.goals.length, 0),
       completedGoals,
       inProgressGoals,
+      experimentProgress,
       quarters: roadmap.quarters.map(q => q.id),
       tags: roadmap.tags,
     });
@@ -245,6 +264,38 @@ export function listRoadmaps(): RoadmapSummary[] {
   summaries.sort((a, b) => b.startDate.localeCompare(a.startDate));
 
   return summaries;
+}
+
+/** Calculate weighted progress from linked experiments */
+function calculateExperimentProgress(experimentIds: string[]): number {
+  if (experimentIds.length === 0) return 0;
+
+  // Only available in browser context for client-side localStorage
+  if (typeof window === 'undefined') return 0;
+
+  try {
+    const stored = localStorage.getItem('dpr_experiments');
+    if (!stored) return 0;
+
+    const doc = JSON.parse(stored);
+    const experiments = doc.experiments || {};
+
+    let totalWeight = 0;
+    let foundCount = 0;
+
+    for (const expId of experimentIds) {
+      const exp = experiments[expId];
+      if (exp && exp.status) {
+        totalWeight += getExperimentProgressWeight(exp.status);
+        foundCount++;
+      }
+    }
+
+    // Return average progress weight across linked experiments
+    return foundCount > 0 ? totalWeight / foundCount : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** Get a single roadmap by ID */
