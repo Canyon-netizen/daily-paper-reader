@@ -73,22 +73,166 @@ const moduleFilter = Astro.url.searchParams.get('module') || 'all';
   <Footer />
 
   <script define:vars={{ baseUrl: base, initialQuery: q, initialModule: moduleFilter }}>
-    // Client-side search using the build-time generated index
+    // Client-side search using both build-time index AND runtime localStorage data
     const indexUrl = baseUrl + '/search-index.json';
 
     let searchIndex = null;
     let loadingIndex = false;
 
+    // Storage keys for runtime data
+    const STORAGE_KEYS = {
+      ideas: 'dpr_ideas_v1',
+      experiments: 'dpr_experiments_v1',
+      writings: 'dpr_writings_v1',
+      roadmaps: 'dpr_roadmaps',
+    };
+
+    // Load runtime data from localStorage
+    function loadRuntimeData() {
+      const runtimeData = [];
+
+      // Load ideas from localStorage
+      try {
+        const ideasRaw = localStorage.getItem(STORAGE_KEYS.ideas);
+        if (ideasRaw) {
+          const ideasDoc = JSON.parse(ideasRaw);
+          if (ideasDoc.ideas) {
+            for (const [id, idea] of Object.entries(ideasDoc.ideas)) {
+              const i = idea as any;
+              runtimeData.push({
+                module: 'ideas',
+                id,
+                title: i.title || id,
+                description: (i.description || i.overview || i['概述'] || '').substring(0, 300),
+                tags: i.tags || [],
+                content: ((i.description || '') + ' ' + (i.overview || i['概述'] || '')).substring(0, 2000),
+                url: `/ideas/${id}`,
+                isRuntime: true,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[search] Failed to load ideas:', e);
+      }
+
+      // Load experiments from localStorage
+      try {
+        const expRaw = localStorage.getItem(STORAGE_KEYS.experiments);
+        if (expRaw) {
+          const expDoc = JSON.parse(expRaw);
+          if (expDoc.experiments) {
+            for (const exp of expDoc.experiments) {
+              runtimeData.push({
+                module: 'experiments',
+                id: exp.id,
+                title: exp.title || exp.titleZh || exp.id,
+                description: ((exp.hypothesis || exp.hypothesisZh || '') + ' ' + (exp.method || exp.methodZh || '')).substring(0, 300),
+                tags: exp.tags || [],
+                content: ((exp.hypothesis || '') + ' ' + (exp.method || '') + ' ' + (exp.expectedResults || '')).substring(0, 2000),
+                url: `/experiments/${exp.id}`,
+                isRuntime: true,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[search] Failed to load experiments:', e);
+      }
+
+      // Load writings from localStorage
+      try {
+        const writingRaw = localStorage.getItem(STORAGE_KEYS.writings);
+        if (writingRaw) {
+          const writingDoc = JSON.parse(writingRaw);
+          if (writingDoc.writings) {
+            for (const [id, writing] of Object.entries(writingDoc.writings)) {
+              const w = writing as any;
+              const sectionTexts = (w.sections || []).map((s: any) => s.content || '').join(' ');
+              runtimeData.push({
+                module: 'writing',
+                id,
+                title: w.title || id,
+                description: (w.abstract || w['摘要'] || '').substring(0, 300),
+                tags: w.tags || [],
+                content: (sectionTexts || '').substring(0, 2000),
+                url: `/writing/${id}`,
+                isRuntime: true,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[search] Failed to load writings:', e);
+      }
+
+      // Load roadmaps from localStorage
+      try {
+        const roadmapRaw = localStorage.getItem(STORAGE_KEYS.roadmaps);
+        if (roadmapRaw) {
+          // Roadmaps are stored as an array directly
+          const roadmaps = JSON.parse(roadmapRaw);
+          if (Array.isArray(roadmaps)) {
+            for (const r of roadmaps) {
+              const goalTexts = (r.quarters || [])
+                .flatMap((q: any) => q.goals || [])
+                .map((g: any) => g.title || '')
+                .join(' ');
+              runtimeData.push({
+                module: 'roadmap',
+                id: r.id,
+                title: r.title || r.titleZh || r.id,
+                description: ((r.description || '') + ' ' + (r.descriptionZh || '')).substring(0, 300),
+                tags: r.tags || [],
+                content: (goalTexts || '').substring(0, 2000),
+                url: `/roadmap/${r.id}`,
+                isRuntime: true,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[search] Failed to load roadmaps:', e);
+      }
+
+      return runtimeData;
+    }
+
     async function loadIndex() {
-      if (searchIndex || loadingIndex) return;
+      if (loadingIndex) return;
       loadingIndex = true;
       try {
         const resp = await fetch(indexUrl);
-        searchIndex = await resp.json();
+        if (resp.ok) {
+          const indexData = await resp.json();
+          // Merge build-time index with runtime localStorage data
+          const runtimeData = loadRuntimeData();
+          searchIndex = {
+            ...indexData,
+            entries: [...(indexData.entries || []), ...runtimeData],
+            count: (indexData.entries?.length || 0) + runtimeData.length,
+          };
+        } else {
+          // Fallback to runtime data only if build-time index unavailable
+          console.warn('[search] Build-time index unavailable, using runtime data only');
+          searchIndex = {
+            v: 1,
+            generatedAt: new Date().toISOString(),
+            modules: Object.keys(STORAGE_KEYS),
+            count: 0,
+            entries: loadRuntimeData(),
+          };
+        }
       } catch (e) {
         console.error('[search] Failed to load index:', e);
-        document.getElementById('search-results').innerHTML =
-          '<p class="search-error">加载搜索索引失败，请刷新页面重试。</p>';
+        // Fallback to runtime data only
+        searchIndex = {
+          v: 1,
+          generatedAt: new Date().toISOString(),
+          modules: Object.keys(STORAGE_KEYS),
+          count: 0,
+          entries: loadRuntimeData(),
+        };
       }
       loadingIndex = false;
     }
