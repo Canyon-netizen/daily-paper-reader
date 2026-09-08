@@ -35,6 +35,7 @@
 
 ## 🆕 最近更新
 
+- **2026-09-01** 🧪 自动化实验思路发掘 (topic-v2) 主循环打通：`astro-src/lib/elo-debate.{ts,mjs}` 抽出纯 Elo + Swiss 配对(浏览器 + Node 共用算法);`scripts/topic-v2-run.mjs` 提供离线 CLI runner(支持 `--dry-run` 让 cron 无 key 也能跑通 smoke);idea 状态机 sketch → candidate → under_review → promoted 接入门控;`scripts/elo-debate-mirror.test.mjs` 守护 TS/JS 镜像不漂移;`.github/workflows/topic-v2.yml` 周日 04:00 UTC 自动跑,默认 dry-run + 手动 workflow_dispatch 可选真跑。详见 `## 🧬 自动化实验思路发掘`。
 - **2026-07-19** 📅 首页浏览体验升级：新增按发布日期浏览的论文日历，联动年 / 月下拉一次切换一个月份；主题分类统一按 `task` 标签归类，兼容旧版 `query:` tags 并展示每个主题下的全部论文。
 - **2026-07-19** 📚 论文库回归检索与整理：移除 cytoscape 相似度网络，改为居中的全量论文列表，保留搜索、标签筛选、详情抽屉、用户标签编辑与隐藏管理。
 - **2026-07-19** ☁️ paper-analyzer 新增自动同步：可在 `/settings/` 开启「论文分析 — 自动同步」，arXiv 分析完成后自动触发 `save-paper.yml`，把笔记写入 `docs/papers/<id>-<slug>.md`；默认关闭，手动保存入口继续保留。
@@ -98,6 +99,7 @@
 | `/papers/` | 论文库：可搜索 / 按标签筛选的全量列表 + 论文详情抽屉 + 用户标签编辑 / 隐藏管理 | `components/PaperLibrary.astro`；用户标签 / 隐藏论文可同步到 Gist |
 | `/papers/<slug>/` | 单篇详情：摘要 + 速览 + 全文笔记 + 图集 + **paper-chat 全文模式**（本地 `.txt` 优先，ar5iv 兜底） | `scripts/paper-chat.ts`、`scripts/paper-fulltext.ts`、`scripts/paper-figures.ts`、`scripts/paper-hide.ts` |
 | `/topic/` | 主题探索：5 阶段状态机（思路 → 拆解 → 搜索 → 总结 → 报告）+ 多轮追问；复用 paper-analyzer 的 LLM / arXiv 链路 | `scripts/topic-search.ts`；会话存 `localStorage` |
+| `/topics/[session_id]/debate/` | 单 session Elo 辩论可视化:leaderboard + persona 气泡 + match transcript + 升级徽章 | `astro-src/pages/topics/[session_id]/debate.astro`(读 localStorage SessionStore.debateProgress) |
 | `/libraries/` | **文献库**：公共主题库（rl / multi-agent / llm-agent / reasoning / computer-vision 等 7 个硬编码方向）+ 用户自建文献库（`statement` / `rubric` / `anchors` / 入库阈值）；详情页 3 tab：论文 / 概念 / 笔记。三层抽象对照 Polaris [`docs/literature-management.md`](../../Polaris/docs/literature-management.md)，DPR 端权威见 [`docs/library-architecture.md`](docs/library-architecture.md) | `lib/libraries.ts`（公共库）+ `lib/user-libraries/`（用户库 CRUD + commit 漏斗）+ `lib/library/relevance.ts`（LLM 评分）+ `lib/library/graph.ts`（概念图谱）+ `scripts/library-ingest.ts`（arXiv 拉取 + 评分） |
 | `/paper-analyzer/` | 长文精读：上传 PDF / arXiv 搜索 / 历史笔记 3 个 tab；走 PDF.js 抽正文 + LLM 4 段笔记 + chunking 应对超大 PDF；arXiv 结果支持手动或自动同步到 GitHub | `scripts/paper-analyzer.ts`（导出 `searchArxiv` / `fetchArxivPdf` / `callLLM` / `SYSTEM_PROMPT`，被 `/topic/` 复用） |
 | `/conferences/` | 会议论文拉取：选会议 + 年份 → 调 GitHub REST `workflow_dispatch` 触发 `conference-init.yml` → 轮询 run 状态 | 直接 fetch `api.github.com`；不走本机后端 |
@@ -585,6 +587,61 @@ git lfs ls-files 'docs/**/*.txt' | wc -l
 git ls-files 'docs/**/*.txt' | wc -l
 # 两者相等时表示完成
 ```
+
+---
+
+## 🧬 自动化实验思路发掘
+
+> 从论文识别"不足 / 缺口",提为 idea 草稿,Elo 辩论筛强,沿状态机升级 → promoted。这是 daily-paper-reader 主线阅读之外的"实验灵感"管线。
+
+### 4 级生命周期
+
+| 状态 | 含义 | 进入门槛(默认阈值) |
+|---|---|---|
+| `sketch` | 从论文 limitations / gaps 提取的原始想法 | 初始态,提取即即 |
+| `candidate` | 已有 1 场胜 + Elo ≥ 1232 | 通过 1 轮 Swiss + judge LLM |
+| `under_review` | Elo ≥ 1250 + ≥ 2 matches + ≥ 1 胜 | 持续辩论中被多次验证 |
+| `promoted` | Elo ≥ 1280 + ≥ 3 matches + ≥ 2 胜 + 非纯 limitation 信号 | top tier,人工 / 报告高亮 |
+
+阈值集中在 `astro-src/lib/idea-lifecycle.ts:GATE_THRESHOLDS`,可整体替换为 `conservative` / `aggressive` 预设。
+
+### 数据流
+
+```
+  论文 (daily pipeline)
+     ↓ topic-search stage 3 / paper-analyzer
+  idea_*.json (archive/<session_id>/debate/)
+     ↓ topic-v2-run.mjs (周日 cron + 手动)
+  Swiss 配对 + LLM judge → elo_rating / matches / wins / debate_log
+     ↓ lifecycle gate check
+  promoted → digest_<YYYYMMDD>.md 落盘
+```
+
+### 关键命令
+
+```bash
+# 全 sessions dry-run(无 key 也能跑)
+node astro-src/scripts/topic-v2-run.mjs --all --dry-run --max-sessions 5
+
+# 单 session 跑真辩论(需要 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL 环境变量)
+node astro-src/scripts/topic-v2-run.mjs --session dedup_test --limit 8 --rounds 3
+
+# 仅重生成 digest(基于已有 JSONs,不再跑辩论)
+node astro-src/scripts/topic-v2-run.mjs --session dedup_test --digest-only
+
+# TS/JS 镜像不漂移守护
+node --test astro-src/scripts/elo-debate-mirror.test.mjs
+```
+
+### 浏览
+
+- `/topics/<session_id>/debate` — 单 session 辩论可视化(leaderboard + persona 气泡 + match transcript)
+- `archive/<session_id>/debate/digest_<YYYYMMDD>.md` — 升级报告(Git 仓内,IDE 可全文搜)
+
+### 触发 CI
+
+- 周日 04:00 UTC cron → dry-run 跑全部 sessions(默认 5 个 cap)
+- GitHub UI → Actions → topic-v2 → Run workflow → 填 `session_id` + `judge_mode`(llm = 真跑,dry-run = stub)
 
 ---
 

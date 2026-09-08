@@ -15,16 +15,24 @@ import { resolveRoute } from '../lib/llm';
 import { loadSettings } from './settings';
 import { injectIntoPromptSync } from './prompt-pack';
 import type { DebateIdea, DebateProgress } from '../lib/schemas';
+// 纯函数复用:把 Elo 算法 + Swiss 配对从 topic-search-v2.ts 抽到 lib/elo-debate.ts,
+// 这样 Node CLI runner (scripts/topic-v2-run.mjs) 与浏览器共用同一份实现,
+// 避免 "两个 Elo" 漂移。浏览器侧只保留 DOM 进度回调与 LLM fetch 封装。
+import {
+  ELO_K,
+  ELO_INITIAL,
+  PERSONAS_DEFAULT,
+  DEBATE_ROUNDS,
+  swissPairs,
+  updateElo,
+} from '../lib/elo-debate';
 
 // ---------------------------------------------------------------------------
-// 常量(对齐 src/elo_debate.py 常量值,跨语言一致)
+// 常量(从 lib/elo-debate.ts 复用;保留 re-export 给旧 caller 不破坏)
 // ---------------------------------------------------------------------------
 
-export const PERSONAS_DEFAULT: readonly string[] = ['方法论者', '工程师', '怀疑论者'];
+export { PERSONAS_DEFAULT, ELO_K, ELO_INITIAL };
 export const DEBATE_MAX_IDEAS = 8;
-export const DEBATE_ROUNDS = 3;
-export const ELO_K = 32;
-export const ELO_INITIAL = 1200;
 export const TOKENS_PER_MATCH_CALL = 16_000;
 export const DEBATE_BUDGET_TOKENS = 800_000;
 
@@ -55,29 +63,8 @@ function escapeHtml(s: string | undefined | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Elo 算法 — 与 src/elo_debate.py 完全等价
+// Elo 算法 + Swiss 配对 — 已抽到 lib/elo-debate.ts 并 import。
 // ---------------------------------------------------------------------------
-
-function expectedScore(a: number, b: number): number {
-  return 1 / (1 + 10 ** ((b - a) / 400));
-}
-
-function updateElo(a: number, b: number, winner: 'a' | 'b' | 'tie'): [number, number] {
-  const ea = expectedScore(a, b);
-  const eb = 1 - ea;
-  if (winner === 'a') return [a + ELO_K * (1 - ea), b - ELO_K * eb];
-  if (winner === 'b') return [a - ELO_K * ea, b + ELO_K * (1 - eb)];
-  return [a, b];
-}
-
-function swissPairs<T extends { elo_rating?: number }>(ideas: T[]): Array<[T, T]> {
-  const ranked = [...ideas].sort((x, y) => (y.elo_rating ?? ELO_INITIAL) - (x.elo_rating ?? ELO_INITIAL));
-  const pairs: Array<[T, T]> = [];
-  for (let k = 0; k + 1 < ranked.length; k += 2) {
-    pairs.push([ranked[k], ranked[k + 1]]);
-  }
-  return pairs;
-}
 
 // ---------------------------------------------------------------------------
 // LLM judge — 与 align src/elo_debate.py:judge_debate 接口一致

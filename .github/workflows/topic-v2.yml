@@ -11,11 +11,11 @@ on:
   workflow_dispatch:
     inputs:
       session_id:
-        description: "可选: 指定 session id;留空则自动生成"
+        description: "可选: 指定 session id;留空则处理所有 sessions"
         required: false
         default: ""
       judge_mode:
-        description: "judge 模式: stub / llm (stub = tie,无 LLM call)"
+        description: "judge 模式: stub / llm (stub = dry-run,无 LLM call)"
         required: false
         default: "stub"
 
@@ -32,33 +32,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      PYTHONUNBUFFERED: "1"
-      TOPIC_V2_JUDGE_MODE: ${{ github.event.inputs.judge_mode || 'stub' }}
+      JUDGE_MODE: ${{ github.event.inputs.judge_mode || 'stub' }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.11"
-          cache: "pip"
+          node-version: '20'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      # No install step needed: topic-v2-run.mjs is pure ESM with zero dependencies.
+      # Runs directly via `node` — no bun, no pip, no requirements.txt.
 
-      - name: Run Topic v2 orchestrator
-        env:
-          TOPIC_V2_SESSION_ID: ${{ github.event.inputs.session_id || '' }}
-        run: |
-          if [ -n "$TOPIC_V2_SESSION_ID" ]; then
-            python -m src.topic_v2 "$TOPIC_V2_SESSION_ID"
-          else
-            python -m src.topic_v2
-          fi
+      - name: Run Topic v2 orchestrator (default cron / no inputs)
+        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.session_id == '' && github.event.inputs.judge_mode == '')
+        run: node astro-src/scripts/topic-v2-run.mjs --all --dry-run --max-sessions 5
+
+      - name: Run Topic v2 orchestrator (with session_id, dry-run)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.session_id != '' && (github.event.inputs.judge_mode == '' || github.event.inputs.judge_mode == 'stub')
+        run: node astro-src/scripts/topic-v2-run.mjs --session ${{ github.event.inputs.session_id }} --dry-run
+
+      - name: Run Topic v2 orchestrator (with session_id + llm judge)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.judge_mode == 'llm'
+        run: node astro-src/scripts/topic-v2-run.mjs --session ${{ github.event.inputs.session_id }}
 
       - name: Commit archive/<session_id>/debate/ if changed
         run: |
@@ -69,7 +70,12 @@ jobs:
             if git diff --staged --quiet; then
               echo "No archive changes to commit"
             else
-              git commit -m "topic-v2: update archive/<session_id>/debate/ [skip ci]"
+              # Extract session_id from the run; default to 'all' if running --all
+              SESSION_ID="${{ github.event.inputs.session_id }}"
+              if [ -z "$SESSION_ID" ]; then
+                SESSION_ID="all"
+              fi
+              git commit -m "topic-v2: update archive/${SESSION_ID}/debate/ [skip ci]"
               git push
             fi
           else
