@@ -4,17 +4,14 @@
 // Shows a single writing with editable sections and citation management.
 // Client-side only (localStorage) - SSR shows shell that hydrates.
 
-// Generate static paths from docs/writing/*.md files
+import { writingPaths } from '../../lib/paths.generated';
+import type { GetStaticPaths } from 'astro';
+
+// Generate static paths from docs/writing/*.md files (auto-generated)
 export const getStaticPaths: GetStaticPaths = async () => {
-  const writings = [
-    'scaling-laws-workshop',
-    'transformer-attention-explained',
-    'multimodal-efficiency-proposal',
-  ];
-  return writings.map((id) => ({ params: { id } }));
+  return writingPaths.map((id) => ({ params: { id } }));
 };
 
-import type { GetStaticPaths } from 'astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
@@ -74,6 +71,10 @@ const papersPayload = { papers: clientPapers };
         <button type="button" class="btn btn-ghost btn-sm" data-edit-metadata>✏️ 编辑元数据</button>
         <button type="button" class="btn btn-ghost btn-sm" data-change-status>改变状态</button>
         <button type="button" class="btn btn-ghost btn-sm" data-delete-writing>🗑️ 删除</button>
+        <div class="writing-export-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-export-markdown>📄 导出 Markdown</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-export-pdf>📑 导出 PDF</button>
+        </div>
       </div>
     </header>
 

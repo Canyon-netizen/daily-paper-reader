@@ -66,6 +66,17 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <button type="button" class="modal-close" aria-label="关闭">×</button>
       </div>
       <form id="experiment-form" class="experiment-form">
+        <!-- Template Picker -->
+        <div class="form-group">
+          <label for="exp-template">选择模板 (可选)</label>
+          <select id="exp-template" name="template">
+            <option value="">— 空白实验 —</option>
+            <option value="ablation-study">消融实验 (Ablation Study)</option>
+            <option value="hyperparameter-sweep">超参数搜索 (Hyperparameter Sweep)</option>
+            <option value="user-study">用户研究 (User Study)</option>
+            <option value="ab-test">A/B 测试 (A/B Test)</option>
+          </select>
+        </div>
         <div class="form-group">
           <label for="exp-title">实验标题 (英文)</label>
           <input

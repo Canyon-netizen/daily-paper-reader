@@ -25,7 +25,7 @@ const workerSnippet = `export default {
   },
 };`;
 
-import { ARXIV_CATEGORIES, PROVIDER_PRESETS, DEFAULT_PROXY } from '../scripts/settings';
+import { ARXIV_CATEGORIES, PROVIDER_PRESETS, DEFAULT_PROXY, DEFAULT_LLM_PROXY } from '../scripts/settings';
 
 const GROUPS: { id: string; label: string }[] = [
   { id: 'cs', label: 'cs — 计算机' },
@@ -405,6 +405,33 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
           <li>之后 arXiv 搜索永久走你自己的代理,公共代理挂了也不影响。</li>
         </ol>
       </details>
+    </section>
+
+    <!-- ===== LLM 本地代理 (2026-09-08) =====
+         与 arXiv CORS 代理是两件事:这里转发的是 POST /v1/chat/completions。
+         proxy 在 server-side 注入 MINIMAX_API_KEY,浏览器不再持有明文 key;
+         同时把每次调用写到 logs/llm-proxy.jsonl,排查问题 / 算 token 成本。 -->
+    <section class="settings-card">
+      <h2 class="settings-card-title">🔁 LLM 本地代理</h2>
+      <p class="settings-card-sub">
+        在本地启 <code>bash scripts/local-llm-proxy.sh</code>(默认监听 <code>{DEFAULT_LLM_PROXY}</code>)后,
+        浏览器把 LLM 请求改发到这里,proxy server-side 注入 API key + 写 JSONL 日志。
+        留空 = 浏览器直连上游 provider(API key 出现在浏览器 Network 面板)。
+      </p>
+
+      <div class="settings-field settings-field-wide">
+        <label for="cfg-llm-proxy">本地代理 URL</label>
+        <input id="cfg-llm-proxy" type="text" placeholder={DEFAULT_LLM_PROXY} />
+        <div class="settings-field-hint">
+          启脚本: <code>bash scripts/local-llm-proxy.sh</code>(需要 .env 含 <code>MINIMAX_API_KEY</code>)。
+          留空 = 关闭,所有 chat 请求直连 provider baseUrl。
+          日志写到 <code>logs/llm-proxy.jsonl</code>(ts / status / latency / model / chars / tokens)。
+        </div>
+        <div class="settings-field-actions">
+          <button type="button" class="settings-action-btn ghost" id="cfg-llm-proxy-test-btn">🩺 测试代理健康</button>
+          <span class="settings-field-status" id="cfg-llm-proxy-status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
     </section>
 
     <!-- ===== 用户标签 ===== -->

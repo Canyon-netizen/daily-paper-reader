@@ -19,6 +19,7 @@ import {
   removeCitation,
 } from '../lib/writing';
 import type { Writing, WritingStatus, WritingType, WritingSection, PaperRef } from '../lib/writing/types';
+import { getWritingTemplate } from '../lib/writing/templates';
 
 // Check if marked is available (will be loaded from CDN)
 declare const marked: any;
@@ -640,12 +641,27 @@ function setupModal(): void {
   const titleInput = document.getElementById('new-writing-title') as HTMLInputElement;
   const typeSelect = document.getElementById('new-writing-type') as HTMLSelectElement;
   const venueInput = document.getElementById('new-writing-venue') as HTMLInputElement;
+  const templateSelect = document.getElementById('new-writing-template') as HTMLSelectElement;
 
   if (!modal || !openBtn || !closeBtn || !createBtn) return;
 
   openBtn.addEventListener('click', () => {
+    // Reset template selection on open
+    if (templateSelect) templateSelect.value = '';
     modal.classList.add('open');
     titleInput?.focus();
+  });
+
+  // Handle template selection - auto-fill type based on template
+  templateSelect?.addEventListener('change', () => {
+    const templateId = templateSelect.value;
+    if (!templateId) return;
+
+    const template = getWritingTemplate(templateId);
+    if (!template) return;
+
+    // Auto-select type based on template
+    typeSelect.value = template.type;
   });
 
   closeBtn.addEventListener('click', () => {
@@ -662,6 +678,7 @@ function setupModal(): void {
     const title = titleInput?.value.trim();
     const type = (typeSelect?.value || 'paper') as WritingType;
     const venue = venueInput?.value.trim();
+    const templateId = templateSelect?.value;
 
     if (!title) {
       alert('请输入标题');
@@ -673,9 +690,24 @@ function setupModal(): void {
       updateWriting(writing.id, { targetVenue: venue });
     }
 
+    // Apply template sections if selected
+    if (templateId) {
+      const template = getWritingTemplate(templateId);
+      if (template && template.sections.length > 0) {
+        const sections = template.sections.map((s) => ({
+          id: `section-${Date.now()}-${s.order}`,
+          title: s.title,
+          content: '',
+          order: s.order,
+        }));
+        updateWriting(writing.id, { sections });
+      }
+    }
+
     // Reset form
     if (titleInput) titleInput.value = '';
     if (venueInput) venueInput.value = '';
+    if (templateSelect) templateSelect.value = '';
     modal.classList.remove('open');
 
     // Redirect to detail page
@@ -867,7 +899,62 @@ function init(): void {
     setupDelete();
     setupCitationPicker();
     setupModalCloseHandlers();
+    setupExport();
   }
+}
+
+// Setup export functionality
+function setupExport(): void {
+  // Export as Markdown
+  const exportMdBtn = document.querySelector('[data-export-markdown]');
+  exportMdBtn?.addEventListener('click', () => {
+    if (!currentWriting) return;
+
+    let md = `# ${currentWriting.title}\n\n`;
+    md += `**状态**: ${STATUS_LABELS[currentWriting.status]}\n`;
+    md += `**类型**: ${TYPE_LABELS[currentWriting.type]}\n`;
+    if (currentWriting.targetVenue) {
+      md += `**目标期刊/会议**: ${currentWriting.targetVenue}\n`;
+    }
+    md += `\n---\n\n`;
+
+    if (currentWriting.abstract) {
+      md += `## 摘要\n\n${currentWriting.abstract}\n\n`;
+    }
+
+    // Sort sections by order
+    const sortedSections = [...currentWriting.sections].sort((a, b) => a.order - b.order);
+    for (const section of sortedSections) {
+      md += `## ${section.title}\n\n${section.content || '(内容待填写)'}\n\n`;
+    }
+
+    // Citations
+    if (currentWriting.citedPapers && currentWriting.citedPapers.length > 0) {
+      md += `---\n\n## 参考文献\n\n`;
+      for (const ref of currentWriting.citedPapers) {
+        md += `- [${ref.arxivId}](https://arxiv.org/abs/${ref.arxivId})`;
+        if (ref.context) {
+          md += ` — ${ref.context}`;
+        }
+        md += '\n';
+      }
+    }
+
+    // Download
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${currentWriting.title.replace(/[^a-zA-Z0-9一-龥]/g, '-')}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // Export as PDF (using window.print)
+  const exportPdfBtn = document.querySelector('[data-export-pdf]');
+  exportPdfBtn?.addEventListener('click', () => {
+    window.print();
+  });
 }
 
 // Run on DOM ready

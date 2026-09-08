@@ -67,6 +67,12 @@ export const STORAGE_KEYS = {
   // 阅读仪表盘缓存(Workspace + Writing + Compare + Dashboard 环形面板)。
   // 纯 localStorage,脏标记触发刷新。
   dashboardCache: 'dpr_dashboard_cache_v1',
+  // LLM 本地代理 URL (scripts/local-llm-proxy.mjs 的入口)。
+  // 设了之后,所有 /v1/chat/completions 请求都改发到这个 URL,
+  // 由本地 proxy server-side 注入 MINIMAX_API_KEY 并转发。
+  // 空字符串 = 直连上游(provider 默认 baseUrl)。
+  // BaseLayout.astro 在 .env 含 DPR_LLM_PROXY_URL 时预填。
+  llmProxy: 'dpr_llm_proxy_v1',
   // 主题在 theme.ts / BaseLayout 里维护,这里不重复
 } as const;
 

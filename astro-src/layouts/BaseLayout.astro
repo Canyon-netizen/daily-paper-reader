@@ -34,6 +34,7 @@ interface ServerLLMConfig {
   model: string;
   provider: string;
   corsProxy: string;  // 默认 Cloudflare Pages 公开代理,浏览器跨域兜底
+  llmProxy: string;   // 本地 LLM 代理 URL(可选),设了之后浏览器所有 chat 请求改走这里
 }
 function readEnvLLMConfig(): ServerLLMConfig | null {
   try {
@@ -69,6 +70,10 @@ function readEnvLLMConfig(): ServerLLMConfig | null {
       provider: 'minimax',
       // 默认代理: 公开 Cloudflare Pages worker(用于浏览器直接 fetch 跨域时兜底)
       corsProxy: env.DPR_CORS_PROXY || 'https://daily-paper-reader.pages.dev/api/proxy',
+      // 本地 LLM 代理(2026-09-08): 如果 .env 写了 DPR_LLM_PROXY_URL(默认 http://localhost:8124),
+      // 浏览器 bootstrap 时自动写入 dpr_llm_proxy_v1,所有 chat 请求改走本地代理。
+      // 空串 = 不启用 proxy,直连上游。
+      llmProxy: (env.DPR_LLM_PROXY_URL || '').trim(),
     };
   } catch {
     return null;
@@ -173,6 +178,15 @@ const serverLLMConfigJson = serverLLMConfig ? JSON.stringify(serverLLMConfig) : 
           // CORS 代理: 默认填公开 worker,除非用户已自配
           if (cfg.corsProxy && !localStorage.getItem('dpr_analyzer_proxy_v1')) {
             localStorage.setItem('dpr_analyzer_proxy_v1', cfg.corsProxy);
+          }
+
+          // 本地 LLM 代理 (2026-09-08) — 如果 .env 写了 DPR_LLM_PROXY_URL,
+          // 浏览器 bootstrap 时自动写入 dpr_llm_proxy_v1。chat.ts 读这个 key 后,
+          // 所有 /v1/chat/completions 请求改发到 proxy,proxy server-side 注入 API key + 写日志。
+          // 留空 = 浏览器直连上游,行为和之前完全一致(向后兼容)。
+          if (cfg.llmProxy && !localStorage.getItem('dpr_llm_proxy_v1')) {
+            localStorage.setItem('dpr_llm_proxy_v1', cfg.llmProxy);
+            console.info(`[dpr-bootstrap] LLM proxy pre-filled: ${cfg.llmProxy}`);
           }
         } catch (e) {
           console.warn('[dpr-bootstrap] failed:', e);

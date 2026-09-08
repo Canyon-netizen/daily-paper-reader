@@ -258,6 +258,37 @@
   display: flex;
   gap: var(--space-2);
   margin-top: var(--space-4);
+  flex-wrap: wrap;
+}
+
+.writing-export-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+/* Print styles for PDF export */
+@media print {
+  .writing-export-actions,
+  .writing-detail-actions button:not([data-export-pdf]),
+  .writing-citations,
+  .writing-versions,
+  .writing-add-citation {
+    display: none !important;
+  }
+
+  .writing-detail {
+    max-width: 100%;
+    padding: 0;
+  }
+
+  .writing-section-content textarea {
+    display: none;
+  }
+
+  .writing-section-content {
+    padding: 0;
+  }
 }
 
 /* Sections editor */

@@ -1,0 +1,258 @@
+---
+// /search — Cross-module unified search page
+//
+// Searches across ideas, experiments, writings, and roadmaps using the build-time
+// generated search index.
+
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/search.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// Get search query from URL
+const q = Astro.url.searchParams.get('q') || '';
+const moduleFilter = Astro.url.searchParams.get('module') || 'all';
+---
+
+<BaseLayout
+  title={`搜索: ${q} · Daily Paper Reader`}
+  description={`搜索结果: ${q}`}
+>
+  <Navbar />
+
+  <main class="search-page">
+    <div class="search-container">
+      <h1>跨模块搜索</h1>
+
+      <form class="search-form" action="/search" method="get">
+        <div class="search-input-group">
+          <input
+            type="text"
+            name="q"
+            id="search-input"
+            class="search-input"
+            placeholder="搜索想法、实验、写作、路线图..."
+            value={q}
+            autofocus
+          />
+          <button type="submit" class="search-submit">搜索</button>
+        </div>
+
+        <div class="search-filters">
+          <label class="filter-label">
+            <input type="radio" name="module" value="all" checked={moduleFilter === 'all'} />
+            全部
+          </label>
+          <label class="filter-label">
+            <input type="radio" name="module" value="ideas" checked={moduleFilter === 'ideas'} />
+            想法
+          </label>
+          <label class="filter-label">
+            <input type="radio" name="module" value="experiments" checked={moduleFilter === 'experiments'} />
+            实验
+          </label>
+          <label class="filter-label">
+            <input type="radio" name="module" value="writing" checked={moduleFilter === 'writing'} />
+            写作
+          </label>
+          <label class="filter-label">
+            <input type="radio" name="module" value="roadmap" checked={moduleFilter === 'roadmap'} />
+            路线图
+          </label>
+        </div>
+      </form>
+
+      <div id="search-results" class="search-results">
+        <p class="search-hint">输入关键词开始搜索...</p>
+      </div>
+    </div>
+  </main>
+
+  <Footer />
+
+  <script define:vars={{ baseUrl: base, initialQuery: q, initialModule: moduleFilter }}>
+    // Client-side search using the build-time generated index
+    const indexUrl = baseUrl + '/search-index.json';
+
+    let searchIndex = null;
+    let loadingIndex = false;
+
+    async function loadIndex() {
+      if (searchIndex || loadingIndex) return;
+      loadingIndex = true;
+      try {
+        const resp = await fetch(indexUrl);
+        searchIndex = await resp.json();
+      } catch (e) {
+        console.error('[search] Failed to load index:', e);
+        document.getElementById('search-results').innerHTML =
+          '<p class="search-error">加载搜索索引失败，请刷新页面重试。</p>';
+      }
+      loadingIndex = false;
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function highlightMatch(text, query) {
+      if (!query || !text) return escapeHtml(text);
+      const escaped = escapeHtml(text);
+      const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+      return escaped.replace(regex, '<mark>$1</mark>');
+    }
+
+    function search(query, module) {
+      if (!searchIndex || !query) {
+        return [];
+      }
+
+      const q = query.toLowerCase();
+      const results = [];
+
+      for (const entry of searchIndex.entries) {
+        // Apply module filter
+        if (module !== 'all' && entry.module !== module) {
+          continue;
+        }
+
+        // Score based on matches
+        let score = 0;
+        const matches = [];
+
+        // Title match (highest weight)
+        if (entry.title && entry.title.toLowerCase().includes(q)) {
+          score += 10;
+          matches.push('title');
+        }
+
+        // Description match
+        if (entry.description && entry.description.toLowerCase().includes(q)) {
+          score += 5;
+          matches.push('description');
+        }
+
+        // Tag match
+        if (entry.tags && entry.tags.some(t => t.toLowerCase().includes(q))) {
+          score += 3;
+          matches.push('tags');
+        }
+
+        // Content match
+        if (entry.content && entry.content.toLowerCase().includes(q)) {
+          score += 1;
+          matches.push('content');
+        }
+
+        if (score > 0) {
+          results.push({
+            ...entry,
+            score,
+            matchedFields: matches,
+          });
+        }
+      }
+
+      // Sort by score descending
+      results.sort((a, b) => b.score - a.score);
+
+      return results;
+    }
+
+    function renderResults(results, query) {
+      const container = document.getElementById('search-results');
+
+      if (!query) {
+        container.innerHTML = '<p class="search-hint">输入关键词开始搜索...</p>';
+        return;
+      }
+
+      if (results.length === 0) {
+        container.innerHTML = `<p class="search-empty">未找到与 "${escapeHtml(query)}" 相关的结果</p>`;
+        return;
+      }
+
+      // Group by module
+      const grouped = {};
+      for (const r of results) {
+        if (!grouped[r.module]) grouped[r.module] = [];
+        grouped[r.module].push(r);
+      }
+
+      const moduleLabels = {
+        ideas: '想法',
+        experiments: '实验',
+        writing: '写作',
+        roadmap: '路线图',
+      };
+
+      let html = `<p class="search-summary">找到 ${results.length} 个结果</p>`;
+
+      for (const [module, entries] of Object.entries(grouped)) {
+        html += `<div class="search-group">`;
+        html += `<h2 class="search-group-title">${moduleLabels[module] || module}</h2>`;
+
+        for (const entry of entries) {
+          const excerpt = entry.description
+            ? entry.description.substring(0, 150) + (entry.description.length > 150 ? '...' : '')
+            : '';
+
+          html += `
+            <div class="search-result">
+              <a href="${entry.url}" class="search-result-link">
+                <h3 class="search-result-title">${highlightMatch(entry.title, query)}</h3>
+              </a>
+              ${excerpt ? `<p class="search-result-excerpt">${highlightMatch(excerpt, query)}</p>` : ''}
+              ${entry.tags && entry.tags.length > 0
+                ? `<div class="search-result-tags">${entry.tags.map(t => `<span class="search-tag">${escapeHtml(t)}</span>`).join('')}</div>`
+                : ''}
+            </div>
+          `;
+        }
+
+        html += `</div>`;
+      }
+
+      container.innerHTML = html;
+    }
+
+    function init() {
+      // Load index immediately
+      loadIndex().then(() => {
+        if (initialQuery) {
+          const results = search(initialQuery, initialModule);
+          renderResults(results, initialQuery);
+        }
+      });
+
+      // Handle form submission
+      const form = document.querySelector('.search-form');
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const formData = new FormData(form);
+        const query = formData.get('q');
+        const module = formData.get('module') || 'all';
+        const url = new URL(window.location.href);
+        url.searchParams.set('q', query);
+        url.searchParams.set('module', module);
+        window.history.pushState({}, '', url);
+
+        const searchResults = search(query, module);
+        renderResults(searchResults, query);
+      });
+    }
+
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
+  </script>
+</BaseLayout>

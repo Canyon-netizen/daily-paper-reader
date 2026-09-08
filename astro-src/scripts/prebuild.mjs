@@ -21,6 +21,8 @@ const SCRIPTS = [
   { name: 'arxiv-index', cmd: 'node', args: [join(HERE, 'build-arxiv-index.mjs')] },
   { name: 'copy-docs', cmd: 'node', args: [join(HERE, 'copy-docs-assets.mjs')] },
   { name: 'search-corpus', cmd: 'node', args: [join(HERE, 'build-search-corpus.mjs')] },
+  { name: 'generate-paths', cmd: 'node', args: [join(HERE, 'generate-paths.mjs')] },
+  { name: 'search-index', cmd: 'node', args: [join(HERE, 'build-search-index.mjs')] },
 ];
 
 const children = [];

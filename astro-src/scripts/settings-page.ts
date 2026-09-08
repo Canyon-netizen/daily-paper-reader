@@ -11,6 +11,8 @@ import {
   saveProvider,
   getCustomProxy,
   setCustomProxy,
+  getCustomLLMProxy,
+  setCustomLLMProxy,
   getGistToken,
   setGistToken,
   getGistId,
@@ -140,6 +142,50 @@ function setModelStatus(msg: string, kind: '' | 'ok' | 'error' | 'warn' = ''): v
   if (!el) return;
   el.textContent = msg;
   el.className = 'settings-model-status' + (kind ? ' ' + kind : '');
+}
+
+function setLLMProxyStatus(msg: string, kind: '' | 'ok' | 'error' | 'warn' = ''): void {
+  const el = document.getElementById('cfg-llm-proxy-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'settings-field-status' + (kind ? ' ' + kind : '');
+}
+
+async function testLLMProxy(): Promise<void> {
+  // 健康检查 — 打 proxy 的 /health,验证:
+  //   1) proxy 进程在跑(没有就 "Failed to fetch");
+  //   2) .env 的 MINIMAX_API_KEY 存在(keyPresent: true);
+  //   3) 上游 URL 可达(proxy 自己会在启动时校验 key,出错就 exit 1)。
+  // 不真的发 chat 请求 — 避免扣 token、避免污染 logs/llm-proxy.jsonl。
+  const url = getCustomLLMProxy();
+  if (!url) { setLLMProxyStatus('✗ 未配置本地代理 URL', 'error'); return; }
+  setLLMProxyStatus('正在测试...');
+  try {
+    const res = await fetch(`${url}/health`, { method: 'GET' });
+    if (!res.ok) {
+      setLLMProxyStatus(`✗ 代理返回 HTTP ${res.status}`, 'error');
+      return;
+    }
+    const data = await res.json() as {
+      ok?: boolean;
+      upstream?: string;
+      model?: string;
+      keyPresent?: boolean;
+      logFile?: string;
+      uptimeSec?: number;
+    };
+    if (!data.ok) { setLLMProxyStatus('✗ 代理返回 ok=false', 'error'); return; }
+    if (!data.keyPresent) {
+      setLLMProxyStatus('✗ proxy 启动时未读到 MINIMAX_API_KEY — 检查 .env', 'error');
+      return;
+    }
+    setLLMProxyStatus(
+      `✓ 健康 — upstream=${data.upstream} model=${data.model} uptime=${data.uptimeSec}s 日志=${data.logFile}`,
+      'ok',
+    );
+  } catch (e) {
+    setLLMProxyStatus(`✗ ${(e as Error)?.message || e} (proxy 没启?跑 bash scripts/local-llm-proxy.sh)`, 'error');
+  }
 }
 
 // ============================================================================
@@ -464,6 +510,19 @@ function init(): void {
   $<HTMLInputElement>('cfg-cors').value = getCustomProxy();
   const debouncedCors = debounce(() => { setCustomProxy($<HTMLInputElement>('cfg-cors').value.trim()); flashSavedHint(); }, 400);
   $<HTMLInputElement>('cfg-cors').addEventListener('input', debouncedCors);
+
+  // --- 5b. LLM 本地代理 (2026-09-08) — 与 CORS 代理独立,转发 /v1/chat/completions。
+  // 启 scripts/local-llm-proxy.sh 后填 URL,chat.ts 会自动改走本地代理。
+  const llmProxyInput = $<HTMLInputElement>('cfg-llm-proxy');
+  llmProxyInput.value = getCustomLLMProxy();
+  const debouncedLlmProxy = debounce(() => {
+    setCustomLLMProxy(llmProxyInput.value.trim());
+    flashSavedHint();
+  }, 400);
+  llmProxyInput.addEventListener('input', debouncedLlmProxy);
+  $<HTMLButtonElement>('cfg-llm-proxy-test-btn').addEventListener('click', () => {
+    void testLLMProxy();
+  });
 
   // --- 6. GitHub 仓库配置(owner/repo/workflow) — 上面那个 PAT 同时给 Gist 同步和
   //     论文保存用,所以这里不重复填 token,只确认仓库配置。

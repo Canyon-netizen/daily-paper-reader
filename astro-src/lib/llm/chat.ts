@@ -22,13 +22,32 @@ const REASONING_MODEL_RE_TOPICSEARCH_DECOMPOSE = /reasoner|reasoning|r1|think/i;
  *  export 出去,call site 显式传,以保留它的历史行为。 */
 export const REASONING_MODEL_PATTERN_WIDE = REASONING_MODEL_RE_TOPICSEARCH_DECOMPOSE;
 
+/** 读取 localStorage `dpr_llm_proxy_v1`(脚本 scripts/local-llm-proxy.mjs 的 URL)。
+ *  SSR / Node 环境没有 localStorage,会返回空串。 */
+function readLLMProxyOverride(): string {
+  try {
+    if (typeof localStorage === 'undefined') return '';
+    const v = (localStorage.getItem('dpr_llm_proxy_v1') || '').trim();
+    if (!v) return '';
+    // 容错:旧版本可能存的是裸 host(没协议头),这里补 http://(loopback 默认 http)
+    return /^https?:\/\//i.test(v) ? v.replace(/\/+$/, '') : `http://${v.replace(/\/+$/, '')}`;
+  } catch {
+    return '';
+  }
+}
+
 /** 调一次 OpenAI 兼容 /v1/chat/completions。 */
 export async function callChatCompletion(
   cfg: LLMConfig,
   opts: CallChatOptions,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ChatResponse> {
-  const url = `${cfg.baseUrl.replace(/\/+$/, '')}/${(opts.urlPath ?? 'v1/chat/completions').replace(/^\/+/, '')}`;
+  // 2026-09-08:如果用户在 localStorage 设了 `dpr_llm_proxy_v1`(= scripts/local-llm-proxy.mjs 的 URL),
+  // 把请求重定向到本地 proxy。proxy server-side 注入 API key,client 这里就不再发
+  // Authorization header(避免明文 key 出现在浏览器 Network 面板 / DevTools)。
+  const proxyUrl = readLLMProxyOverride();
+  const effectiveBase = proxyUrl || cfg.baseUrl;
+  const url = `${effectiveBase.replace(/\/+$/, '')}/${(opts.urlPath ?? 'v1/chat/completions').replace(/^\/+/, '')}`;
   const isDeepSeek = DEEPSEEK_RE.test(cfg.baseUrl);
   const isReasoning = (opts.reasoningModelPattern ?? REASONING_MODEL_RE).test(cfg.model);
   const body: Record<string, unknown> = {
@@ -41,12 +60,19 @@ export async function callChatCompletion(
   if (isDeepSeek && isReasoning) {
     body.thinking = { type: 'disabled' };
   }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (!proxyUrl && cfg.apiKey) {
+    headers.Authorization = `Bearer ${cfg.apiKey}`;
+  }
+  // 走本地 proxy 时附一个调试 tag,便于在 logs/llm-proxy.jsonl 区分调用来源
+  if (proxyUrl && opts.libraryId) {
+    headers['X-LLM-Tag'] = opts.libraryId;
+  }
   const res = await fetchImpl(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.apiKey}`,
-    },
+    headers,
     body: JSON.stringify(body),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
