@@ -26,6 +26,12 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     <section class="agents-controls">
       <div class="agents-controls-row">
         <label>
+          <span>Session</span>
+          <select id="agents-session-picker">
+            <option value="">— 新建 / 输入 —</option>
+          </select>
+        </label>
+        <label>
           <span>Session ID</span>
           <input id="agents-session-id" type="text" placeholder="my-research-project" />
         </label>
@@ -315,6 +321,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
         saveRounds(sid, [...existing, ...records]);
         statusText.textContent = `完成 ${records.length} round(s), stopped: ${stoppedReason}`;
+        refreshSessionPicker();
         refresh();
       } catch (err) {
         statusText.textContent = `错误: ${err instanceof Error ? err.message : String(err)}`;
@@ -325,9 +332,50 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     // 初始化
     const sessionInput = $<HTMLInputElement>('agents-session-id');
+    const sessionPicker = $<HTMLSelectElement>('agents-session-picker');
+
+    function listKnownSessions(): string[] {
+      const out = new Set<string>();
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (!k) continue;
+        const m = k.match(/^dpr_agents_rounds_(.+)$/);
+        if (m) out.add(m[1]);
+      }
+      const cur = loadSessionId();
+      if (cur) out.add(cur);
+      return [...out].sort();
+    }
+
+    function refreshSessionPicker() {
+      const sessions = listKnownSessions();
+      const cur = loadSessionId();
+      sessionPicker.innerHTML = '<option value="">— 新建 / 输入 —</option>' +
+        sessions.map((s) => {
+          const sel = s === cur ? ' selected' : '';
+          return `<option value="${escapeHtml(s)}"${sel}>${escapeHtml(s)}</option>`;
+        }).join('');
+    }
+
     sessionInput.value = loadSessionId();
     currentSessionId = sessionInput.value;
-    sessionInput.addEventListener('change', () => { currentSessionId = sessionInput.value; saveSessionId(sessionInput.value); refresh(); });
+    refreshSessionPicker();
+
+    sessionPicker.addEventListener('change', () => {
+      const v = sessionPicker.value;
+      if (v) {
+        sessionInput.value = v;
+        currentSessionId = v;
+        saveSessionId(v);
+        refresh();
+      }
+    });
+    sessionInput.addEventListener('change', () => {
+      currentSessionId = sessionInput.value;
+      saveSessionId(sessionInput.value);
+      refreshSessionPicker();
+      refresh();
+    });
     $('agents-run-btn').addEventListener('click', runOnce);
     refresh();
   </script>
