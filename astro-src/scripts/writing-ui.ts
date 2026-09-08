@@ -23,8 +23,8 @@ import {
 } from '../lib/writing';
 import type { Writing, WritingStatus, WritingType, WritingSection, PaperRef } from '../lib/writing/types';
 import { getWritingTemplate } from '../lib/writing/templates';
-import { getExperiment } from '../lib/experiments';
-import { getIdea } from '../lib/ideas';
+import { getExperiment, getAllExperiments } from '../lib/experiments';
+import { getIdea, listIdeas } from '../lib/ideas';
 
 // Check if marked is available (will be loaded from CDN)
 declare const marked: any;
@@ -379,6 +379,9 @@ function renderDetailPage(): void {
 
   // Render citations
   renderCitations();
+
+  // Render upstream sources
+  renderUpstreamSources();
 
   // Render versions
   renderVersions();
@@ -810,6 +813,79 @@ async function initCitationPickerSearch(): Promise<void> {
   searchInput.addEventListener('input', filterAndRender);
   // Initial state
   resultsContainer.innerHTML = '<p class="muted">输入关键词搜索论文</p>';
+}
+
+// Render upstream sources
+function renderUpstreamSources(): void {
+  const container = document.querySelector('[data-upstream-list]');
+  if (!container || !currentWriting) return;
+
+  const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+  // Get upstream ideas and experiments
+  const upstreamIdeas = (currentWriting.relatedIdeas || [])
+    .map(id => getIdea(id))
+    .filter(Boolean) as NonNullable<ReturnType<typeof getIdea>>[];
+
+  const upstreamExperiments = (currentWriting.relatedExperiments || [])
+    .map(id => getExperiment(id))
+    .filter(Boolean) as NonNullable<ReturnType<typeof getExperiment>>[];
+
+  if (upstreamIdeas.length === 0 && upstreamExperiments.length === 0) {
+    container.innerHTML = '<p class="muted" style="font-size: 0.9rem;">此写作没有关联上游想法或实验。</p>';
+    return;
+  }
+
+  // Sort by status group then updatedAt descending
+  const ideaStatusOrder: Record<string, number> = { active: 0, running: 1, completed: 2, planning: 3, failed: 4, promoted: 5, archived: 6 };
+  const expStatusOrder: Record<string, number> = { planning: 0, running: 1, completed: 2, failed: 3, paused: 4 };
+
+  const ideaStatusLabels: Record<string, string> = { draft: '草稿', active: '进行中', promoted: '已推荐', archived: '已归档' };
+  const expStatusLabels: Record<string, string> = { planning: '规划中', running: '进行中', completed: '已完成', failed: '失败', paused: '暂停' };
+
+  // Sort ideas
+  const sortedIdeas = [...upstreamIdeas].sort((a, b) => {
+    const aOrder = ideaStatusOrder[a.status] ?? 99;
+    const bOrder = ideaStatusOrder[b.status] ?? 99;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+
+  // Sort experiments
+  const sortedExperiments = [...upstreamExperiments].sort((a, b) => {
+    const aOrder = expStatusOrder[a.status] ?? 99;
+    const bOrder = expStatusOrder[b.status] ?? 99;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+
+  const ideasHtml = sortedIdeas.length > 0 ? `
+    <h4 class="upstream-subtitle">💡 想法</h4>
+    <div class="upstream-items">
+      ${sortedIdeas.map(i => `
+        <a href="${base}/ideas/${i.id}/" class="upstream-item">
+          <span class="upstream-item-title">${escapeHtml(i.title)}</span>
+          <span class="upstream-item-badge upstream-item-badge--${i.status}">${ideaStatusLabels[i.status] || i.status}</span>
+          <span class="upstream-item-date">${new Date(i.updatedAt).toLocaleDateString('zh-CN')}</span>
+        </a>
+      `).join('')}
+    </div>
+  ` : '';
+
+  const experimentsHtml = sortedExperiments.length > 0 ? `
+    <h4 class="upstream-subtitle">🧪 实验</h4>
+    <div class="upstream-items">
+      ${sortedExperiments.map(e => `
+        <a href="${base}/experiments/${e.id}/" class="upstream-item">
+          <span class="upstream-item-title">${escapeHtml(e.title)}</span>
+          <span class="upstream-item-badge upstream-item-badge--${e.status}">${expStatusLabels[e.status] || e.status}</span>
+          <span class="upstream-item-date">${new Date(e.updatedAt).toLocaleDateString('zh-CN')}</span>
+        </a>
+      `).join('')}
+    </div>
+  ` : '';
+
+  container.innerHTML = `${ideasHtml}${experimentsHtml}`;
 }
 
 // Render versions
@@ -1490,6 +1566,27 @@ function setupExport(): void {
     a.href = url;
     a.download = `${currentWriting.title.replace(/[^a-zA-Z0-9一-龥]/g, '-')}.md`;
     a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // Export as JSON
+  const exportJsonBtn = document.querySelector('[data-export-json]');
+  exportJsonBtn?.addEventListener('click', () => {
+    if (!currentWriting) return;
+
+    // Build export data with upstreamFetchedAt
+    const exportData = {
+      ...currentWriting,
+      upstreamFetchedAt: Date.now(),
+    };
+
+    const json = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${currentWriting.id}.json`;
+    link.click();
     URL.revokeObjectURL(url);
   });
 

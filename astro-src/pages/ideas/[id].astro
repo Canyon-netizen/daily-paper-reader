@@ -44,9 +44,11 @@ const { id } = Astro.params;
   <Footer />
 
   <script define:vars={{ ideaId: id, baseUrl: base }}>
-    import { getIdea, updateIdea, deleteIdea } from '../../lib/ideas';
+    import { getIdea, updateIdea, deleteIdea, listIdeas } from '../../lib/ideas';
     import type { Idea, IdeaStatus } from '../../lib/ideas/types';
     import { renderMarkdownBody } from '../../lib/markdown/render';
+    import { getAllExperiments } from '../../lib/experiments';
+    import { listWritings } from '../../lib/writing';
 
     const statusLabels: Record<IdeaStatus, string> = {
       draft: '草稿',
@@ -137,11 +139,13 @@ const { id } = Astro.params;
 
           ${papersHtml}
           ${conceptsHtml}
+          ${renderDerivedTrackingHtml(idea)}
         </div>
 
         <div class="idea-detail-actions">
           <button type="button" class="btn btn-ghost" data-edit-idea>✏️ 编辑</button>
           <button type="button" class="btn btn-primary" data-create-experiment>🔬 创建实验</button>
+          <button type="button" class="btn btn-ghost" data-export-json>📋 导出 JSON</button>
           <div class="idea-status-actions">
             ${idea.status !== 'active' ? `<button type="button" class="btn btn-sm" data-status="active">🚀 进行中</button>` : ''}
             ${idea.status !== 'promoted' ? `<button type="button" class="btn btn-sm" data-status="promoted">⭐ 推荐</button>` : ''}
@@ -165,6 +169,18 @@ const { id } = Astro.params;
         params.set('prefill_hypothesis', idea.description);
         params.set('prefill_papers', idea.relatedPapers.join(','));
         window.location.href = `${baseUrl}/experiments/?${params.toString()}`;
+      });
+
+      // Export JSON handler
+      container.querySelector<HTMLButtonElement>('[data-export-json]')?.addEventListener('click', () => {
+        const json = JSON.stringify(idea, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${idea.id}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
       });
 
       container.querySelectorAll<HTMLButtonElement>('[data-status]').forEach((btn) => {
@@ -275,10 +291,146 @@ const { id } = Astro.params;
         .replace(/"/g, '&quot;');
     }
 
+    /** Render derived tracking section - shows experiments and writings derived from this idea */
+    function renderDerivedTrackingHtml(idea: Idea): string {
+      const derivedExperiments = getAllExperiments().filter(e =>
+        e.relatedIdeas?.includes(idea.id)
+      );
+      const derivedWritings = listWritings().filter(w =>
+        w.relatedIdeas?.includes(idea.id)
+      );
+
+      if (derivedExperiments.length === 0 && derivedWritings.length === 0) {
+        return `<div class="idea-detail-section derived-tracking-section">
+          <h4>🔗 派生追踪</h4>
+          <p class="derived-empty">还没有派生的实验或写作。</p>
+          <div class="derived-cta">
+            <a href="${baseUrl}/experiments/?prefill_idea_id=${encodeURIComponent(idea.id)}&prefill_title=${encodeURIComponent(idea.title)}" class="btn btn-sm">🧪 创建实验</a>
+            <a href="${baseUrl}/writing/?prefill_idea_id=${encodeURIComponent(idea.id)}&prefill_title=${encodeURIComponent(idea.title)}" class="btn btn-sm">📝 创建写作</a>
+          </div>
+        </div>`;
+      }
+
+      // Count summary
+      const expCount = derivedExperiments.length;
+      const writingCount = derivedWritings.length;
+      const countSummary = `派生 ${expCount} 个实验 ${writingCount > 0 ? `+ ${writingCount} 个写作` : ''}`;
+
+      // Status order for sorting
+      const expStatusOrder: Record<string, number> = { active: 0, running: 1, completed: 2, planning: 3, failed: 4, paused: 5, archived: 6 };
+      const writingStatusOrder: Record<string, number> = { review: 0, draft: 1, final: 2 };
+
+      // Sort experiments by status group then by createdAt descending
+      const sortedExperiments = [...derivedExperiments].sort((a, b) => {
+        const aOrder = expStatusOrder[a.status] ?? 99;
+        const bOrder = expStatusOrder[b.status] ?? 99;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+
+      // Sort writings by status group then by updatedAt descending
+      const sortedWritings = [...derivedWritings].sort((a, b) => {
+        const aOrder = writingStatusOrder[a.status] ?? 99;
+        const bOrder = writingStatusOrder[b.status] ?? 99;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return b.updatedAt - a.updatedAt;
+      });
+
+      // Group experiments by status for collapsible sections
+      const expGroups: Record<string, typeof derivedExperiments> = {};
+      for (const exp of sortedExperiments) {
+        const status = exp.status;
+        if (!expGroups[status]) expGroups[status] = [];
+        expGroups[status].push(exp);
+      }
+
+      // Group writings by status
+      const writingGroups: Record<string, typeof derivedWritings> = {};
+      for (const w of sortedWritings) {
+        const status = w.status;
+        if (!writingGroups[status]) writingGroups[status] = [];
+        writingGroups[status].push(w);
+      }
+
+      const expStatusLabels: Record<string, string> = { planning: '规划中', running: '进行中', completed: '已完成', failed: '失败', paused: '暂停' };
+      const writingStatusLabels: Record<string, string> = { draft: '草稿', review: '审核中', final: '已完成' };
+
+      // Default expanded statuses
+      const defaultExpandedStatuses = ['completed', 'promoted'];
+
+      let experimentsHtml = '';
+      for (const [status, exps] of Object.entries(expGroups)) {
+        const isExpanded = defaultExpandedStatuses.includes(status);
+        experimentsHtml += `
+          <div class="derived-status-group" data-status="${status}">
+            <button type="button" class="derived-group-header" data-toggle-group="${status}">
+              <span class="derived-group-toggle">${isExpanded ? '▼' : '▶'}</span>
+              <span class="derived-group-status">${expStatusLabels[status] || status}</span>
+              <span class="derived-group-count">(${exps.length})</span>
+            </button>
+            <div class="derived-group-content" ${isExpanded ? '' : 'hidden'}>
+              ${exps.map(exp => `
+                <a href="${baseUrl}/experiments/${exp.id}/" class="derived-item">
+                  <span class="derived-item-title">${escapeHtml(exp.title)}</span>
+                  <span class="derived-item-badge derived-item-badge--${exp.status}">${expStatusLabels[exp.status] || exp.status}</span>
+                  <span class="derived-item-date">${new Date(exp.createdAt).toLocaleDateString('zh-CN')}</span>
+                </a>
+              `).join('')}
+            </div>
+          </div>`;
+      }
+
+      let writingsHtml = '';
+      for (const [status, ws] of Object.entries(writingGroups)) {
+        const isExpanded = defaultExpandedStatuses.includes(status);
+        writingsHtml += `
+          <div class="derived-status-group" data-status="${status}">
+            <button type="button" class="derived-group-header" data-toggle-group="${status}">
+              <span class="derived-group-toggle">${isExpanded ? '▼' : '▶'}</span>
+              <span class="derived-group-status">${writingStatusLabels[status] || status}</span>
+              <span class="derived-group-count">(${ws.length})</span>
+            </button>
+            <div class="derived-group-content" ${isExpanded ? '' : 'hidden'}>
+              ${ws.map(w => `
+                <a href="${baseUrl}/writing/${w.id}/" class="derived-item">
+                  <span class="derived-item-title">${escapeHtml(w.title)}</span>
+                  <span class="derived-item-badge derived-item-badge--writing">${writingStatusLabels[w.status] || w.status}</span>
+                  <span class="derived-item-date">${new Date(w.updatedAt).toLocaleDateString('zh-CN')}</span>
+                </a>
+              `).join('')}
+            </div>
+          </div>`;
+      }
+
+      return `<div class="idea-detail-section derived-tracking-section">
+        <h4>🔗 派生追踪</h4>
+        <p class="derived-count-summary">${countSummary}</p>
+        ${experimentsHtml ? `<div class="derived-list derived-experiments">${experimentsHtml}</div>` : ''}
+        ${writingsHtml ? `<div class="derived-list derived-writings">${writingsHtml}</div>` : ''}
+      </div>`;
+    }
+
+    // Setup toggle handlers for derived tracking groups
+    function setupDerivedTrackingToggles(): void {
+      document.querySelectorAll<HTMLButtonElement>('[data-toggle-group]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const status = btn.dataset.toggleGroup;
+          const content = btn.parentElement?.querySelector('.derived-group-content');
+          const toggle = btn.querySelector('.derived-group-toggle');
+          if (content && toggle) {
+            const isHidden = content.hasAttribute('hidden');
+            content.toggleAttribute('hidden', !isHidden);
+            toggle.textContent = isHidden ? '▼' : '▶';
+          }
+        });
+      });
+    }
+
     // Initialize
     const idea = getIdea(ideaId);
     if (idea) {
       renderDetail(idea);
+      setupDerivedTrackingToggles();
     } else {
       const container = document.getElementById('idea-detail-content');
       if (container) {

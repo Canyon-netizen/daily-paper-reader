@@ -10,7 +10,8 @@ import {
   deleteIdea,
   getIdeaCounts,
 } from '../lib/ideas';
-import { createExperiment, updateExperiment } from '../lib/experiments';
+import { createExperiment, updateExperiment, getAllExperiments } from '../lib/experiments';
+import { listWritings } from '../lib/writing';
 
 let currentFilter: IdeaStatus | 'all' = 'all';
 let lastStatusChange: { ideaId: string; oldStatus: IdeaStatus; timeout: number } | null = null;
@@ -461,6 +462,43 @@ function setupBatchOperations(): void {
   batchModal?.addEventListener('click', (e) => {
     if (e.target === batchModal) batchModal.close();
   });
+
+  // Export all lifecycle data
+  const exportAllBtn = document.querySelector<HTMLButtonElement>('[data-export-all]');
+  exportAllBtn?.addEventListener('click', () => {
+    exportAllLifecycle();
+  });
+}
+
+/** Export all lifecycle data (ideas, experiments, writings) */
+function exportAllLifecycle(): void {
+  const ideas = listIdeas();
+  const experiments = getAllExperiments();
+  const writings = listWritings();
+
+  const exportData = {
+    exportedAt: new Date().toISOString(),
+    ideas,
+    experiments,
+    writings,
+  };
+
+  const json = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  a.download = `dpr-lifecycle-export-${yyyy}${mm}${dd}.json`;
+
+  a.click();
+  URL.revokeObjectURL(url);
+
+  showToast(`已导出 ${ideas.length} 个想法 + ${experiments.length} 个实验 + ${writings.length} 个写作`);
 }
 
 /** Open batch experiment modal */

@@ -47,6 +47,7 @@ const { id } = Astro.params;
   <script define:vars={{ expId: id, baseUrl: base }}>
     import { getExperiment, updateExperiment } from '../../lib/experiments';
     import type { Experiment, ExperimentStatus, ExperimentVariable } from '../../lib/experiments/types';
+    import { listWritings } from '../../lib/writing';
 
     const statusLabels: Record<ExperimentStatus, string> = {
       planning: '规划中',
@@ -190,6 +191,7 @@ const { id } = Astro.params;
         ${tagsHtml}
         ${papersHtml}
         ${ideasHtml}
+        ${renderCitingWritingsHtml(exp)}
 
         <div class="exp-detail-actions">
           <button type="button" class="btn btn-primary" data-edit-experiment>✏️ 编辑实验</button>
@@ -403,6 +405,49 @@ const { id } = Astro.params;
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;');
+    }
+
+    /** Render citing writings section */
+    function renderCitingWritingsHtml(exp: Experiment): string {
+      const citingWritings = listWritings().filter(w =>
+        w.relatedExperiments?.includes(exp.id)
+      );
+
+      if (citingWritings.length === 0) {
+        return `<section class="exp-section citing-writings-section">
+          <h2 class="exp-section-title">📝 引用的写作</h2>
+          <p class="citing-writings-empty">还没有引用本实验的写作。</p>
+          <a href="${baseUrl}/writing/?prefill_experiment_id=${encodeURIComponent(exp.id)}&prefill_title=${encodeURIComponent(exp.title)}" class="btn btn-sm">📝 创建写作</a>
+        </section>`;
+      }
+
+      // Sort by status group then updatedAt descending
+      const statusOrder: Record<string, number> = { review: 0, draft: 1, final: 2 };
+      const sortedWritings = [...citingWritings].sort((a, b) => {
+        const aOrder = statusOrder[a.status] ?? 99;
+        const bOrder = statusOrder[b.status] ?? 99;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return b.updatedAt - a.updatedAt;
+      });
+
+      const typeLabels: Record<string, string> = { paper: '论文', section: '章节', note: '笔记', review: '综述', translation: '翻译' };
+      const statusLabels: Record<string, string> = { draft: '草稿', review: '审核中', final: '已完成' };
+
+      return `<section class="exp-section citing-writings-section">
+        <h2 class="exp-section-title">📝 引用的写作</h2>
+        <div class="citing-writings-list">
+          ${sortedWritings.map(w => `
+            <a href="${baseUrl}/writing/${w.id}/" class="citing-writing-card">
+              <span class="citing-writing-title">${escapeHtml(w.title)}</span>
+              <span class="citing-writing-badges">
+                <span class="citing-writing-type">${typeLabels[w.type] || w.type}</span>
+                <span class="citing-writing-status citing-writing-status--${w.status}">${statusLabels[w.status] || w.status}</span>
+              </span>
+              <span class="citing-writing-date">${new Date(w.updatedAt).toLocaleDateString('zh-CN')}</span>
+            </a>
+          `).join('')}
+        </div>
+      </section>`;
     }
 
     // Initialize
