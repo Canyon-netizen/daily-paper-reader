@@ -27,14 +27,23 @@ CATEGORY_ENUM = {
 CONCEPT_EXTRACT_SYSTEM_PROMPT = (
     "你是一个学术论文概念提取助手。从论文中提取 3 到 7 个核心概念,输出 JSON。\n"
     "输出 schema(严格 JSON,不要 markdown code block 包裹):\n"
-    '{"concepts": [{"name": "显示名", "slug": "kebab-case", '
+    '{"concepts": [{"name": "显示名(中文,2-6 字)", "slug": "kebab-case", '
     '"category": "method|architecture|methodology|problem|metric|dataset|other", '
     '"novelty": 0-1, "centrality": 0-1}]}\n\n'
     "novelty: 这个概念在 2025 年是否是'新提出的'(1=新,0=已有)。\n"
     "centrality: 这个概念在这篇论文里的中心程度(1=核心,0=次要)。\n"
     "category 严格使用 7 个枚举值之一。\n"
     "只输出已有领域概念(如 RAG / LoRA / Diffusion),不要编造新词。\n"
-    "slug 字段必须满足 ^[a-z0-9-]+$ (kebab-case)。"
+    "slug 字段必须满足 ^[a-z0-9-]+$ (kebab-case)。\n"
+    "\n"
+    "## name 字段硬约束(2026-09-08 加入,治中英混存 + 论文标题污染)\n"
+    "- 必须用中文,2-6 个汉字(如「检索增强生成」「人类反馈强化学习」)\n"
+    "- 禁止英文/拉丁字母(包括 paper title 中的英文术语 → 用中文意译)\n"
+    "- 禁止返回整篇论文标题(常见污染:把 'StarBench: A Turn-Based RPG Benchmark ...' 当 name)\n"
+    "- 禁止冒号 / 破折号 / 括号(简短的「名称」,不是「说明」)\n"
+    "- 长度 ≤ 8 字符,超过则截取核心词\n"
+    "- 已是英文术语但中文无对应译名的(罕见)→ 用英文但限 1-3 个单词,如 'LoRA' 'Diffusion'\n"
+    "违反以上任一约束的 name 视为脏数据,前端会丢弃。"
 )
 
 

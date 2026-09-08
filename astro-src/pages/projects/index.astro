@@ -8,11 +8,14 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import '../../styles/projects.css';
 import '../../styles/writing.css';
+import '../../styles/ideas.css';
+import '../../styles/projects-highlights.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
 const PROJECT_TABS = [
   { id: 'papers', label: '📑 论文', icon: 'papers' },
+  { id: 'ideas', label: '💡 Ideas', icon: 'ideas' },
   { id: 'writing', label: '📝 写作', icon: 'writing' },
   { id: 'highlights', label: '🧩 高亮', icon: 'highlights' },
 ] as const;
@@ -152,7 +155,27 @@ const PROJECT_TABS = [
         </div>
       </div>
 
-      <!-- Highlights tab panel (placeholder) -->
+      <!-- Ideas tab panel (Phase G idea bank) -->
+      <div
+        class="tab-panel"
+        id="panel-ideas"
+        role="tabpanel"
+        aria-labelledby="tab-ideas"
+        hidden
+      >
+        <div class="ideas-tab-content">
+          <div class="ideas-header">
+            <h3>💡 研究思路</h3>
+            <button class="button primary" id="ideas-generate-btn">🚀 生成思路</button>
+          </div>
+          <p class="ideas-sub">从项目下的论文 + method_debate + (可选) 标定 paper 派生可执行 idea。</p>
+          <div class="ideas-anchor-picker" id="ideas-anchor-picker"></div>
+          <div class="ideas-list" id="ideas-list"></div>
+          <p class="ideas-empty">还没有 idea — 点上方按钮生成。</p>
+        </div>
+      </div>
+
+      <!-- Highlights tab panel (Phase B → 升级到聚合视图,见 projects-highlights-ui.ts) -->
       <div
         class="tab-panel"
         id="panel-highlights"
@@ -161,7 +184,13 @@ const PROJECT_TABS = [
         hidden
       >
         <div class="highlights-tab-content">
-          <p class="highlights-placeholder">高亮聚合（Phase B MVP）</p>
+          <div class="highlights-header">
+            <h3>🧩 论文高亮</h3>
+            <p class="highlights-sub">
+              聚合本项目所有论文的全文高亮 + 注释。回论文页选段文字 → 「🖍 添加高亮」即可入库。
+            </p>
+          </div>
+          <div id="highlights-mount" class="highlights-mount"></div>
         </div>
       </div>
     </section>
@@ -307,6 +336,8 @@ const PROJECT_TABS = [
       renderTabs();
       renderPapersTab();
       renderWritingTab();
+      renderIdeasTab();
+      renderHighlightsTab();
     }
 
     // Render tabs
@@ -319,6 +350,43 @@ const PROJECT_TABS = [
         });
       });
       switchTab(currentTab);
+    }
+
+    // Render ideas tab (Phase G idea bank)
+    async function renderIdeasTab(): Promise<void> {
+      if (!currentProjectId) return;
+      const list = document.getElementById('ideas-list');
+      const empty = document.querySelector('.ideas-empty') as HTMLElement | null;
+      const anchorPicker = document.getElementById('ideas-anchor-picker');
+      const generateBtn = document.getElementById('ideas-generate-btn');
+      if (!list || !generateBtn) return;
+
+      // 挂 idea-bank UI (idempotent, attachIdeaBankUI 返回 cleanup 函数)
+      // 动态 import 避免 SSR 编译含 window/document 的文件
+      const { attachIdeaBankUI } = await import(
+        /* @vite-ignore */ '../../scripts/projects-idea-bank'
+      );
+      const cleanup = attachIdeaBankUI(
+        document.querySelector('.ideas-tab-content') as HTMLElement,
+        currentProjectId,
+      );
+      // 切换 tab 时 cleanup — 简化: 用 pagehide
+      window.addEventListener('pagehide', () => cleanup(), { once: true });
+    }
+
+    // Render highlights tab (project-level aggregation + inline note edit)
+    async function renderHighlightsTab(): Promise<void> {
+      if (!currentProjectId) return;
+      const mount = document.getElementById('highlights-mount') as HTMLElement | null;
+      if (!mount) return;
+      // 每次打开项目都重新挂载(避免上次 projectId 残留)
+      mount.innerHTML = '';
+      delete mount.dataset.phlMounted;
+      const { attachHighlightsUI } = await import(
+        /* @vite-ignore */ '../../scripts/projects-highlights-ui'
+      );
+      const { cleanup } = attachHighlightsUI(mount, currentProjectId);
+      window.addEventListener('pagehide', () => cleanup(), { once: true });
     }
 
     // Switch tab

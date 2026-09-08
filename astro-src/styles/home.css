@@ -607,3 +607,370 @@
   .home .stat-value-sm { font-size: 0.85rem; }
   .home .section-header { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
 }
+
+/* ============================================================
+ * Home Search Box (iter2)
+ * ============================================================ */
+.libraries-page .home-search-box {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.5rem 0 2rem;
+  flex-wrap: wrap;
+}
+.libraries-page .search-form {
+  display: flex;
+  flex: 1;
+  min-width: 280px;
+  max-width: 480px;
+}
+.libraries-page .search-input {
+  flex: 1;
+  padding: 0.65rem 1rem;
+  font-size: 0.95rem;
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  background: var(--bg);
+  color: var(--fg);
+  outline: none;
+  transition: border-color var(--transition);
+}
+.libraries-page .search-input:focus {
+  border-color: var(--accent);
+}
+.libraries-page .search-input::placeholder {
+  color: var(--fg-subtle);
+}
+.libraries-page .search-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.libraries-page .search-btn:hover {
+  background: var(--accent-hover);
+}
+.libraries-page .research-dashboard-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.65rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: all var(--transition);
+}
+.libraries-page .research-dashboard-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+@media (max-width: 480px) {
+  .libraries-page .home-search-box {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .libraries-page .search-form {
+    max-width: none;
+  }
+}
+
+/* ============================================================
+ * Research Workflow Section (2026-09-07)
+ * ============================================================ */
+.libraries-page .research-workflow-section {
+  max-width: var(--shell-max-width, 1100px);
+  margin: 0 auto 2.5rem;
+  padding: 0 1.5rem;
+}
+.libraries-page .workflow-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+  color: var(--fg);
+}
+.libraries-page .workflow-desc {
+  color: var(--fg-muted);
+  margin: 0 0 1.25rem;
+  font-size: 0.95rem;
+}
+.libraries-page .workflow-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+.libraries-page .workflow-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.25rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  transition: all var(--transition);
+}
+.libraries-page .workflow-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+}
+.libraries-page .workflow-icon {
+  font-size: 1.75rem;
+  margin-bottom: 0.5rem;
+}
+.libraries-page .workflow-label {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--fg);
+  margin-bottom: 0.25rem;
+}
+.libraries-page .workflow-desc-sm {
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+}
+
+.libraries-page .workflow-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.35rem;
+  margin-left: 0.35rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+}
+
+.libraries-page .workflow-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Mobile-first: ensure workflow-cards works without .libraries-page parent */
+.workflow-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+}
+.workflow-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.25rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  transition: all var(--transition);
+}
+.workflow-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  text-decoration: none;
+}
+
+@media (max-width: 900px) {
+  .workflow-cards {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 720px) {
+  .workflow-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .workflow-cards {
+    grid-template-columns: 1fr;
+  }
+  .workflow-card {
+    padding: 1rem 0.75rem;
+  }
+}
+
+/* Welcome Modal */
+.welcome-modal {
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 0;
+  background: var(--bg-elevated);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-width: 520px;
+  width: 90%;
+}
+
+.welcome-modal::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.welcome-modal[open] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.welcome-modal-content {
+  padding: var(--space-8);
+}
+
+.welcome-header {
+  text-align: center;
+  margin-bottom: var(--space-6);
+}
+
+.welcome-icon {
+  font-size: 3rem;
+  display: block;
+  margin-bottom: var(--space-4);
+}
+
+.welcome-header h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.welcome-desc {
+  text-align: center;
+  color: var(--fg-muted);
+  margin-bottom: var(--space-6);
+  line-height: 1.6;
+}
+
+.welcome-features {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.welcome-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.welcome-feature-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.welcome-feature strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.welcome-feature p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+
+.welcome-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.welcome-dont-show {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.welcome-dont-show input {
+  cursor: pointer;
+}
+
+@media (max-width: 480px) {
+  .welcome-modal-content {
+    padding: var(--space-5);
+  }
+  .welcome-footer {
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+}
+
+/* ============================================================
+ * Recent Papers Section (R5)
+ * ============================================================ */
+.libraries-page .recent-papers-section {
+  max-width: var(--shell-max-width, 1100px);
+  margin: 0 auto 2rem;
+  padding: 0 1.5rem;
+}
+.libraries-page .recent-papers-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin: 0 0 1rem;
+  color: var(--fg);
+}
+.libraries-page .recent-papers-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 0.75rem;
+}
+.libraries-page .recent-paper-card {
+  display: flex;
+  flex-direction: column;
+  padding: 0.85rem 1rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: all var(--transition);
+}
+.libraries-page .recent-paper-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+  text-decoration: none;
+}
+.libraries-page .recent-paper-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg);
+  line-height: 1.4;
+  margin-bottom: 0.5rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.libraries-page .recent-paper-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
+.libraries-page .recent-paper-arxiv {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+}

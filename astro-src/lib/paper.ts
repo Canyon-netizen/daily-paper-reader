@@ -18,6 +18,11 @@
 
 import { buildCategories, type Categories } from './taxonomies';
 import type { ConceptRef } from './types/concept';
+import type { ResourceTier, DataScale } from './types/resource-tier';
+import {
+  inferResourceTier,
+  inferDataScale,
+} from './types/resource-tier';
 import { extractVenue } from './venue';
 import { stripTitleMarkup } from './title';
 import { applyPaperFilters } from './paper-filter';
@@ -107,6 +112,17 @@ export interface PaperFrontmatter {
   method_debate_model?: string;
   /** 深入追问:3-5 个引导性问题,帮助读者深入探索这篇论文。 */
   follow_up_questions?: string[];
+  /** 深度抽取:指标/数据集/算力需求/局限性/可复现性评分。由 paper.deep_extract LLM 生成。 */
+  deep_extract?: {
+    reported_metrics: Array<{ name: string; value: string; context?: string }>;
+    datasets: Array<{ name: string; role: string; size?: string }>;
+    compute_requirements: { params?: string; gpu_hours?: string; model_size?: string; flops?: string };
+    limitations: string[];
+    replicability_score: number;
+    replicability_reason: string;
+    deep_extract_model?: string;
+    deep_extract_generated_at?: string;
+  };
   [key: string]: unknown;
 }
 
@@ -130,6 +146,12 @@ export interface Paper extends PaperFrontmatter {
    *  讨论与可借鉴点)。由 translate_polaris.py 写入 .md 之后,parseFrontmatter
    *  + extractWikiArticle 抽出来。workbench 右侧详情面板就地展示。 */
   wikiContent?: string;
+  // 派生字段:基于 deep_extract.compute_requirements 推断的算力档位(目标 4)。
+  // 仅在内存中计算,不写 frontmatter(backfill 单独脚本负责 SSG / 列表筛选场景)。
+  // 'unknown' = 字段缺失或推断失败。
+  resourceTier?: ResourceTier;
+  // 派生字段:基于 deep_extract.datasets / 文本推断的数据规模。
+  dataScale?: DataScale;
 }
 
 export interface FigureEntry {
@@ -147,12 +169,17 @@ export interface FigureEntry {
 // lib/paper-frontmatter/,本文件顶部已 import 它们。
 
 export async function readPaper(id: string): Promise<Paper | null> {
+  // per-build 缓存命中(Phase J2):同一 paper id 在同一 build 进程内只读一次盘
+  if (_paperCache.has(id)) {
+    return _paperCache.get(id) ?? null;
+  }
   const disk = await import('./paper-disk.mjs');
   const mdPath = disk.joinPath(disk.DOCS_DIR, `${id}.md`);
   let text: string;
   try {
     text = await disk.readTextFile(mdPath);
   } catch {
+    _paperCache.set(id, null);
     return null;
   }
   const parsed = parseFrontmatter(text);
@@ -182,7 +209,38 @@ export async function readPaper(id: string): Promise<Paper | null> {
   const figures = fmFigures.length > 0
     ? fmFigures
     : (await loadFiguresFromAssetMeta(arxivId)) ?? [];
-  return {
+  // 派生算力档位 / 数据规模(目标 4):
+  //   优先级:frontmatter 已写明的 resource_tier / data_scale(backfill 写盘)
+  //         > deep_extract 纯函数推断(空时大多数论文走不到这一步)
+  //         > 兜底文本(textSignals:拼接 tldr/motivation/method/result/conclusion/context)
+  //         > unknown
+  const VALID_TIERS: ReadonlyArray<ResourceTier> = ['api_only', 'single_gpu', 'multi_gpu', 'cluster', 'tpu_pod', 'unknown'];
+  const VALID_SCALES: ReadonlyArray<DataScale> = ['small', 'medium', 'large', 'web_scale', 'unknown'];
+  const deepExtract = parsed.data.deep_extract;
+  // backfill 写的 resource_tier / data_scale 不在 PaperFrontmatter 类型里(独立字段),
+  // 用 Record<string, unknown> cast 边界处理;不在白名单 → 视作 undefined 走推断路径。
+  const fm = parsed.data as unknown as Record<string, unknown>;
+  const fmTierRaw = typeof fm.resource_tier === 'string' ? fm.resource_tier : '';
+  const fmScaleRaw = typeof fm.data_scale === 'string' ? fm.data_scale : '';
+  const fmTier = (VALID_TIERS as readonly string[]).includes(fmTierRaw)
+    ? (fmTierRaw as ResourceTier)
+    : undefined;
+  const fmScale = (VALID_SCALES as readonly string[]).includes(fmScaleRaw)
+    ? (fmScaleRaw as DataScale)
+    : undefined;
+  const textSignals = [
+    parsed.data.tldr,
+    parsed.data.motivation,
+    parsed.data.method,
+    parsed.data.result,
+    parsed.data.conclusion,
+    parsed.data.context,
+  ].filter(Boolean).join(' ');
+  const resourceTier: ResourceTier =
+    fmTier ?? inferResourceTier(deepExtract, textSignals || undefined);
+  const dataScale: DataScale =
+    fmScale ?? inferDataScale(deepExtract, textSignals || undefined);
+  const result: Paper = {
     ...parsed.data,
     id,
     slug: id.split('/').pop() || '',
@@ -200,11 +258,17 @@ export async function readPaper(id: string): Promise<Paper | null> {
     isBroken: false,
     figures,
     tables: parseFigureList(parsed.data.tables_json),
+    // 派生字段(目标 4)
+    resourceTier,
+    dataScale,
     // Polaris 5 节中文解读(translate_polaris.py 写入),undefined = 旧论文没编译过。
 // 优先用 strict 版(5 节齐全才显示),退到老 4 节 / 不完整版本 —— workbench
 // 详情面板 / library 工作台就地展示 wiki,严格优先避免展示「半截翻译」。
 wikiContent: extractWikiArticleStrict(parsed.body) || extractWikiArticle(parsed.body) || undefined,
   };
+  // per-build 缓存写入(Phase J2):同进程再次 readPaper(id) 直接 O(1) 命中
+  _paperCache.set(id, result);
+  return result;
 }
 
 /** 当 frontmatter 没有 `categories.venue` 但 `source` 是会议源时,
@@ -331,9 +395,30 @@ export function flattenCategories(c: Categories | undefined | null): string[] {
   return out;
 }
 
+/** 全 build process 内的 listPapers 缓存。
+ *  关键动机(2026-09-03):astro build 单进程跑全 700+ /papers/[arxiv]/ 静态页时,
+ *  每页都调 listPapers({limit:500}) 走一遍 readPaper × 500 = 35万 次 fs+yaml parse,
+ *  是 build 时间大头(~7 min)。缓存 unfiltered 全列表后,所有带 limit/sortBy 的调用
+ *  派生同一份数据 — O(1) 重复 + 一次性 N 次 read。Cloudflare Pages 20 min 上限可以
+ *  从逼近压到 12-15 min 留出余量。
+ *  SSR (Node) build 进程内有效,客户端 bundle 不进(Vite tree-shake 掉 if 永不被 import)。
+ */
+let _fullListCache: PaperListItem[] | null = null;
+let _fullListBase = '/';
+
+/** per-paper cache (Phase J2) — 同 build 进程内每个 paper id 只读盘一次。
+ *  ~700 papers × N IO 调用 → 1 次读盘 + 1 次 gray-matter parse。
+ *  Module 作用域对单次 build 进程有效,无需 invalidate。 */
+const _paperCache = new Map<string, Paper | null>();
+
 export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[]> {
-  const ids = await listAllPaperIds();
   const base = opts.base || '/';
+  // 全列表缓存命中 → 直接派生(任何 opts 都能命中,因为 cache 存的是
+  // 未过滤未排序未 dedup 的全量 items;dedup/filter/sort 全部在 applyPaperFilters 阶段做)
+  if (_fullListCache && _fullListBase === base && !opts.pathPrefix) {
+    return applyPaperFilters(_fullListCache, opts);
+  }
+  const ids = await listAllPaperIds();
   const items: PaperListItem[] = [];
   for (const id of ids) {
     const p = await readPaper(id);
@@ -369,6 +454,12 @@ export async function listPapers(opts: ListOptions = {}): Promise<PaperListItem[
       // Polaris 5 节中文解读(Polaris wiki_content 镜像)
       wikiContent: p.wikiContent,
     });
+  }
+  // 写入全列表缓存(下次任何 opts 调用都直接派生,O(1) 命中)
+  // pathPrefix 仍然跳过缓存 — 那是另一份 corpus 视角,不该污染全量 cache
+  if (!opts.pathPrefix) {
+    _fullListCache = items;
+    _fullListBase = base;
   }
   // 过滤+排序+限条 + dedup 全部委托给 paper-filter(纯数据 pipeline)
   return applyPaperFilters(items, {

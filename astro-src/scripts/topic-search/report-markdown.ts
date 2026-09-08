@@ -9,12 +9,65 @@
 import { loadSettings, type LLMConfig } from '../settings';
 import { canonicalArxivId as canonicalId } from '../../lib/dom-utils';
 import { resolveRoute } from '../../lib/llm';
-import type { Summary, TopicReport, TopicReportDimension, TopicReportDimensionPaper, TopicSession } from '../../lib/schemas';
+import type {
+  Summary,
+  TopicReport,
+  TopicReportDimension,
+  TopicReportDimensionPaper,
+  TopicReportFrontierDirection,
+  TopicSession,
+} from '../../lib/schemas';
+import type { ResearchApproach } from '../../lib/types/topic';
+import type { ResourceTier } from '../../lib/types/resource-tier';
 import { getActiveReportPrompt } from './prompts';
 import { callLLMRaw } from './llm-call';
 import { S } from './state';
 import { setStatus, clearStatus } from './status';
 import { persistSession } from './store';
+
+const RESOURCE_TIER_ENUM: ReadonlyArray<ResourceTier> = [
+  'api_only',
+  'single_gpu',
+  'multi_gpu',
+  'cluster',
+  'tpu_pod',
+  'unknown',
+];
+
+function normalizeResourceTier(raw: unknown): ResourceTier {
+  const s = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  return (RESOURCE_TIER_ENUM as readonly string[]).includes(s)
+    ? (s as ResourceTier)
+    : 'unknown';
+}
+
+function normalizeResearchApproach(raw: any): ResearchApproach | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const idea = truncReport(raw.idea, 80);
+  if (!idea) return undefined;
+  const pipeline: string[] = [];
+  if (Array.isArray(raw.pipeline)) {
+    for (const step of raw.pipeline) {
+      const t = truncReport(step, 40);
+      if (t) pipeline.push(t);
+      if (pipeline.length >= 5) break;
+    }
+  }
+  if (pipeline.length < 2) return undefined;
+  const difficultyRaw = typeof raw.difficulty === 'string' ? raw.difficulty.toLowerCase() : '';
+  const difficulty: ResearchApproach['difficulty'] =
+    difficultyRaw === 'low' || difficultyRaw === 'medium' || difficultyRaw === 'high'
+      ? difficultyRaw
+      : 'medium';
+  const weeksRaw = Number(raw.estimatedTimeWeeks);
+  const estimatedTimeWeeks =
+    Number.isFinite(weeksRaw) && weeksRaw >= 1 && weeksRaw <= 52 ? Math.round(weeksRaw) : undefined;
+  const tiedNextStep =
+    typeof raw.tiedNextStep === 'string' && raw.tiedNextStep.trim()
+      ? raw.tiedNextStep.trim().slice(0, 40)
+      : undefined;
+  return { idea, pipeline, difficulty, estimatedTimeWeeks, tiedNextStep };
+}
 
 // 主题报告增量追加节流（同 session 内 N 篇并发完成时，8 秒内最多触发 1 次）。
 export const REPORT_INC_THROTTLE_MS = 8000;
@@ -63,10 +116,12 @@ function normalizeReportTopic(obj: any, prev: TopicReport | undefined, mode: 'fu
       }
     }
     if (papers.length === 0) return null;
+    const researchApproach = normalizeResearchApproach(d?.researchApproach);
     return {
       name,
       description: d?.description ? truncReport(d.description, 160) : undefined,
       papers,
+      researchApproach,
     };
   };
   const dims: TopicReportDimension[] = [];
@@ -86,9 +141,55 @@ function normalizeReportTopic(obj: any, prev: TopicReport | undefined, mode: 'fu
     }
     return out;
   };
+
+  // nextSteps(目标 5):支持旧 string[] 与新对象 schema。
+  // 旧 session 缓存了 string[],在 normalize 入口自动迁移成 {id, text, ...}
+  const nextSteps: Array<{ id: string; text: string; tiedDimensionName?: string }> = [];
+  if (Array.isArray(obj.nextSteps)) {
+    for (let i = 0; i < obj.nextSteps.length && nextSteps.length < 6; i++) {
+      const s = obj.nextSteps[i];
+      if (typeof s === 'string') {
+        const t = truncReport(s, 120);
+        if (t) nextSteps.push({ id: `ns_${nextSteps.length + 1}`, text: t });
+      } else if (s && typeof s === 'object') {
+        const text = truncReport(s.text ?? s, 120);
+        if (!text) continue;
+        const id = typeof s.id === 'string' && s.id.trim()
+          ? s.id.trim().slice(0, 40)
+          : `ns_${nextSteps.length + 1}`;
+        const tiedDimensionName =
+          typeof s.tiedDimensionName === 'string' && s.tiedDimensionName.trim()
+            ? s.tiedDimensionName.trim().slice(0, 30)
+            : undefined;
+        nextSteps.push({ id, text, tiedDimensionName });
+      }
+    }
+  }
   const relatedSet = new Set<string>();
   for (const d of dims) for (const p of d.papers) relatedSet.add(p.arxivId);
   const related: string[] = [...relatedSet];
+
+  // frontierDirections(目标 3):独立数组,只收 LLM 给的 ≥1 关联论文 + name 非空的
+  const frontierArr: TopicReportFrontierDirection[] = [];
+  if (Array.isArray(obj.frontierDirections)) {
+    for (const f of obj.frontierDirections) {
+      const name = truncReport(f?.name, 24);
+      if (!name) continue;
+      const description = truncReport(f?.description, 80) || '';
+      const ids: string[] = [];
+      if (Array.isArray(f?.paperArxivIds)) {
+        for (const raw of f.paperArxivIds) {
+          const id = canonicalId(String(raw ?? '').trim());
+          if (id) ids.push(id);
+        }
+      }
+      // 关联论文必须 ≥1:没有就丢弃(避免空架子)
+      if (ids.length === 0) continue;
+      frontierArr.push({ name, description, paperArxivIds: ids });
+      if (frontierArr.length >= 4) break;
+    }
+  }
+
   const prevIds = new Set(prev?.relatedArxivIds ?? []);
   return {
     overview: truncReport(obj.overview, 800) || '(未生成总览)',
@@ -96,7 +197,9 @@ function normalizeReportTopic(obj: any, prev: TopicReport | undefined, mode: 'fu
     methodsComparison: obj.methodsComparison ? truncReport(obj.methodsComparison, 600) : undefined,
     sharedFindings: arrOf('sharedFindings', 8),
     gaps: arrOf('gaps', 6),
-    nextSteps: arrOf('nextSteps', 6),
+    nextSteps,
+    frontierDirections: frontierArr,
+    resourceTier: normalizeResourceTier(obj.resourceTier),
     generatedAt: Date.now(),
     relatedArxivIds: related,
     incrementallyAddedArxivIds:
@@ -264,7 +367,8 @@ export function buildReportMarkdown(): string | null {
     `> 生成于 ${new Date(r.generatedAt).toLocaleString()} · 整合 ${r.relatedArxivIds.length} 篇论文` +
       (r.incrementallyAddedArxivIds && r.incrementallyAddedArxivIds.length
         ? ` · 本次新增 ${r.incrementallyAddedArxivIds.length} 篇`
-        : ''),
+        : '') +
+      ` · 算力档位: ${r.resourceTier ?? 'unknown'}`,
   );
   lines.push('');
   lines.push('## 主题总览');
@@ -281,6 +385,14 @@ export function buildReportMarkdown(): string | null {
       if (p.result) lines.push(`  - 结果: ${p.result}`);
       if (p.note) lines.push(`  - 注: ${p.note}`);
     });
+    if (d.researchApproach) {
+      const ra = d.researchApproach;
+      lines.push('');
+      lines.push(`#### 研究思路`);
+      lines.push(`- **核心思路**: ${ra.idea}`);
+      lines.push(`- **实施步骤**: ${ra.pipeline.map((step, i) => `${i + 1}. ${step}`).join(' · ')}`);
+      lines.push(`- **难度**: ${ra.difficulty}${ra.estimatedTimeWeeks ? ` · 预估 ${ra.estimatedTimeWeeks} 周` : ''}${ra.tiedNextStep ? ` · 对应建议 \`${ra.tiedNextStep}\`` : ''}`);
+    }
     lines.push('');
   });
 
@@ -318,6 +430,17 @@ export function buildReportMarkdown(): string | null {
     r.sharedFindings.forEach((s) => lines.push(`- ${s}`));
     lines.push('');
   }
+  // 前沿方向(目标 3):显式结构化方向,独立于 gaps
+  if (r.frontierDirections && r.frontierDirections.length) {
+    lines.push('## 前沿方向');
+    r.frontierDirections.forEach((f) => {
+      lines.push(`- **${f.name}** — ${f.description || '(无说明)'}`);
+      if (f.paperArxivIds.length) {
+        lines.push(`  - 关联: arXiv:${f.paperArxivIds.join(', arXiv:')}`);
+      }
+    });
+    lines.push('');
+  }
   if (r.gaps.length) {
     lines.push('## 研究空白');
     r.gaps.forEach((s) => lines.push(`- ${s}`));
@@ -325,10 +448,19 @@ export function buildReportMarkdown(): string | null {
   }
   if (r.nextSteps.length) {
     lines.push('## 下一步建议');
-    r.nextSteps.forEach((s) => lines.push(`- ${s}`));
+    r.nextSteps.forEach((s) => {
+      lines.push(`<a name="nextstep-${escapeMarkdownAnchor(s.id)}"></a>`);
+      const tie = s.tiedDimensionName ? ` _(对应维度: ${s.tiedDimensionName})_` : '';
+      lines.push(`- **[${s.id}]** ${s.text}${tie}`);
+    });
     lines.push('');
   }
   return lines.join('\n');
+}
+
+/** Markdown anchor 不允许部分字符,做简易清理;不保证 Markdown 完美,只防报错。 */
+function escapeMarkdownAnchor(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
 export function copyReportAsMarkdown(): void {

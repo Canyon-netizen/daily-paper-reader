@@ -11,6 +11,7 @@
 import type { AnalysisResult, ArxivEntry } from '../../scripts/paper-analyzer';
 import type { SubQ } from './subq';
 import type { Facet } from './facet';
+import type { ResourceTier } from './resource-tier';
 
 export interface Candidate {
   arxivId: string;
@@ -44,6 +45,9 @@ export interface TopicSession {
   candidatesBySubq: Record<string, Candidate[]>;
   /** 阶段 3 子方向 group 折叠状态:subqId → 是否展开。 */
   candGroupExpanded?: Record<string, boolean>;
+  /** 阶段 3 算力档位筛选器:'all' 显示全部;指定档位只显示该档位(可总结过)或显示 chip「未知」的候选。
+   *  默认 'all'(旧 session 无此字段 → undefined,UI 视作 'all')。 */
+  candResourceFilter?: ResourceTier | 'all';
   summaries: Summary[];
   chats: Record<string, ChatMsg[]>;
   /** 报告追问历史(阶段 5)。 */
@@ -102,10 +106,26 @@ export interface TopicReportDimensionPaper {
   note?: string;      // 截断 120
 }
 
+/** 研究思路(目标 5 的核心交付):把"做这个方向"拆成 idea + pipeline + 难度。 */
+export interface ResearchApproach {
+  /** 一句话核心思路:这个维度可以怎样入手/借鉴(≤ 80 字)。 */
+  idea: string;
+  /** 实施步骤:每步 ≤ 40 字,2-5 步。 */
+  pipeline: string[];
+  /** 实施难度(low / medium / high):对个人研究者或小团队。 */
+  difficulty: 'low' | 'medium' | 'high';
+  /** 预估耗时(周),1-52。LLM 估不出来时省略。 */
+  estimatedTimeWeeks?: number;
+  /** 对应的 nextStep.id(双向 anchor),可省略。 */
+  tiedNextStep?: string;
+}
+
 export interface TopicReportDimension {
   name: string;                                  // 截断 30
   description?: string;                          // 截断 160
   papers: TopicReportDimensionPaper[];           // ≥ 1
+  /** 目标 5:这个维度对应的研究思路(LLM 输出,可省略)。 */
+  researchApproach?: ResearchApproach;
 }
 
 export interface TopicReport {
@@ -114,8 +134,22 @@ export interface TopicReport {
   methodsComparison?: string;                     // 截断 600
   sharedFindings: string[];                      // 截断 120/条, 最长 8
   gaps: string[];                                // 截断 120/条, 最长 6
-  nextSteps: string[];                           // 截断 120/条, 最长 6
+  /** 下一步建议:每条带稳定 id + 文本,可被 dimension.researchApproach.tiedNextStep 反向引用(目标 5)。
+   *  旧 session 可能是 string[] → normalizeReportTopic 入口兼容迁移成对象。 */
+  nextSteps: Array<{ id: string; text: string; tiedDimensionName?: string }>;
+  /** 前沿研究方向:聚合论文里"还没充分做"或"可能拓展"的方向,显式结构化(目标 3)。
+   *  name 方向名,description 一句话解释(≤ 80 字),paperArxivIds 关联论文 ID。 */
+  frontierDirections?: TopicReportFrontierDirection[];   // 0-4 条
+  /** 主题级算力档位:综合覆盖论文的 compute_requirements 得出(目标 4)。 */
+  resourceTier?: ResourceTier;                   // 默认 'unknown'
   generatedAt: number;
   relatedArxivIds: string[];
   incrementallyAddedArxivIds?: string[];
+}
+
+/** 单条前沿方向(目标 3 的核心交付)。 */
+export interface TopicReportFrontierDirection {
+  name: string;                                  // 截断 24
+  description: string;                           // 截断 80
+  paperArxivIds: string[];                       // 关联论文 ID(去版本号)
 }

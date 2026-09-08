@@ -1,0 +1,220 @@
+---
+// /writing/[id]/ — Writing detail page (full draft view with sections)
+//
+// Shows a single writing with editable sections and citation management.
+// Client-side only (localStorage) - SSR shows shell that hydrates.
+
+import { writingPaths } from '../../lib/paths.generated';
+import type { GetStaticPaths } from 'astro';
+
+// Generate static paths from docs/writing/*.md files (auto-generated)
+export const getStaticPaths: GetStaticPaths = async () => {
+  return writingPaths.map((id) => ({ params: { id } }));
+};
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { defaultPaperRepository } from '../../lib/paper-repository';
+import { flattenCategories } from '../../lib/paper';
+import { paperPlainTitle } from '../../lib/title';
+import '../../styles/writing.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// Get the ID from URL - for static build, we'll use getStaticPaths
+const { id } = Astro.params;
+
+// For SSR, pass the ID. Client-side will fetch the actual data.
+const writingId = id || '';
+
+// Embed paper data for citation picker search
+const paperRepo = defaultPaperRepository;
+const allPapers = await paperRepo.list({ dedup: true, base });
+const clientPapers = allPapers.map((p) => ({
+  id: p.id,
+  title: paperPlainTitle(p.title, p.title_plain),
+  title_zh: paperPlainTitle(p.title_zh, p.title_zh_plain),
+  authors: p.authors || '',
+  date: p.date || '',
+  pdf: p.pdf || '',
+  tags: flattenCategories(p.categories),
+  tldr: p.tldr || '',
+  arxivId: p.arxivId || '',
+  slug: p.slug || '',
+}));
+const papersPayload = { papers: clientPapers };
+---
+
+<BaseLayout
+  title="写作详情 · Daily Paper Reader"
+  description="写作详情页"
+>
+  <Navbar />
+
+  <main class="writing-detail" data-writing-id={writingId}>
+    <a class="writing-detail-back" href={base + '/writing/'}>
+      ← 所有写作
+    </a>
+
+    <header class="writing-detail-header">
+      <h1 class="writing-detail-title" data-writing-title>加载中...</h1>
+      <div class="writing-detail-meta">
+        <span class="writing-card-type" data-writing-type>—</span>
+        <span class="writing-card-status draft" data-writing-status>草稿</span>
+        <span data-writing-venue></span>
+        <span data-writing-updated></span>
+        <span class="writing-wordcount" data-writing-wordcount>0 字</span>
+      </div>
+      <div class="writing-detail-actions">
+        <button type="button" class="btn btn-primary btn-sm" data-save-writing>💾 保存</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-edit-metadata>✏️ 编辑元数据</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-change-status>改变状态</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-delete-writing>🗑️ 删除</button>
+        <div class="writing-export-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-export-markdown>📄 导出 Markdown</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-export-json>📋 导出 JSON</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-export-pdf>📑 导出 PDF</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Abstract -->
+    <section class="writing-abstract">
+      <h3>摘要</h3>
+      <textarea
+        id="writing-abstract"
+        placeholder="输入论文摘要..."
+        data-writing-abstract
+      ></textarea>
+    </section>
+
+    <!-- Sections -->
+    <section class="writing-sections" data-sections-container>
+      <!-- Sections will be rendered by client-side JS -->
+    </section>
+
+    <!-- Citations -->
+    <section class="writing-citations">
+      <h3>引用论文</h3>
+      <div class="writing-citation-list" data-citations-list>
+        <!-- Citations will be rendered by client-side JS -->
+      </div>
+      <div class="writing-add-citation">
+        <button type="button" class="btn btn-secondary btn-sm" data-open-citation-picker>🔍 从文库选择</button>
+        <span class="citation-or-divider">或</span>
+        <input
+          type="text"
+          id="citation-arxiv-id"
+          placeholder="输入 arXiv ID (如: 1706.03762)"
+        />
+        <input
+          type="text"
+          id="citation-context"
+          placeholder="引用上下文 (可选)"
+        />
+        <button type="button" class="btn btn-primary btn-sm" data-add-citation>添加引用</button>
+      </div>
+    </section>
+
+    <!-- Upstream Sources -->
+    <section class="writing-upstream-sources" data-upstream-sources-section>
+      <h3>⬆️ 上游来源</h3>
+      <div class="writing-upstream-list" data-upstream-list>
+        <!-- Upstream sources will be rendered by client-side JS -->
+      </div>
+    </section>
+
+    <!-- Version history -->
+    <section class="writing-versions" data-versions-section>
+      <h3>版本历史</h3>
+      <div class="writing-version-list" data-versions-list>
+        <!-- Versions will be rendered by client-side JS -->
+      </div>
+    </section>
+  </main>
+
+  <!-- Metadata Edit Modal -->
+  <div id="metadata-edit-modal" class="modal">
+    <div class="modal-backdrop" data-close-metadata-modal></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>编辑元数据</h3>
+        <button type="button" class="modal-close" data-close-metadata-modal>×</button>
+      </div>
+      <form id="metadata-edit-form" class="modal-body">
+        <div class="form-group">
+          <label for="edit-title">标题</label>
+          <input type="text" id="edit-title" name="title" required placeholder="写作标题" />
+        </div>
+        <div class="form-group">
+          <label for="edit-type">类型</label>
+          <select id="edit-type" name="type">
+            <option value="paper">论文草稿</option>
+            <option value="section">章节</option>
+            <option value="note">笔记</option>
+            <option value="review">综述</option>
+            <option value="translation">翻译</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="edit-venue">目标期刊/会议</label>
+          <input type="text" id="edit-venue" name="venue" placeholder="如: NeurIPS 2026" />
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-ghost" data-close-metadata-modal>取消</button>
+          <button type="submit" class="btn btn-primary">保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Citation Picker Modal -->
+  <div id="citation-picker-modal" class="modal">
+    <div class="modal-backdrop" data-close-modal></div>
+    <div class="modal-content citation-picker-modal-content">
+      <div class="modal-header">
+        <h3>从文库选择论文</h3>
+        <button type="button" class="modal-close" data-close-citation-picker>×</button>
+      </div>
+      <div class="modal-body">
+        <input
+          type="text"
+          id="citation-search-input"
+          class="form-input"
+          placeholder="搜索论文标题、作者或 arXiv ID..."
+          autofocus
+        />
+        <div id="citation-search-results" class="citation-search-results">
+          <p class="muted">输入关键词搜索论文</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <Footer />
+
+  <!-- 客户端数据载体 — citation picker 搜索从这里读论文数据 -->
+  <script id="papers-data" type="application/json" set:html={JSON.stringify(papersPayload)} />
+
+  <script>
+    // Load KaTeX for LaTeX rendering
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
+    document.head.appendChild(link);
+
+    const katexScript = document.createElement('script');
+    katexScript.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
+    katexScript.onload = () => {
+      // Load marked for markdown
+      const markedScript = document.createElement('script');
+      markedScript.src = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
+      markedScript.onload = () => {
+        import('../../scripts/writing-ui');
+      };
+      document.head.appendChild(markedScript);
+    };
+    document.head.appendChild(katexScript);
+  </script>
+</BaseLayout>

@@ -321,6 +321,17 @@
   padding: 1rem 1.25rem;
   overflow-y: auto;
   flex: 1 1 auto;
+  /* min-height: 0 让 body 在 .dpr-modal max-height: 90vh 内能正常收缩,
+     否则 flex 默认 min-height: auto = 内容高度,body 不肯缩 → overflow-y: auto 永远不触发。
+     用户报:2026-09-06 长表单 modal 无法上下滚动,form 越界被 .dpr-modal overflow: hidden 静默切掉。
+     但 body 是 .dpr-modal > form > .dpr-modal-body —— form 自己也要是 flex column 才能传下来。 */
+  min-height: 0;
+}
+.dpr-modal > form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .dpr-modal-footer {
   padding: 0.85rem 1.25rem;

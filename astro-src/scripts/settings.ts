@@ -500,8 +500,16 @@ export const PROVIDER_PRESETS: Record<string, ProviderPreset> = {
   minimax: {
     label: 'MiniMax',
     baseUrl: 'https://api.minimaxi.com/v1',
-    defaultModel: 'MiniMax-Text-01',
-    models: ['MiniMax-Text-01', 'abab6.5s-chat', 'abab5.5-chat'],
+    // 默认 MiniMax-M3(2026-09 MiniMax 主力推理模型,OpenAI 兼容 /v1/chat/completions 端点)。
+    // 老模型保留在 models 里作 fallback,用户切走再切回不会丢选项。
+    defaultModel: 'MiniMax-M3',
+    models: [
+      'MiniMax-M3',
+      'MiniMax-M2',
+      'MiniMax-Text-01',
+      'abab6.5s-chat',
+      'abab5.5-chat',
+    ],
   },
   openai: {
     label: 'OpenAI',
@@ -567,6 +575,37 @@ export function setCustomProxy(v: string): void {
     const trimmed = v.trim();
     if (trimmed) localStorage.setItem(STORAGE_KEYS.proxy, trimmed);
     else localStorage.removeItem(STORAGE_KEYS.proxy);
+  } catch { /* ignore */ }
+}
+
+// ============================================================================
+// LLM 本地代理 (2026-09-08) — scripts/local-llm-proxy.mjs 入口 URL。
+// 与 arXiv CORS 代理(getCustomProxy / dpr_analyzer_proxy_v1)是两件事:
+//   - CORS 代理转发 GET 静态资源(arXiv XML / PDF.js worker);
+//   - LLM 代理转发 POST /v1/chat/completions,server-side 注入 API key + 写日志。
+// chat.ts 会读这个 key,如果有值就把 chat 请求改发到 proxy,
+// 并去掉 Authorization header(避免明文 key 出现在浏览器 Network 面板)。
+// ============================================================================
+
+/** 默认指向 scripts/local-llm-proxy.mjs 的默认端口。 */
+export const DEFAULT_LLM_PROXY = 'http://localhost:8124';
+
+export function getCustomLLMProxy(): string {
+  try {
+    let v = (localStorage.getItem(STORAGE_KEYS.llmProxy) || '').trim();
+    if (!v) return '';
+    if (!/^https?:\/\//i.test(v)) v = 'http://' + v;
+    return v.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+export function setCustomLLMProxy(v: string): void {
+  try {
+    const trimmed = v.trim();
+    if (trimmed) localStorage.setItem(STORAGE_KEYS.llmProxy, trimmed);
+    else localStorage.removeItem(STORAGE_KEYS.llmProxy);
   } catch { /* ignore */ }
 }
 

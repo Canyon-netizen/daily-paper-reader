@@ -1,10 +1,11 @@
 /*
  * Daily Paper Reader — Astro 站全局样式
  *
- * 设计目标:学术报式 (arXiv 风格)
- *  - 干净、白底、克制色彩
- *  - 高信息密度、可读性优先
- *  - 三主题:light / dark / high-contrast
+ * 设计目标 (2026-09-07 学术化调整):
+ *   - 学术报式 / Nature / arXiv 期刊风 —— 衬线正文,等宽代码
+ *   - 干净、米白底、克制色彩(去 cool gray 偏冷)
+ *   - 优先 typography / whitespace / 引用块 / 边线,弱化"卡片"质感
+ *   - 三主题:light / dark / high-contrast
  *
  * 全部颜色/间距/字号用 CSS 变量,主题切换只换变量值
  */
@@ -15,53 +16,57 @@
 :root,
 :root[data-theme='light'] {
   /* Light 主题 (默认) */
-  --bg: #fafafa;
+  --bg: #fdfcf8;             /* 米白 paper-white,比 #fafafa 暖 */
   --bg-elevated: #ffffff;
-  --bg-muted: #f3f4f6;
+  --bg-muted: #f4f1ea;       /* 段落 / 表格底,呼应米白 */
   --fg: #1a1a1a;
   --fg-muted: #4b5563;
   --fg-subtle: #6b7280;
-  --border: #e5e7eb;
-  --border-strong: #d1d5db;
+  --border: #e3ddd1;         /* 暖灰边框,与米白底协调 */
+  --border-strong: #c8bfa9;
 
-  --accent: #b31b1b;       /* arXiv 经典红 */
-  --accent-hover: #8a1414;
-  --accent-soft: rgba(179, 27, 27, 0.08);
-  --accent-glow: rgba(179, 27, 27, 0.18);
+  --accent: #8b1a1a;         /* 暗酒红 —— 期刊 / 学报常用,比 #b31b1b 沉稳 */
+  --accent-hover: #6d1414;
+  --accent-soft: rgba(139, 26, 26, 0.08);
+  --accent-glow: rgba(139, 26, 26, 0.18);
 
-  --link: #1d4ed8;
-  --link-hover: #1e40af;
+  --link: #1f3b8b;           /* 深蓝链接,期刊常用 navy */
+  --link-hover: #15296b;
 
-  --tag-bg: #e0e7ff;
-  --tag-fg: #3730a3;
+  --tag-bg: #ebe4d3;
+  --tag-fg: #5b3a1a;
 
-  --code-bg: #f3f4f6;
+  --code-bg: #f4f1ea;
   --code-fg: #1f2937;
 
   --success: #16a34a;
   --success-soft: rgba(22, 163, 74, 0.10);
   --danger: #c62828;
   --danger-soft: rgba(198, 40, 40, 0.10);
-  --info: #2563eb;
-  --info-soft: rgba(37, 99, 235, 0.10);
+  --info: #1f3b8b;
+  --info-soft: rgba(31, 59, 139, 0.10);
   --warning: #b45309;
   --warning-soft: rgba(180, 83, 9, 0.12);
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 1px rgba(15, 23, 42, 0.02);
-  --shadow-md: 0 4px 14px rgba(15, 23, 42, 0.06), 0 2px 4px rgba(15, 23, 42, 0.04);
-  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.10), 0 4px 8px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 14px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.10);
   --shadow-color: 15, 23, 42;
 
   --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 2px;          /* 去圆角化 —— 期刊多用直角 + 边线 */
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
 
-  --font-sans: system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
-  --font-serif: 'Charter', 'Iowan Old Style', 'Apple Garamond', 'Georgia', 'Source Han Serif SC', 'Noto Serif CJK SC', serif;
-  --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', 'JetBrains Mono', monospace;
+  /* 字体栈 (2026-09-07 加载 Google Fonts):
+     - --font-serif: Source Serif 4(英文衬线,过渡体,易读) + Noto Serif SC(中文衬线)
+     - --font-sans: Inter(英文无衬线,UI 控件) + Noto Sans SC(中文无衬线)
+     - --font-mono: JetBrains Mono + SF Mono + Consolas */
+  --font-sans: 'Inter', 'Noto Sans SC', system-ui, -apple-system, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --font-serif: 'Source Serif 4', 'Noto Serif SC', Charter, 'Iowan Old Style', 'Apple Garamond', Georgia, 'Source Han Serif SC', serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, Monaco, ui-monospace, monospace;
 
   /* 间距阶 — 用于 margin / padding / gap 的 4px 网格 */
   --space-1: 0.25rem;
@@ -185,9 +190,12 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--fg);
-  font-family: var(--font-sans);
+  /* 学术风:正文 / 段落走衬线(易读、信息密度高),
+     UI 控件(按钮/输入框/标签)显式指定 var(--font-sans)。 */
+  font-family: var(--font-serif);
   font-size: 16px;
-  line-height: 1.6;
+  line-height: 1.65;
+  letter-spacing: 0.005em;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -196,6 +204,55 @@ body {
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+}
+
+/* 标题层级 —— 全部衬线,weight 渐变(700 → 600 → 500) */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-serif);
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  margin: 0 0 0.5em 0;
+}
+h1 { font-size: clamp(1.8rem, 2.8vw, 2.3rem); font-weight: 800; }
+h2 { font-size: clamp(1.4rem, 2.2vw, 1.8rem); font-weight: 700; }
+h3 { font-size: clamp(1.15rem, 1.7vw, 1.4rem); font-weight: 700; }
+h4 { font-size: 1.05rem; font-weight: 600; }
+h5 { font-size: 0.95rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+h6 { font-size: 0.85rem; font-weight: 600; color: var(--fg-muted); }
+
+/* 段落 —— 期刊式 1.65 行距 + 首段无缩进 / 后续段首字缩进(中文友好) */
+p {
+  margin: 0 0 1em 0;
+  line-height: 1.7;
+}
+p + p {
+  text-indent: 1.5em;
+  margin-top: -0.3em;
+}
+p:lang(zh) + p:lang(zh),
+.paper-body p + p,
+.draft-body p + p {
+  text-indent: 1.5em;
+}
+
+/* UI chrome 显式 sans-serif(button / input / select / textarea / nav / chrome) */
+button, input, select, textarea,
+.kbd, code, pre, samp,
+.nav, .toolbar, .chrome,
+.tab-btn, .shortcut, .pill, .chip {
+  font-family: var(--font-sans);
+}
+
+/* 代码块 —— 等宽 */
+code, pre, samp {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+/* 引用 / 边注 —— 衬线斜体 */
+blockquote, .sidenote, .epigraph {
+  font-family: var(--font-serif);
+  font-style: italic;
 }
 
 body > * { flex-shrink: 0; }

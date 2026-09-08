@@ -20,6 +20,12 @@ export function buildSpeedReadBody(r: NoteAnalysisInput, entry: ArxivEntry | nul
   if (r.result) bodyParts.push(`## 结果\n${r.result}`);
   if (r.conclusion) bodyParts.push(`## 结论\n${r.conclusion}`);
   if (r.context) bodyParts.push(`## 主题语境\n${r.context}`);
+  // 研究贡献:LLM 输出的 3-5 条核心贡献(目标 2 的核心交付)。
+  // 不写 frontmatter,仅在速读正文末尾追加一段,便于用户一眼看到"这篇论文留下了什么新东西"。
+  if (r.contributions && r.contributions.length) {
+    const list = r.contributions.map((c, i) => `${i + 1}. ${c}`).join('\n');
+    bodyParts.push(`## 研究贡献\n${list}`);
+  }
   return bodyParts.length ? '\n' + bodyParts.join('\n\n') + '\n' : '';
 }
 

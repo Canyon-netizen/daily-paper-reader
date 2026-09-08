@@ -785,18 +785,37 @@ export async function chatWithReport(
               (p.result ? `\n    结果:${p.result}` : '') +
               (p.note ? `\n    注:${p.note}` : ''),
           )
-          .join('\n'),
+          .join('\n') +
+        (d.researchApproach
+          ? `\n  [研究思路] ${d.researchApproach.idea}` +
+            ` | 难度:${d.researchApproach.difficulty}` +
+            (d.researchApproach.estimatedTimeWeeks ? ` | ${d.researchApproach.estimatedTimeWeeks}w` : '') +
+            (d.researchApproach.tiedNextStep ? ` | tiedNextStep=${d.researchApproach.tiedNextStep}` : '') +
+            `\n  [实施步骤] ${d.researchApproach.pipeline.join(' → ')}`
+          : ''),
     )
     .join('\n');
   const sysContext =
     `[研究主题] ${topic}\n` +
     `[主题报告 — 生成于 ${new Date(report.generatedAt).toLocaleString()}]\n` +
-    `[覆盖论文数] ${report.relatedArxivIds.length}\n\n` +
+    `[覆盖论文数] ${report.relatedArxivIds.length}\n` +
+    `[主题级算力档位] ${report.resourceTier ?? 'unknown'}\n\n` +
     `[主题总览]\n${report.overview}\n\n` +
     `[论文横向对比]\n${dimLines}\n\n` +
     (report.sharedFindings.length ? `[共同发现]\n${report.sharedFindings.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
+    (report.frontierDirections && report.frontierDirections.length
+      ? `[前沿方向]\n${report.frontierDirections.map((f, i) => {
+          const ids = f.paperArxivIds.length ? ` (关联 arXiv:${f.paperArxivIds.join(', arXiv:')})` : '';
+          return `  ${i + 1}. ${f.name} — ${f.description}${ids}`;
+        }).join('\n')}\n\n`
+      : '') +
     (report.gaps.length ? `[研究空白]\n${report.gaps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
-    (report.nextSteps.length ? `[下一步建议]\n${report.nextSteps.map((s, i) => `  ${i + 1}. ${s}`).join('\n')}\n\n` : '') +
+    (report.nextSteps.length
+      ? `[下一步建议]\n${report.nextSteps.map((s, i) => {
+          const tie = s.tiedDimensionName ? ` (tiedDim=${s.tiedDimensionName})` : '';
+          return `  ${i + 1}. [${s.id}]${tie} ${s.text}`;
+        }).join('\n')}\n\n`
+      : '') +
     `[可引用的论文速览(节选)] —— 供你(模型)在回答细节问题时交叉验证:\n` +
     summaries
       .slice(0, 30)

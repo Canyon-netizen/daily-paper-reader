@@ -24,15 +24,19 @@ const isActive = (target: string): boolean => {
 // 收藏夹,概念上与公共主题库是同一层。Polaris 也没有「我的图书馆」单一路由,
 // 只在 /libraries 一次展示公共 + 个人。
 const links = [
-  { href: '/libraries/',      label: '文献库',      match: '/libraries' },
-  { href: '/papers/',         label: '全部论文',    match: '/papers' },
-  { href: '/graph/',          label: '引用图',      match: '/graph' },
-  { href: '/topic/',          label: '主题探索',    match: '/topic' },
-  { href: '/conferences/',    label: '会议',        match: '/conferences' },
-  { href: '/concepts/',       label: '概念',        match: '/concepts' },
-  { href: '/settings/',       label: '设置',        match: '/settings' },
-  { href: '/tutorial/',       label: '使用教程',    match: '/tutorial' },
-  { href: '/zotero-usage/',   label: 'Zotero',      match: '/zotero-usage' },
+  { href: '/libraries/',      label: '文献库',      match: '/libraries', tooltip: '按主题/领域组织的论文集合' },
+  { href: '/papers/',        label: '全部论文',    match: '/papers', tooltip: '浏览所有收录的论文' },
+  { href: '/search/',        label: '搜索',        match: '/search', tooltip: '跨模块全文搜索' },
+  { href: '/graph/',         label: '引用图',      match: '/graph', tooltip: '论文引用关系可视化' },
+  { href: '/topic/',         label: '主题探索',    match: '/topic', tooltip: '深度主题研究与报告生成' },
+  { href: '/conferences/',   label: '会议',        match: '/conferences', tooltip: '顶会论文追踪 (NeurIPS/ICLR/ICML)' },
+  { href: '/concepts/',      label: '概念',        match: '/concepts', tooltip: '领域核心概念知识图谱' },
+  { href: '/research/',      label: '研究',        match: '/research', tooltip: '研究工作流仪表板' },
+  { href: '/ideas/',         label: '想法',        match: '/ideas', tooltip: '记录研究灵感与思考' },
+  { href: '/experiments/',   label: '实验',        match: '/experiments', tooltip: '设计实验验证想法' },
+  { href: '/writing/',        label: '写作',        match: '/writing', tooltip: '撰写论文、笔记、综述' },
+  { href: '/roadmap/',       label: '路线图',      match: '/roadmap', tooltip: '规划长期研究目标与里程碑' },
+  { href: '/settings/',      label: '设置',        match: '/settings', tooltip: 'API 密钥与 Gist 同步配置' },
 ];
 ---
 
@@ -54,6 +58,7 @@ const links = [
           href={base + l.href}
           class={isActive(l.match) ? 'active' : ''}
           aria-current={isActive(l.match) ? 'page' : undefined}
+          title={l.tooltip}
         >{l.label}</a>
       ))}
       <a
@@ -65,6 +70,13 @@ const links = [
     </nav>
 
     <div class="navbar-actions">
+      <button id="help-toggle" class="help-toggle-btn" aria-label="帮助" type="button" title="帮助与快捷键">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+      </button>
       <button id="theme-toggle" class="theme-toggle-btn" aria-label="切换主题" type="button" title="切换主题 (light → dark → contrast)">
         <span class="theme-icon theme-icon--light" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -177,10 +189,37 @@ const links = [
     color: var(--fg-subtle);
   }
 
-  /* 极窄屏(< 920)把链接全部收起来避免折行;这里不做汉堡菜单(避免引入 JS),保留滚动 */
+  /* 极窄屏(< 920)把链接全部收起来避免折行;保留滚动但更易用 */
   @media (max-width: 920px) {
     .navbar-links a { padding: 0.4rem 0.65rem; font-size: 0.85rem; }
     .navbar-inner { gap: var(--space-3); padding: 0 var(--space-4); }
+  }
+  /* Mobile (< 640px): horizontal scroll with better visual hint */
+  @media (max-width: 640px) {
+    .navbar-links {
+      max-width: 60vw;
+      mask-image: linear-gradient(to right, black 0, black calc(100% - 32px), transparent 100%);
+      -webkit-mask-image: linear-gradient(to right, black 0, black calc(100% - 32px), transparent 100%);
+    }
+    .navbar-links a { padding: 0.35rem 0.5rem; font-size: 0.8rem; }
+  }
+  /* Tooltips on touch: use title attribute as fallback, show on tap highlight */
+  @media (hover: none) and (pointer: coarse) {
+    .navbar-links a:active::after {
+      content: attr(title);
+      position: absolute;
+      bottom: -28px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      border-radius: var(--radius-sm);
+      font-size: 0.7rem;
+      white-space: nowrap;
+      z-index: 100;
+      color: var(--fg-muted);
+    }
   }
 
   .navbar-actions {
@@ -210,6 +249,26 @@ const links = [
   }
   .theme-toggle-btn:active { transform: scale(0.95); }
 
+  .help-toggle-btn {
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--fg-muted);
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition), border-color var(--transition), transform var(--transition);
+  }
+  .help-toggle-btn:hover {
+    background: var(--bg-muted);
+    color: var(--fg);
+    border-color: var(--border-strong);
+  }
+  .help-toggle-btn:active { transform: scale(0.95); }
+
   /* SVG 主题图标切换
    * 关键陷阱:Astro scoped CSS 会给选择器自动加 [data-astro-cid-xxx] 前缀,
    * 编译后变成 [data-astro-cid-xxx][data-theme=light] — 需要同一元素同时
@@ -231,5 +290,112 @@ const links = [
   }
   @media (max-width: 460px) {
     .brand-text { display: none; }
+  }
+</style>
+
+<script>
+  // Help button - show help modal
+  document.getElementById('help-toggle')?.addEventListener('click', () => {
+    let helpModal = document.getElementById('help-modal');
+    if (!helpModal) {
+      helpModal = document.createElement('dialog');
+      helpModal.id = 'help-modal';
+      helpModal.className = 'help-modal';
+      helpModal.innerHTML = `
+        <div class="help-modal-content">
+          <header class="help-modal-header">
+            <h2>帮助与快捷键</h2>
+            <button class="help-modal-close" aria-label="关闭">✕</button>
+          </header>
+          <div class="help-modal-body">
+            <section>
+              <h3>快速入门</h3>
+              <ul>
+                <li><strong>文献库</strong> - 按主题/领域组织的论文集合</li>
+                <li><strong>想法</strong> - 记录研究灵感与思考</li>
+                <li><strong>实验</strong> - 设计实验验证想法</li>
+                <li><strong>写作</strong> - 撰写论文、笔记、综述</li>
+                <li><strong>路线图</strong> - 规划长期研究目标与里程碑</li>
+              </ul>
+            </section>
+            <section>
+              <h3>快捷键</h3>
+              <ul>
+                <li><kbd>?</kbd> - 打开帮助 (当前页面)</li>
+                <li><kbd>Esc</kbd> - 关闭弹窗</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(helpModal);
+      helpModal.querySelector('.help-modal-close')?.addEventListener('click', () => helpModal.close());
+      helpModal.addEventListener('click', (e) => { if (e.target === helpModal) helpModal.close(); });
+    }
+    helpModal.showModal();
+  });
+
+  // Keyboard shortcut: ? to open help
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '?' && !['INPUT', 'TEXTAREA'].includes((e.target as Element).tagName)) {
+      e.preventDefault();
+      document.getElementById('help-toggle')?.click();
+    }
+  });
+</script>
+
+<style is:global>
+  .help-modal {
+    border: none;
+    border-radius: var(--radius-lg);
+    padding: 0;
+    background: var(--bg-elevated);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    max-width: 480px;
+    width: 90%;
+  }
+  .help-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
+  .help-modal[open] { display: flex; }
+  .help-modal-content { width: 100%; }
+  .help-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .help-modal-header h2 { margin: 0; font-size: 1.1rem; }
+  .help-modal-close {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    cursor: pointer;
+    color: var(--fg-muted);
+    padding: 0.25rem;
+  }
+  .help-modal-close:hover { color: var(--fg); }
+  .help-modal-body { padding: 1.25rem; }
+  .help-modal-body section { margin-bottom: 1.25rem; }
+  .help-modal-body section:last-child { margin-bottom: 0; }
+  .help-modal-body h3 {
+    font-size: 0.95rem;
+    margin: 0 0 0.5rem;
+    color: var(--fg);
+  }
+  .help-modal-body ul {
+    margin: 0;
+    padding-left: 1.25rem;
+    color: var(--fg-muted);
+    font-size: 0.9rem;
+    line-height: 1.6;
+  }
+  .help-modal-body li { margin-bottom: 0.35rem; }
+  .help-modal-body kbd {
+    background: var(--bg-muted);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.8rem;
+    font-family: monospace;
   }
 </style>

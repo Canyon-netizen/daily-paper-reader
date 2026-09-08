@@ -37,7 +37,10 @@ export function buildFiguresCarouselHtml(
 
   const parts: string[] = [];
   parts.push(`<h2>${heading}</h2>`);
-  parts.push('<details class="paper-figures-wrap">');
+  // 默认 open:之前是折叠的,但 <details> 子元素会被 UA display:none,
+  // <img loading="lazy"> 在 display:none 父级下永远不触发加载,
+  // 用户感知 = 论文页每张图都加载不出来。2026-09-06 改默认展开,仍可手动收起。
+  parts.push('<details class="paper-figures-wrap" open>');
   parts.push(`<summary>${summaryLabel}</summary>`);
   parts.push(
     `<div class="paper-carousel" data-count="${total}" aria-label="论文图表轮播，共 ${total} 张" tabindex="0">`,

@@ -1,0 +1,335 @@
+---
+// astro-src/pages/research.astro
+//
+// Cross-module research dashboard showing all research activities in one view.
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/research.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout
+  title="Research Dashboard · Daily Paper Reader"
+  description="Unified view of all your research: ideas, experiments, writings, and roadmaps"
+>
+  <Navbar />
+
+  <main class="research-page">
+    <header class="research-header">
+      <h1>Research Dashboard</h1>
+      <p class="research-sub">Unified view of your research pipeline</p>
+    </header>
+
+    <!-- Stats Summary -->
+    <section class="research-stats" id="research-stats">
+      <!-- Client-side rendered -->
+      <noscript>
+        <p class="research-nojs">Enable JavaScript to view research statistics</p>
+      </noscript>
+    </section>
+
+    <!-- Conversion Funnel -->
+    <section class="research-funnel" id="research-funnel">
+      <div class="section-header">
+        <h2>Conversion Funnel</h2>
+      </div>
+      <div class="funnel-container" id="funnel-container">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+
+    <!-- Weekly Activity Timeline -->
+    <section class="research-timeline" id="research-timeline">
+      <div class="section-header">
+        <h2>Weekly Activity</h2>
+      </div>
+      <div class="timeline-container" id="timeline-container">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+
+    <!-- Active Ideas -->
+    <section class="research-section" id="research-ideas">
+      <div class="section-header">
+        <h2>Active Ideas</h2>
+        <a href={`${base}/ideas/`} class="section-link">View all →</a>
+      </div>
+      <div class="research-list" id="ideas-list">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+
+    <!-- Running Experiments -->
+    <section class="research-section" id="research-experiments">
+      <div class="section-header">
+        <h2>Running Experiments</h2>
+        <a href={`${base}/experiments/`} class="section-link">View all →</a>
+      </div>
+      <div class="research-list" id="experiments-list">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+
+    <!-- Drafts in Progress -->
+    <section class="research-section" id="research-writings">
+      <div class="section-header">
+        <h2>Drafts in Progress</h2>
+        <a href={`${base}/writing/`} class="section-link">View all →</a>
+      </div>
+      <div class="research-list" id="writings-list">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+
+    <!-- Current Quarter Goals -->
+    <section class="research-section" id="research-goals">
+      <div class="section-header">
+        <h2>Current Quarter Goals</h2>
+        <a href={`${base}/roadmap/`} class="section-link">View all →</a>
+      </div>
+      <div class="research-list" id="goals-list">
+        <!-- Client-side rendered -->
+      </div>
+    </section>
+  </main>
+
+  <Footer />
+
+  <script>
+    import { getResearchDashboard } from '../lib/research';
+
+    const baseUrl = import.meta.env.BASE_URL || '/';
+
+    const statusLabels: Record<string, string> = {
+      active: '进行中',
+      running: '运行中',
+      draft: '草稿',
+      review: '审核中',
+      final: '已完成',
+      submitted: '已提交',
+      accepted: '已接收',
+      rejected: '已拒绝',
+      published: '已发表',
+      'in-progress': '进行中',
+      pending: '待开始',
+      planning: '规划中',
+      completed: '已完成',
+    };
+
+    const statusColors: Record<string, string> = {
+      active: '#22c55e',
+      running: '#3b82f6',
+      draft: '#f59e0b',
+      review: '#3b82f6',
+      final: '#22c55e',
+      submitted: '#6366f1',
+      accepted: '#10b981',
+      rejected: '#ef4444',
+      published: '#8b5cf6',
+      'in-progress': '#3b82f6',
+      pending: '#9ca3af',
+      planning: '#9ca3af',
+      completed: '#22c55e',
+    };
+
+    function renderStats(stats: any) {
+      const container = document.getElementById('research-stats');
+      if (!container) return;
+
+      const { ideas, experiments, writings, currentQuarter } = stats;
+
+      container.innerHTML = `
+        <div class="stat-card">
+          <span class="stat-number">${ideas.total}</span>
+          <span class="stat-label">Ideas</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">${experiments.byStatus.running}</span>
+          <span class="stat-label">Experiments Running</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-number">${writings.drafts}</span>
+          <span class="stat-label">Drafts</span>
+        </div>
+        <div class="stat-card stat-quarter">
+          <span class="stat-number">${currentQuarter}</span>
+          <span class="stat-label">Current Quarter</span>
+        </div>
+      `;
+    }
+
+    function renderTimeline(weeklyActivity: Record<string, { ideas: number; experiments: number; writings: number }>) {
+      const container = document.getElementById('timeline-container');
+      if (!container) return;
+
+      if (!weeklyActivity || Object.keys(weeklyActivity).length === 0) {
+        container.innerHTML = `<div class="research-empty">No activity data yet</div>`;
+        return;
+      }
+
+      // Sort weeks from oldest to newest
+      const weeks = Object.entries(weeklyActivity).sort((a, b) => a[0].localeCompare(b[0]));
+
+      // Calculate max for scaling
+      const maxCount = Math.max(
+        1,
+        ...weeks.map(([, data]) => Math.max(data.ideas, data.experiments, data.writings))
+      );
+
+      container.innerHTML = `
+        <div class="timeline-chart">
+          ${weeks.map(([weekStart, data]) => {
+            const date = new Date(weekStart);
+            const label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            const ideasHeight = (data.ideas / maxCount) * 100;
+            const experimentsHeight = (data.experiments / maxCount) * 100;
+            const writingsHeight = (data.writings / maxCount) * 100;
+
+            return `
+              <div class="timeline-week">
+                <div class="timeline-bars">
+                  <div class="timeline-bar timeline-bar--ideas" style="height: ${ideasHeight}%" title="Ideas: ${data.ideas}"></div>
+                  <div class="timeline-bar timeline-bar--experiments" style="height: ${experimentsHeight}%" title="Experiments: ${data.experiments}"></div>
+                  <div class="timeline-bar timeline-bar--writings" style="height: ${writingsHeight}%" title="Writings: ${data.writings}"></div>
+                </div>
+                <div class="timeline-label">${label}</div>
+                <div class="timeline-counts">
+                  <span class="timeline-count timeline-count--ideas">💡 ${data.ideas}</span>
+                  <span class="timeline-count timeline-count--experiments">🧪 ${data.experiments}</span>
+                  <span class="timeline-count timeline-count--writings">📝 ${data.writings}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        <div class="timeline-legend">
+          <span class="timeline-legend-item"><span class="timeline-legend-dot timeline-legend-dot--ideas"></span> Ideas</span>
+          <span class="timeline-legend-item"><span class="timeline-legend-dot timeline-legend-dot--experiments"></span> Experiments</span>
+          <span class="timeline-legend-item"><span class="timeline-legend-dot timeline-legend-dot--writings"></span> Writings</span>
+        </div>
+      `;
+    }
+
+    function renderFunnel(funnel: any) {
+      const container = document.getElementById('funnel-container');
+      if (!container) return;
+
+      if (!funnel) {
+        container.innerHTML = `<div class="research-empty">No funnel data yet</div>`;
+        return;
+      }
+
+      const { ideaToExp, expToWriting, writingToPublished } = funnel;
+
+      container.innerHTML = `
+        <div class="funnel-stages">
+          <div class="funnel-stage">
+            <div class="funnel-icon">💡</div>
+            <div class="funnel-label">Ideas</div>
+            <div class="funnel-count">${ideaToExp.total}</div>
+            <div class="funnel-arrow">↓</div>
+          </div>
+          <div class="funnel-stage">
+            <div class="funnel-icon">🧪</div>
+            <div class="funnel-label">Experiments</div>
+            <div class="funnel-count">${expToWriting.total}</div>
+            <div class="funnel-arrow">↓</div>
+          </div>
+          <div class="funnel-stage">
+            <div class="funnel-icon">📝</div>
+            <div class="funnel-label">Writings</div>
+            <div class="funnel-count">${writingToPublished.total}</div>
+            <div class="funnel-arrow">↓</div>
+          </div>
+          <div class="funnel-stage">
+            <div class="funnel-icon">📄</div>
+            <div class="funnel-label">Published</div>
+            <div class="funnel-count">${writingToPublished.converted}</div>
+          </div>
+        </div>
+        <div class="funnel-rates">
+          <div class="funnel-rate">
+            <span class="funnel-rate-label">Idea→Exp</span>
+            <span class="funnel-rate-value">${(ideaToExp.rate * 100).toFixed(0)}%</span>
+            <span class="funnel-rate-detail">${ideaToExp.converted}/${ideaToExp.total}</span>
+          </div>
+          <div class="funnel-rate">
+            <span class="funnel-rate-label">Exp→Writing</span>
+            <span class="funnel-rate-value">${(expToWriting.rate * 100).toFixed(0)}%</span>
+            <span class="funnel-rate-detail">${expToWriting.converted}/${expToWriting.total}</span>
+          </div>
+          <div class="funnel-rate">
+            <span class="funnel-rate-label">Writing→Published</span>
+            <span class="funnel-rate-value">${(writingToPublished.rate * 100).toFixed(0)}%</span>
+            <span class="funnel-rate-detail">${writingToPublished.converted}/${writingToPublished.total}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderList(containerId: string, items: any[]) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+
+      if (items.length === 0) {
+        container.innerHTML = `<div class="research-empty">No items</div>`;
+        return;
+      }
+
+      container.innerHTML = items.map(item => {
+        const statusColor = statusColors[item.status] || '#9ca3af';
+        const statusLabel = statusLabels[item.status] || item.status;
+        const tags = item.tags?.slice(0, 3).map((t: string) => `<span class="item-tag">${t}</span>`).join('') || '';
+
+        return `
+          <a href="${baseUrl}${item.url}" class="research-item">
+            <div class="item-header">
+              <span class="item-module">${item.module}</span>
+              <span class="item-status" style="background: ${statusColor}20; color: ${statusColor}">${statusLabel}</span>
+            </div>
+            <h3 class="item-title">${escapeHtml(item.title)}</h3>
+            ${item.description ? `<p class="item-desc">${escapeHtml(item.description.slice(0, 120))}...</p>` : ''}
+            <div class="item-footer">
+              <div class="item-tags">${tags}</div>
+              <span class="item-date">${formatDate(item.updatedAt)}</span>
+            </div>
+          </a>
+        `;
+      }).join('');
+    }
+
+    function escapeHtml(str: string): string {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function formatDate(dateStr: string): string {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    // Initialize dashboard
+    function initDashboard() {
+      try {
+        const dashboard = getResearchDashboard();
+
+        renderStats(dashboard.stats);
+        renderFunnel(dashboard.stats.funnel);
+        renderTimeline(dashboard.stats.weeklyActivity);
+        renderList('ideas-list', dashboard.activeIdeas);
+        renderList('experiments-list', dashboard.runningExperiments);
+        renderList('writings-list', dashboard.draftWritings);
+        renderList('goals-list', dashboard.currentGoals);
+      } catch (err) {
+        console.error('[research] Failed to load dashboard:', err);
+      }
+    }
+
+    initDashboard();
+  </script>
+</BaseLayout>

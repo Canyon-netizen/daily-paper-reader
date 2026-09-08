@@ -49,7 +49,19 @@ interface FetchResult {
 // 没 GH token 时:dev 本地 build 也会无 token,跳过 API → 退回"最新论文 date"
 // (与原来行为一致,避免 build 报错)。生产环境需要在 Vercel/Cloudflare 配
 // GH_TOKEN (PAT, scope: public_repo 或 repo) 作为构建环境变量。
+//
+// Phase J3:per-build 进程级 Promise 缓存 — 同一个 build 进程内多次调用只 fetch 一次。
+let _fetchCache: Promise<FetchResult> | null = null;
+
 async function fetchLastSuccessRunDate(): Promise<FetchResult> {
+  if (_fetchCache) return _fetchCache;
+  _fetchCache = (async () => {
+    return await _doFetchLastSuccessRunDate();
+  })();
+  return _fetchCache;
+}
+
+async function _doFetchLastSuccessRunDate(): Promise<FetchResult> {
   const ghToken = readGhToken();
   const ghRepoOwner = process.env.GH_REPO_OWNER || 'Canyon-netizen';
   const ghRepoName = process.env.GH_REPO_NAME || 'daily-paper-reader';

@@ -90,6 +90,11 @@ export interface AnalysisResult {
   // 深入追问:3-5 个引导性问题,帮助读者深入探索这篇论文。
   // 来自 LLM 生成,中文,每个问题 15-30 个字符,聚焦于实验局限、适用边界、可扩展方向等。
   follow_up_questions?: string[];
+  // 研究贡献:3-5 条核心贡献,提炼这篇论文相对前人的新东西(模型/方法/数据集/发现/理论等)。
+  // 每条独立成点,15-50 中文字符;不与 tldr / motivation / method / result / conclusion
+  // 重复 — 显式拆出是为了替代"散落在四段里让用户自行归纳"的现状,目标 2。
+  // 不写 frontmatter(与 method_pros_cons 同样的内存派生态,Python 后端重写论文不持久化)。
+  contributions?: string[];
 }
 
 // 旧 3-层结构 (domain/task/method) — 现已被 4-dim Categories 取代。
@@ -752,6 +757,16 @@ function rehydrateHistory(id: string): void {
 let currentPdfText: string | null = null;
 let currentPdfMeta: { name: string; size: number } | null = null;
 let currentArxivEntry: ArxivEntry | null = null;
+let currentAnalysisResult: AnalysisResult | null = null;
+
+// Export getters for external access (e.g., action bar buttons)
+export function getCurrentArxivEntry(): ArxivEntry | null {
+  return currentArxivEntry;
+}
+
+export function getCurrentAnalysisResult(): AnalysisResult | null {
+  return currentAnalysisResult;
+}
 
 // arxiv-index.json: build-arxiv-index.mjs 生成。
 // schema 演进:早期是 {id → rel},后来 settings 面板要查 title,改为
@@ -1239,7 +1254,14 @@ ${TYPE_LINES}
   - "实验部分的基线选择是否公平?"
   - "这篇论文的假设在实际场景中是否容易满足?"
   - "作者提到的局限性可以通过什么方式改进?"
-  禁止在问题里包含答案,禁止超过 30 个字符。`;
+  禁止在问题里包含答案,禁止超过 30 个字符。
+- contributions(研究贡献,新增):数组,3-5 条字符串,每条 15-50 个中文字符,提炼这篇论文相对前人的新东西
+  (新模型 / 新方法 / 新数据集 / 新发现 / 新理论 / 新基准 / 新分析视角 等),每条独立成点。
+  - 每条聚焦一个具体贡献点,用名词短语而非完整句子,如 "提出 LoRA 低秩适配方法" 而非
+    "作者提出了 LoRA 这种低秩适配方法来减少微调参数量"
+  - 与 tldr / motivation / method / result / conclusion / context 不重复;贡献是"这篇论文
+    留下了什么新东西",四段是"它怎么做到的"
+  - 提炼不到时输出空数组 []`;
 
 function buildUserPrompt(title: string, abstract: string, body: string): string {
   // 对齐 src/6.generate_docs.py: payload = {"title": title, "abstract": abstract}
@@ -1247,7 +1269,7 @@ function buildUserPrompt(title: string, abstract: string, body: string): string 
   const payload = JSON.stringify({ title, abstract: abstract || '(无 abstract,从正文摘录)', body_excerpt: body.slice(0, 8000) }, null, 0);
   return (
     "请基于上面的 JSON 中的 title / abstract / body_excerpt,输出一个中文速览摘要,严格返回 JSON(不要输出任何其它文字):\n" +
-    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"topic_tags\":{\"venue\":[],\"task\":[\"...\"],\"method\":[\"...\"],\"type\":[\"...\"]},\"follow_up_questions\":[\"...\",\"...\",\"...\"]}\n" +
+    "{\"title\":\"...\",\"title_en\":\"...\",\"authors\":\"...\",\"tldr\":\"...\",\"motivation\":\"...\",\"method\":\"...\",\"result\":\"...\",\"conclusion\":\"...\",\"context\":\"...\",\"topic_tags\":{\"venue\":[],\"task\":[\"...\"],\"method\":[\"...\"],\"type\":[\"...\"]},\"follow_up_questions\":[\"...\",\"...\",\"...\"],\"contributions\":[\"...\",\"...\",\"...\"]}\n" +
     "Output must be strict JSON only, no markdown, no fences, no extra text."
   ).replace("上面的 JSON", payload + "\n上面的 JSON");
 }
@@ -1447,6 +1469,9 @@ export async function callLLM(
     conclusion: parsed.conclusion || '',
     context: parsed.context || '',
     follow_up_questions: parsed.follow_up_questions || [],
+    contributions: Array.isArray(parsed.contributions)
+      ? parsed.contributions.filter((x): x is string => typeof x === 'string').slice(0, 5)
+      : [],
     // categories 由 normalizeCategories 按 lib/taxonomies 的 3-dim 候选池 (task/method/type)
     // 严格过滤;自由标签必须带 "other:" 前缀才接受;venue 维度由前端从 source 字段重推,
     // LLM 输出此处忽略。LLM 没返回 / 字段缺失 / 格式错乱 / 顶层是 string[] (旧 history)
@@ -2343,6 +2368,9 @@ function newId(): string {
 // 注:历史笔记重新加载由调用方负责 — 这里只画 result DOM,不读写 history;
 // 防止「打开历史」也生成一份新 history 条目这种递归 bug。
 function renderResult(r: AnalysisResult, rawText: string): void {
+  // Store current analysis result for action bar
+  currentAnalysisResult = r;
+
   const box = $('results');
   box.hidden = false;
 
@@ -2583,6 +2611,93 @@ function renderResult(r: AnalysisResult, rawText: string): void {
       }
     });
   }
+
+  // Add action bar for idea/experiment/project creation
+  const actionBar = document.createElement('div');
+  actionBar.className = 'analyzer-action-bar';
+  actionBar.innerHTML = `
+    <button type="button" id="btn-save-idea" class="btn btn-sm">💡 保存为想法</button>
+    <button type="button" id="btn-create-experiment" class="btn btn-sm">🧪 创建实验</button>
+    <button type="button" id="btn-join-project" class="btn btn-sm">📁 加入项目</button>
+  `;
+  box.appendChild(actionBar);
+
+  // "保存为想法" button
+  const saveIdeaBtn = actionBar.querySelector('#btn-save-idea');
+  saveIdeaBtn?.addEventListener('click', () => {
+    const entry = getCurrentArxivEntry();
+    const result = getCurrentAnalysisResult();
+    if (!entry || !result) {
+      setStatus('没有可用的论文分析结果', 'error');
+      return;
+    }
+    const title = encodeURIComponent(result.title || entry.title || 'Untitled');
+    const description = encodeURIComponent(
+      [result.motivation, result.method, result.result, result.conclusion]
+        .filter(Boolean)
+        .map((s) => s?.replace(/\n/g, '\n') || '')
+        .join('\n\n---\n\n')
+    );
+    // Use structured prefill_source_papers (JSON array)
+    const sourcePapers = [{
+      id: entry.arxivId || '',
+      title: result.title || entry.title || '',
+      abstract: result.method || '',
+      tldr: result.result || '',
+      motivation: result.motivation || '',
+      method: result.method || '',
+      result: result.result || '',
+      conclusion: result.conclusion || '',
+    }];
+    const prefillSourcePapers = encodeURIComponent(JSON.stringify(sourcePapers));
+    window.location.href = `/ideas/?prefill_title=${title}&prefill_description=${description}&prefill_source_papers=${prefillSourcePapers}&prefill_source=paper-analyzer`;
+  });
+
+  // "创建实验" button
+  const createExpBtn = actionBar.querySelector('#btn-create-experiment');
+  createExpBtn?.addEventListener('click', () => {
+    const entry = getCurrentArxivEntry();
+    const result = getCurrentAnalysisResult();
+    if (!entry || !result) {
+      setStatus('没有可用的论文分析结果', 'error');
+      return;
+    }
+    const title = encodeURIComponent(`实验: ${result.title || entry.title || 'Untitled'}`);
+    const hypothesis = encodeURIComponent(result.motivation || '');
+    const papers = encodeURIComponent(entry.arxivId || '');
+    window.location.href = `/experiments/?prefill_title=${title}&prefill_hypothesis=${hypothesis}&prefill_papers=${papers}`;
+  });
+
+  // "加入项目" button - show project picker modal
+  const joinProjectBtn = actionBar.querySelector('#btn-join-project');
+  joinProjectBtn?.addEventListener('click', async () => {
+    const entry = getCurrentArxivEntry();
+    if (!entry?.arxivId) {
+      setStatus('只有 arXiv 论文才能加入项目', 'error');
+      return;
+    }
+    // Try to get projects list
+    try {
+      const { getProjectsList } = await import('./projects');
+      const projects = getProjectsList();
+      if (projects.length === 0) {
+        setStatus('还没有项目,请先在 Projects 页面创建', 'info');
+        return;
+      }
+      // Simple prompt-based selection (could be replaced with a proper modal)
+      const projectNames = projects.map((p) => p.name || p.id).join('\n');
+      const selected = prompt(`选择要加入的项目 (输入项目名称):\n\n${projectNames}`);
+      if (!selected) return;
+      const matched = projects.find((p) => (p.name || p.id) === selected);
+      if (!matched) {
+        setStatus('未找到匹配的项目', 'error');
+        return;
+      }
+      setStatus(`已将论文 ${entry.arxivId} 添加到项目 ${matched.name || matched.id}`, 'info');
+    } catch (e) {
+      setStatus('获取项目列表失败', 'error');
+    }
+  });
 
   box.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }

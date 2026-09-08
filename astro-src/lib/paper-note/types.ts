@@ -22,6 +22,7 @@ export interface NoteAnalysisInput {
   result?: string;
   conclusion?: string;
   context?: string;
+  contributions?: string[];
   categories?:
     | Categories
     | string[]

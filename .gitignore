@@ -16,6 +16,9 @@ chat.db-wal
 app.log
 *.log
 .local-runs/
+# Local LLM proxy 写盘日志(2026-09-08)— scripts/local-llm-proxy.mjs 每次 chat
+# 调用 append 一行,本地调试用,不入库。仓库根 logs/ 整体也排除,避免误提交。
+logs/
 
 # 本地爬虫运行状态(由 src/main.py / 维护脚本在 archive/ 下生成)
 # 每次本地维护都会重写,git diff 会一直吵;不入库
@@ -64,6 +67,8 @@ public/search-corpus.json
 
 # prebuild 自动生成的相关论文图谱(build-search-corpus.mjs 跑出来的)
 public/paper-relations.json
+# J5 增量指纹:hash(id|title_zh|...) 检测未变则跳过 O(N²) hybrid 计算
+.prebuild-relations-hash
 
 # PR-5 Concept Backlinks 产物(由 backfill_concepts.py 生成 + copy 到 public/)
 # wiki/concepts/ 是源,public/wiki/ 是 Astro 构建副本,都不入库
@@ -96,3 +101,4 @@ audit_findings.json
 audit_results.json
 frontmatter_audit_findings.json
 scripts/audit_findings.json
+plans/

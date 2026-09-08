@@ -100,6 +100,16 @@ export function createPaperRepository(
     return result;
   }
 
+  /** 按 canonical arxiv id 查找论文(不含版本号)。用于短形式 URL 如 /papers/2608.00133/ 重定向。 */
+  async function findByArxivId(arxivId: string): Promise<Paper | null> {
+    // 提取 canonical id (去除版本号)
+    const canonical = arxivId.replace(/v\d+$/, '');
+    const all = await list({ dedup: true });
+    const found = all.find((p) => p.canonicalArxivId === canonical);
+    if (!found) return null;
+    return readPaperLib(found.id);
+  }
+
   /** 按 task 维度桶分,统一首页 / papers 库主题视图的桶定义。 */
   async function groupByTask(): Promise<Map<string, PaperListItem[]>> {
     const all = await list({ sortBy: 'score' });
@@ -139,6 +149,7 @@ export function createPaperRepository(
     list,
     listAll,
     read,
+    findByArxivId,
     groupByTask,
     stats: getStats,
     invalidate,

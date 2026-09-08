@@ -55,15 +55,110 @@ const newToday = items.filter((p) => p.date === today).length;
         <strong>{totalPapers}</strong> 篇,展示 <strong>{libraryCount}</strong> 个非空公共主题库。
         在下面可以新建自己的个人文献库,把想精读 / 反复查阅的论文收在一起,跨设备同步走 Gist。
       </p>
+
+      <!-- 搜索入口 (iter2) -->
+      <div class="home-search-box">
+        <form action="/search/" method="get" class="search-form">
+          <input
+            type="search"
+            name="q"
+            placeholder="搜索想法、实验、写作、路线图..."
+            class="search-input"
+            aria-label="搜索"
+          />
+          <button type="submit" class="search-btn">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.35-4.35"/>
+            </svg>
+          </button>
+        </form>
+        <a href="/research/" class="research-dashboard-link">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/>
+            <rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          研究仪表板
+        </a>
+      </div>
+
       <div class="libraries-shortcuts" aria-label="状态">
         <span class="shortcut">📅 今日新增 <strong>{newToday}</strong></span>
-        <span class="shortcut">🕒 最近更新 {lastUpdated || '—'}</span>
+        {/* lastUpdated 是 { label, isFallback, hint? } 对象(2026-08-02 拆出后),
+            直接插值会被 Astro 渲染成 "[object Object]"。这里显式用 .label。
+            isFallback=true 时加"(数据截止)"副标让用户知道是兜底口径。 */}
+        <span
+          class={`shortcut ${lastUpdated.isFallback ? 'shortcut--fallback' : ''}`}
+          title={lastUpdated.hint || ''}
+        >🕒 最近更新 {lastUpdated.label}{lastUpdated.isFallback ? ' · 数据截止' : ''}</span>
         <a class="shortcut" href={base + '/papers/'}>📚 全部论文</a>
         <a class="shortcut" href={base + '/topic/'}>🎯 主题探索</a>
         <a class="shortcut" href={base + '/projects/'}>📂 项目工作区</a>
         <a class="shortcut" href={base + '/dashboard/'}>📊 阅读仪表板</a>
       </div>
     </header>
+
+    {/* 最新论文快捷入口 (R5:在快捷入口后面渲染论文卡片) */}
+    {items.length > 0 && (
+      <section class="recent-papers-section">
+        <h2 class="recent-papers-title">最新论文</h2>
+        <div class="recent-papers-grid">
+          {items.slice(0, 5).map((p) => (
+            <a class="recent-paper-card" href={base + '/papers/' + p.slug + '/'}>
+              <div class="recent-paper-title">{p.title_zh || p.title}</div>
+              <div class="recent-paper-meta">
+                <span class="recent-paper-arxiv">{p.canonicalArxivId}</span>
+                <span class="recent-paper-date">{p.date?.slice(5) || ''}</span>
+              </div>
+            </a>
+          ))}
+        </div>
+      </section>
+    )}
+
+    <!-- 研究工作流快捷入口 (2026-09-07) -->
+    <section class="research-workflow-section">
+      <h2 class="workflow-title">研究工作流</h2>
+      <p class="workflow-desc">
+        从想法到实验、写作、路线图 — 完整的研究生命周期管理
+      </p>
+      <div class="workflow-cards">
+        <a href={base + '/ideas/'} class="workflow-card">
+          <span class="workflow-icon">💡</span>
+          <span class="workflow-label">想法</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">记录研究灵感</span>
+            <span class="workflow-count" id="workflow-ideas-count" style="display: none;">0</span>
+          </span>
+        </a>
+        <a href={base + '/experiments/'} class="workflow-card">
+          <span class="workflow-icon">🔬</span>
+          <span class="workflow-label">实验</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">设计实验验证</span>
+            <span class="workflow-count" id="workflow-experiments-count" style="display: none;">0</span>
+          </span>
+        </a>
+        <a href={base + '/writing/'} class="workflow-card">
+          <span class="workflow-icon">✍️</span>
+          <span class="workflow-label">写作</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">撰写论文笔记</span>
+            <span class="workflow-count" id="workflow-writing-count" style="display: none;">0</span>
+          </span>
+        </a>
+        <a href={base + '/roadmap/'} class="workflow-card">
+          <span class="workflow-icon">🗺️</span>
+          <span class="workflow-label">路线图</span>
+          <span class="workflow-card-row">
+            <span class="workflow-desc-sm">规划长期目标</span>
+            <span class="workflow-count" id="workflow-roadmap-count" style="display: none;">0</span>
+          </span>
+        </a>
+      </div>
+    </section>
 
     <!-- 阅读仪表板 strip: 客户端水合,显示 3 个 KPI + 跳 /dashboard/ -->
     <section id="dashboard-strip-mount" class="dashboard-strip-mount" aria-label="阅读状态概览"></section>
@@ -161,13 +256,142 @@ const newToday = items.filter((p) => p.date === today).length;
   <Footer />
   <NewLibraryModal />
 
+  <!-- Welcome Modal for first-time users -->
+  <dialog id="welcome-modal" class="welcome-modal">
+    <div class="welcome-modal-content">
+      <div class="welcome-header">
+        <span class="welcome-icon">👋</span>
+        <h2>欢迎使用 Daily Paper Reader</h2>
+      </div>
+      <p class="welcome-desc">
+        这是一个面向科研工作者的论文阅读与管理工具。从论文发现到实验设计、写作输出，帮你建立完整的研究工作流。
+      </p>
+      <div class="welcome-features">
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">📚</span>
+          <div>
+            <strong>文献库</strong>
+            <p>按主题/领域组织论文，追踪最新 arXiv 论文</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">💡</span>
+          <div>
+            <strong>想法</strong>
+            <p>记录研究灵感，关联论文，管理想法生命周期</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">🔬</span>
+          <div>
+            <strong>实验</strong>
+            <p>结构化实验设计，验证你的研究假设</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">✍️</span>
+          <div>
+            <strong>写作</strong>
+            <p>论文、笔记、综述写作空间，集成引用管理</p>
+          </div>
+        </div>
+        <div class="welcome-feature">
+          <span class="welcome-feature-icon">🗺️</span>
+          <div>
+            <strong>路线图</strong>
+            <p>长期研究目标规划，按季度追踪进度</p>
+          </div>
+        </div>
+      </div>
+      <div class="welcome-footer">
+        <label class="welcome-dont-show">
+          <input type="checkbox" id="welcome-dont-show" />
+          下次不再显示
+        </label>
+        <button type="button" class="btn btn-primary" id="welcome-close">开始使用</button>
+      </div>
+    </div>
+  </dialog>
+
   <script>
     import '../scripts/user-libraries-ui';
     import { mountDashboardStrip } from '../scripts/dashboard-strip';
+    import { listIdeas } from '../lib/ideas';
+    import { getAllExperiments } from '../lib/experiments';
+    import { listWritings } from '../lib/writing';
+    import { listRoadmaps } from '../lib/roadmap';
+
     const itemsForStrip = JSON.parse(document.getElementById('home-papers-data')?.textContent || '[]');
     const mount = document.getElementById('dashboard-strip-mount');
     if (mount && Array.isArray(itemsForStrip)) {
       mountDashboardStrip(mount, itemsForStrip);
     }
+
+    // Update workflow counts on home page
+    (function updateWorkflowCounts() {
+      const ideasCount = document.getElementById('workflow-ideas-count');
+      const experimentsCount = document.getElementById('workflow-experiments-count');
+      const writingCount = document.getElementById('workflow-writing-count');
+      const roadmapCount = document.getElementById('workflow-roadmap-count');
+
+      try {
+        if (ideasCount) {
+          const count = listIdeas().length;
+          ideasCount.textContent = String(count);
+          ideasCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+        if (experimentsCount) {
+          const count = getAllExperiments().length;
+          experimentsCount.textContent = String(count);
+          experimentsCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+        if (writingCount) {
+          const count = listWritings().length;
+          writingCount.textContent = String(count);
+          writingCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+        if (roadmapCount) {
+          const count = listRoadmaps().length;
+          roadmapCount.textContent = String(count);
+          roadmapCount.style.display = count > 0 ? 'inline-flex' : 'none';
+        }
+      } catch (e) {
+        // localStorage may not be available
+        console.debug('Workflow counts unavailable:', e);
+      }
+    })();
+
+    // Welcome modal for first-time users
+    (function initWelcomeModal() {
+      const dontShowKey = 'dpr_hide_welcome';
+      if (localStorage.getItem(dontShowKey)) return;
+
+      const modal = document.getElementById('welcome-modal') as HTMLDialogElement;
+      const closeBtn = document.getElementById('welcome-close');
+      const dontShowCheckbox = document.getElementById('welcome-dont-show') as HTMLInputElement;
+
+      if (!modal || !closeBtn) return;
+
+      // Show modal after a short delay
+      setTimeout(() => {
+        modal.showModal();
+      }, 800);
+
+      closeBtn.addEventListener('click', () => {
+        modal.close();
+        if (dontShowCheckbox?.checked) {
+          localStorage.setItem(dontShowKey, 'true');
+        }
+      });
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          modal.close();
+          if (dontShowCheckbox?.checked) {
+            localStorage.setItem(dontShowKey, 'true');
+          }
+        }
+      });
+    })();
   </script>
 </BaseLayout>

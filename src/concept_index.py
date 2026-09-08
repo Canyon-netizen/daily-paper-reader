@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.concept_slug import wiki_slug
@@ -354,6 +355,7 @@ def _prune_orphan_concept_pages(archive_path: str, written: set[str]) -> None:
             continue
         try:
             os.remove(path)
+            logging.warning(f"[concept-prune] remove {path} (concept_id-prefixed, no longer in index)")
         except OSError:
             pass
 

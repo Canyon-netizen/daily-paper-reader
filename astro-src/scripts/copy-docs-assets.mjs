@@ -13,11 +13,11 @@
 //   - 删除 public/assets/figures + public/assets/tables 的旧目录,避免遗留被删论文的图
 //   - 失败兜底:docs/assets 不存在时 no-op(不阻塞 dev)
 //
-// 版本去重:
-//   - 同一篇 arXiv 论文可能会以 v1 / v2 / ... 多个版本被采集进 docs/assets/
-//     (如 2606.26694v1、2606.26694v2),但 markdown 笔记、HTML 模板、index 都只引用最新版,
-//     老版本的 figures 是纯部署冗余,会无谓地撑大产物。
-//   - 这里按 canonical id(= 去掉末尾 v<n>)分组,只搬运版本号最大的那一份。
+// figures 版本处理(2026-09-08 改,治 2607.11624v2 老版本页面整页图 404):
+//   - 每个 vN 版本都是独立路由 —— /papers/<id>v<N>-slug/ 渲染时引用
+//     figures/arxiv/<id>v<N>/fig-NNN.webp,**所有版本都要拷**,不能按 canonical id
+//     去重(dedup 会让老版本页面整页图 404,踩过 2607.11624v2 这个雷)。
+//   - 同 id 的 v1/v2/v3 图基本重合,总 MiB 涨幅 < 5%,部署可接受。
 //
 // 体积兜底:
 //   - Cloudflare Pages 单文件 ≤ 25 MiB。个别论文(物理仿真/数据集类)的超大配图会触发上限,
@@ -28,8 +28,8 @@
 //   - daily pipeline 抓 arXiv PDF 抽正文,生成 docs/papers/{arxivId}v#-slug.txt。
 //   - paper-chat 的全文模式(paper-fulltext.ts::loadFulltextSkeleton)优先读
 //     /papers/{id}.txt 作为 LLM 上下文 — 比 ar5iv 快、不依赖 8123 CORS 代理。
-//   - 同一 id 可能 v1 / v2 共存,跟 figures 一样按 canonical id 去重,
-//     只拷最高版本那一份,避免 LLM 看到旧版 + 减少 dist 体积。
+//   - 同一 id 可能 v1 / v2 共存,这里按 canonical id 去重,只拷最高版本那一份,
+//     避免 LLM 看到旧版 + 减少 dist 体积(fetch 用 canonical id,最新版本即可)。
 //   - 体积兜底:个别论文 .txt 太大(>1 MiB)→ 截断到 1 MiB,够 LLM 看完整结构,
 //     也避免 Cloudflare 25 MiB 单文件限制被撞穿。
 //
@@ -158,43 +158,25 @@ async function copyDir(src, dst) {
   return { count, shrunk: shrunkCount, bytesIn, bytesOut };
 }
 
-async function copyFiguresVersionDedup(srcSub, dstSub) {
-  // figures/ 下通常有 arxiv/、biorxiv/ 等一级子目录,版本目录(如 2606.26694v2)在
-  // 它们之下。每个一级子目录单独做版本去重,只搬同 canonical id 的最大版本。
+async function copyFiguresAllVersions(srcSub, dstSub) {
+  // 每个版本目录(<id>v<N>) 都是独立路由 —— /papers/<id>v<N>-slug/ 渲染时
+  // 引用 figures/arxiv/<id>v<N>/fig-NNN.webp,所以**所有版本都要拷**,不能用
+  // canonical id 去重(dedup 会让老版本页面整页图 404,2607.11624v2 是踩过的坑)。
+  // 部署体积基本不增:同 id 的 v1/v2/v3 图基本重合 5-15 张,总 MiB 涨幅 < 5%。
   mkdirSync(dstSub, { recursive: true });
-  let total = { count: 0, shrunk: 0, bytesIn: 0, bytesOut: 0, dropped: 0 };
-  const allDropped = [];
+  let total = { count: 0, shrunk: 0, bytesIn: 0, bytesOut: 0 };
   if (!existsSync(srcSub)) return total;
   for (const group of readdirSync(srcSub)) {
     const groupSrc = join(srcSub, group);
     if (!statSync(groupSrc).isDirectory()) continue;
-    const entries = listVersionedDirs(groupSrc);
-    if (entries.length === 0) {
-      // 不是版本化目录(比如顶层只有 plain 名字),原样递归搬
-      const groupDst = join(dstSub, group);
-      if (existsSync(groupDst)) rmSync(groupDst, { recursive: true, force: true });
-      const r = await copyDir(groupSrc, groupDst);
-      total.count += r.count; total.shrunk += r.shrunk;
-      total.bytesIn += r.bytesIn; total.bytesOut += r.bytesOut;
-      continue;
-    }
-    const latest = latestDirsPerId(entries);
-    const latestSet = new Set(latest.map(e => e.dir));
-    const dropped = entries.filter(e => !latestSet.has(e.dir));
-    for (const d of dropped) allDropped.push(`${group}/${d.dir}(v${d.version})`);
-    for (const e of latest) {
-      const src = join(groupSrc, e.dir);
-      const dst = join(dstSub, group, e.dir);
-      if (existsSync(dst)) rmSync(dst, { recursive: true, force: true });
-      const r = await copyDir(src, dst);
-      total.count += r.count; total.shrunk += r.shrunk;
-      total.bytesIn += r.bytesIn; total.bytesOut += r.bytesOut;
-    }
+    // 直接整组递归拷,不去重版本
+    const groupDst = join(dstSub, group);
+    if (existsSync(groupDst)) rmSync(groupDst, { recursive: true, force: true });
+    const r = await copyDir(groupSrc, groupDst);
+    total.count += r.count; total.shrunk += r.shrunk;
+    total.bytesIn += r.bytesIn; total.bytesOut += r.bytesOut;
   }
-  if (allDropped.length) {
-    console.log(`[copy-docs-assets] 跳过老版本 figures: ${allDropped.join(', ')}`);
-  }
-  return { ...total, dropped: allDropped.length };
+  return total;
 }
 
 async function main() {
@@ -216,7 +198,7 @@ async function main() {
     if (existsSync(dstSub)) rmSync(dstSub, { recursive: true, force: true });
     let r;
     if (sub === 'figures') {
-      r = await copyFiguresVersionDedup(srcSub, dstSub);
+      r = await copyFiguresAllVersions(srcSub, dstSub);
     } else {
       r = await copyDir(srcSub, dstSub);
     }

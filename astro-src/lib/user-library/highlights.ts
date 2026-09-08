@@ -108,6 +108,35 @@ export async function deleteHighlight(highlightId: string): Promise<boolean> {
   });
 }
 
+/** 更新一条高亮的 note(空字符串视作清除 note)。 */
+export async function updateHighlightNote(
+  highlightId: string,
+  note: string,
+): Promise<Highlight | null> {
+  const db = await openDB();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      const req = store.get(highlightId);
+      req.onsuccess = () => {
+        const h = req.result as Highlight | undefined;
+        if (!h) { resolve(null); return; }
+        const trimmed = note.trim();
+        if (trimmed) h.note = trimmed;
+        else delete h.note;
+        const put = store.put(h);
+        put.onsuccess = () => resolve(h);
+        put.onerror = () => resolve(null);
+      };
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 export async function listHighlights(rawId: string): Promise<Highlight[]> {
   const canonicalId = canonicalArxivId(rawId);
   if (!canonicalId) return [];

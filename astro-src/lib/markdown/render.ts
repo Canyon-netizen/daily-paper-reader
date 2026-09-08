@@ -36,9 +36,10 @@ export function renderMarkdownBody(md: string, opts: RenderOptions = {}): string
 
   // 行内选项(wikilink resolver)。每行 renderInline 都拿到同一个对象,
   // chat 模式不传 wikilink resolver → 原文里 `[[name]]` 字面量保留。
+  // base 字段透传给 renderInline,wikilink href 用它做前缀,避免 BASE_URL 部署时 404。
   const inlineOpts = isChat
     ? {}
-    : { wikilinkResolver: opts.wikilinkResolver };
+    : { wikilinkResolver: opts.wikilinkResolver, base: opts.base };
 
   const flushList = (): void => {
     if (listItems.length) {

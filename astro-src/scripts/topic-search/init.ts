@@ -16,6 +16,7 @@ import {
   doSummarize,
   doVerifyHit,
   filterCandidatesByLLM,
+  setCandResourceFilter,
   startNewSession,
   persistSession,
 } from './actions';
@@ -141,6 +142,15 @@ export function init(): void {
     if (target.dataset.act === 'verify-hit') {
       const sid = target.dataset.sid;
       if (sid) void doVerifyHit(sid);
+    }
+  });
+
+  // 阶段 3 算力档位筛选条 — change 委托到 #cand-list
+  document.getElementById('cand-list')?.addEventListener('change', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.dataset.act === 'cand-tier-filter') {
+      const v = (target as HTMLSelectElement).value;
+      setCandResourceFilter(v as Parameters<typeof setCandResourceFilter>[0]);
     }
   });
 
