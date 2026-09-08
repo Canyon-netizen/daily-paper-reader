@@ -35,6 +35,10 @@ const STATUS_LABELS: Record<WritingStatus, string> = {
   draft: '草稿',
   review: '审核中',
   final: '已完成',
+  submitted: '已提交',
+  accepted: '已接收',
+  rejected: '已拒绝',
+  published: '已发表',
 };
 
 const TYPE_LABELS: Record<WritingType, string> = {
@@ -1109,7 +1113,7 @@ function setupStatusChange(): void {
   if (!statusBtn || !currentWriting) return;
 
   statusBtn.addEventListener('click', () => {
-    const statuses: WritingStatus[] = ['draft', 'review', 'final'];
+    const statuses: WritingStatus[] = ['draft', 'review', 'final', 'submitted', 'accepted', 'rejected', 'published'];
     const currentIdx = statuses.indexOf(currentWriting!.status);
     const nextStatus = statuses[(currentIdx + 1) % statuses.length];
 
