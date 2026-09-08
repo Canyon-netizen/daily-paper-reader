@@ -52,6 +52,7 @@ export interface PaperRepositoryOptions {
  *  - list(opts):等同于 lib/paper.listPapers() 但带缓存
  *  - listAll():等同于 listPapers() 全量全集
  *  - read(id):等同于 lib/paper.readPaper() 但带缓存
+ *  - findByArxivId(arxivId):按 canonical arxiv id 查找论文(不含版本号)
  *  - groupByTask():按 task 维度桶分
  *  - stats():观察仓库本身的性能指标
  *  - invalidate():强制下一次 list() 重读盘
@@ -62,6 +63,7 @@ export interface PaperRepository {
   list(opts?: ListOptions): Promise<PaperListItem[]>;
   listAll(): Promise<PaperListItem[]>;
   read(id: string): Promise<Paper | null>;
+  findByArxivId(arxivId: string): Promise<Paper | null>;
   groupByTask(): Promise<Map<string, PaperListItem[]>>;
   stats(): RepositoryStats;
   invalidate(): void;

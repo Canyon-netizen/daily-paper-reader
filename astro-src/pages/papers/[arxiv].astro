@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import { readPaper, listPapers, listAllPaperIds, flattenCategories } from '../../lib/paper';
+import { defaultPaperRepository } from '../../lib/paper-repository';
 import { renderMarkdownBody, renderTitleHtml } from '../../lib/markdown';
 import { paperPlainTitle } from '../../lib/title';
 import { buildConceptIndex, buildWikilinkResolver } from '../../lib/concepts-index';
@@ -88,8 +89,18 @@ export const getStaticPaths: GetStaticPaths = async () => {
 
 const { arxiv } = Astro.params;
 const { fullId } = Astro.props;
-const id = fullId || `papers/${arxiv}`;
-const paper = await readPaper(id);
+let id = fullId || `papers/${arxiv}`;
+let paper = await readPaper(id);
+
+// R5: 如果 paper 没找到,且 arxiv 参数是纯数字形式(如 2608.00133),
+// 尝试用 findByArxivId 查找并重定向到完整 slug 页面
+if (!paper && arxiv) {
+  const found = await defaultPaperRepository.findByArxivId(arxiv);
+  if (found && found.slug) {
+    return Astro.redirect(`/papers/${found.slug}/`, 302);
+  }
+}
+
 const base = import.meta.env.BASE_URL;
 const fulltextInline = paper && !paper.isBroken ? await readFulltextInline(id) : '';
 // 浏览器 <title> / 富标题:纯文本用于 tab 标题,富 HTML 用于页面 <h1>/<h2> 渲染数学。

@@ -100,6 +100,24 @@ const newToday = items.filter((p) => p.date === today).length;
       </div>
     </header>
 
+    {/* 最新论文快捷入口 (R5:在快捷入口后面渲染论文卡片) */}
+    {items.length > 0 && (
+      <section class="recent-papers-section">
+        <h2 class="recent-papers-title">最新论文</h2>
+        <div class="recent-papers-grid">
+          {items.slice(0, 5).map((p) => (
+            <a class="recent-paper-card" href={base + '/papers/' + p.slug + '/'}>
+              <div class="recent-paper-title">{p.title_zh || p.title}</div>
+              <div class="recent-paper-meta">
+                <span class="recent-paper-arxiv">{p.canonicalArxivId}</span>
+                <span class="recent-paper-date">{p.date?.slice(5) || ''}</span>
+              </div>
+            </a>
+          ))}
+        </div>
+      </section>
+    )}
+
     <!-- 研究工作流快捷入口 (2026-09-07) -->
     <section class="research-workflow-section">
       <h2 class="workflow-title">研究工作流</h2>
