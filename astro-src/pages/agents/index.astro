@@ -75,6 +75,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         </label>
         <button class="button primary" id="agents-run-btn">▶️ 跑一轮</button>
         <button class="button" id="agents-abort-btn" hidden title="中断当前 round 循环(已完成本轮后立即退出)">🛑 停止</button>
+        <button class="button" id="agents-duplicate-btn" title="把当前 session 的所有 rounds 复制到新 sid,方便换个 preset/maxRounds 重跑同一基线">📋 复制</button>
         <a class="button" href="/agents/compare/" title="多会话并排对比">📊 对比</a>
       </div>
     </section>
@@ -587,6 +588,63 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       }
     }
 
+    // iter #15 — session 复制(分支实验)
+    //
+    // 复制整个 session 到新 sid,retag meta.session_id,加 branch note。
+    // 用户可以换个 gate preset / max_rounds / candidates 重跑同一基线。
+    function pickNewSidLocal(base: string): string {
+      let candidate = base;
+      let n = 2;
+      while (loadRounds(candidate).length > 0 || localStorage.getItem(META_KEY(candidate))) {
+        candidate = `${base}-${n}`;
+        n++;
+      }
+      return candidate;
+    }
+
+    function duplicateSession(oldSid: string): { newSid: string; roundCount: number } {
+      if (!oldSid) throw new Error('oldSid required');
+      const base = `${oldSid}-copy`;
+      const newSid = pickNewSidLocal(base);
+      const oldRecords = loadRounds(oldSid);
+      const newRecords = oldRecords.map((r) => ({
+        ...r,
+        meta: { ...(r.meta ?? {}), session_id: newSid },
+      }));
+      if (newRecords.length > 0) saveRounds(newSid, newRecords);
+
+      const oldMeta = loadMeta(oldSid);
+      const title = oldMeta.title ? `${oldMeta.title} (copy)` : `Copy of ${oldSid}`;
+      const branchNote = `Branched from ${oldSid} at ${new Date().toISOString()}`;
+      const notes = oldMeta.notes ? `${branchNote}\n\n${oldMeta.notes}` : branchNote;
+      saveMeta(newSid, { title, notes });
+
+      return { newSid, roundCount: newRecords.length };
+    }
+
+    function duplicateCurrentSession() {
+      if (!currentSessionId) {
+        alert('先选一个 session');
+        return;
+      }
+      const oldSid = currentSessionId;
+      let result: { newSid: string; roundCount: number };
+      try {
+        result = duplicateSession(oldSid);
+      } catch (err) {
+        alert(`复制失败: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      // 切到新 session 并刷新
+      currentSessionId = result.newSid;
+      saveSessionId(result.newSid);
+      sessionInput.value = result.newSid;
+      refreshSessionPicker();
+      refresh();
+      $('agents-status-text').textContent =
+        `📋 已复制 "${oldSid}" → "${result.newSid}" (${result.roundCount} rounds)`;
+    }
+
     function wireMetaPanel() {
       const titleInput = $<HTMLInputElement>('agents-meta-title');
       const notesInput = $<HTMLTextAreaElement>('agents-meta-notes');
@@ -838,6 +896,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     });
     wireTokenRate();
     wireMetaPanel();
+    $('agents-duplicate-btn').addEventListener('click', duplicateCurrentSession);
     refresh();
 
     // ---------------------------------------------------------------------
