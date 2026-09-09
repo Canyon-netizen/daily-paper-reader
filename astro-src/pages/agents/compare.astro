@@ -1,0 +1,280 @@
+---
+// /agents/compare/ — 多 session 并排比较
+//
+// 浏览器侧:读 localStorage 里的 rounds(每会话一个 dpr_agents_rounds_<sid> 键)
+// 用户勾选 2-3 个会话,展示:
+//   - 概览卡:轮数 / proposals / applied / avg score / 最后活动
+//   - 趋势对比:avg score 折线图(多 series)
+//   - top applied proposals
+//
+// 未来扩展:CLI 跑的 sessions 在 archive/<sid>/rounds/*.json,需要 build 时生成
+// manifest(目前 iter #9 只覆盖 browser-localStorage sessions)。
+
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Navbar from '../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="多会话对比 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / 对比</span>
+    </nav>
+
+    <header class="agents-compare-header">
+      <h1>📊 多会话对比</h1>
+      <p class="muted">
+        勾选 2-3 个本地会话,横向比较它们的 round 数、applied 数、平均评分与趋势。
+        <br />
+        <small>(本视图只覆盖浏览器 localStorage 中的 session;CLI 跑的 session 在 archive/&lt;sid&gt;/rounds/*.json,iter #6 的详情页可以查)</small>
+      </p>
+    </header>
+
+    <section class="agents-compare-picker" id="agents-compare-picker">
+      <h2>1. 选择会话</h2>
+      <div id="agents-compare-session-list" class="agents-compare-session-list">
+        <p class="muted">载入中...</p>
+      </div>
+      <div class="agents-compare-actions">
+        <button class="button primary" id="agents-compare-btn" disabled>2. 对比</button>
+        <span class="muted" id="agents-compare-hint"></span>
+      </div>
+    </section>
+
+    <section class="agents-compare-results" id="agents-compare-results" hidden>
+      <h2>3. 对比结果</h2>
+      <div id="agents-compare-table-wrap"></div>
+      <div id="agents-compare-trend-wrap"></div>
+      <div id="agents-compare-tops-wrap"></div>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  type RoundRecord = any;
+  const ROUNDS_KEY = (sid: string) => `dpr_agents_rounds_${sid}`;
+  const STORAGE_KEY = 'dpr_agents_session_v1';
+
+  const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`#${id} not found`);
+    return el as T;
+  };
+
+  function escapeHtml(s: string): string {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c] ?? c));
+  }
+
+  function listKnownSessions(): string[] {
+    const out = new Set<string>();
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      const m = k.match(/^dpr_agents_rounds_(.+)$/);
+      if (m) out.add(m[1]);
+    }
+    const cur = localStorage.getItem(STORAGE_KEY);
+    if (cur) out.add(cur);
+    return [...out].sort();
+  }
+
+  function loadRounds(sid: string): RoundRecord[] {
+    try {
+      const raw = localStorage.getItem(ROUNDS_KEY(sid));
+      if (!raw) return [];
+      return JSON.parse(raw) as RoundRecord[];
+    } catch {
+      return [];
+    }
+  }
+
+  // ---------- UI: session list with checkboxes ----------
+  function renderSessionList() {
+    const list = $('agents-compare-session-list');
+    const sessions = listKnownSessions();
+    if (sessions.length === 0) {
+      list.innerHTML = '<p class="muted">还没有本地 session。先去 <a href="/agents/">/agents/</a> 跑一轮。</p>';
+      return;
+    }
+    list.innerHTML = sessions.map((sid) => {
+      const recs = loadRounds(sid);
+      const rounds = recs.length;
+      const applied = recs.reduce((a, r) => a + r.modifier.applied.length, 0);
+      const last = recs.length > 0
+        ? new Date(Math.max(...recs.map((r) => r.finished_at))).toLocaleString()
+        : '-';
+      return `
+        <label class="agents-compare-session">
+          <input type="checkbox" value="${escapeHtml(sid)}" class="agents-compare-checkbox" />
+          <div class="agents-compare-session-info">
+            <strong>${escapeHtml(sid)}</strong>
+            <span class="muted">${rounds} rounds · ${applied} applied · last: ${last}</span>
+          </div>
+        </label>
+      `;
+    }).join('');
+
+    const hint = $('agents-compare-hint');
+    const btn = $<HTMLButtonElement>('agents-compare-btn');
+    const updateHint = () => {
+      const n = list.querySelectorAll<HTMLInputElement>('.agents-compare-checkbox:checked').length;
+      if (n === 0) { btn.disabled = true; hint.textContent = '请勾选 2-3 个会话'; }
+      else if (n === 1) { btn.disabled = true; hint.textContent = '已选 1 个,再勾一个'; }
+      else if (n <= 3) { btn.disabled = false; hint.textContent = `已选 ${n} 个`; }
+      else { btn.disabled = true; hint.textContent = '最多选 3 个(取消勾选多余的)'; }
+    };
+    list.querySelectorAll<HTMLInputElement>('.agents-compare-checkbox').forEach((cb) => {
+      cb.addEventListener('change', updateHint);
+    });
+    updateHint();
+  }
+
+  // ---------- compute comparison metrics ----------
+  interface SessionStats {
+    sid: string;
+    rounds: number;
+    proposals: number;
+    avgScore: number;
+    avgElo: number;
+    applied: number;
+    appliedRate: number;       // applied / proposals
+    lastActivity: number;      // ms
+    trend: { round: number; avgScore: number }[];
+    topAppliedTitles: string[];
+  }
+
+  function computeStats(sid: string): SessionStats | null {
+    const recs = loadRounds(sid);
+    if (recs.length === 0) return null;
+    const allCritiques = recs.flatMap((r) => r.feedback.critiques);
+    const avgScore = allCritiques.length
+      ? allCritiques.reduce((a, c) => a + c.total, 0) / allCritiques.length
+      : 0;
+    const avgElo = allCritiques.length
+      ? allCritiques.reduce((a, c) => a + c.elo, 0) / allCritiques.length
+      : 0;
+    const applied = recs.reduce((a, r) => a + r.modifier.applied.length, 0);
+    const proposals = recs.reduce((a, r) => a + r.designer.proposals.length, 0);
+    const lastActivity = Math.max(...recs.map((r) => r.finished_at));
+    const trend = recs.map((r) => {
+      const cs = r.feedback.critiques;
+      const avg = cs.length ? cs.reduce((a, c) => a + c.total, 0) / cs.length : 0;
+      return { round: r.round, avgScore: avg };
+    });
+    const topApplied = recs
+      .flatMap((r) => r.modifier.applied.map((a) => {
+        const proposal = r.designer.proposals.find((p: any) => p.id === a.proposal_id);
+        return proposal?.title ?? a.payload?.title ?? a.proposal_id;
+      }))
+      .filter(Boolean)
+      .slice(0, 3);
+    return {
+      sid,
+      rounds: recs.length,
+      proposals,
+      avgScore,
+      avgElo,
+      applied,
+      appliedRate: proposals ? applied / proposals : 0,
+      lastActivity,
+      trend,
+      topAppliedTitles: topApplied,
+    };
+  }
+
+  // ---------- render comparison ----------
+  function renderTable(stats: SessionStats[]) {
+    const wrap = $('agents-compare-table-wrap');
+    const cols = stats.map((s) => `
+      <th>
+        <a href="/agents/${encodeURIComponent(s.sid)}/" target="_blank" class="agents-link">${escapeHtml(s.sid)}</a>
+      </th>
+    `).join('');
+    const row = (label: string, get: (s: SessionStats) => string) => `
+      <tr><th>${label}</th>${stats.map((s) => `<td>${get(s)}</td>`).join('')}</tr>
+    `;
+    wrap.innerHTML = `
+      <table class="agents-compare-table">
+        <thead><tr><th></th>${cols}</tr></thead>
+        <tbody>
+          ${row('rounds', (s) => String(s.rounds))}
+          ${row('proposals', (s) => String(s.proposals))}
+          ${row('avg score', (s) => s.avgScore.toFixed(2))}
+          ${row('avg Elo', (s) => s.avgElo.toFixed(0))}
+          ${row('applied', (s) => String(s.applied))}
+          ${row('applied rate', (s) => `${(s.appliedRate * 100).toFixed(1)}%`)}
+          ${row('last activity', (s) => new Date(s.lastActivity).toLocaleString())}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderTrend(stats: SessionStats[]) {
+    const wrap = $('agents-compare-trend-wrap');
+    const W = 600, H = 160, PAD = 30;
+    const allRounds = stats.flatMap((s) => s.trend);
+    const maxR = Math.max(1, ...allRounds.map((p) => p.round));
+    const maxScore = 10;
+    const palette = ['#5b8def', '#f5a623', '#7ed321'];
+    const xStep = (W - PAD * 2) / Math.max(1, maxR - 1);
+    const yFor = (score: number) => H - PAD - (score / maxScore) * (H - PAD * 2);
+    const lines = stats.map((s, i) => {
+      const color = palette[i % palette.length];
+      const pts = s.trend.map((p) =>
+        `${PAD + (p.round - 1) * xStep},${yFor(p.avgScore)}`).join(' ');
+      const dots = s.trend.map((p) =>
+        `<circle cx="${PAD + (p.round - 1) * xStep}" cy="${yFor(p.avgScore)}" r="3" fill="${color}"></circle>`
+      ).join('');
+      return `<polyline points="${pts}" stroke="${color}" stroke-width="2" fill="none" />${dots}`;
+    }).join('');
+    const legend = stats.map((s, i) =>
+      `<span style="color:${palette[i % palette.length]}">● ${escapeHtml(s.sid)}</span>`
+    ).join(' &nbsp; ');
+    wrap.innerHTML = `
+      <h3>📈 avg score 趋势对比</h3>
+      <svg viewBox="0 0 ${W} ${H}" class="agents-spark agents-spark-wide" role="img" aria-label="session avg score trend">
+        <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" stroke="#ccc" />
+        <line x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${H - PAD}" stroke="#ccc" />
+        <text x="${PAD - 5}" y="${PAD + 4}" text-anchor="end" font-size="10" fill="#666">10</text>
+        <text x="${PAD - 5}" y="${H - PAD + 4}" text-anchor="end" font-size="10" fill="#666">0</text>
+        ${lines}
+      </svg>
+      <p class="muted">${legend}</p>
+    `;
+  }
+
+  function renderTops(stats: SessionStats[]) {
+    const wrap = $('agents-compare-tops-wrap');
+    wrap.innerHTML = '<h3>🏆 applied proposal 标题(top 3 / session)</h3>' + stats.map((s) => `
+      <details class="agents-compare-tops" open>
+        <summary><strong>${escapeHtml(s.sid)}</strong> <span class="muted">(${s.topAppliedTitles.length})</span></summary>
+        ${s.topAppliedTitles.length
+          ? `<ol>${s.topAppliedTitles.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ol>`
+          : '<p class="muted">本 session 无 applied action</p>'}
+      </details>
+    `).join('');
+  }
+
+  // ---------- wire up ----------
+  document.addEventListener('DOMContentLoaded', () => {
+    renderSessionList();
+    $<HTMLButtonElement>('agents-compare-btn').addEventListener('click', () => {
+      const selected = [...document.querySelectorAll<HTMLInputElement>('.agents-compare-checkbox:checked')]
+        .map((cb) => cb.value);
+      if (selected.length < 2 || selected.length > 3) return;
+      const stats = selected.map(computeStats).filter(Boolean) as SessionStats[];
+      if (stats.length < 2) return;
+      $('agents-compare-results').hidden = false;
+      renderTable(stats);
+      renderTrend(stats);
+      renderTops(stats);
+      $('agents-compare-results').scrollIntoView({ behavior: 'smooth' });
+    });
+  });
+</script>
