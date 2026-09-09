@@ -116,6 +116,23 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </div>
     </section>
 
+    <section class="agents-activity" id="agents-activity" hidden>
+      <div class="agents-activity-header">
+        <span class="agents-meta-label">📅 最近 30 天活动</span>
+        <span class="muted">共 <strong id="agents-activity-total">0</strong> round(s)</span>
+        <span class="agents-activity-legend">
+          <span class="muted">少</span>
+          <span class="agents-heat-cell level-0"></span>
+          <span class="agents-heat-cell level-1"></span>
+          <span class="agents-heat-cell level-2"></span>
+          <span class="agents-heat-cell level-3"></span>
+          <span class="agents-heat-cell level-4"></span>
+          <span class="muted">多</span>
+        </span>
+      </div>
+      <div class="agents-activity-grid" id="agents-activity-grid"></div>
+    </section>
+
     <section class="agents-filter" id="agents-filter" hidden>
       <div class="agents-filter-header">
         <span class="agents-meta-label">🏷️ 按 tag 过滤 session</span>
@@ -1207,6 +1224,73 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       });
     }
 
+    // iter #21 — activity heatmap(最近 30 天每天 round 数)
+    const HEATMAP_DAY_MS = 24 * 60 * 60 * 1000;
+
+    function dayKey(ts: number): number {
+      const d = new Date(ts);
+      return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+    }
+
+    function buildHeatmapCells(allRecords: { started_at: number }[], now = Date.now()): { day: number; count: number; level: 0 | 1 | 2 | 3 | 4 }[] {
+      const endDay = dayKey(now);
+      const startDay = endDay - 29 * HEATMAP_DAY_MS;
+      const counts = new Map<number, number>();
+      for (const r of allRecords) {
+        if (!r || typeof r.started_at !== 'number') continue;
+        const k = dayKey(r.started_at);
+        if (k < startDay || k > endDay) continue;
+        counts.set(k, (counts.get(k) ?? 0) + 1);
+      }
+      const cells: { day: number; count: number; level: 0 | 1 | 2 | 3 | 4 }[] = [];
+      for (let k = startDay; k <= endDay; k += HEATMAP_DAY_MS) {
+        cells.push({ day: k, count: counts.get(k) ?? 0, level: 0 });
+      }
+      const max = Math.max(1, ...cells.map((c) => c.count));
+      for (const c of cells) {
+        if (c.count === 0) c.level = 0;
+        else if (c.count >= max * 0.75) c.level = 4;
+        else if (c.count >= max * 0.5) c.level = 3;
+        else if (c.count >= max * 0.25) c.level = 2;
+        else c.level = 1;
+      }
+      return cells;
+    }
+
+    function refreshActivityHeatmap() {
+      const panel = $('agents-activity');
+      const grid = $('agents-activity-grid');
+      const totalEl = $('agents-activity-total');
+      const allRecords: { started_at: number }[] = [];
+      for (const sid of listKnownSessions()) {
+        for (const r of loadRounds(sid)) allRecords.push({ started_at: r.started_at });
+      }
+      // 也统计 trash 里的(只要 started_at)
+      for (const e of listTrash()) {
+        const raw = localStorage.getItem(e.key);
+        if (!raw) continue;
+        try {
+          const rec = JSON.parse(raw);
+          if (rec.roundsRaw) {
+            const arr = JSON.parse(rec.roundsRaw);
+            for (const r of arr) allRecords.push({ started_at: r.started_at });
+          }
+        } catch { /* ignore */ }
+      }
+      const cells = buildHeatmapCells(allRecords);
+      const total = cells.reduce((a, c) => a + c.count, 0);
+      totalEl.textContent = String(total);
+      grid.innerHTML = cells
+        .map((c) => {
+          const date = new Date(c.day).toISOString().slice(0, 10);
+          return `<span class="agents-heat-cell level-${c.level}" title="${date}: ${c.count} round${c.count === 1 ? '' : 's'}"></span>`;
+        })
+        .join('');
+      panel.hidden = false;
+    }
+
+    function wireActivityHeatmap() { /* no listeners, pure render */ }
+
     function refreshFilterPanel() {
       const panel = $('agents-filter');
       const chips = $('agents-filter-chips');
@@ -1530,6 +1614,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     wireFilterClear();
     refreshTrashPanel();
     refreshFilterPanel();
+    refreshActivityHeatmap();
     refresh();
 
     // ---------------------------------------------------------------------

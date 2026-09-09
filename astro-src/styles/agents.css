@@ -669,3 +669,53 @@ kbd {
   padding: 0.6rem 1rem;
   margin-bottom: 1rem;
 }
+
+/* Activity heatmap (iter #21) */
+.agents-activity {
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  padding: 0.6rem 1rem;
+  margin-bottom: 1rem;
+}
+.agents-activity-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+.agents-activity-header strong {
+  color: var(--text, #1a1a1a);
+  font-size: 1rem;
+}
+.agents-activity-legend {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.78rem;
+}
+.agents-activity-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+}
+.agents-heat-cell {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid #e5e7eb;
+  cursor: default;
+}
+.agents-heat-cell.level-0 { background: #f3f4f6; }
+.agents-heat-cell.level-1 { background: #d1fae5; border-color: #a7f3d0; }
+.agents-heat-cell.level-2 { background: #6ee7b7; border-color: #34d399; }
+.agents-heat-cell.level-3 { background: #10b981; border-color: #059669; }
+.agents-heat-cell.level-4 { background: #047857; border-color: #065f46; }
+.agents-heat-cell:hover {
+  outline: 2px solid var(--primary, #5b8def);
+  outline-offset: 0;
+}
