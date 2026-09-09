@@ -72,6 +72,7 @@ function parseArgs(argv) {
     else if (a === '--auto-resume') out.autoResume = true;
     else if (a === '--write-deliverable') out.writeDeliverable = true;
     else if (a === '--few-shot-from') out.fewShotFrom = Number(argv[++i]);
+    else if (a === '--search-arxiv') out.searchArxiv = argv[++i];
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -170,6 +171,16 @@ if (args.help) {
                      as Designer few-shot examples. Closes iter #34 ↔
                      iter #31 loop: new sessions learn from past wins.
                      Default 0 (disabled). Capped at 20 to bound prompt.
+  --search-arxiv Q   Designer tool use (iter #56): search arXiv API for Q
+                     before the round runs, use top results as candidates.
+                     Closes the "candidates empty → Designer has no input"
+                     gap that was the biggest blocker vs Sakana / STORM
+                     (those tools have web/Python tool use; DPR didn't).
+                     By default max 12 results, dedup by canonical id,
+                     filtered to ti: (title match) for relevance.
+                     Combine with --new-session "<GOAL>" --search-arxiv Q
+                     to bootstrap a session from a topic query, zero
+                     prior papers needed.
   --help             Show this help`);
   process.exit(0);
 }
@@ -1756,6 +1767,103 @@ export async function loadCandidatesFromArchive(sessionId, maxPapers = 30) {
 }
 
 // ---------------------------------------------------------------------------
+// --search-arxiv:Designer tool use (iter #56)
+//
+// arXiv API export.arxiv.org/api/query 走原生 fetch,XML 用正则抽 entry (Node 无 DOMParser)。
+// 仅搜 ti: 标题匹配,避免 all: 召回噪音;按 canonical arxiv id dedup 保留 latest。
+// 输入:query (string), opts { maxResults?: number }
+// 输出:Promise<Array<{ arxivId, title, tldr, summary, published, authors[] }>>
+//
+// 失败兜底:network 错 / 解析失败 → 返回 [] 不抛,让 round 继续跑(stub 模式)。
+// ---------------------------------------------------------------------------
+
+/**
+ * parseArxivEntry(xml) — 从 arXiv API 单条 <entry> XML 抽字段。纯函数。
+ * 用正则而不是 DOMParser,Node 没有原生 DOMParser;字段命名与 TS ArxivEntry 对齐。
+ */
+export function parseArxivEntry(xml) {
+  const idMatch = xml.match(/<id>\s*(https?:\/\/arxiv\.org\/abs\/([^<>\s]+))\s*<\/id>/);
+  if (!idMatch) return null;
+  const arxivId = idMatch[2].trim();
+  const titleMatch = xml.match(/<title>\s*([\s\S]*?)\s*<\/title>/);
+  const summaryMatch = xml.match(/<summary>\s*([\s\S]*?)\s*<\/summary>/);
+  const publishedMatch = xml.match(/<published>\s*([^<]+?)\s*<\/published>/);
+  const updatedMatch = xml.match(/<updated>\s*([^<]+?)\s*<\/updated>/);
+  const authors = [];
+  const authorRe = /<author>\s*<name>\s*([^<]+?)\s*<\/name>/g;
+  let m;
+  while ((m = authorRe.exec(xml)) !== null) authors.push(m[1].trim());
+  return {
+    arxivId,
+    title: (titleMatch?.[1] ?? '').replace(/\s+/g, ' ').trim(),
+    summary: (summaryMatch?.[1] ?? '').replace(/\s+/g, ' ').trim(),
+    published: publishedMatch?.[1]?.trim() ?? '',
+    updated: updatedMatch?.[1]?.trim() ?? '',
+    authors,
+  };
+}
+
+/**
+ * canonicalArxivId(id) — 去掉 /v\d+ 后缀,避免 v1/v2 视为不同论文。
+ * 与 astro-src/lib/dom-utils.ts canonicalArxivId 行为一致。
+ */
+export function canonicalArxivId(id) {
+  if (typeof id !== 'string') return '';
+  return id.replace(/\/v\d+$/i, '').replace(/v\d+$/i, '');
+}
+
+/**
+ * searchArxivApi(query, opts) — 调 arXiv API,返回 dedup + 截断后的 candidates。
+ * 纯 IO,内部失败 → 返回 [],不抛(让 round 跑 stub)。
+ *
+ * opts.maxResults 默认 12(与 paper-analyzer.ts:searchArxiv 一致)。
+ */
+export async function searchArxivApi(query, opts = {}) {
+  if (typeof query !== 'string' || query.trim().length === 0) return [];
+  const maxResults = Math.max(1, Math.min(50, opts.maxResults ?? 12));
+  const q = query.trim();
+  // 限定 ti: 标题匹配 + 默认 cs 主流类目过滤
+  // 类目过滤与 paper-analyzer.ts:buildCategoryFilter 行为一致,但硬编码避免引 settings.ts
+  const cats = ['cs.AI', 'cs.CL', 'cs.LG', 'cs.CV', 'cs.MA', 'cs.IR'];
+  const catFilter = cats.map((c) => `cat:${c}`).join(' OR ');
+  const searchExpr = `ti:"${q.replace(/"/g, '\\"')}" AND (${catFilter})`;
+  const url = `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(searchExpr)}&max_results=${maxResults}&sortBy=relevance&sortOrder=descending`;
+
+  let xmlText;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'dpr-agents-runner/1.0 (+https://github.com/Canyon-netizen/daily-paper-reader)' },
+    });
+    if (!res.ok) {
+      console.warn(`[search-arxiv] HTTP ${res.status} for "${q}"`);
+      return [];
+    }
+    xmlText = await res.text();
+  } catch (err) {
+    console.warn(`[search-arxiv] network failed for "${q}": ${err.message}`);
+    return [];
+  }
+
+  // 抽所有 <entry>...</entry> 块;允许跨行
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  const entries = [];
+  let m;
+  while ((m = entryRe.exec(xmlText)) !== null) {
+    const parsed = parseArxivEntry(m[1]);
+    if (parsed && parsed.arxivId && parsed.title) entries.push(parsed);
+  }
+
+  // 按 canonical id dedup,保留 updated 最新的
+  const byCanonical = new Map();
+  for (const e of entries) {
+    const key = canonicalArxivId(e.arxivId);
+    const cur = byCanonical.get(key);
+    if (!cur || (e.updated || '') > (cur.updated || '')) byCanonical.set(key, e);
+  }
+  return Array.from(byCanonical.values()).slice(0, maxResults);
+}
+
+// ---------------------------------------------------------------------------
 // --status 模式:从已有 round JSONs 生成 session 摘要(纯函数,无 LLM)
 // ---------------------------------------------------------------------------
 
@@ -2270,6 +2378,7 @@ async function main() {
         noSynthesize: !!args.noSynthesize,
         fewShotExamples: args._fewShotExamples ?? [],
         _quickstartMode: !!args._quickstartMode,
+        searchArxiv: args.searchArxiv ?? null,
       });
     }
     return;
@@ -2290,6 +2399,7 @@ async function main() {
     noSynthesize: !!args.noSynthesize,
     fewShotExamples: args._fewShotExamples ?? [],
     _quickstartMode: !!args._quickstartMode,
+    searchArxiv: args.searchArxiv ?? null,
   });
 }
 
@@ -2307,13 +2417,25 @@ async function runOneSession(sessionId, caller, opts) {
 
   // 自动从 archive/<session>/recommend/ 加载 candidates
   // 除非用户用 --no-candidates 显式关掉
+  // 或者 --search-arxiv 提供了真 arXiv 实时搜索(覆盖 archive 推荐)
   let candidates = [];
-  if (!opts.noCandidates) {
+  let candidatesSource = 'archive';
+  if (opts.searchArxiv) {
+    const queried = await searchArxivApi(opts.searchArxiv, { maxResults: 12 });
+    candidates = queried.map((q) => ({
+      arxivId: q.arxivId,
+      title: q.title,
+      tldr: q.summary?.slice(0, 200),
+    }));
+    candidatesSource = `arxiv-search:${opts.searchArxiv}`;
+    console.log(`  [search-arxiv] loaded ${candidates.length} papers from arXiv API for "${opts.searchArxiv}"`);
+  } else if (!opts.noCandidates) {
     candidates = await loadCandidatesFromArchive(sessionId, 30);
     if (candidates.length) {
       console.log(`  [candidates] loaded ${candidates.length} papers from archive/${sessionId}/recommend/`);
     }
   }
+  console.log(`  [candidates-source] ${candidatesSource}`);
 
   const input = {
     project: { id: sessionId, name: sessionId, statement: '(auto)' },

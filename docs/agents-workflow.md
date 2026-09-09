@@ -170,13 +170,27 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 
 ## 6. 已知限制与未来工作
 
-- ❌ **无 tool use**：Designer 不能调外部工具（Sakana 能跑 Python，Deep Research 能搜 web）
-- ❌ **stub LLM 的 output 无意义**：dry-run 只跑骨架，real LLM 才出有内容的 deliverables
+- ❌ ~~**Designer 不能调外部工具**~~ — **iter #56 已修复 `--search-arxiv`**:可调 arXiv API 实时拉论文作为 candidates,关闭了最大短板
 - ❌ **Modifier 不写 LaTeX**：目前只写 markdown（synthesis / drafts / reviews / experiments / paper_additions / rebuttals）
 - ❌ **archive/ 不入版本控制**：每次 git status 容易"看上去大"，但 archive 在 .gitignore 顶层通常没问题；可手动 cp 出 demo
 - ⚠️ **3 个智能体都共用 1 个 LLM endpoint**：persona 视角差异主要靠 prompt 实现，不是真不同模型；要"真多视角"可在 feedback.ts 加 model 数组
+- ⚠️ **`--search-arxiv` 只搜 arXiv**：不像 STORM / Deep Research 那样能搜维基 / 联网；要"真 web research"需要加 web fetch 工具
 
 下个 milestone 候选：
-- 加 `--tool` 子集（如 Designer 调用 arXiv 搜索补 candidates）
+- 加 web search 工具（GeneralistAI / Tavily / Bing API）
 - 把 synthesis 输出为 PDF（pandoc / wkhtmltopdf）
 - 加 evaluator 智能体：4 agent 版本（设计 → 反馈 → 修改 → **评估**）
+- 跨平台 npm 包发布：让 DPR Agents 不只跑在仓库内
+
+最近重要迭代：
+
+| iter | 主题 | 关键改动 |
+|---|---|---|
+| #39 | --few-shot-from | 跨 session Designer 学习 leaderboard topElo |
+| #50 | --bulk | 多 session 批量操作 |
+| #51 | round annotations | localStorage 给 round 加批注 |
+| #52 | round comparison matrix | session dashboard 对比 2 轮 |
+| #53 | paper × persona matrix | session dashboard 对比论文 × 视角 |
+| #54 | --quickstart | 零摩擦 first-run + agents-workflow.md 参考 |
+| #55 | --quickstart e2e | 真实子进程端到端 smoke 6 项断言 |
+| **#56** | **--search-arxiv** | **Designer 真 tool use;关闭最大短板** |
