@@ -2000,3 +2000,76 @@ mark {
   #agents-ann-preview { background: rgba(0,0,0,0.2); border-color: rgba(255,255,255,0.1); }
   .agents-ann-widget-latest pre { background: rgba(0,0,0,0.3); }
 }
+
+/* ─── iter #52 — Round comparison matrix ──────────────────── */
+.agents-matrix-wrapper {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.agents-matrix-table {
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  margin: 0.5rem 0;
+}
+.agents-matrix-table th,
+.agents-matrix-table td {
+  border: 1px solid var(--border, #e5e7eb);
+  padding: 0;
+  text-align: center;
+  min-width: 56px;
+  height: 36px;
+}
+.agents-matrix-table th {
+  background: var(--surface-alt, #f9fafb);
+  font-weight: 600;
+  font-size: 0.75rem;
+}
+.agents-matrix-corner {
+  background: var(--surface, #fff) !important;
+}
+.agents-matrix-diag {
+  background: var(--surface-alt, #f3f4f6);
+  font-style: italic;
+}
+.agents-matrix-cell {
+  position: relative;
+}
+.agents-matrix-link {
+  display: block;
+  padding: 0.4rem 0.5rem;
+  color: #1f2937;
+  text-decoration: none;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.agents-matrix-link:hover {
+  background: rgba(255,255,255,0.4);
+  color: var(--link, #1d4ed8);
+}
+.agents-matrix-cell-high .agents-matrix-link { color: #065f46; }
+.agents-matrix-cell-mid  .agents-matrix-link { color: #92400e; }
+.agents-matrix-cell-low  .agents-matrix-link { color: #7f1d1d; }
+.agents-matrix-pair-details {
+  margin-top: 0.5rem;
+}
+.agents-matrix-pair-details summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  margin: 0.5rem 0;
+}
+.agents-drift-low  { background: #d1fae5; color: #065f46; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.agents-drift-mid  { background: #fef3c7; color: #92400e; padding: 0.1rem 0.4rem; border-radius: 4px; }
+.agents-drift-high { background: #fee2e2; color: #7f1d1d; padding: 0.1rem 0.4rem; border-radius: 4px; }
+@media (prefers-color-scheme: dark) {
+  .agents-matrix-table th { background: rgba(255,255,255,0.05); }
+  .agents-matrix-table th, .agents-matrix-table td { border-color: rgba(255,255,255,0.1); }
+  .agents-matrix-corner { background: rgba(255,255,255,0.02) !important; }
+  .agents-matrix-diag { background: rgba(255,255,255,0.04); }
+  .agents-matrix-link { color: #e5e7eb; }
+  .agents-matrix-cell-high .agents-matrix-link { color: #6ee7b7; }
+  .agents-matrix-cell-mid  .agents-matrix-link { color: #fcd34d; }
+  .agents-matrix-cell-low  .agents-matrix-link { color: #fca5a5; }
+  .agents-drift-low  { background: rgba(16, 185, 129, 0.2); color: #6ee7b7; }
+  .agents-drift-mid  { background: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+  .agents-drift-high { background: rgba(239, 68, 68, 0.2); color: #fca5a5; }
+}

@@ -205,6 +205,86 @@ const allApplied = rounds.flatMap((r) =>
   r.modifier.applied.map((a) => ({ ...a, roundN: r.round })),
 ).sort((a, b) => (b.applied_at ?? 0) - (a.applied_at ?? 0)).slice(0, 8);
 
+// ---------------------------------------------------------------------------
+// iter #52 — Round comparison matrix
+// ---------------------------------------------------------------------------
+//
+// 给定 N 个 round,两两比较:
+//   - titles_jaccard = |A ∩ B| / |A ∪ B|(用 proposal 标题集合)
+//   - applied_jaccard = |A.applied ∩ B.applied| / |A.applied ∪ B.applied|
+//   - avg_score_delta = B.avg_score - A.avg_score
+//   - elapsed_delta_ms = B.elapsed - A.elapsed
+// 用 jaccard 0..1 作为相似度;1 - jaccard 作为分歧度。
+
+interface RoundSig {
+  roundN: number;
+  titles: Set<string>;
+  applied: Set<string>;
+  avgScore: number;
+  durationMs: number;
+}
+
+const roundSigs: RoundSig[] = rounds.map((r) => {
+  const titles = new Set(r.designer.proposals.map((p) => p.title));
+  const applied = new Set(r.modifier.applied.map((a) => a.proposal_id));
+  const cs = r.feedback.critiques;
+  const avg = cs.length ? cs.reduce((a, c) => a + c.total, 0) / cs.length : -1;
+  return {
+    roundN: r.round,
+    titles,
+    applied,
+    avgScore: avg,
+    durationMs: r.telemetry?.duration_ms ?? (r.finished_at - r.started_at),
+  };
+});
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  const uni = a.size + b.size - inter;
+  return uni === 0 ? 1 : inter / uni;
+}
+
+interface PairStat {
+  a: number;
+  b: number;
+  titleJaccard: number;
+  appliedJaccard: number;
+  avgScoreDelta: number | null;
+  elapsedDeltaMs: number;
+}
+
+const pairStats: PairStat[] = [];
+for (let i = 0; i < roundSigs.length; i++) {
+  for (let j = i + 1; j < roundSigs.length; j++) {
+    const A = roundSigs[i];
+    const B = roundSigs[j];
+    pairStats.push({
+      a: A.roundN,
+      b: B.roundN,
+      titleJaccard: jaccard(A.titles, B.titles),
+      appliedJaccard: jaccard(A.applied, B.applied),
+      avgScoreDelta: A.avgScore < 0 || B.avgScore < 0 ? null : B.avgScore - A.avgScore,
+      elapsedDeltaMs: B.durationMs - A.durationMs,
+    });
+  }
+}
+
+// 设计漂移:title_jaccard 两两的标准差(衡量研究方向的稳定性)
+function stdev(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const v = xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length;
+  return Math.sqrt(v);
+}
+const designDrift = stdev(pairStats.map((p) => p.titleJaccard));
+const meanJaccard = pairStats.length === 0
+  ? 0
+  : pairStats.reduce((a, b) => a + b.titleJaccard, 0) / pairStats.length;
+const driftBucket = designDrift < 0.05 ? '稳定' : designDrift < 0.15 ? '轻微漂移' : '明显漂移';
+const driftCls = designDrift < 0.05 ? 'agents-drift-low' : designDrift < 0.15 ? 'agents-drift-mid' : 'agents-drift-high';
+
 // Chart geometry — SVG viewport, max values for normalization
 const N = Math.max(1, cycleStats.length);
 const CHART_W = Math.max(280, N * 80);
@@ -379,6 +459,96 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
                 ))}
               </tbody>
             </table>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🔁 Round Comparison Matrix (iter #52)</h2>
+          <p class="muted">
+            N×N 矩阵,每格是两两 round 的 proposal 标题 <strong>Jaccard 相似度</strong>
+            (1=完全相同研究方向,0=完全不同)。同时给出 applied proposal 相似度 + 平均分差 + 用时差。
+            <br />
+            本 session 设计漂移: <span class={driftCls}>{designDrift.toFixed(3)} ({driftBucket})</span>
+            · 平均 Jaccard: <code>{meanJaccard.toFixed(3)}</code>
+            · pair 数: <code>{pairStats.length}</code>
+          </p>
+          {roundSigs.length < 2 ? (
+            <p class="muted">少于 2 个 round,无法比较。</p>
+          ) : (
+            <div class="agents-matrix-wrapper">
+              <table class="agents-matrix-table">
+                <thead>
+                  <tr>
+                    <th class="agents-matrix-corner">r ⨯ r</th>
+                    {roundSigs.map((s) => <th>r{s.roundN}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {roundSigs.map((rowSig) => (
+                    <tr>
+                      <th>r{rowSig.roundN}</th>
+                      {roundSigs.map((colSig) => {
+                        if (rowSig.roundN === colSig.roundN) {
+                          return <td class="agents-matrix-diag"><span class="muted">—</span></td>;
+                        }
+                        // 找 pair
+                        const ps = pairStats.find((p) =>
+                          (p.a === rowSig.roundN && p.b === colSig.roundN) ||
+                          (p.a === colSig.roundN && p.b === rowSig.roundN)
+                        );
+                        if (!ps) return <td class="muted">?</td>;
+                        const j = ps.titleJaccard;
+                        const bg = `rgba(59, 130, 246, ${0.15 + j * 0.7})`;
+                        const cellCls = j >= 0.7 ? 'agents-matrix-cell-high'
+                                      : j >= 0.3 ? 'agents-matrix-cell-mid'
+                                      : 'agents-matrix-cell-low';
+                        return (
+                          <td class={`agents-matrix-cell ${cellCls}`}
+                              style={`background:${bg}`}
+                              title={`titles ∩: ${(j * 100).toFixed(0)}%  · applied ∩: ${(ps.appliedJaccard * 100).toFixed(0)}%  · Δscore: ${ps.avgScoreDelta === null ? '—' : ps.avgScoreDelta.toFixed(2)}  · Δtime: ${(ps.elapsedDeltaMs / 1000).toFixed(1)}s`}>
+                            <a href={`${base}/agents/${sessionId}/${String(rowSig.roundN).padStart(3, '0')}/`}
+                               class="agents-matrix-link">{j.toFixed(2)}</a>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {pairStats.length > 0 && (
+            <details class="agents-matrix-pair-details">
+              <summary>📋 全部 pair 详情 ({pairStats.length})</summary>
+              <table class="agents-session-table">
+                <thead>
+                  <tr>
+                    <th>rA</th><th>rB</th>
+                    <th>titles Jaccard</th>
+                    <th>applied Jaccard</th>
+                    <th>Δ avg score</th>
+                    <th>Δ time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pairStats
+                    .slice()
+                    .sort((x, y) => x.titleJaccard - y.titleJaccard)
+                    .map((p) => (
+                      <tr>
+                        <td>r{p.a}</td>
+                        <td>r{p.b}</td>
+                        <td>{p.titleJaccard.toFixed(3)}</td>
+                        <td>{p.appliedJaccard.toFixed(3)}</td>
+                        <td>{p.avgScoreDelta === null ? <span class="muted">—</span> : p.avgScoreDelta.toFixed(2)}</td>
+                        <td>{(p.elapsedDeltaMs / 1000).toFixed(1)}s</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              <p class="muted"><small>默认按 titles Jaccard 升序(分歧最大的在前)。</small></p>
+            </details>
           )}
         </section>
 
