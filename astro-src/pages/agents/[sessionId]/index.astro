@@ -1,0 +1,431 @@
+---
+// astro-src/pages/agents/[sessionId]/index.astro
+//
+// iter #43 — Session overview dashboard.
+//
+// Aggregates one session's archive/<sid>/{meta.json, rounds/*.json, synthesis/*.md}
+// into a single page so they can see the big picture before drilling into rounds.
+//
+// Shows:
+//   - Session header (meta)
+//   - Convergence verdict (judgement: converging / stalled / fresh)
+//   - 3 mini-charts: directive_count, avg score, tokens (all per cycle)
+//   - Top promoted proposals table (aggregated from all rounds, deduped by id)
+//   - Recent applied actions (latest 8 with deliverable links)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths: enumerate all sessions under archive/
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  let sessions: string[] = [];
+  try { sessions = await readdir(root); } catch { return []; }
+  const out: { params: { sessionId: string } }[] = [];
+  for (const sid of sessions) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (existsSync(metaPath)) out.push({ params: { sessionId: sid } });
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+
+// ---------------------------------------------------------------------------
+// Types (mirror RoundRecord; keep optional so old records don't crash)
+// ---------------------------------------------------------------------------
+
+interface ModifierAction {
+  id: string;
+  kind: string;
+  proposal_id: string;
+  payload: Record<string, unknown>;
+  applied_at: number;
+}
+interface Critique { total: number; proposal_id: string; }
+interface RoundRecord {
+  round: number;
+  started_at: number;
+  finished_at: number;
+  designer: { proposals: { id: string; title: string; type: string; rationale: string }[]; model: string };
+  feedback: { critiques: Critique[]; judge_calls: number; total_tokens: number };
+  gate: { promoted: string[]; candidate: string[]; sketch: string[]; rejected: string[] };
+  modifier: { applied: ModifierAction[]; skipped: { proposal_id: string; reason: string }[] };
+  telemetry?: { duration_ms: number; llm_calls: number; approx_tokens: number };
+  meta: { session_id: string; dry_run: boolean };
+}
+
+interface SessionMeta {
+  session_id: string;
+  goal: string;
+  created_at: number;
+  rounds_requested?: number;
+  dry_run?: boolean;
+}
+
+interface CycleStat {
+  cycle: number;             // 1..N
+  roundN: number;            // round_NNN.json 里的 round number
+  directiveCount: number;    // 0 if no synthesis yet for that cycle
+  avgScore: number;          // -1 if no critiques
+  totalTokens: number;
+  appliedCount: number;
+  synthesisPath: string | null;
+  durationMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Load meta + all rounds + all syntheses
+// ---------------------------------------------------------------------------
+
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+
+let meta: SessionMeta | null = null;
+try {
+  meta = JSON.parse(await readFile(join(sessionDir, 'meta.json'), 'utf8')) as SessionMeta;
+} catch { meta = null; }
+
+let rounds: RoundRecord[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds'))).filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = (await Promise.all(
+    files.map((f) => readFile(join(sessionDir, 'rounds', f), 'utf8').then((raw) => JSON.parse(raw) as RoundRecord))
+  )).sort((a, b) => a.round - b.round);
+} catch { rounds = []; }
+
+// syntheses — file basenames look like synthesis_001.md
+let syntheses: { idx: number; path: string; raw: string }[] = [];
+try {
+  const sfiles = (await readdir(join(sessionDir, 'synthesis'))).filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+  syntheses = await Promise.all(
+    sfiles.map(async (f) => {
+      const m = f.match(/^synthesis_(\d+)\.md$/);
+      const idx = m ? Number(m[1]) : 0;
+      const path = join(sessionDir, 'synthesis', f);
+      const raw = await readFile(path, 'utf8');
+      return { idx, path, raw };
+    }),
+  );
+} catch { syntheses = []; }
+
+// ---------------------------------------------------------------------------
+// Aggregate per-cycle stats
+// ---------------------------------------------------------------------------
+
+function countDirectivesInSynthesis(md: string): number {
+  // 数 ## 下一步建议 + ## Gap & 矛盾 下面的 bullet
+  let count = 0;
+  const inSection = (headerRe: RegExp) => (s: string) => s.match(headerRe);
+  const sections = md.split(/^##\s+/m);
+  for (const sec of sections) {
+    if (sec.startsWith('下一步建议') || sec.startsWith('Gap &') || sec.startsWith('Gaps &')) {
+      // bullets + checkbox bullets
+      const m = sec.match(/^[-*\s]\s+(?:\[[ x]\]\s+)?.+$/gm);
+      if (m) count += m.filter((l) => !/^\s*[-*]\s+\(/.test(l) && !/^\s*[-*]\s+\(无\)/.test(l) && !/^\s*[-*]\s+\(stub/.test(l)).length;
+    }
+  }
+  return count;
+}
+
+const cycleStats: CycleStat[] = rounds.map((r, i) => {
+  // Match synthesis index i+1 → cycle i+1
+  const synth = syntheses.find((s) => s.idx === i + 1) ?? null;
+  const avg = r.feedback.critiques.length
+    ? r.feedback.critiques.reduce((a, c) => a + c.total, 0) / r.feedback.critiques.length
+    : -1;
+  return {
+    cycle: i + 1,
+    roundN: r.round,
+    directiveCount: synth ? countDirectivesInSynthesis(synth.raw) : 0,
+    avgScore: avg,
+    totalTokens: r.feedback.total_tokens ?? 0,
+    appliedCount: r.modifier.applied.length,
+    synthesisPath: synth?.path ?? null,
+    durationMs: r.telemetry?.duration_ms ?? (r.finished_at - r.started_at),
+  };
+});
+
+// Convergence verdict
+function judgeConvergence(stats: CycleStat[]): { verdict: string; reason: string; cls: string } {
+  if (stats.length === 0) return { verdict: '暂无数据', reason: '尚无 round', cls: 'muted' };
+  if (stats.length === 1) return { verdict: '起步', reason: '只跑了 1 个 cycle,继续观察', cls: 'mid' };
+  const dirCounts = stats.map((s) => s.directiveCount).filter((n) => n > 0);
+  if (dirCounts.length === 0) return { verdict: '无 synthesis', reason: '尚未生成任何 synthesis,无法判断', cls: 'mid' };
+  const last = dirCounts[dirCounts.length - 1];
+  const first = dirCounts[0];
+  // 单调下降(允许小幅波动)
+  let decreasing = true;
+  for (let i = 1; i < dirCounts.length; i++) {
+    if (dirCounts[i] > dirCounts[i - 1]) { decreasing = false; break; }
+  }
+  if (last === 0) return { verdict: '已收敛', reason: '最近一轮无 directive,研究目标已基本饱和', cls: 'high' };
+  if (decreasing) return { verdict: '收敛中', reason: `directive 数从 ${first} 单调下降至 ${last},趋势良好`, cls: 'high' };
+  if (last < first) return { verdict: '部分收敛', reason: `directive 从 ${first} 降至 ${last},但中间有反弹`, cls: 'mid' };
+  return { verdict: '停滞', reason: `directive 数 ${first} → ${last},无明显收敛`, cls: 'low' };
+}
+
+const convergence = judgeConvergence(cycleStats);
+
+// Top promoted proposals (deduped by id, scored by max avg from any round)
+const proposalBestScore = new Map<string, { id: string; title: string; type: string; rationale: string; bestScore: number; rounds: number[] }>();
+for (const r of rounds) {
+  for (const p of r.designer.proposals) {
+    if (!r.gate.promoted.includes(p.id)) continue;
+    const cs = r.feedback.critiques.filter((c) => c.proposal_id === p.id);
+    const avg = cs.length ? cs.reduce((a, c) => a + c.total, 0) / cs.length : 0;
+    const existing = proposalBestScore.get(p.id);
+    if (!existing || avg > existing.bestScore) {
+      proposalBestScore.set(p.id, {
+        id: p.id, title: p.title, type: p.type, rationale: p.rationale,
+        bestScore: avg,
+        rounds: [...(existing?.rounds ?? []), r.round],
+      });
+    } else if (existing) {
+      existing.rounds.push(r.round);
+    }
+  }
+}
+const topPromoted = [...proposalBestScore.values()]
+  .sort((a, b) => b.bestScore - a.bestScore)
+  .slice(0, 8);
+
+// Recent applied (latest 8, across all rounds)
+const allApplied = rounds.flatMap((r) =>
+  r.modifier.applied.map((a) => ({ ...a, roundN: r.round })),
+).sort((a, b) => (b.applied_at ?? 0) - (a.applied_at ?? 0)).slice(0, 8);
+
+// Chart geometry — SVG viewport, max values for normalization
+const N = Math.max(1, cycleStats.length);
+const CHART_W = Math.max(280, N * 80);
+const CHART_H = 120;
+const PAD = 28;
+const innerW = CHART_W - PAD * 2;
+const xStep = N > 1 ? innerW / (N - 1) : 0;
+const maxDir = Math.max(1, ...cycleStats.map((s) => s.directiveCount));
+const maxTokens = Math.max(1, ...cycleStats.map((s) => s.totalTokens));
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function actionHref(a: { kind: string; payload: Record<string, unknown> }): string | null {
+  const p = a.payload as Record<string, string>;
+  if (a.kind === 'create_draft_outline' && p.writing_id) return `${base}/writing/${p.writing_id}/`;
+  if (a.kind === 'archive_round_summary' && p.experiment_id) return `${base}/experiments/${p.experiment_id}/`;
+  if (a.kind === 'add_paper_to_stage' && p.paper_id) return `${base}/papers/${p.paper_id}/`;
+  return null;
+}
+---
+
+<BaseLayout title={meta ? `${sessionId} · Session Dashboard` : 'Session Dashboard'}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / </span>
+      <a href={`${base}/agents/auto/`}>自治模式</a>
+      <span class="muted"> / {sessionId}</span>
+    </nav>
+
+    {!meta ? (
+      <section class="agents-status">
+        <p class="agents-status-text">⚠️ session <code>{sessionId}</code> 没有 meta.json,可能未完成 bootstrap。</p>
+      </section>
+    ) : (
+      <>
+        <header class="agents-session-header">
+          <h1>📂 {escapeHtml(sessionId)}</h1>
+          <p class="muted">
+            goal: <strong>{escapeHtml(meta.goal)}</strong>
+            · 创建于 {new Date(meta.created_at).toLocaleString()}
+            {meta.rounds_requested && <span> · 计划 rounds: {meta.rounds_requested}</span>}
+            {meta.dry_run && <span class="badge badge-low" style="margin-left:0.5rem">DRY-RUN</span>}
+          </p>
+        </header>
+
+        <section class="agents-session-section agents-session-verdict">
+          <h2>🎯 收敛判定</h2>
+          <p>
+            <span class={`agents-verdict-badge agents-verdict-${convergence.cls}`}>{convergence.verdict}</span>
+            <span class="muted" style="margin-left:0.5rem">{convergence.reason}</span>
+          </p>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📈 趋势</h2>
+          {cycleStats.length === 0 ? (
+            <p class="muted">尚无 round 数据</p>
+          ) : (
+            <div class="agents-session-charts">
+              <div class="agents-session-chart">
+                <h3>Directives / cycle</h3>
+                <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} class="agents-session-svg" role="img" aria-label="directive count per cycle">
+                  <line x1={PAD} y1={CHART_H - PAD} x2={CHART_W - PAD} y2={CHART_H - PAD} stroke="#ccc" />
+                  <line x1={PAD} y1={PAD} x2={PAD} y2={CHART_H - PAD} stroke="#ccc" />
+                  <text x={PAD - 4} y={PAD + 4} text-anchor="end" font-size="10" fill="#666">{maxDir}</text>
+                  <text x={PAD - 4} y={CHART_H - PAD + 4} text-anchor="end" font-size="10" fill="#666">0</text>
+                  <polyline
+                    points={cycleStats.map((s, i) => `${PAD + i * xStep},${CHART_H - PAD - (s.directiveCount / maxDir) * (CHART_H - PAD * 2)}`).join(' ')}
+                    stroke="#3b82f6" stroke-width="2" fill="none"
+                  />
+                  {cycleStats.map((s, i) => (
+                    <g key={s.cycle}>
+                      <circle cx={PAD + i * xStep} cy={CHART_H - PAD - (s.directiveCount / maxDir) * (CHART_H - PAD * 2)} r="3" fill="#3b82f6" />
+                      <text x={PAD + i * xStep} y={CHART_H - PAD + 14} text-anchor="middle" font-size="10" fill="#666">c{s.cycle}</text>
+                    </g>
+                  ))}
+                </svg>
+              </div>
+
+              <div class="agents-session-chart">
+                <h3>Avg score / round</h3>
+                <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} class="agents-session-svg" role="img" aria-label="avg score per round">
+                  <line x1={PAD} y1={CHART_H - PAD} x2={CHART_W - PAD} y2={CHART_H - PAD} stroke="#ccc" />
+                  <line x1={PAD} y1={PAD} x2={PAD} y2={CHART_H - PAD} stroke="#ccc" />
+                  <text x={PAD - 4} y={PAD + 4} text-anchor="end" font-size="10" fill="#666">10</text>
+                  <text x={PAD - 4} y={CHART_H - PAD + 4} text-anchor="end" font-size="10" fill="#666">0</text>
+                  {(() => {
+                    const valid = cycleStats.filter((s) => s.avgScore >= 0);
+                    if (valid.length === 0) return <text x={CHART_W / 2} y={CHART_H / 2} text-anchor="middle" font-size="11" fill="#999">无评分</text>;
+                    const pts = cycleStats.map((s, i) => {
+                      const score = s.avgScore < 0 ? null : s.avgScore;
+                      if (score === null) return null;
+                      return `${PAD + i * xStep},${CHART_H - PAD - (score / 10) * (CHART_H - PAD * 2)}`;
+                    }).filter(Boolean).join(' ');
+                    return <>
+                      <polyline points={pts} stroke="#10b981" stroke-width="2" fill="none" />
+                      {cycleStats.map((s, i) => s.avgScore >= 0 && (
+                        <circle key={s.cycle} cx={PAD + i * xStep} cy={CHART_H - PAD - (s.avgScore / 10) * (CHART_H - PAD * 2)} r="3" fill="#10b981" />
+                      ))}
+                    </>;
+                  })()}
+                  {cycleStats.map((s, i) => (
+                    <text key={s.cycle} x={PAD + i * xStep} y={CHART_H - PAD + 14} text-anchor="middle" font-size="10" fill="#666">r{s.roundN}</text>
+                  ))}
+                </svg>
+              </div>
+
+              <div class="agents-session-chart">
+                <h3>Tokens / round</h3>
+                <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} class="agents-session-svg" role="img" aria-label="tokens per round">
+                  <line x1={PAD} y1={CHART_H - PAD} x2={CHART_W - PAD} y2={CHART_H - PAD} stroke="#ccc" />
+                  <text x={PAD - 4} y={CHART_H - PAD + 4} text-anchor="end" font-size="10" fill="#666">0</text>
+                  <text x={PAD - 4} y={PAD + 4} text-anchor="end" font-size="10" fill="#666">{(maxTokens / 1000).toFixed(1)}k</text>
+                  {cycleStats.map((s, i) => {
+                    const barH = (s.totalTokens / maxTokens) * (CHART_H - PAD * 2);
+                    const x = PAD + i * xStep - 14;
+                    const y = CHART_H - PAD - barH;
+                    return (
+                      <g key={s.cycle}>
+                        <rect x={x} y={y} width="28" height={barH} fill="#a78bfa" rx="2" />
+                        <text x={x + 14} y={CHART_H - PAD + 14} text-anchor="middle" font-size="10" fill="#666">r{s.roundN}</text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+            </div>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🏆 Top promoted proposals ({topPromoted.length})</h2>
+          {topPromoted.length === 0 ? (
+            <p class="muted">尚无 promoted proposal</p>
+          ) : (
+            <table class="agents-session-table">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Type</th>
+                  <th>Best avg</th>
+                  <th>Rounds</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {topPromoted.map((p) => (
+                  <tr>
+                    <td>
+                      <strong>{escapeHtml(p.title)}</strong>
+                      <br />
+                      <small class="muted">{escapeHtml(p.rationale.slice(0, 100))}{p.rationale.length > 100 ? '…' : ''}</small>
+                    </td>
+                    <td><code>{escapeHtml(p.type)}</code></td>
+                    <td>{p.bestScore.toFixed(2)}</td>
+                    <td>{p.rounds.map((r) => `r${r}`).join(', ')}</td>
+                    <td>
+                      {p.rounds.length > 0 && (
+                        <a class="button small" href={`${base}/agents/${sessionId}/${String(p.rounds[0]).padStart(3, '0')}/`}>
+                          查看 r{p.rounds[0]}
+                        </a>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🛠 Recent applied actions ({allApplied.length})</h2>
+          {allApplied.length === 0 ? (
+            <p class="muted">尚无 applied action</p>
+          ) : (
+            <table class="agents-session-table">
+              <thead>
+                <tr>
+                  <th>Kind</th>
+                  <th>Round</th>
+                  <th>Applied at</th>
+                  <th>Proposal</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {allApplied.map((a) => {
+                  const href = actionHref(a);
+                  const title = (a.payload?.title as string) ?? a.proposal_id;
+                  return (
+                    <tr>
+                      <td><code>{escapeHtml(a.kind)}</code></td>
+                      <td>
+                        <a href={`${base}/agents/${sessionId}/${String(a.roundN).padStart(3, '0')}/`}>r{a.roundN}</a>
+                      </td>
+                      <td><small>{new Date(a.applied_at).toLocaleString()}</small></td>
+                      <td>{escapeHtml(String(title))}</td>
+                      <td>
+                        {href ? <a class="button small" href={href}>查看产物</a> : <span class="muted">—</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🔁 继续 / resume</h2>
+          <p class="muted">基于当前 session 继续跑下一个 cycle,沿用 gaps 作为下轮 Designer 的 directive。</p>
+          <pre class="agents-auto-cmd" tabindex="0">node astro-src/scripts/agents-run.mjs --auto "{escapeHtml(meta.goal)}" \
+  --auto-resume --session {sessionId} \
+  --max-cycles 1</pre>
+        </section>
+      </>
+    )}
+  </main>
+</BaseLayout>
