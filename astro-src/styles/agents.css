@@ -1416,3 +1416,76 @@ mark {
     background: rgba(59, 130, 246, 0.12);
   }
 }
+
+/* ---------- iter #42: /agents/<sid>/<rid>/ — resume + telemetry ---------- */
+.agents-auto-resume-section {
+  margin: 1rem 0;
+  padding: 1rem 1.25rem;
+  background: var(--panel-bg, rgba(91, 141, 239, 0.06));
+  border: 1px solid var(--link-soft, rgba(59, 130, 246, 0.25));
+  border-radius: 6px;
+}
+.agents-auto-resume-section h2 {
+  margin-top: 0;
+  font-size: 1rem;
+}
+.agents-auto-resume-section .agents-auto-cmd {
+  font-size: 0.78rem;
+  margin: 0.5rem 0;
+}
+
+.agents-telemetry-chart {
+  margin: 0.5rem 0;
+  overflow-x: auto;
+}
+.agents-telemetry-svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+.agents-telemetry-stages {
+  margin-top: 0.75rem;
+}
+.agents-telemetry-stages-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.3rem;
+}
+.agents-telemetry-stages-list li {
+  display: grid;
+  grid-template-columns: 80px 1fr 60px;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+.agents-telemetry-stage-name { color: var(--text-muted, #555); }
+.agents-telemetry-stage-bar {
+  height: 0.65rem;
+  background: var(--bar-bg, rgba(0, 0, 0, 0.06));
+  border-radius: 2px;
+  overflow: hidden;
+}
+.agents-telemetry-stage-fill {
+  display: block;
+  height: 100%;
+  background: var(--link, #3b82f6);
+  transition: width 0.2s;
+}
+.agents-telemetry-stage-val {
+  text-align: right;
+  color: var(--text-muted, #666);
+}
+
+@media (prefers-color-scheme: dark) {
+  .agents-auto-resume-section {
+    background: rgba(91, 141, 239, 0.08);
+    border-color: rgba(91, 141, 239, 0.3);
+  }
+  .agents-telemetry-stage-bar {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}

@@ -238,25 +238,34 @@ function stubLLMResponse(system, user, model, candidates = []) {
 
 async function runOneRoundCLI(roundN, input, caller, preset, dryRun) {
   const started = Date.now();
+  const stage = {}; // ms per stage
 
   // 1. Designer — 走真 LLM 或 stub
+  const t0 = Date.now();
   const proposals = await designerCLI(input, caller);
+  stage.designer = Date.now() - t0;
   const tokens = proposals.length * 250;
 
   // 2. Feedback — 走真 LLM 或 stub
+  const t1 = Date.now();
   const critiques = await feedbackCLI(proposals, caller);
+  stage.feedback = Date.now() - t1;
   const fbTokens = proposals.length * 600;
 
   // 3. Gate
+  const t2 = Date.now();
   const verdicts = gateProposals(proposals, critiques, preset)
     .map((v) => {
       const p = proposals.find((x) => x.id === v.proposal_id);
       return p ? applySafetyOverride(v, p) : v;
     });
   const buckets = partitionByDecision(verdicts);
+  stage.gate = Date.now() - t2;
 
   // 4. Modifier — dry_run 时只记录 would_call
+  const t3 = Date.now();
   const { applied, skipped } = await modifierCLI(verdicts, proposals, input, dryRun);
+  stage.modifier = Date.now() - t3;
 
   const rec = makeRoundRecord({
     round: roundN,
@@ -274,6 +283,14 @@ async function runOneRoundCLI(roundN, input, caller, preset, dryRun) {
   rec.feedback.total_tokens = tokens + fbTokens;
   rec.gate = { verdicts, ...buckets };
   rec.modifier = { applied, skipped };
+
+  // iter #42 — telemetry
+  rec.telemetry = {
+    duration_ms: rec.finished_at - rec.started_at,
+    llm_calls: 1 + proposals.length * 3, // 1 designer + 3 feedback per proposal
+    approx_tokens: tokens + fbTokens,
+    stage_durations_ms: { ...stage },
+  };
 
   return rec;
 }

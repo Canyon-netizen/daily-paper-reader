@@ -169,6 +169,19 @@ export interface RoundRecord {
     skipped: ModifierSkip[];
   };
 
+  // iter #42 — cycle telemetry (timing + LLM-call proxies)
+  telemetry: {
+    duration_ms: number;            // finished_at - started_at
+    llm_calls: number;              // designer + feedback (3 personas each)
+    approx_tokens: number;          // same as feedback.total_tokens
+    stage_durations_ms?: {          // optional: where time was spent
+      designer?: number;
+      feedback?: number;
+      gate?: number;
+      modifier?: number;
+    };
+  };
+
   // 调试 / 后续引用
   meta: {
     session_id: string;            // 与 topic-v2 同,archive/<session>/rounds/

@@ -101,6 +101,17 @@ interface RoundRecord {
     rejected: string[];
   };
   modifier: { applied: ModifierAction[]; skipped: ModifierSkip[] };
+  telemetry?: {
+    duration_ms: number;
+    llm_calls: number;
+    approx_tokens: number;
+    stage_durations_ms?: {
+      designer?: number;
+      feedback?: number;
+      gate?: number;
+      modifier?: number;
+    };
+  };
   meta: { session_id: string; dry_run: boolean };
 }
 
@@ -215,6 +226,37 @@ const tokenPct = (n: number) => tokens.total > 0 ? Math.round((n / tokens.total)
 const startedAtIso = rec ? new Date(rec.started_at).toISOString() : '';
 const finishedAtIso = rec ? new Date(rec.finished_at).toISOString() : '';
 const elapsedMs = rec ? rec.finished_at - rec.started_at : 0;
+
+// iter #42 — auto-resume command preview + per-round telemetry aggregates
+const resumeCmd = rec
+  ? `node astro-src/scripts/agents-run.mjs --auto "${rec.project_id.replace(/"/g, '\\"')}" \\\n` +
+    `  --auto-resume --session ${rec.project_id} \\\n` +
+    `  --max-cycles 1`
+  : null;
+
+// 加载所有 round 的 telemetry,做时长趋势图
+let roundTimings: { round: number; duration_ms: number; llm_calls: number; approx_tokens: number }[] = [];
+if (rec) {
+  roundTimings = await Promise.all(
+    allRoundsInSession.sort((a, b) => a - b).map(async (rn) => {
+      const f = join(process.cwd(), 'archive', sessionId, 'rounds', `round_${String(rn).padStart(3, '0')}.json`);
+      try {
+        const raw = await readFile(f, 'utf8');
+        const r = JSON.parse(raw) as RoundRecord;
+        return {
+          round: r.round,
+          duration_ms: r.finished_at - r.started_at,
+          llm_calls: r.feedback?.judge_calls ?? 0,
+          approx_tokens: r.feedback?.total_tokens ?? 0,
+        };
+      } catch {
+        return { round: rn, duration_ms: 0, llm_calls: 0, approx_tokens: 0 };
+      }
+    }),
+  );
+}
+
+const maxDurationMs = Math.max(1, ...roundTimings.map((t) => t.duration_ms));
 
 // iter #16 — load round N-1 if it exists, compute diff
 let prevRec: RoundRecord | null = null;
@@ -333,6 +375,76 @@ function deltaClass(n: number | null): string {
             {rec.meta.dry_run && <span class="badge badge-low" style="margin-left:0.5rem">DRY-RUN</span>}
           </p>
         </header>
+
+        <section class="agents-auto-resume-section" id="agents-auto-resume-section">
+          <h2>↪ 继续这个 session</h2>
+          <p class="muted">
+            用 <code>--auto-resume</code> 接着跑下一个 cycle(把上次 gaps 注入到下次 Designer prompt)。
+            复制后在项目根目录运行。
+          </p>
+          <pre id="agents-auto-resume-cmd" class="agents-auto-cmd" tabindex="0">{resumeCmd}</pre>
+          <div class="agents-auto-actions">
+            <button type="button" class="button" id="agents-auto-resume-copy-btn">📎 复制到剪贴板</button>
+            <a class="button" href={`${base}/agents/auto/`}>打开自治模式配置</a>
+          </div>
+          <p id="agents-auto-resume-hint" class="muted" aria-live="polite"></p>
+        </section>
+
+        <section class="agents-round-detail-section">
+          <h2>⏱ Telemetry (iter #42)</h2>
+          {roundTimings.length > 0 && (
+            <div class="agents-telemetry-chart">
+              <svg viewBox="0 0 {Math.max(320, roundTimings.length * 60)} 120" class="agents-telemetry-svg" role="img" aria-label="duration per round">
+                <line x1="20" y1="100" x2={Math.max(320, roundTimings.length * 60) - 20} y2="100" stroke="#ccc" stroke-width="1" />
+                {roundTimings.map((t, i) => {
+                  const x = 20 + i * 60;
+                  const barH = (t.duration_ms / maxDurationMs) * 80;
+                  const y = 100 - barH;
+                  const isCurrent = t.round === Number(roundId);
+                  return (
+                    <g key={t.round}>
+                      <rect x={x} y={y} width="40" height={barH}
+                        fill={isCurrent ? '#3b82f6' : '#94a3b8'}
+                        stroke={isCurrent ? '#1d4ed8' : 'none'}
+                        stroke-width={isCurrent ? '1.5' : '0'}
+                        rx="2"
+                        />
+                      <text x={x + 20} y="115" text-anchor="middle" font-size="10" fill="#666">R{t.round}</text>
+                      <text x={x + 20} y={y - 4} text-anchor="middle" font-size="10" fill="#333">
+                        {(t.duration_ms / 1000).toFixed(1)}s
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+              <p class="muted" style="margin-top:0.5rem">
+                每轮 (round + synthesis) 耗时 · 蓝色 = 当前轮 · 灰 = 其他轮
+              </p>
+            </div>
+          )}
+          {rec.telemetry?.stage_durations_ms && (
+            <div class="agents-telemetry-stages">
+                  <strong>Stage breakdown (本轮):</strong>
+                  <ul class="agents-telemetry-stages-list">
+                    {(['designer', 'feedback', 'gate', 'modifier'] as const).map((k) => {
+                      const v = rec.telemetry!.stage_durations_ms![k] ?? 0;
+                      return (
+                        <li key={k}>
+                          <span class="agents-telemetry-stage-name">{k}</span>
+                          <span class="agents-telemetry-stage-bar">
+                            <span class="agents-telemetry-stage-fill" style={`width: ${maxDurationMs > 0 ? Math.min(100, (v / maxDurationMs) * 100) : 0}%`} />
+                          </span>
+                          <span class="agents-telemetry-stage-val">{(v / 1000).toFixed(2)}s</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <p class="muted" style="margin-top:0.5rem">
+                    LLM calls ≈ {rec.telemetry.llm_calls} · tokens ≈ {rec.telemetry.approx_tokens}
+                  </p>
+            </div>
+          )}
+        </section>
 
         <section class="agents-round-detail-section">
           <h2>📊 概览</h2>
@@ -567,3 +679,29 @@ function deltaClass(n: number | null): string {
     )}
   </main>
 </BaseLayout>
+
+<script>
+  // iter #42 — copy resume command to clipboard
+  document.addEventListener('DOMContentLoaded', () => {
+    const copyBtn = document.getElementById('agents-auto-resume-copy-btn');
+    const cmdEl = document.getElementById('agents-auto-resume-cmd');
+    const hintEl = document.getElementById('agents-auto-resume-hint');
+    if (!copyBtn || !cmdEl || !hintEl) return;
+    copyBtn.addEventListener('click', async () => {
+      const cmd = cmdEl.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(cmd);
+        hintEl.textContent = '✓ 已复制';
+        hintEl.style.color = '#080';
+      } catch {
+        const range = document.createRange();
+        range.selectNodeContents(cmdEl);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        hintEl.textContent = '⚠️ 无法自动复制,已选中文本,请按 Cmd/Ctrl+C';
+        hintEl.style.color = '#c00';
+      }
+    });
+  });
+</script>

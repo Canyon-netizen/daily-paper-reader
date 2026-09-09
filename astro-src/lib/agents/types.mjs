@@ -78,6 +78,17 @@ export function makeRoundRecord(input) {
       rejected: [],
     },
     modifier: { applied: [], skipped: [] },
+    telemetry: {
+      duration_ms: 0,
+      llm_calls: 0,
+      approx_tokens: 0,
+      stage_durations_ms: {
+        designer: 0,
+        feedback: 0,
+        gate: 0,
+        modifier: 0,
+      },
+    },
     meta: {
       session_id: input.session_id || input.project_id,
       dry_run: !!input.dry_run,
