@@ -253,6 +253,7 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
             · 创建于 {new Date(meta.created_at).toLocaleString()}
             {meta.rounds_requested && <span> · 计划 rounds: {meta.rounds_requested}</span>}
             {meta.dry_run && <span class="badge badge-low" style="margin-left:0.5rem">DRY-RUN</span>}
+            <span class="agents-ann-badge" id="agents-ann-count-badge" data-sid={sessionId}>📝 备注 加载中…</span>
           </p>
         </header>
 
@@ -440,7 +441,102 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
   --auto-resume --session {sessionId} \
   --max-cycles 1</pre>
         </section>
+
+        <section class="agents-session-section">
+          <h2>📝 Annotations (iter #51)</h2>
+          <p class="muted">
+            浏览器 localStorage 备注。每轮可独立写一段 markdown,系统会保留历史版本 + 导出 JSON bundle。
+          </p>
+          <table class="agents-session-table" id="agents-ann-table">
+            <thead>
+              <tr><th>Round</th><th>备注条数</th><th>最近更新</th><th>预览</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="5" class="muted">加载中…</td></tr>
+            </tbody>
+          </table>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/${String(rounds[0]?.round ?? 1).padStart(3, '0')}/annotations/`}>在 round 1 打开编辑器 →</a>
+            <span style="margin-left:0.5rem">·</span>
+            <button type="button" class="button small" id="agents-ann-export-all">📋 导出所有 round 备注 (JSON)</button>
+          </p>
+        </section>
       </>
     )}
   </main>
 </BaseLayout>
+
+<script>
+  // iter #51 — session-level annotation count widget
+  document.addEventListener('DOMContentLoaded', () => {
+    const badge = document.getElementById('agents-ann-count-badge');
+    const table = document.getElementById('agents-ann-table');
+    const exportBtn = document.getElementById('agents-ann-export-all');
+    if (!badge || !table) return;
+    const sid = badge.getAttribute('data-sid') ?? '';
+    const tbody = table.querySelector('tbody');
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+      }[c] ?? c));
+    }
+
+    // Enumerate known round numbers by trying common range up to 99
+    const maxGuess = 99;
+    const counts = new Map();
+    const latest = new Map();
+    const previews = new Map();
+
+    for (let r = 1; r <= maxGuess; r++) {
+      const padded = String(r).padStart(3, '0');
+      const KEY = `dpr_agents_annotations_${sid}_${padded}`;
+      let arr = [];
+      try { arr = JSON.parse(localStorage.getItem(KEY) ?? '[]'); } catch {}
+      if (arr.length === 0) continue;
+      counts.set(r, arr.length);
+      latest.set(r, arr[arr.length - 1].saved_at);
+      previews.set(r, arr[arr.length - 1].body ?? '');
+    }
+
+    const total = [...counts.values()].reduce((a, n) => a + n, 0);
+    const numRounds = counts.size;
+    badge.textContent = `📝 备注 ${total} 条 / ${numRounds} 轮`;
+
+    if (numRounds === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">尚无备注。打开任一 round 详情,在右上方"📝 备注"小部件里写一条。</td></tr>`;
+    } else {
+      const rows = [...counts.keys()].sort((a, b) => a - b).map((r) => {
+        const padded = String(r).padStart(3, '0');
+        const dt = new Date(latest.get(r)).toLocaleString();
+        const prev = (previews.get(r) ?? '').slice(0, 60).replace(/\n/g, ' ');
+        return `<tr>
+          <td>r${r}</td>
+          <td>${counts.get(r)}</td>
+          <td><small>${dt}</small></td>
+          <td><small class="muted">${esc(prev)}${(previews.get(r) ?? '').length > 60 ? '…' : ''}</small></td>
+          <td><a class="button small" href="/agents/${sid}/${padded}/annotations/">打开 →</a></td>
+        </tr>`;
+      }).join('');
+      tbody.innerHTML = rows;
+    }
+
+    exportBtn?.addEventListener('click', () => {
+      const bundle = { session: sid, exported_at: new Date().toISOString(), rounds: {} };
+      for (const r of counts.keys()) {
+        const padded = String(r).padStart(3, '0');
+        const KEY = `dpr_agents_annotations_${sid}_${padded}`;
+        let arr = [];
+        try { arr = JSON.parse(localStorage.getItem(KEY) ?? '[]'); } catch {}
+        bundle.rounds[padded] = arr;
+      }
+      const text = JSON.stringify(bundle, null, 2);
+      const blob = new Blob([text], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `annotations-${sid}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    });
+  });
+</script>

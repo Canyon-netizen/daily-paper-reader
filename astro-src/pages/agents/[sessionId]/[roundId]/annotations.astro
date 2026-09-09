@@ -1,0 +1,352 @@
+---
+// astro-src/pages/agents/[sessionId]/[roundId]/annotations.astro
+//
+// iter #51 — Round annotations.
+//
+// Lets the user write markdown notes attached to a round. Stored in
+// browser localStorage (key: dpr_agents_annotations_<sid>_<NNN>).
+//
+// Renders a simple editor + preview, and shows history (saved_at + word
+// count) for all annotations on this round.
+//
+// Server-side does NOT persist anything — purely browser-local.
+// (SSR backend would be needed for cross-device persistence; out of
+// scope for this iter.)
+
+import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import Navbar from '../../../../components/Navbar.astro';
+import '../../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths: enumerate rounds from archive
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  const out: { params: { sessionId: string; roundId: string } }[] = [];
+  if (!existsSync(root)) return out;
+  const { readdir } = await import('node:fs/promises');
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { return out; }
+  for (const sid of sids) {
+    const roundsDir = join(root, sid, 'rounds');
+    if (!existsSync(roundsDir)) continue;
+    let files: string[] = [];
+    try { files = await readdir(roundsDir); } catch { continue; }
+    for (const f of files) {
+      const m = f.match(/^round_(\d+)\.json$/);
+      if (m) out.push({ params: { sessionId: sid, roundId: m[1] } });
+    }
+  }
+  return out;
+}
+
+const { sessionId, roundId } = Astro.params;
+
+// 仅核对 round 存在 + 抓 round 元数据(为页面头部提供 context)
+const padded = String(roundId).padStart(3, '0');
+const filePath = join(process.cwd(), 'archive', sessionId, 'rounds', `round_${padded}.json`);
+
+let roundInfo: any = null;
+let loadError: string | null = null;
+try {
+  if (existsSync(filePath)) {
+    roundInfo = JSON.parse(await readFile(filePath, 'utf8'));
+  } else {
+    loadError = '未找到 round JSON(可能该 round 仅在 localStorage 中)';
+  }
+} catch (e) {
+  loadError = String((e as Error)?.message ?? e);
+}
+
+const annotationKey = `dpr_agents_annotations_${sessionId}_${padded}`;
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title={roundInfo ? `Annotations · ${sessionId} · round ${roundId}` : 'Annotations'}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / </span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="muted"> / </span>
+      <a href={`${base}/agents/${sessionId}/${roundId}/`}>round {roundId}</a>
+      <span class="muted"> / annotations</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>📝 Round Annotations</h1>
+      <p class="muted">
+        session <code>{sessionId}</code> · round <code>{roundId}</code>
+        {roundInfo && <span> · {roundInfo.designer?.proposals?.length ?? 0} proposals · gate: {(roundInfo.gate?.promoted?.length ?? 0)} promoted</span>}
+      </p>
+      <p class="muted" style="font-size:0.85rem;">
+        ⚠️ 备注存到浏览器 <strong>localStorage</strong>(key: <code>{annotationKey}</code>),
+        不会跨设备同步。导出 session 时记得把 <code>localStorage</code> 也备份。
+      </p>
+    </header>
+
+    {loadError && (
+      <section class="agents-status">
+        <p class="agents-status-text">⚠️ {escapeHtml(loadError)}</p>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>✍️ 写 / 编辑备注</h2>
+      <form id="agents-ann-form">
+        <textarea
+          id="agents-ann-body"
+          rows="10"
+          placeholder="写点什么吧... (markdown 格式, 支持 ## h2, - bullet, [ ] checkbox, > quote)"
+        ></textarea>
+        <p>
+          <button type="submit" class="button">💾 保存</button>
+          <button type="button" class="button" id="agents-ann-clear">🗑 清空</button>
+          <span class="muted" id="agents-ann-status" style="margin-left:0.5rem"></span>
+        </p>
+      </form>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>👀 实时预览</h2>
+      <div id="agents-ann-preview" class="agents-synthesis-body">
+        <p class="muted">在上方编辑器里写,这里会同步渲染。</p>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📚 历史记录</h2>
+      <p class="muted">每次保存都会留下一个版本快照。</p>
+      <ul id="agents-ann-history" class="agents-ann-history">
+        <li class="muted">尚无历史。</li>
+      </ul>
+      <p>
+        <button type="button" class="button" id="agents-ann-export">📋 导出全部</button>
+        <button type="button" class="button" id="agents-ann-import">📥 导入</button>
+        <input type="file" id="agents-ann-import-file" accept="application/json,.json" hidden />
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<script type="module">
+  const KEY = (document.currentScript?.previousElementSibling?.getAttribute?.('data-key'))
+    || `dpr_agents_annotations_${'{SID}'}_{'{NNN}'}`; // 占位,实际从 URL 推
+  const url = new URL(window.location.href);
+  const m = url.pathname.match(/\/agents\/([^/]+)\/(\d+)\/annotations\/?$/);
+  const SID = m ? m[1] : '';
+  const NN = m ? m[2] : '';
+  const ANNOTATION_KEY = `dpr_agents_annotations_${SID}_${String(NN).padStart(3, '0')}`;
+
+  const bodyEl = document.getElementById('agents-ann-body');
+  const formEl = document.getElementById('agents-ann-form');
+  const clearEl = document.getElementById('agents-ann-clear');
+  const statusEl = document.getElementById('agents-ann-status');
+  const previewEl = document.getElementById('agents-ann-preview');
+  const historyEl = document.getElementById('agents-ann-history');
+  const exportEl = document.getElementById('agents-ann-export');
+  const importEl = document.getElementById('agents-ann-import');
+  const importFileEl = document.getElementById('agents-ann-import-file');
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+    }[c] ?? c));
+  }
+
+  function renderInline(s) {
+    let out = escapeHtml(s);
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+    return out;
+  }
+
+  function markdownToBlocks(body) {
+    const lines = body.split(/\r?\n/);
+    const blocks = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      if (line.startsWith('# ')) { blocks.push({ kind: 'h1', lines: [line.slice(2).trim()] }); i++; continue; }
+      if (line.startsWith('## ')) { blocks.push({ kind: 'h2', lines: [line.slice(3).trim()] }); i++; continue; }
+      if (line.startsWith('---')) { blocks.push({ kind: 'hr', lines: [] }); i++; continue; }
+      if (line.startsWith('> ')) {
+        const ls = [];
+        while (i < lines.length && lines[i].startsWith('> ')) { ls.push(lines[i].slice(2).trim()); i++; }
+        blocks.push({ kind: 'blockquote', lines: ls });
+        continue;
+      }
+      if (/^\s*[-*]\s+\[[ x]\]\s+/.test(line)) {
+        const ls = [];
+        while (i < lines.length && /^\s*[-*]\s+\[[ x]\]\s+/.test(lines[i])) {
+          ls.push(lines[i].replace(/^\s*[-*]\s+\[[ x]\]\s+/, ''));
+          i++;
+        }
+        blocks.push({ kind: 'checklist', lines: ls });
+        continue;
+      }
+      if (/^\s*[-*]\s+/.test(line)) {
+        const ls = [];
+        while (i < lines.length && /^\s*[-*]\s+/.test(lines[i]) && !/^\s*[-*]\s+\[[ x]\]\s+/.test(lines[i])) {
+          ls.push(lines[i].replace(/^\s*[-*]\s+/, ''));
+          i++;
+        }
+        blocks.push({ kind: 'ul', lines: ls });
+        continue;
+      }
+      const ls = [];
+      while (i < lines.length && lines[i].trim() && !lines[i].startsWith('#') && !lines[i].startsWith('>') && !/^\s*[-*]\s+/.test(lines[i])) {
+        ls.push(lines[i]);
+        i++;
+      }
+      blocks.push({ kind: 'p', lines: ls });
+    }
+    return blocks;
+  }
+
+  function renderPreview(body) {
+    if (!body.trim()) {
+      previewEl.innerHTML = '<p class="muted">在上方编辑器里写,这里会同步渲染。</p>';
+      return;
+    }
+    const blocks = markdownToBlocks(body);
+    previewEl.innerHTML = blocks.map((b) => {
+      if (b.kind === 'h1') return `<h2>${renderInline(b.lines[0])}</h2>`;
+      if (b.kind === 'h2') return `<h3>${renderInline(b.lines[0])}</h3>`;
+      if (b.kind === 'hr') return '<hr />';
+      if (b.kind === 'blockquote') return `<blockquote>${b.lines.map((l) => `<p>${renderInline(l)}</p>`).join('')}</blockquote>`;
+      if (b.kind === 'ul') return `<ul>${b.lines.map((l) => `<li>${renderInline(l)}</li>`).join('')}</ul>`;
+      if (b.kind === 'checklist') return `<ul class="agents-checklist">${b.lines.map((l) => `<li>${renderInline(l)}</li>`).join('')}</ul>`;
+      if (b.kind === 'p') return b.lines.map((l) => `<p>${renderInline(l)}</p>`).join('');
+      return '';
+    }).join('');
+  }
+
+  function loadHistory() {
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem(ANNOTATION_KEY) ?? '[]'); } catch { history = []; }
+    if (history.length === 0) {
+      historyEl.innerHTML = '<li class="muted">尚无历史。</li>';
+      return history;
+    }
+    historyEl.innerHTML = history.map((h, i) => {
+      const wc = h.body ? h.body.length : 0;
+      const dt = new Date(h.saved_at).toLocaleString();
+      const preview = (h.body ?? '').slice(0, 80).replace(/\n/g, ' ');
+      return `<li class="agents-ann-history-item">
+        <div class="agents-ann-history-meta">
+          <strong>v${i + 1}</strong> · ${dt} · ${wc} chars
+          <button type="button" class="agents-ann-restore" data-idx="${i}">↺ 恢复</button>
+          <button type="button" class="agents-ann-del" data-idx="${i}">🗑</button>
+        </div>
+        <pre class="agents-ann-history-preview">${escapeHtml(preview)}${preview.length >= 80 ? '…' : ''}</pre>
+      </li>`;
+    }).join('');
+    historyEl.querySelectorAll('.agents-ann-restore').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-idx'));
+        if (history[idx]) {
+          bodyEl.value = history[idx].body ?? '';
+          renderPreview(bodyEl.value);
+          statusEl.textContent = `↺ 已恢复 v${idx + 1} 到编辑器`;
+        }
+      });
+    });
+    historyEl.querySelectorAll('.agents-ann-del').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = Number(btn.getAttribute('data-idx'));
+        history.splice(idx, 1);
+        localStorage.setItem(ANNOTATION_KEY, JSON.stringify(history));
+        loadHistory();
+        statusEl.textContent = `🗑 已删除 v${idx + 1}`;
+      });
+    });
+    return history;
+  }
+
+  // 启动时:加载最近一条到编辑器
+  const initial = loadHistory();
+  if (initial.length > 0) {
+    bodyEl.value = initial[initial.length - 1].body ?? '';
+    renderPreview(bodyEl.value);
+  }
+
+  // 实时预览
+  bodyEl?.addEventListener('input', () => renderPreview(bodyEl.value));
+
+  // 保存
+  formEl?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const body = bodyEl.value;
+    if (!body.trim()) {
+      statusEl.textContent = '⚠️ 内容为空,未保存';
+      return;
+    }
+    const history = loadHistory();
+    history.push({ saved_at: Date.now(), body });
+    localStorage.setItem(ANNOTATION_KEY, JSON.stringify(history));
+    loadHistory();
+    statusEl.textContent = `✓ 已保存 v${history.length} (${new Date().toLocaleTimeString()})`;
+    setTimeout(() => { statusEl.textContent = ''; }, 3000);
+  });
+
+  // 清空编辑器(不删历史)
+  clearEl?.addEventListener('click', () => {
+    bodyEl.value = '';
+    renderPreview('');
+    statusEl.textContent = '🗑 编辑器已清空(历史未删)';
+  });
+
+  // 导出
+  exportEl?.addEventListener('click', () => {
+    const history = loadHistory();
+    const blob = new Blob([JSON.stringify({
+      session: SID, round: NN,
+      exported_at: new Date().toISOString(),
+      history,
+    }, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `annotations-${SID}-r${NN}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+
+  // 导入
+  importEl?.addEventListener('click', () => importFileEl?.click());
+  importFileEl?.addEventListener('change', async () => {
+    const file = importFileEl.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const history = Array.isArray(parsed.history) ? parsed.history : [];
+      if (history.length === 0) {
+        statusEl.textContent = '⚠️ 文件里没有 history 数组';
+        return;
+      }
+      // 合并(避免覆盖)
+      const existing = loadHistory();
+      const merged = existing.concat(history);
+      localStorage.setItem(ANNOTATION_KEY, JSON.stringify(merged));
+      loadHistory();
+      statusEl.textContent = `✓ 已合并 ${history.length} 条历史`;
+    } catch (e) {
+      statusEl.textContent = `⚠️ 解析失败:${e}`;
+    }
+  });
+</script>

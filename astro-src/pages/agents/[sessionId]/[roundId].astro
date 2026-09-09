@@ -392,6 +392,16 @@ function deltaClass(n: number | null): string {
           <p id="agents-auto-resume-hint" class="muted" aria-live="polite"></p>
         </section>
 
+        <section class="agents-round-detail-section" id="agents-ann-widget-section">
+          <h2>📝 备注 <small class="muted">(iter #51 — 浏览器 localStorage)</small></h2>
+          <div id="agents-ann-widget" data-sid={sessionId} data-rid={String(roundId).padStart(3, '0')}>
+            <p class="muted">加载中…</p>
+          </div>
+          <p>
+            <a class="button" href={`${base}/agents/${sessionId}/${String(roundId).padStart(3, '0')}/annotations/`}>📝 打开完整编辑器</a>
+          </p>
+        </section>
+
         <section class="agents-round-detail-section">
           <h2>⏱ Telemetry (iter #42)</h2>
           {roundTimings.length > 0 && (
@@ -705,5 +715,66 @@ function deltaClass(n: number | null): string {
         hintEl.style.color = '#c00';
       }
     });
+  });
+</script>
+
+<script>
+  // iter #51 — round annotation widget (client-side, localStorage)
+  document.addEventListener('DOMContentLoaded', () => {
+    const root = document.getElementById('agents-ann-widget');
+    if (!root) return;
+    const sid = root.getAttribute('data-sid') ?? '';
+    const rid = root.getAttribute('data-rid') ?? '';
+    const KEY = `dpr_agents_annotations_${sid}_${rid}`;
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+      }[c] ?? c));
+    }
+
+    function load() {
+      let arr = [];
+      try { arr = JSON.parse(localStorage.getItem(KEY) ?? '[]'); } catch {}
+      return arr;
+    }
+
+    function render() {
+      const arr = load();
+      const latest = arr[arr.length - 1];
+      const body = latest?.body ?? '';
+      const dt = latest ? new Date(latest.saved_at).toLocaleString() : null;
+      const preview = body.length > 240 ? body.slice(0, 240) + '…' : body;
+      root.innerHTML = `
+        <div class="agents-ann-widget-meta muted">
+          ${arr.length === 0
+            ? '<em>尚无备注。点下方"打开完整编辑器"写一条。</em>'
+            : `共 ${arr.length} 条历史 · 最近更新 ${dt}`}
+        </div>
+        ${latest ? `<details class="agents-ann-widget-latest"><summary>最新内容预览</summary><pre>${esc(preview)}</pre></details>` : ''}
+        <textarea id="agents-ann-quick" rows="3" placeholder="写一行备注...  回车以外还需要点下面的保存"></textarea>
+        <p>
+          <button type="button" class="button" id="agents-ann-quick-save">💾 快速保存</button>
+          <span class="muted" id="agents-ann-quick-hint" style="margin-left:0.5rem"></span>
+        </p>
+      `;
+      const btn = document.getElementById('agents-ann-quick-save');
+      const ta = document.getElementById('agents-ann-quick');
+      const hint = document.getElementById('agents-ann-quick-hint');
+      btn?.addEventListener('click', () => {
+        const text = ta.value;
+        if (!text.trim()) {
+          hint.textContent = '⚠️ 空内容';
+          return;
+        }
+        const all = load();
+        all.push({ saved_at: Date.now(), body: text });
+        localStorage.setItem(KEY, JSON.stringify(all));
+        hint.textContent = `✓ 已保存 v${all.length}`;
+        setTimeout(() => render(), 800);
+      });
+    }
+
+    render();
   });
 </script>
