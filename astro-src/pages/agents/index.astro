@@ -86,6 +86,28 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     <section class="agents-empty" id="agents-empty">
       <p>暂无 round。在上方填 Session ID + 点"跑一轮"开始。</p>
     </section>
+
+    <section class="agents-trends" id="agents-trends" hidden>
+      <h2>📈 趋势(本会话所有 round)</h2>
+      <div class="agents-trends-grid">
+        <div class="agents-trend-cell">
+          <h3>平均分(score)</h3>
+          <div class="agents-trend-chart" id="agents-trend-score"></div>
+          <p class="muted" id="agents-trend-score-meta"></p>
+        </div>
+        <div class="agents-trend-cell">
+          <h3>平均 Elo</h3>
+          <div class="agents-trend-chart" id="agents-trend-elo"></div>
+          <p class="muted" id="agents-trend-elo-meta"></p>
+        </div>
+        <div class="agents-trend-cell">
+          <h3>每轮 applied 动作数</h3>
+          <div class="agents-trend-chart" id="agents-trend-applied"></div>
+          <p class="muted" id="agents-trend-applied-meta"></p>
+        </div>
+      </div>
+      <p class="muted" id="agents-trend-convergence"></p>
+    </section>
   </main>
 
   <script>
@@ -607,5 +629,123 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     projectPicker.addEventListener('change', loadPapersFromProject);
     $('agents-load-papers-btn').addEventListener('click', loadPapersFromProject);
     refreshProjectPicker();
+
+    // ---------------------------------------------------------------------
+    // Round trends:per-session 趋势(score / Elo / applied)
+    // ---------------------------------------------------------------------
+
+    interface TrendPoint { round: number; value: number; }
+
+    function average(xs: number[]): number {
+      if (xs.length === 0) return 0;
+      return xs.reduce((a, b) => a + b, 0) / xs.length;
+    }
+
+    function buildTrend(records: RoundRecord[], metric: 'score' | 'elo' | 'applied'): TrendPoint[] {
+      return records.map((r) => {
+        if (metric === 'applied') {
+          return { round: r.round, value: r.modifier.applied.length };
+        }
+        if (r.feedback.critiques.length === 0) {
+          return { round: r.round, value: 0 };
+        }
+        const xs = r.feedback.critiques.map((c) =>
+          metric === 'score' ? c.total : c.elo,
+        );
+        return { round: r.round, value: average(xs) };
+      });
+    }
+
+    function sparklineSvg(points: TrendPoint[], opts: { width: number; height: number; color: string }): string {
+      if (points.length === 0) return '<svg></svg>';
+      const { width, height, color } = opts;
+      const padX = 4, padY = 4;
+      const w = width - padX * 2;
+      const h = height - padY * 2;
+      const xs = points.map((p) => p.value);
+      const min = Math.min(...xs, 0);
+      const max = Math.max(...xs, 1);
+      const span = max - min || 1;
+      const stepX = points.length === 1 ? 0 : w / (points.length - 1);
+      const path = points
+        .map((p, i) => {
+          const x = padX + stepX * i;
+          const y = padY + h - ((p.value - min) / span) * h;
+          return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+        })
+        .join(' ');
+      const dots = points
+        .map((p, i) => {
+          const x = padX + stepX * i;
+          const y = padY + h - ((p.value - min) / span) * h;
+          return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="${color}"/>`;
+        })
+        .join('');
+      return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" class="agents-spark"><path d="${path}" fill="none" stroke="${color}" stroke-width="1.5"/>${dots}</svg>`;
+    }
+
+    function deltaArrow(delta: number): string {
+      if (delta > 0.05) return '↑';
+      if (delta < -0.05) return '↓';
+      return '→';
+    }
+
+    function renderTrends(sid: string) {
+      const records = loadRounds(sid).sort((a, b) => a.round - b.round);
+      const section = $('agents-trends');
+      if (records.length < 2) {
+        section.hidden = true;
+        return;
+      }
+      section.hidden = false;
+
+      const score = buildTrend(records, 'score');
+      const elo = buildTrend(records, 'elo');
+      const applied = buildTrend(records, 'applied');
+
+      $('agents-trend-score').innerHTML = sparklineSvg(score, { width: 240, height: 60, color: '#3b82f6' });
+      $('agents-trend-elo').innerHTML = sparklineSvg(elo, { width: 240, height: 60, color: '#8b5cf6' });
+      $('agents-trend-applied').innerHTML = sparklineSvg(applied, { width: 240, height: 60, color: '#10b981' });
+
+      const lastScore = score[score.length - 1].value;
+      const firstScore = score[0].value;
+      const lastElo = elo[elo.length - 1].value;
+      const firstElo = elo[0].value;
+      const totalApplied = records.reduce((a, r) => a + r.modifier.applied.length, 0);
+
+      $('agents-trend-score-meta').textContent =
+        `首轮 ${firstScore.toFixed(1)} → 末轮 ${lastScore.toFixed(1)} (${deltaArrow(lastScore - firstScore)} ${(lastScore - firstScore).toFixed(2)})`;
+      $('agents-trend-elo-meta').textContent =
+        `首轮 ${firstElo.toFixed(0)} → 末轮 ${lastElo.toFixed(0)} (${deltaArrow(lastElo - firstElo)} ${(lastElo - firstElo).toFixed(0)})`;
+      $('agents-trend-applied-meta').textContent =
+        `共 ${totalApplied} 个 applied 动作, ${records.length} 轮中 ${records.filter((r) => r.modifier.applied.length > 0).length} 轮有产出`;
+
+      // 收敛提示:score std 越来越小 / Elo 越来越接近 1200 / applied 持续 0
+      const scoreStd = stdDev(score.map((p) => p.value));
+      const eloStd = stdDev(elo.map((p) => p.value));
+      let conv = '';
+      if (eloStd < 30) conv = '✅ Elo 收敛:feedback agent 几乎无分歧,稳态。';
+      else if (scoreStd < 0.5) conv = '✅ 平均分收敛:各轮分数接近,系统在稳态。';
+      else if (lastScore > firstScore + 0.5) conv = '📈 分数上行:loop 在变好,可继续跑。';
+      else if (lastScore < firstScore - 0.5) conv = '📉 分数下行:loop 在退化,考虑调 preset / 换 LLM。';
+      else if (totalApplied === 0) conv = '⚠️ 0 个 applied:gate 阈值太高或 LLM 评分集中在 sketch 段。';
+      else conv = '🔄 进行中:无明显收敛信号。';
+      $('agents-trend-convergence').textContent = conv;
+    }
+
+    function stdDev(xs: number[]): number {
+      if (xs.length < 2) return 0;
+      const m = average(xs);
+      const v = average(xs.map((x) => (x - m) ** 2));
+      return Math.sqrt(v);
+    }
+
+    // 把 trends 接入 refresh()
+    const _origRefresh = refresh;
+    refresh = function () {
+      _origRefresh();
+      if (currentSessionId) renderTrends(currentSessionId);
+      else $('agents-trends').hidden = true;
+    };
   </script>
 </BaseLayout>
