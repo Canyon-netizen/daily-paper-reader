@@ -1060,6 +1060,83 @@ mark {
   }
 }
 
+/* iter #29 — dashboard summary panel */
+.agents-dashboard {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+  border: 1px solid #bae6fd;
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  margin: 1rem 0;
+}
+.agents-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+.agents-dashboard-card {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(186, 230, 253, 0.6);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.agents-dashboard-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+.agents-dashboard-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  font-weight: 600;
+}
+.agents-dashboard-value {
+  font-size: 0.92rem;
+  color: #0f172a;
+}
+.agents-dashboard-tag {
+  display: inline-block;
+  background: #e0e7ff;
+  color: #3730a3;
+  padding: 0.15rem 0.5rem;
+  border-radius: 12px;
+  margin-right: 0.3rem;
+  font-size: 0.82rem;
+  margin-bottom: 0.2rem;
+}
+.agents-dashboard-actions-row {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.agents-dashboard-actions-row .button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+@media (prefers-color-scheme: dark) {
+  .agents-dashboard {
+    background: linear-gradient(135deg, #0c4a6e 0%, #075985 100%);
+    border-color: #0369a1;
+  }
+  .agents-dashboard-card {
+    background: rgba(30, 41, 59, 0.7);
+    border-color: #1e3a8a;
+  }
+  .agents-dashboard-label {
+    color: #93c5fd;
+  }
+  .agents-dashboard-value {
+    color: #f1f5f9;
+  }
+  .agents-dashboard-tag {
+    background: #1e3a8a;
+    color: #bfdbfe;
+  }
+}
+
 /* iter #28 — round card delta badge + sparkline */
 .agents-round-delta {
   display: inline-block;

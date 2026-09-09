@@ -116,6 +116,35 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </div>
     </section>
 
+    <!-- iter #29 — dashboard 摘要面板:一眼能开干 -->
+    <section class="agents-dashboard" id="agents-dashboard">
+      <div class="agents-dashboard-grid">
+        <div class="agents-dashboard-card agents-dashboard-last">
+          <span class="agents-dashboard-icon">⏱️</span>
+          <span class="agents-dashboard-label">最近活动</span>
+          <span class="agents-dashboard-value" id="agents-dashboard-last">—</span>
+        </div>
+        <div class="agents-dashboard-card agents-dashboard-best">
+          <span class="agents-dashboard-icon">🏆</span>
+          <span class="agents-dashboard-label">最佳 round</span>
+          <span class="agents-dashboard-value" id="agents-dashboard-best">—</span>
+        </div>
+        <div class="agents-dashboard-card agents-dashboard-tags">
+          <span class="agents-dashboard-icon">🏷️</span>
+          <span class="agents-dashboard-label">热门标签</span>
+          <span class="agents-dashboard-value" id="agents-dashboard-tags">—</span>
+        </div>
+        <div class="agents-dashboard-card agents-dashboard-actions">
+          <span class="agents-dashboard-icon">⚡</span>
+          <span class="agents-dashboard-label">快速操作</span>
+          <span class="agents-dashboard-value agents-dashboard-actions-row">
+            <button class="button small" id="agents-dashboard-jump-last" type="button" disabled>↪ 续上次</button>
+            <button class="button small" id="agents-dashboard-new-session" type="button">➕ 新 session</button>
+          </span>
+        </div>
+      </div>
+    </section>
+
     <section class="agents-search" id="agents-search-section">
       <div class="agents-search-row">
         <span class="agents-search-input-cell">
@@ -573,6 +602,104 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       } else {
         lastEl.textContent = '尚无 round';
       }
+      refreshDashboard(allSessions);
+    }
+
+    // ─── iter #29 — dashboard 摘要面板 ──────────────────────────────
+    function refreshDashboard(allSessions: string[]) {
+      // 收集所有 rounds + sessions
+      const allRounds: { sid: string; round: number; rec: RoundRecord }[] = [];
+      const sessMeta: { meta: { tags?: string[] } }[] = [];
+      for (const sid of allSessions) {
+        const recs = loadRounds(sid);
+        for (const r of recs) allRounds.push({ sid, round: r.round, rec: r });
+        const m = loadMeta(sid);
+        sessMeta.push({ meta: m ?? {} });
+      }
+      const sum = dashboardSummaryPure({ allRounds, sessions: sessMeta });
+      // last
+      const lastEl = $('agents-dashboard-last');
+      if (sum.last) {
+        const ago = formatAgo(Date.now() - sum.last.ts);
+        lastEl.innerHTML = `<strong>${escapeHtml(sum.last.sid)}</strong> · R${sum.last.round}<br><small class="muted">${ago}</small>`;
+      } else {
+        lastEl.innerHTML = `<small class="muted">从未跑过</small>`;
+      }
+      // best
+      const bestEl = $('agents-dashboard-best');
+      if (sum.best) {
+        const url = `/agents/${encodeURIComponent(sum.best.sid)}/${String(sum.best.round).padStart(3, '0')}/`;
+        bestEl.innerHTML = `<a class="agents-link" href="${url}" target="_blank">R${sum.best.round} in ${escapeHtml(sum.best.sid)}</a><br><small class="muted">avg ${sum.best.avg.toFixed(2)}</small>`;
+      } else {
+        bestEl.innerHTML = `<small class="muted">无 critique 数据</small>`;
+      }
+      // tags
+      const tagsEl = $('agents-dashboard-tags');
+      if (sum.topTags.length === 0) {
+        tagsEl.innerHTML = `<small class="muted">还没加过标签</small>`;
+      } else {
+        tagsEl.innerHTML = sum.topTags.map((t) =>
+          `<span class="agents-dashboard-tag">#${escapeHtml(t.tag)} <small>(${t.count})</small></span>`
+        ).join(' ');
+      }
+      // jump-last button
+      const jumpBtn = $<HTMLButtonElement>('agents-dashboard-jump-last');
+      if (sum.last) {
+        jumpBtn.disabled = false;
+        jumpBtn.title = `切换到 session "${sum.last.sid}"`;
+        jumpBtn.onclick = () => {
+          currentSessionId = sum.last!.sid;
+          saveSessionId(sum.last!.sid);
+          sessionInput.value = sum.last!.sid;
+          refreshSessionPicker();
+          refresh();
+          showToast(`已切到 "${sum.last!.sid}"`, 'info');
+        };
+      } else {
+        jumpBtn.disabled = true;
+      }
+    }
+
+    // dashboardSummary 的镜像(直接调上面 .mjs 里同样的逻辑)
+    function dashboardSummaryPure({ allRounds, sessions }: {
+      allRounds: { sid: string; round: number; rec: RoundRecord }[];
+      sessions: { meta: { tags?: string[] } }[];
+    }) {
+      const pickBest = () => {
+        let best: { sid: string; round: number; avg: number } | null = null;
+        for (const r of allRounds) {
+          const cs = r.rec?.feedback?.critiques;
+          if (!Array.isArray(cs) || cs.length === 0) continue;
+          const avg = cs.reduce((a, c) => a + (Number(c.total) || 0), 0) / cs.length;
+          if (!best || avg > best.avg) best = { sid: r.sid, round: r.round, avg };
+        }
+        return best;
+      };
+      const pickLast = () => {
+        let last: { sid: string; round: number; ts: number } | null = null;
+        for (const r of allRounds) {
+          const ts = r.rec?.finished_at ?? r.rec?.started_at;
+          if (typeof ts !== 'number') continue;
+          if (!last || ts > last.ts) last = { sid: r.sid, round: r.round, ts };
+        }
+        return last;
+      };
+      const topTags = (n: number) => {
+        const counts = new Map<string, number>();
+        for (const s of sessions) {
+          const tags = Array.isArray(s?.meta?.tags) ? s.meta.tags : [];
+          for (const t of tags) {
+            const k = String(t).toLowerCase().trim();
+            if (!k) continue;
+            counts.set(k, (counts.get(k) || 0) + 1);
+          }
+        }
+        return [...counts.entries()]
+          .map(([tag, count]) => ({ tag, count }))
+          .sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+          .slice(0, n);
+      };
+      return { best: pickBest(), last: pickLast(), topTags: topTags(3) };
     }
 
     function formatAgo(ms: number): string {
@@ -2077,6 +2204,17 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     refreshBookmarksPanel();
     refreshFilterPanel();
     refreshActivityHeatmap();
+    refreshStats();   // iter #29 — refresh dashboard too
+
+    // iter #29 — "新 session" 按钮:聚焦 session 输入框,清空 value
+    $('agents-dashboard-new-session').addEventListener('click', () => {
+      $<HTMLInputElement>('agents-session-id').value = '';
+      currentSessionId = '';
+      saveSessionId('');
+      $<HTMLInputElement>('agents-session-id').focus();
+      showToast('输入新 Session ID 然后跑一轮', 'info');
+    });
+
     refresh();
 
     // ---------------------------------------------------------------------
