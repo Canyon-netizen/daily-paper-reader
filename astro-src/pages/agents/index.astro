@@ -104,6 +104,25 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </div>
     </section>
 
+    <section class="agents-meta" id="agents-meta" hidden>
+      <div class="agents-meta-row">
+        <span class="agents-meta-title-cell">
+          <span class="agents-meta-label">标题(可选)</span>
+          <input id="agents-meta-title" type="text" placeholder="给这个 session 起个名字,例如:ACL 论文 review" maxlength="80" />
+        </span>
+        <span class="agents-meta-when">
+          <span class="muted" id="agents-meta-when"></span>
+        </span>
+      </div>
+      <div class="agents-meta-row">
+        <span class="agents-meta-notes-cell">
+          <span class="agents-meta-label">Notes(自由记录)</span>
+          <textarea id="agents-meta-notes" rows="3" placeholder="想记住的事:目标 / 上下文 / 已尝试的方法 / 下一步计划…"></textarea>
+        </span>
+      </div>
+      <p class="muted agents-meta-hint">数据存在浏览器 localStorage 里,跨刷新保留,不会上传。</p>
+    </section>
+
     <section class="agents-status" id="agents-status" hidden>
       <p class="agents-status-text" id="agents-status-text">就绪</p>
       <p class="agents-status-candidates muted" id="agents-status-candidates" hidden></p>
@@ -345,6 +364,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       list.innerHTML = '';
       refreshStats();
       refreshTokenPanel();
+      refreshMetaPanel();
       if (!sid) {
         empty.hidden = false;
         $('agents-rounds').hidden = true;
@@ -491,6 +511,110 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           setTokenRate(v);
           refreshTokenPanel();
         }
+      });
+    }
+
+    // iter #14 — session 元数据(title + notes)
+    //
+    // localStorage[dpr_agents_meta_<sid>] = { title, notes, createdAt, updatedAt }
+    // 让用户给 session 起个友好名字 + 自由记录目标/进度/下一步
+    // 纯函数逻辑在 tests/test_agents_session_meta.mjs 测过
+    const META_KEY = (sid: string) => `dpr_agents_meta_${sid}`;
+
+    function emptyMeta(sid: string, now = Date.now()) {
+      return { sid, title: '', notes: '', createdAt: now, updatedAt: now };
+    }
+
+    function loadMeta(sid: string, now = Date.now()) {
+      const raw = localStorage.getItem(META_KEY(sid));
+      if (!raw) return emptyMeta(sid, now);
+      try {
+        const obj = JSON.parse(raw);
+        return {
+          sid,
+          title: typeof obj.title === 'string' ? obj.title : '',
+          notes: typeof obj.notes === 'string' ? obj.notes : '',
+          createdAt: typeof obj.createdAt === 'number' ? obj.createdAt : now,
+          updatedAt: typeof obj.updatedAt === 'number' ? obj.updatedAt : now,
+        };
+      } catch {
+        return emptyMeta(sid, now);
+      }
+    }
+
+    function saveMeta(sid: string, patch: { title?: string; notes?: string }, now = Date.now()) {
+      const prev = loadMeta(sid, now);
+      const next = {
+        ...prev,
+        ...(patch.title !== undefined ? { title: String(patch.title) } : {}),
+        ...(patch.notes !== undefined ? { notes: String(patch.notes) } : {}),
+        updatedAt: now,
+      };
+      localStorage.setItem(META_KEY(sid), JSON.stringify(next));
+      return next;
+    }
+
+    function formatSessionLabel(sid: string, meta: { title: string }, roundCount: number, appliedCount: number) {
+      const title = (meta.title ?? '').trim();
+      const tag = title ? `📝 ${title}` : sid;
+      if (roundCount === 0) return tag;
+      const r = `${roundCount} round${roundCount === 1 ? '' : 's'}`;
+      return `${tag} · ${r} · ${appliedCount} applied`;
+    }
+
+    function refreshMetaPanel() {
+      const panel = $('agents-meta');
+      const sid = currentSessionId;
+      const titleInput = $<HTMLInputElement>('agents-meta-title');
+      const notesInput = $<HTMLTextAreaElement>('agents-meta-notes');
+      const whenEl = $('agents-meta-when');
+      if (!sid) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      const m = loadMeta(sid);
+      // 用 focused 判断避免抢用户正在输入的内容
+      if (document.activeElement !== titleInput) titleInput.value = m.title;
+      if (document.activeElement !== notesInput) notesInput.value = m.notes;
+      if (m.title || m.notes) {
+        const created = new Date(m.createdAt).toLocaleDateString();
+        whenEl.textContent = m.createdAt === m.updatedAt
+          ? `创建于 ${created}`
+          : `创建于 ${created} · 最近编辑 ${new Date(m.updatedAt).toLocaleString()}`;
+      } else {
+        whenEl.textContent = '';
+      }
+    }
+
+    function wireMetaPanel() {
+      const titleInput = $<HTMLInputElement>('agents-meta-title');
+      const notesInput = $<HTMLTextAreaElement>('agents-meta-notes');
+      const commitTitle = () => {
+        if (!currentSessionId) return;
+        saveMeta(currentSessionId, { title: titleInput.value });
+        refreshMetaPanel();
+        refreshSessionPicker();
+      };
+      const commitNotes = () => {
+        if (!currentSessionId) return;
+        saveMeta(currentSessionId, { notes: notesInput.value });
+        refreshMetaPanel();
+      };
+      // 离开焦点或按 Enter 才提交标题(避免每按一键都写 localStorage)
+      titleInput.addEventListener('blur', commitTitle);
+      titleInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          titleInput.blur();
+        }
+      });
+      // notes 失去焦点或 800ms debounce 后提交
+      notesInput.addEventListener('blur', commitNotes);
+      let notesTimer: number | undefined;
+      notesInput.addEventListener('input', () => {
+        if (notesTimer) window.clearTimeout(notesTimer);
+        notesTimer = window.setTimeout(commitNotes, 800);
       });
     }
 
@@ -679,9 +803,8 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           const recs = loadRounds(s);
           const roundCount = recs.length;
           const appliedCount = recs.reduce((acc, r) => acc + r.modifier.applied.length, 0);
-          const label = roundCount > 0
-            ? `${s} · ${roundCount} round${roundCount === 1 ? '' : 's'} · ${appliedCount} applied`
-            : s;
+          const meta = loadMeta(s);
+          const label = formatSessionLabel(s, meta, roundCount, appliedCount);
           const sel = s === cur ? ' selected' : '';
           return `<option value="${escapeHtml(s)}"${sel}>${escapeHtml(label)}</option>`;
         }).join('');
@@ -714,6 +837,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       }
     });
     wireTokenRate();
+    wireMetaPanel();
     refresh();
 
     // ---------------------------------------------------------------------
