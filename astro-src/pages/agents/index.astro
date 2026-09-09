@@ -76,6 +76,15 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <button class="button primary" id="agents-run-btn">▶️ 跑一轮</button>
         <button class="button" id="agents-abort-btn" hidden title="中断当前 round 循环(已完成本轮后立即退出)">🛑 停止</button>
         <button class="button" id="agents-duplicate-btn" title="把当前 session 的所有 rounds 复制到新 sid,方便换个 preset/maxRounds 重跑同一基线">📋 复制</button>
+        <button class="button" id="agents-export-btn" title="把当前 session + meta 导出为单个 JSON 文件">📦 导出</button>
+        <label class="button" for="agents-import-file" title="从 JSON 文件恢复 session 到 localStorage">
+          📥 导入
+          <input id="agents-import-file" type="file" accept="application/json,.json" hidden />
+        </label>
+        <label class="agents-checkbox" title="勾上后会覆盖已有 rounds">
+          <input id="agents-import-overwrite" type="checkbox" />
+          <span>overwrite</span>
+        </label>
         <a class="button" href="/agents/compare/" title="多会话并排对比">📊 对比</a>
       </div>
     </section>
@@ -622,6 +631,105 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       return { newSid, roundCount: newRecords.length };
     }
 
+    // iter #17 — session 导出/导入 JSON
+    //
+    // 浏览器 session 在 localStorage 里,不能跨设备。
+    // 导出:把 rounds + meta 打包成单个 JSON 文件下载
+    // 导入:从 <input type="file"> 读 JSON → 写到 localStorage(可选 overwrite / rename)
+    function exportSessionBundle(sid: string): unknown {
+      const rounds = loadRounds(sid);
+      const meta = loadMeta(sid);
+      return {
+        kind: 'dpr-agents-session',
+        version: 1,
+        exportedAt: Date.now(),
+        session: { sid, meta, rounds },
+      };
+    }
+
+    function downloadCurrentSession() {
+      if (!currentSessionId) {
+        alert('先选一个 session');
+        return;
+      }
+      const sid = currentSessionId;
+      const bundle = exportSessionBundle(sid);
+      const json = JSON.stringify(bundle, null, 2);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.href = url;
+      a.download = `agents-session-${sid}-${ts}.json`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 100);
+      $('agents-status-text').textContent =
+        `📦 已导出 "${sid}" → agents-session-${sid}-${ts}.json (${loadRounds(sid).length} rounds)`;
+    }
+
+    async function importSessionFromFile(file: File, targetSid?: string, overwrite = false) {
+      const text = await file.text();
+      let obj: any;
+      try {
+        obj = JSON.parse(text);
+      } catch {
+        throw new Error('JSON 解析失败');
+      }
+      if (obj?.kind !== 'dpr-agents-session') {
+        throw new Error(`不是 dpr-agents-session export(kind=${obj?.kind})`);
+      }
+      if (obj.version !== 1) {
+        throw new Error(`不支持的 version=${obj.version}`);
+      }
+      if (!obj.session?.sid) throw new Error('export 缺 session.sid');
+      const finalSid = targetSid || obj.session.sid;
+      // 覆盖检查
+      if (!overwrite && loadRounds(finalSid).length > 0) {
+        throw new Error(`"${finalSid}" 已存在 rounds;勾选 overwrite 或换 targetSid`);
+      }
+      // 写 rounds
+      const rounds = Array.isArray(obj.session.rounds) ? obj.session.rounds : [];
+      saveRounds(finalSid, rounds);
+      // 写 meta(更新 sid + updatedAt)
+      const prevMeta = obj.session.meta ?? {};
+      localStorage.setItem(META_KEY(finalSid), JSON.stringify({
+        ...prevMeta,
+        sid: finalSid,
+        updatedAt: Date.now(),
+      }));
+      return { sid: finalSid, roundsImported: rounds.length };
+    }
+
+    async function handleImportFileInput(e: Event) {
+      const input = e.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+      const overwrite = ($<HTMLInputElement>('agents-import-overwrite')).checked;
+      try {
+        const r = await importSessionFromFile(file, undefined, overwrite);
+        currentSessionId = r.sid;
+        saveSessionId(r.sid);
+        sessionInput.value = r.sid;
+        refreshSessionPicker();
+        refresh();
+        $('agents-status-text').textContent =
+          `📥 已导入 "${file.name}" → "${r.sid}" (${r.roundsImported} rounds)`;
+      } catch (err) {
+        alert(`导入失败: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        input.value = '';  // reset 让同一文件能再次选
+      }
+    }
+
+    function wireExportImport() {
+      $('agents-export-btn').addEventListener('click', downloadCurrentSession);
+      $('agents-import-file').addEventListener('change', handleImportFileInput);
+    }
+
     function duplicateCurrentSession() {
       if (!currentSessionId) {
         alert('先选一个 session');
@@ -897,6 +1005,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     wireTokenRate();
     wireMetaPanel();
     $('agents-duplicate-btn').addEventListener('click', duplicateCurrentSession);
+    wireExportImport();
     refresh();
 
     // ---------------------------------------------------------------------
