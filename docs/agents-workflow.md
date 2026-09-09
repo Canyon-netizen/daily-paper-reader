@@ -197,3 +197,4 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 | **#57** | **--export-md** | **整 session 一键打包成 1 个 markdown,便于分享 / 归档 / 二次处理** |
 | **#58** | **/agents/<sid>/export/** | **浏览器版本 export 页面 — Download .md / Copy to clipboard / Preview** |
 | **#59** | **lib/agents/export-bundle.mjs** | **CLI + 浏览器双 surface 共享同一份 buildExportBundle / formatExportMarkdown,字节级一致** |
+| **#60** | **lib/agents/export-bundle.ts** | **typed 镜像 — 6 个 type contract + re-export .mjs 运行时,TS caller 可 typed import** |
