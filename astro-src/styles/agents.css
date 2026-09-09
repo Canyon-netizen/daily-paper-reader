@@ -1768,3 +1768,65 @@ mark {
   .agents-cov-table code { background: rgba(255,255,255,0.06); }
   .agents-cov-session-chip { background: rgba(255,255,255,0.06); }
 }
+
+/* iter #48 — Archive search */
+.agents-search-input {
+  width: 100%;
+  max-width: 560px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  font-size: 0.95rem;
+  margin-right: 0.5rem;
+}
+.agents-search-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+.agents-search-hits {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.agents-search-hit {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--border, #eee);
+}
+.agents-search-hit:last-child { border-bottom: 0; }
+.agents-search-hit-title {
+  display: inline-block;
+  text-decoration: none;
+  color: inherit;
+  font-size: 0.95rem;
+}
+.agents-search-hit-title:hover strong { text-decoration: underline; }
+.agents-search-kind { margin-right: 0.25rem; }
+.agents-search-hit-meta {
+  margin: 0.25rem 0;
+  font-size: 0.8rem;
+  color: var(--text-muted, #666);
+}
+.agents-search-hit-meta code {
+  background: var(--surface-muted, #f3f4f6);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+}
+.agents-search-hit-snippet {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text, #333);
+  font-family: ui-monospace, monospace;
+}
+.agents-search-hit-snippet mark {
+  background: rgba(250, 204, 21, 0.4);
+  padding: 0 2px;
+  border-radius: 2px;
+}
+@media (prefers-color-scheme: dark) {
+  .agents-search-input { background: rgba(255,255,255,0.03); color: inherit; border-color: rgba(255,255,255,0.15); }
+  .agents-search-hit-meta code { background: rgba(255,255,255,0.06); }
+  .agents-search-hit-snippet mark { background: rgba(250, 204, 21, 0.3); color: #fde047; }
+}
