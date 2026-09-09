@@ -1,0 +1,245 @@
+---
+// astro-src/pages/agents/compare-sessions.astro
+//
+// iter #45 — Cross-session comparison.
+//
+// Reads session stats from /data/agents-archive-manifest.json (precomputed
+// during prebuild by build-archive-manifest.mjs which now emits
+// totalDirectives / directiveTrend / avgScoreTrend / verdict per session).
+//
+// Server-side renders the page shell + session picker. Client-side reads
+// ?a=&b= from URL, fetches the manifest, computes side-by-side stats and
+// renders trend chart overlay.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="Cross-session 对比">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cross-session 对比</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>🆚 Cross-session 对比</h1>
+      <p class="muted">
+        选择两个 session 并排查看收敛速度、proposal 质量、applied 数量、directive 趋势。
+        URL 形如 <code>?a=<sid>&b=<sid></code>,刷新即同步。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 选择 sessions</h2>
+      <form id="agents-cs-form" class="agents-cs-form">
+        <label>
+          Session A
+          <select id="agents-cs-a" name="a">
+            <option value="">— 加载中… —</option>
+          </select>
+        </label>
+        <label>
+          Session B
+          <select id="agents-cs-b" name="b">
+            <option value="">— 加载中… —</option>
+          </select>
+        </label>
+        <button type="submit" class="button">对比 →</button>
+        <a class="button" id="agents-cs-reset" href={`${base}/agents/compare-sessions/`}>重置</a>
+      </form>
+      <p id="agents-cs-meta" class="muted" style="margin-top:0.5rem">正在加载 manifest…</p>
+    </section>
+
+    <div id="agents-cs-result"></div>
+  </main>
+</BaseLayout>
+
+<script type="module">
+  const base = (document.querySelector('base')?.href || '/').replace(/\/$/, '');
+  const form = document.getElementById('agents-cs-form');
+  const result = document.getElementById('agents-cs-result');
+  const selA = document.getElementById('agents-cs-a');
+  const selB = document.getElementById('agents-cs-b');
+  const metaEl = document.getElementById('agents-cs-meta');
+
+  let manifest = null;
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+    }[c] ?? c));
+  }
+
+  function fmtTime(ms) {
+    if (!ms) return '—';
+    return new Date(ms).toLocaleString();
+  }
+
+  function verdictClass(v) {
+    if (v === '已收敛' || v === '收敛中') return 'agents-verdict-high';
+    if (v === '部分收敛' || v === '起步') return 'agents-verdict-mid';
+    if (v === '停滞') return 'agents-verdict-low';
+    return 'agents-verdict-muted';
+  }
+
+  function renderStatsRow(label, a, b, fmt = (x) => x) {
+    const winnerA = (typeof a === 'number' && typeof b === 'number' && a > b);
+    const winnerB = (typeof a === 'number' && typeof b === 'number' && b > a);
+    return `<tr>
+      <td>${escapeHtml(label)}</td>
+      <td${winnerA ? ' class="agents-cs-winner"' : ''}>${escapeHtml(fmt(a))}</td>
+      <td${winnerB ? ' class="agents-cs-winner"' : ''}>${escapeHtml(fmt(b))}</td>
+    </tr>`;
+  }
+
+  function renderTrendOverlay(a, b) {
+    const allLen = Math.max((a.directiveTrend ?? []).length, (b.directiveTrend ?? []).length, (a.avgScoreTrend ?? []).length, (b.avgScoreTrend ?? []).length);
+    const N = Math.max(1, allLen);
+    const W = Math.max(280, N * 70);
+    const H = 140;
+    const PAD = 28;
+    const innerW = W - PAD * 2;
+    const xStep = N > 1 ? innerW / (N - 1) : 0;
+    const maxDir = Math.max(1, ...((a.directiveTrend ?? []).concat(b.directiveTrend ?? [])));
+    const maxScore = 10;
+
+    function pathFor(values) {
+      const vs = values ?? [];
+      return vs.map((v, i) => `${PAD + i * xStep},${H - PAD - (v / maxDir) * (H - PAD * 2)}`).join(' ');
+    }
+    function pathScore(values) {
+      const vs = values ?? [];
+      return vs.map((v, i) => `${PAD + i * xStep},${H - PAD - (v / maxScore) * (H - PAD * 2)}`).join(' ');
+    }
+
+    return `
+      <div class="agents-session-chart">
+        <h3>Directives / cycle</h3>
+        <svg viewBox="0 0 ${W} ${H}" class="agents-session-svg" role="img" aria-label="directive trend overlay">
+          <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" stroke="#ccc" />
+          <line x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${H - PAD}" stroke="#ccc" />
+          <text x="${PAD - 4}" y="${PAD + 4}" text-anchor="end" font-size="10" fill="#666">${maxDir}</text>
+          <text x="${PAD - 4}" y="${H - PAD + 4}" text-anchor="end" font-size="10" fill="#666">0</text>
+          <polyline points="${pathFor(a.directiveTrend)}" stroke="#3b82f6" stroke-width="2" fill="none" />
+          <polyline points="${pathFor(b.directiveTrend)}" stroke="#ef4444" stroke-width="2" stroke-dasharray="4,4" fill="none" />
+          ${(a.directiveTrend ?? []).map((v, i) => `<circle cx="${PAD + i * xStep}" cy="${H - PAD - (v / maxDir) * (H - PAD * 2)}" r="3" fill="#3b82f6" />`).join('')}
+          ${(b.directiveTrend ?? []).map((v, i) => `<circle cx="${PAD + i * xStep}" cy="${H - PAD - (v / maxDir) * (H - PAD * 2)}" r="3" fill="#ef4444" />`).join('')}
+          ${Array.from({ length: N }, (_, i) => `<text x="${PAD + i * xStep}" y="${H - PAD + 14}" text-anchor="middle" font-size="10" fill="#666">c${i + 1}</text>`).join('')}
+        </svg>
+        <p class="muted"><span style="color:#3b82f6">━</span> A (${escapeHtml(a.sid)}) <span style="color:#ef4444; margin-left:1rem">┄</span> B (${escapeHtml(b.sid)})</p>
+      </div>
+      <div class="agents-session-chart">
+        <h3>Avg score / round</h3>
+        <svg viewBox="0 0 ${W} ${H}" class="agents-session-svg" role="img" aria-label="avg score trend overlay">
+          <line x1="${PAD}" y1="${H - PAD}" x2="${W - PAD}" y2="${H - PAD}" stroke="#ccc" />
+          <line x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${H - PAD}" stroke="#ccc" />
+          <text x="${PAD - 4}" y="${PAD + 4}" text-anchor="end" font-size="10" fill="#666">10</text>
+          <text x="${PAD - 4}" y="${H - PAD + 4}" text-anchor="end" font-size="10" fill="#666">0</text>
+          <polyline points="${pathScore(a.avgScoreTrend)}" stroke="#10b981" stroke-width="2" fill="none" />
+          <polyline points="${pathScore(b.avgScoreTrend)}" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4,4" fill="none" />
+          ${(a.avgScoreTrend ?? []).map((v, i) => `<circle cx="${PAD + i * xStep}" cy="${H - PAD - (v / maxScore) * (H - PAD * 2)}" r="3" fill="#10b981" />`).join('')}
+          ${(b.avgScoreTrend ?? []).map((v, i) => `<circle cx="${PAD + i * xStep}" cy="${H - PAD - (v / maxScore) * (H - PAD * 2)}" r="3" fill="#f59e0b" />`).join('')}
+        </svg>
+        <p class="muted"><span style="color:#10b981">━</span> A <span style="color:#f59e0b; margin-left:1rem">┄</span> B</p>
+      </div>
+    `;
+  }
+
+  function renderComparison(a, b) {
+    if (!a || !b) {
+      result.innerHTML = `<section class="agents-session-section">
+        <p class="muted">请选择两个 session 后点击「对比 →」。共 ${manifest.sessions.length} 个 session 可选。</p>
+      </section>`;
+      return;
+    }
+
+    result.innerHTML = `
+      <section class="agents-session-section">
+        <h2>📊 对比结果</h2>
+        <div class="agents-cs-cards">
+          <div class="agents-cs-card">
+            <h3>A · <a href="${base}/agents/${encodeURIComponent(a.sid)}/">${escapeHtml(a.sid)}</a></h3>
+            <p><span class="agents-verdict-badge ${verdictClass(a.verdict)}">${escapeHtml(a.verdict)}</span></p>
+            <p class="muted">last activity: ${escapeHtml(fmtTime(a.lastAt))}</p>
+          </div>
+          <div class="agents-cs-card">
+            <h3>B · <a href="${base}/agents/${encodeURIComponent(b.sid)}/">${escapeHtml(b.sid)}</a></h3>
+            <p><span class="agents-verdict-badge ${verdictClass(b.verdict)}">${escapeHtml(b.verdict)}</span></p>
+            <p class="muted">last activity: ${escapeHtml(fmtTime(b.lastAt))}</p>
+          </div>
+        </div>
+
+        <table class="agents-session-table">
+          <thead><tr><th>指标</th><th>A (${escapeHtml(a.sid)})</th><th>B (${escapeHtml(b.sid)})</th></tr></thead>
+          <tbody>
+            ${renderStatsRow('Rounds', a.rounds, b.rounds)}
+            ${renderStatsRow('Proposals', a.proposals, b.proposals)}
+            ${renderStatsRow('Avg score', a.avgScore, b.avgScore, (x) => x.toFixed ? x.toFixed(2) : x)}
+            ${renderStatsRow('Avg Elo', a.avgElo, b.avgElo)}
+            ${renderStatsRow('Applied', a.applied, b.applied)}
+            ${renderStatsRow('Skipped', a.skipped, b.skipped)}
+            ${renderStatsRow('Applied rate', a.appliedRate ?? (a.proposals ? a.applied / a.proposals : 0), b.appliedRate ?? (b.proposals ? b.applied / b.proposals : 0), (x) => (x * 100).toFixed(1) + '%')}
+            ${renderStatsRow('Total directives', a.totalDirectives ?? 0, b.totalDirectives ?? 0)}
+          </tbody>
+        </table>
+
+        <div class="agents-session-charts">
+          ${renderTrendOverlay(a, b)}
+        </div>
+
+        <h3>Top applied titles</h3>
+        <table class="agents-session-table">
+          <thead><tr><th>A</th><th>B</th></tr></thead>
+          <tbody>
+            ${[0, 1, 2].map((i) => `<tr><td>${escapeHtml(a.topAppliedTitles?.[i] ?? '—')}</td><td>${escapeHtml(b.topAppliedTitles?.[i] ?? '—')}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </section>
+    `;
+  }
+
+  function populateSelectors() {
+    const opts = manifest.sessions.map((s) => `<option value="${escapeHtml(s.sid)}">${escapeHtml(s.sid)} (${s.rounds}r · ${s.proposals}p · verdict: ${escapeHtml(s.verdict ?? '?')})</option>`).join('');
+    selA.innerHTML = '<option value="">— 选择 session —</option>' + opts;
+    selB.innerHTML = '<option value="">— 选择 session —</option>' + opts;
+
+    const url = new URL(window.location.href);
+    const a = url.searchParams.get('a');
+    const b = url.searchParams.get('b');
+    if (a && manifest.sessions.find((s) => s.sid === a)) selA.value = a;
+    if (b && manifest.sessions.find((s) => s.sid === b)) selB.value = b;
+
+    const aRec = manifest.sessions.find((s) => s.sid === selA.value);
+    const bRec = manifest.sessions.find((s) => s.sid === selB.value);
+    renderComparison(aRec, bRec);
+  }
+
+  form?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const a = selA.value;
+    const b = selB.value;
+    const u = new URL(window.location.href);
+    if (a) u.searchParams.set('a', a); else u.searchParams.delete('a');
+    if (b) u.searchParams.set('b', b); else u.searchParams.delete('b');
+    window.location.href = u.toString();
+  });
+
+  // 拉 manifest
+  (async () => {
+    try {
+      const r = await fetch(`${base}/data/agents-archive-manifest.json`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      manifest = await r.json();
+      metaEl.textContent = `manifest: ${manifest.sessions.length} 个 session · generated_at = ${fmtTime(manifest.generated_at)}`;
+      populateSelectors();
+    } catch (e) {
+      metaEl.innerHTML = `<span style="color:#b91c1c">⚠️ 加载 manifest 失败:${escapeHtml(String(e))}</span>
+        <br /><small>manifest 是在 prebuild 时生成的。试试 <code>npm run build</code> 重跑 prebuild。</small>`;
+    }
+  })();
+</script>

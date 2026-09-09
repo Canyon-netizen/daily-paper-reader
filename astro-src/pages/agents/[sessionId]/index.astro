@@ -159,8 +159,9 @@ const cycleStats: CycleStat[] = rounds.map((r, i) => {
 function judgeConvergence(stats: CycleStat[]): { verdict: string; reason: string; cls: string } {
   if (stats.length === 0) return { verdict: '暂无数据', reason: '尚无 round', cls: 'muted' };
   if (stats.length === 1) return { verdict: '起步', reason: '只跑了 1 个 cycle,继续观察', cls: 'mid' };
-  const dirCounts = stats.map((s) => s.directiveCount).filter((n) => n > 0);
-  if (dirCounts.length === 0) return { verdict: '无 synthesis', reason: '尚未生成任何 synthesis,无法判断', cls: 'mid' };
+  const dirCounts = stats.map((s) => s.directiveCount);
+  const allZero = dirCounts.every((n) => n === 0);
+  if (allZero) return { verdict: '已收敛', reason: '所有 cycle 均无 directive,研究目标已基本饱和', cls: 'high' };
   const last = dirCounts[dirCounts.length - 1];
   const first = dirCounts[0];
   // 单调下降(允许小幅波动)
