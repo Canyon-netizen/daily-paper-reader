@@ -140,6 +140,78 @@ function badgeClass(decision: string): string {
   return 'badge badge-none';
 }
 
+// ─── iter #27 — round detail page polish helpers ────────────────
+
+/**
+ * 按比例拆分 token:designer 60% / feedback 30% / modifier 10%。
+ * 实际 round JSON 只有 feedback.total_tokens 聚合,这里按经验值估计。
+ */
+function breakdownTokens(rec: RoundRecord): { designer: number; feedback: number; modifier: number; total: number } {
+  const total = rec?.feedback?.total_tokens ?? 0;
+  const designer = Math.round(total * 0.60);
+  const feedback = Math.round(total * 0.30);
+  const modifier = Math.max(0, total - designer - feedback);
+  return { designer, feedback, modifier, total };
+}
+
+/**
+ * 列出 session 的所有 round numbers,返回 prev/next。
+ * 当前 round 不在列表 → 都 null。
+ */
+function roundNavFor(currentRound: number, allRounds: number[]): { prev: number | null; next: number | null } {
+  const sorted = allRounds.slice().sort((a, b) => a - b);
+  const idx = sorted.indexOf(currentRound);
+  if (idx < 0) return { prev: null, next: null };
+  return {
+    prev: idx > 0 ? sorted[idx - 1] : null,
+    next: idx < sorted.length - 1 ? sorted[idx + 1] : null,
+  };
+}
+
+/**
+ * Modifier action 的 badge class — 不同 kind 给不同颜色,让用户一眼区分。
+ */
+function appliedBadgeClass(kind: string): string {
+  if (kind === 'create_draft_outline') return 'badge badge-high';
+  if (kind === 'archive_round_summary') return 'badge badge-mid';
+  if (kind === 'add_paper_to_stage') return 'badge badge-low';
+  return 'badge badge-none';
+}
+
+/**
+ * Skipped reason 的分类 badge。
+ * no_op / noop → 低优先级(可接受跳过)
+ * duplicate / already_exists → 中(重复,可考虑清理)
+ * 其他 → 异常
+ */
+function skippedBadgeClass(reason: string): string {
+  const r = String(reason ?? '').toLowerCase();
+  if (r.includes('no_op') || r.includes('noop')) return 'badge badge-low';
+  if (r.includes('duplicate') || r.includes('already')) return 'badge badge-mid';
+  return 'badge badge-none';
+}
+
+/**
+ * 读 archive 目录,列出所有 round numbers(为 prev/next 导航用)。
+ */
+let allRoundsInSession: number[] = [];
+if (rec) {
+  const roundsDir = join(process.cwd(), 'archive', sessionId, 'rounds');
+  if (existsSync(roundsDir)) {
+    try {
+      const files = await readdir(roundsDir);
+      allRoundsInSession = files
+        .map((f) => f.match(/^round_(\d+)\.json$/))
+        .filter((m): m is RegExpMatchArray => !!m)
+        .map((m) => Number(m[1]));
+    } catch { allRoundsInSession = []; }
+  }
+}
+
+const nav = rec ? roundNavFor(Number(roundId), allRoundsInSession) : { prev: null, next: null };
+const tokens = rec ? breakdownTokens(rec) : { designer: 0, feedback: 0, modifier: 0, total: 0 };
+const tokenPct = (n: number) => tokens.total > 0 ? Math.round((n / tokens.total) * 100) : 0;
+
 const startedAtIso = rec ? new Date(rec.started_at).toISOString() : '';
 const finishedAtIso = rec ? new Date(rec.finished_at).toISOString() : '';
 const elapsedMs = rec ? rec.finished_at - rec.started_at : 0;
@@ -284,6 +356,31 @@ function deltaClass(n: number | null): string {
               <span class="badge badge-low">{rec.modifier.skipped.length} skipped</span>
             </div>
           </div>
+          {tokens.total > 0 && (
+            <div class="agents-token-breakdown">
+              <strong>Token 估算</strong>(共 {tokens.total.toLocaleString()}):
+              <div class="agents-token-bar" aria-label="token 用量按段拆分">
+                <span class="agents-token-seg agents-token-designer" style={`width: ${tokenPct(tokens.designer)}%`}
+                      title={`Designer ≈ ${tokens.designer} (${tokenPct(tokens.designer)}%)`}>
+                  {tokenPct(tokens.designer) >= 8 && `${tokenPct(tokens.designer)}%`}
+                </span>
+                <span class="agents-token-seg agents-token-feedback" style={`width: ${tokenPct(tokens.feedback)}%`}
+                      title={`Feedback ≈ ${tokens.feedback} (${tokenPct(tokens.feedback)}%)`}>
+                  {tokenPct(tokens.feedback) >= 8 && `${tokenPct(tokens.feedback)}%`}
+                </span>
+                <span class="agents-token-seg agents-token-modifier" style={`width: ${tokenPct(tokens.modifier)}%`}
+                      title={`Modifier ≈ ${tokens.modifier} (${tokenPct(tokens.modifier)}%)`}>
+                  {tokenPct(tokens.modifier) >= 8 && `${tokenPct(tokens.modifier)}%`}
+                </span>
+              </div>
+              <span class="muted agents-token-legend">
+                <span class="agents-token-dot agents-token-dot-designer"></span> Designer
+                <span class="agents-token-dot agents-token-dot-feedback"></span> Feedback
+                <span class="agents-token-dot agents-token-dot-modifier"></span> Modifier
+                <small>(按经验值 60/30/10 估算)</small>
+              </span>
+            </div>
+          )}
         </section>
 
         {diff && (
@@ -407,18 +504,24 @@ function deltaClass(n: number | null): string {
           {rec.modifier.applied.length === 0 ? (
             <p class="muted">本轮无写入动作</p>
           ) : (
-            <ul>
+            <ul class="agents-detail-applied">
               {rec.modifier.applied.map((a) => {
                 const href = actionTargetHref(a, base);
+                const proposal = rec!.designer.proposals.find((p) => p.id === a.proposal_id);
                 return (
                   <li>
-                    <span class="badge badge-mid">{a.kind}</span>
+                    <span class={appliedBadgeClass(a.kind)}>{a.kind}</span>
+                    {' '}
+                    {proposal && <strong>{escapeHtml(proposal.title)}</strong>}
                     {' '}
                     {href
                       ? <a class="agents-link" href={href} target="_blank">→ 打开目标</a>
                       : <code class="muted">{JSON.stringify(a.payload).slice(0, 80)}</code>
                     }
-                    <span class="muted"> — proposal_id: <code>{a.proposal_id}</code></span>
+                    <span class="muted agents-detail-applied-meta">
+                      — <code>{a.proposal_id}</code>
+                      {' · '}{new Date(a.applied_at).toLocaleTimeString()}
+                    </span>
                   </li>
                 );
               })}
@@ -427,16 +530,39 @@ function deltaClass(n: number | null): string {
           {rec.modifier.skipped.length > 0 && (
             <details>
               <summary>skipped ({rec.modifier.skipped.length})</summary>
-              <ul>
+              <ul class="agents-detail-skipped">
                 {rec.modifier.skipped.map((s) => (
                   <li>
-                    <code>{s.proposal_id}</code>: {escapeHtml(s.reason)}
+                    <span class={skippedBadgeClass(s.reason)}>{escapeHtml(s.reason.split(/[:;,]/)[0].trim() || s.reason.slice(0, 20))}</span>
+                    {' '}
+                    <code>{s.proposal_id}</code>
+                    <span class="muted"> — {escapeHtml(s.reason)}</span>
                   </li>
                 ))}
               </ul>
             </details>
           )}
         </section>
+
+        {(nav.prev !== null || nav.next !== null) && (
+          <nav class="agents-round-nav">
+            {nav.prev !== null ? (
+              <a class="button" href={`${base}/agents/${sessionId}/${String(nav.prev).padStart(3, '0')}/`}>
+                ← Round {nav.prev}
+              </a>
+            ) : (
+              <span class="muted">已是第一轮</span>
+            )}
+            <a class="button" href={`${base}/agents/`}>返回控制台</a>
+            {nav.next !== null ? (
+              <a class="button" href={`${base}/agents/${sessionId}/${String(nav.next).padStart(3, '0')}/`}>
+                Round {nav.next} →
+              </a>
+            ) : (
+              <span class="muted">已是最后一轮</span>
+            )}
+          </nav>
+        )}
       </>
     )}
   </main>

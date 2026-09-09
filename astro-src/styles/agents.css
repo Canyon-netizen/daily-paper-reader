@@ -599,6 +599,114 @@ kbd {
 .agents-delta-neg { color: #b91c1c; font-weight: 600; }
 .agents-delta-zero { color: var(--text-muted, #888); }
 
+/* iter #27 — round detail page polish */
+.agents-token-breakdown {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: #f8fafc;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.agents-token-bar {
+  display: flex;
+  width: 100%;
+  height: 18px;
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0.4rem 0;
+  background: #e5e7eb;
+}
+.agents-token-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  color: white;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.agents-token-designer { background: #3b82f6; }  /* 蓝 */
+.agents-token-feedback { background: #8b5cf6; }  /* 紫 */
+.agents-token-modifier { background: #10b981; }  /* 绿 */
+.agents-token-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.agents-token-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-left: 0.4rem;
+}
+.agents-token-dot-designer { background: #3b82f6; }
+.agents-token-dot-feedback { background: #8b5cf6; }
+.agents-token-dot-modifier { background: #10b981; }
+
+.agents-detail-applied {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.agents-detail-applied li {
+  padding: 0.4rem 0.6rem;
+  background: #f0fdf4;
+  border-left: 3px solid #10b981;
+  border-radius: 4px;
+}
+.agents-detail-applied-meta {
+  font-size: 0.78rem;
+  margin-left: 0.25rem;
+}
+.agents-detail-skipped {
+  list-style: none;
+  padding: 0;
+}
+.agents-detail-skipped li {
+  padding: 0.3rem 0.5rem;
+  margin: 0.2rem 0;
+  background: #fafafa;
+  border-left: 3px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 0.88rem;
+}
+
+.agents-round-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border, #e5e5e5);
+}
+.agents-round-nav .button {
+  font-size: 0.9rem;
+  padding: 0.4rem 0.85rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  .agents-token-breakdown {
+    background: #1e293b;
+  }
+  .agents-token-bar {
+    background: #334155;
+  }
+  .agents-detail-applied li {
+    background: #064e3b;
+    border-left-color: #10b981;
+  }
+  .agents-detail-skipped li {
+    background: #1f2937;
+    border-left-color: #4b5563;
+  }
+}
+
 /* Label-as-button (iter #17 — import file picker) */
 .agents-controls-row label.button {
   display: inline-flex;
