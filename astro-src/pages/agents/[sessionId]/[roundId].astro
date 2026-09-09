@@ -143,6 +143,94 @@ function badgeClass(decision: string): string {
 const startedAtIso = rec ? new Date(rec.started_at).toISOString() : '';
 const finishedAtIso = rec ? new Date(rec.finished_at).toISOString() : '';
 const elapsedMs = rec ? rec.finished_at - rec.started_at : 0;
+
+// iter #16 — load round N-1 if it exists, compute diff
+let prevRec: RoundRecord | null = null;
+if (rec && rec.round > 1) {
+  const prevFile = join(process.cwd(), 'archive', sessionId, 'rounds', `round_${String(rec.round - 1).padStart(3, '0')}.json`);
+  try {
+    const raw = await readFile(prevFile, 'utf8');
+    prevRec = JSON.parse(raw) as RoundRecord;
+  } catch {
+    prevRec = null;
+  }
+}
+
+interface RoundDiff {
+  addedTitles: string[];
+  removedTitles: string[];
+  newAppliedTitles: string[];
+  scoreDelta: number | null;
+  eloDelta: number | null;
+  prevScore: number | null;
+  currScore: number | null;
+  prevElo: number | null;
+  currElo: number | null;
+}
+
+function diffRounds(prev: RoundRecord | null, curr: RoundRecord): RoundDiff {
+  if (!prev) {
+    return {
+      addedTitles: curr.designer.proposals.map((p) => p.title),
+      removedTitles: [],
+      newAppliedTitles: curr.modifier.applied.map((a) => {
+        const p = curr.designer.proposals.find((pp) => pp.id === a.proposal_id);
+        return p?.title ?? a.proposal_id;
+      }),
+      scoreDelta: null, eloDelta: null,
+      prevScore: null, currScore: null, prevElo: null, currElo: null,
+    };
+  }
+  const prevTitles = new Set(prev.designer.proposals.map((p) => p.title));
+  const currTitles = new Set(curr.designer.proposals.map((p) => p.title));
+  const addedTitles = [...currTitles].filter((t) => !prevTitles.has(t));
+  const removedTitles = [...prevTitles].filter((t) => !currTitles.has(t));
+
+  const proposalById = new Map<string, string>();
+  for (const p of curr.designer.proposals) proposalById.set(p.id, p.title);
+  for (const p of prev.designer.proposals) if (!proposalById.has(p.id)) proposalById.set(p.id, p.title);
+
+  const prevAppliedIds = new Set(prev.modifier.applied.map((a) => a.proposal_id));
+  const newApplied = curr.modifier.applied.filter((a) => !prevAppliedIds.has(a.proposal_id));
+  const newAppliedTitles = newApplied.map((a) => proposalById.get(a.proposal_id) ?? a.proposal_id);
+
+  function avgScores(r: RoundRecord): number | null {
+    const cs = r.feedback.critiques;
+    if (cs.length === 0) return null;
+    return cs.reduce((a, c) => a + c.total, 0) / cs.length;
+  }
+  function avgElo(r: RoundRecord): number | null {
+    const cs = r.feedback.critiques;
+    if (cs.length === 0) return null;
+    return cs.reduce((a, c) => a + c.elo, 0) / cs.length;
+  }
+
+  const prevScore = avgScores(prev);
+  const currScore = avgScores(curr);
+  const prevElo = avgElo(prev);
+  const currElo = avgElo(curr);
+
+  return {
+    addedTitles, removedTitles, newAppliedTitles,
+    scoreDelta: prevScore === null || currScore === null ? null : currScore - prevScore,
+    eloDelta: prevElo === null || currElo === null ? null : currElo - prevElo,
+    prevScore, currScore, prevElo, currElo,
+  };
+}
+
+const diff: RoundDiff | null = rec ? diffRounds(prevRec, rec) : null;
+
+function fmtDelta(n: number | null, digits = 2): string {
+  if (n === null || !isFinite(n)) return '—';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(digits)}`;
+}
+function deltaClass(n: number | null): string {
+  if (n === null || !isFinite(n)) return 'muted';
+  if (n > 0.01) return 'agents-delta-pos';
+  if (n < -0.01) return 'agents-delta-neg';
+  return 'agents-delta-zero';
+}
 ---
 
 <BaseLayout title={rec ? `Round ${rec.round} · ${rec.project_id}` : 'Round 详情'}>
@@ -197,6 +285,61 @@ const elapsedMs = rec ? rec.finished_at - rec.started_at : 0;
             </div>
           </div>
         </section>
+
+        {diff && (
+          <section class="agents-round-detail-section">
+            <h2>🔄 本轮 vs 上轮 {prevRec ? `(Round ${prevRec.round})` : '(无前轮 — 这是第一轮)'}</h2>
+            <div class="agents-detail-grid">
+              <div>
+                <strong>平均分</strong>:
+                <span class={deltaClass(diff.scoreDelta)}>
+                  {diff.prevScore?.toFixed(2) ?? '—'} → {diff.currScore?.toFixed(2) ?? '—'}
+                  {' '}({fmtDelta(diff.scoreDelta)})
+                </span>
+              </div>
+              <div>
+                <strong>平均 Elo</strong>:
+                <span class={deltaClass(diff.eloDelta)}>
+                  {diff.prevElo?.toFixed(0) ?? '—'} → {diff.currElo?.toFixed(0) ?? '—'}
+                  {' '}({fmtDelta(diff.eloDelta, 0)})
+                </span>
+              </div>
+              <div>
+                <strong>新增 proposals</strong>: <span class="agents-delta-pos">{diff.addedTitles.length}</span>
+              </div>
+              <div>
+                <strong>移除 proposals</strong>: <span class="agents-delta-neg">{diff.removedTitles.length}</span>
+              </div>
+              <div>
+                <strong>本轮新写入</strong>: <span class="badge badge-mid">{diff.newAppliedTitles.length}</span>
+              </div>
+            </div>
+            {diff.addedTitles.length > 0 && (
+              <details open>
+                <summary>➕ 新增的 proposals ({diff.addedTitles.length})</summary>
+                <ul>
+                  {diff.addedTitles.map((t) => (<li>{escapeHtml(t)}</li>))}
+                </ul>
+              </details>
+            )}
+            {diff.removedTitles.length > 0 && (
+              <details>
+                <summary>➖ 移除的 proposals ({diff.removedTitles.length})</summary>
+                <ul>
+                  {diff.removedTitles.map((t) => (<li class="muted">{escapeHtml(t)}</li>))}
+                </ul>
+              </details>
+            )}
+            {diff.newAppliedTitles.length > 0 && (
+              <details open>
+                <summary>✏️ 本轮新应用的 ({diff.newAppliedTitles.length})</summary>
+                <ul>
+                  {diff.newAppliedTitles.map((t) => (<li>{escapeHtml(t)}</li>))}
+                </ul>
+              </details>
+            )}
+          </section>
+        )}
 
         <section class="agents-round-detail-section">
           <h2>📝 Designer Proposals ({rec.designer.proposals.length})</h2>
