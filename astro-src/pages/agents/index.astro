@@ -116,6 +116,18 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </div>
     </section>
 
+    <section class="agents-search" id="agents-search-section">
+      <div class="agents-search-row">
+        <span class="agents-search-input-cell">
+          <span class="agents-meta-label">🔍 全局搜索</span>
+          <input id="agents-search" type="text" placeholder="搜 sid / title / notes / tag,空格 AND,Esc 清除" />
+          <button class="button small" id="agents-search-clear" type="button">清除</button>
+        </span>
+        <span class="muted agents-search-count" id="agents-search-count"></span>
+      </div>
+      <p class="muted agents-search-hint">例:<code>acl methodology</code> 找 sid/title/notes/tag 同时含这两个词的 session</p>
+    </section>
+
     <section class="agents-activity" id="agents-activity" hidden>
       <div class="agents-activity-header">
         <span class="agents-meta-label">📅 最近 30 天活动</span>
@@ -1291,6 +1303,97 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     function wireActivityHeatmap() { /* no listeners, pure render */ }
 
+    // iter #22 — session 全局搜索
+    //
+    // 输入框 → live 过滤 picker 列表
+    // 搜 sid / title / notes / tag,case-insensitive,空格 AND
+    const SEARCH_KEY = 'dpr_agents_search_query_v1';
+
+    function searchSessions<T extends { sid: string; title?: string; notes?: string; tags?: string[] }>(sessions: T[], query: string): T[] {
+      if (!query || !query.trim()) return sessions;
+      const keywords = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+      if (keywords.length === 0) return sessions;
+      return sessions.filter((s) => {
+        const haystack = [
+          s.sid ?? '',
+          s.title ?? '',
+          s.notes ?? '',
+          ...(s.tags ?? []),
+        ].join(' ').toLowerCase();
+        return keywords.every((kw) => haystack.includes(kw));
+      });
+    }
+
+    function highlight(text: string, query: string): string {
+      if (!query || !query.trim()) return escapeHtml(text);
+      const keywords = query.trim().split(/\s+/).filter(Boolean);
+      let result = escapeHtml(text);
+      for (const kw of keywords) {
+        if (!kw) continue;
+        const safe = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`(${safe})`, 'gi');
+        result = result.replace(re, '<mark>$1</mark>');
+      }
+      return result;
+    }
+
+    function getSearchQuery(): string {
+      return localStorage.getItem(SEARCH_KEY) ?? '';
+    }
+    function setSearchQuery(q: string) {
+      localStorage.setItem(SEARCH_KEY, q);
+    }
+
+    function wireSearch() {
+      const input = $<HTMLInputElement>('agents-search');
+      const clearBtn = $<HTMLButtonElement>('agents-search-clear');
+      const counter = $('agents-search-count');
+      input.value = getSearchQuery();
+      const apply = () => {
+        const q = input.value;
+        setSearchQuery(q);
+        refreshSessionPicker();
+        refreshSearchCounter();
+      };
+      const debounced = debounce(apply, 150);
+      input.addEventListener('input', debounced);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          input.value = '';
+          apply();
+        }
+      });
+      clearBtn.addEventListener('click', () => {
+        input.value = '';
+        apply();
+        input.focus();
+      });
+      refreshSearchCounter();
+    }
+
+    function debounce<T extends (...args: any[]) => void>(fn: T, ms: number): T {
+      let timer: number | undefined;
+      return ((...args: any[]) => {
+        if (timer) window.clearTimeout(timer);
+        timer = window.setTimeout(() => fn(...args), ms);
+      }) as T;
+    }
+
+    function refreshSearchCounter() {
+      const counter = $('agents-search-count');
+      const q = getSearchQuery();
+      if (!q.trim()) {
+        counter.textContent = '';
+        return;
+      }
+      const sessions = listKnownSessions().map((sid) => {
+        const m = loadMeta(sid);
+        return { sid, title: m.title, notes: m.notes, tags: m.tags ?? [] };
+      });
+      const matched = searchSessions(sessions, q).length;
+      counter.textContent = `${matched} / ${sessions.length}`;
+    }
+
     function refreshFilterPanel() {
       const panel = $('agents-filter');
       const chips = $('agents-filter-chips');
@@ -1555,21 +1658,26 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       const allSessions = listKnownSessions();
       const cur = loadSessionId();
       const selected = getSelectedFilterTags();
-      // 构造 [{sid, tags}] 后过滤
-      const annotated = allSessions.map((s) => ({ sid: s, tags: loadMeta(s).tags ?? [] }));
-      const filtered = filterSessionsByTags(annotated, selected).map((x) => x.sid);
+      const q = getSearchQuery();
+      // 构造 [{sid, title, notes, tags}] 后过滤
+      const annotated = allSessions.map((s) => {
+        const m = loadMeta(s);
+        return { sid: s, title: m.title, notes: m.notes, tags: m.tags ?? [] };
+      });
+      let pool = filterSessionsByTags(annotated, selected);
+      pool = searchSessions(pool, q);
+      const filtered = pool.map((x) => x.sid);
       sessionPicker.innerHTML = '<option value="">— 新建 / 输入 —</option>' +
         filtered.map((s) => {
           const recs = loadRounds(s);
           const roundCount = recs.length;
           const appliedCount = recs.reduce((acc, r) => acc + r.modifier.applied.length, 0);
           const meta = loadMeta(s);
-          const label = formatSessionLabel(s, meta, roundCount, appliedCount);
-          const tagSuffix = meta.tags?.length ? ` · ${meta.tags.map((t) => `#${t}`).join(' ')}` : '';
+          const label = highlight(formatSessionLabel(s, meta, roundCount, appliedCount), q);
+          const tagSuffix = meta.tags?.length ? ` · ${meta.tags.map((t) => highlight(`#${t}`, q)).join(' ')}` : '';
           const sel = s === cur ? ' selected' : '';
-          return `<option value="${escapeHtml(s)}"${sel}>${escapeHtml(label)}${escapeHtml(tagSuffix)}</option>`;
+          return `<option value="${escapeHtml(s)}"${sel}>${label}${tagSuffix}</option>`;
         }).join('');
-      // 标记当前 session 即使被过滤掉也保留(用户可能在 filter 下还在编辑)
       if (cur && !filtered.includes(cur)) {
         const opt = document.createElement('option');
         opt.value = cur;
@@ -1577,6 +1685,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         opt.selected = true;
         sessionPicker.appendChild(opt);
       }
+      refreshSearchCounter();
     }
 
     sessionInput.value = loadSessionId();
@@ -1612,6 +1721,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     wireExportImport();
     wireTrash();
     wireFilterClear();
+    wireSearch();
     refreshTrashPanel();
     refreshFilterPanel();
     refreshActivityHeatmap();
