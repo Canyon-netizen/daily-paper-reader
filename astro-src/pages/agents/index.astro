@@ -161,6 +161,15 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       <ul id="agents-trash-list"></ul>
     </section>
 
+    <!-- iter #24 — 跨 session round 收藏面板 -->
+    <section class="agents-bookmarks" id="agents-bookmarks" hidden>
+      <div class="agents-bookmarks-header">
+        <h3>⭐ 收藏的 rounds <span class="muted" id="agents-bookmarks-count">(0)</span></h3>
+        <button class="button small" id="agents-bookmarks-clear" title="清除所有收藏(不可撤销)">清空</button>
+      </div>
+      <ul id="agents-bookmarks-list"></ul>
+    </section>
+
     <section class="agents-meta" id="agents-meta" hidden>
       <div class="agents-meta-row">
         <span class="agents-meta-title-cell">
@@ -344,9 +353,16 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       const div = document.createElement('div');
       div.className = 'agents-round-card';
       div.dataset.roundIndex = String(rec.round);
+      const starred = hasBookmarkUI(currentSessionId, rec.round);
+      const starTitle = starred ? '取消收藏此 round' : '收藏此 round(跨 session 看)';
       div.innerHTML = `
         <header class="agents-round-header">
-          <h3><a class="agents-link" href="/agents/${encodeURIComponent(currentSessionId)}/${String(rec.round).padStart(3, '0')}/" target="_blank">Round ${rec.round} ↗</a></h3>
+          <h3>
+            <button class="agents-bookmark-star-btn ${starred ? 'is-starred' : ''}" data-round="${rec.round}" title="${starTitle}" aria-pressed="${starred}">
+              ${starred ? '★' : '☆'}
+            </button>
+            <a class="agents-link" href="/agents/${encodeURIComponent(currentSessionId)}/${String(rec.round).padStart(3, '0')}/" target="_blank">Round ${rec.round} ↗</a>
+          </h3>
           <span class="agents-round-meta">
             ${new Date(rec.started_at).toLocaleString()} · ${rec.feedback.total_tokens} tok
             <button class="button small agents-export-btn" data-fmt="json" title="导出此 round 的完整 JSON">📥 JSON</button>
@@ -1139,6 +1155,110 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       });
     }
 
+    // ─── iter #24 — 跨 session round 收藏夹 ─────────────────────────
+    // 给任意 round 打星标,在统一面板里看到所有 session 的收藏。
+    // 数据:dpr_agents_bookmarks_v1 = JSON [{ sid, round, title, addedAt }]
+    // 操作:add / remove / toggle / has / list(按 addedAt desc)
+    const BOOKMARKS_KEY = 'dpr_agents_bookmarks_v1';
+
+    function loadBookmarksUI(): { sid: string; round: number; title: string; addedAt: number }[] {
+      const raw = localStorage.getItem(BOOKMARKS_KEY);
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        return arr.filter((b) =>
+          b && typeof b === 'object' && typeof b.sid === 'string' && b.sid
+          && typeof b.round === 'number' && Number.isFinite(b.round)
+          && typeof b.addedAt === 'number'
+        );
+      } catch { return []; }
+    }
+    function writeBookmarksUI(list: { sid: string; round: number; title: string; addedAt: number }[]) {
+      localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(list));
+    }
+    function hasBookmarkUI(sid: string, round: number): boolean {
+      return loadBookmarksUI().some((b) => b.sid === sid && b.round === round);
+    }
+    function toggleBookmarkUI(sid: string, round: number, title: string): boolean {
+      const list = loadBookmarksUI();
+      const idx = list.findIndex((b) => b.sid === sid && b.round === round);
+      if (idx >= 0) {
+        list.splice(idx, 1);
+        writeBookmarksUI(list);
+        return false;  // 现在未收藏
+      }
+      list.push({ sid, round, title, addedAt: Date.now() });
+      writeBookmarksUI(list);
+      return true;  // 现在收藏了
+    }
+
+    function refreshBookmarksPanel() {
+      const panel = $('agents-bookmarks');
+      const list = $('agents-bookmarks-list');
+      const count = $('agents-bookmarks-count');
+      const items = loadBookmarksUI().slice().sort((a, b) => b.addedAt - a.addedAt);
+      count.textContent = `(${items.length})`;
+      if (items.length === 0) {
+        panel.hidden = true;
+        list.innerHTML = '';
+        return;
+      }
+      panel.hidden = false;
+      list.innerHTML = items.map((b) => {
+        const sidSafe = escapeHtml(b.sid);
+        const titleSafe = escapeHtml(b.title || '(untitled round)');
+        const at = new Date(b.addedAt).toLocaleString();
+        const url = `/agents/${encodeURIComponent(b.sid)}/${String(b.round).padStart(3, '0')}/`;
+        return `
+          <li class="agents-bookmark-item">
+            <span class="agents-bookmark-star" aria-hidden="true">⭐</span>
+            <a class="agents-link" href="${url}" target="_blank">${titleSafe}</a>
+            <span class="muted">· sid=${sidSafe} · round ${b.round} · ${at}</span>
+            <button class="button small agents-bookmark-jump" data-sid="${sidSafe}" title="切到该 session 查看上下文">切</button>
+            <button class="button small agents-bookmark-remove" data-sid="${sidSafe}" data-round="${b.round}" title="从收藏中移除">✕</button>
+          </li>
+        `;
+      }).join('');
+      list.querySelectorAll<HTMLButtonElement>('.agents-bookmark-remove').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const sid = btn.dataset.sid!;
+          const round = Number(btn.dataset.round);
+          toggleBookmarkUI(sid, round, '');  // 移除
+          refreshBookmarksPanel();
+          // 如果是当前 session 的 round,刷新列表的星星状态
+          if (sid === currentSessionId) refresh();
+          showToast('已从收藏移除', 'info');
+        });
+      });
+      list.querySelectorAll<HTMLButtonElement>('.agents-bookmark-jump').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const sid = btn.dataset.sid!;
+          currentSessionId = sid;
+          saveSessionId(sid);
+          sessionInput.value = sid;
+          refreshSessionPicker();
+          refresh();
+          showToast(`已切到 "${sid}"`, 'info');
+        });
+      });
+    }
+
+    function wireBookmarks() {
+      $('agents-bookmarks-clear').addEventListener('click', () => {
+        const list = loadBookmarksUI();
+        if (list.length === 0) {
+          showToast('收藏本来就是空的', 'info');
+          return;
+        }
+        if (!confirm(`清空所有 ${list.length} 个收藏?此操作不可撤销。`)) return;
+        writeBookmarksUI([]);
+        refreshBookmarksPanel();
+        refresh();  // 把当前 session 的圆点重置
+        showToast('已清空收藏', 'success');
+      });
+    }
+
     function wireExportImport() {
       $('agents-export-btn').addEventListener('click', downloadCurrentSession);
       $('agents-report-btn').addEventListener('click', downloadExperimentReport);
@@ -1518,6 +1638,26 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           else if (fmt === 'md') exportRoundDigest(rec);
         });
       });
+      // iter #24 — ⭐ 收藏切换
+      list.querySelectorAll<HTMLButtonElement>('.agents-bookmark-star-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.closest<HTMLElement>('.agents-round-card')?.dataset.roundIndex);
+          const rec = records.find((r) => r.round === idx);
+          if (!rec) return;
+          // 取 round 第一个 proposal 标题作为收藏标签
+          const title = rec.designer.proposals?.[0]?.title
+            ?? rec.modifier.applied?.[0]?.payload?.title
+            ?? `Round ${rec.round}`;
+          const starred = toggleBookmarkUI(currentSessionId, rec.round, String(title));
+          // 原地更新按钮状态(避免刷新整列表)
+          btn.textContent = starred ? '★' : '☆';
+          btn.classList.toggle('is-starred', starred);
+          btn.setAttribute('aria-pressed', String(starred));
+          btn.title = starred ? '取消收藏此 round' : '收藏此 round(跨 session 看)';
+          refreshBookmarksPanel();
+          showToast(starred ? `⭐ 已收藏 round ${rec.round}` : `已取消收藏 round ${rec.round}`, starred ? 'success' : 'info');
+        });
+      });
     }
 
     function exportRoundJson(rec: RoundRecord) {
@@ -1859,9 +1999,11 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     $('agents-duplicate-btn').addEventListener('click', duplicateCurrentSession);
     wireExportImport();
     wireTrash();
+    wireBookmarks();
     wireFilterClear();
     wireSearch();
     refreshTrashPanel();
+    refreshBookmarksPanel();
     refreshFilterPanel();
     refreshActivityHeatmap();
     refresh();

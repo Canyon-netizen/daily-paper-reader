@@ -906,3 +906,93 @@ mark {
     background: rgba(255, 255, 255, 0.08);
   }
 }
+
+/* ─── iter #24 跨 session round 收藏 ──────────────────────────── */
+.agents-bookmarks {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+.agents-bookmarks-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.agents-bookmarks-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.agents-bookmarks ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.agents-bookmark-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.6);
+}
+.agents-bookmark-star {
+  font-size: 1rem;
+}
+.agents-bookmark-item .agents-bookmark-jump,
+.agents-bookmark-item .agents-bookmark-remove {
+  margin-left: auto;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.5rem;
+}
+.agents-bookmark-item .agents-bookmark-remove {
+  margin-left: 0.25rem;
+}
+.agents-bookmark-star-btn {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-size: 1.4rem;
+  line-height: 1;
+  padding: 0 0.25rem;
+  color: #d1d5db;
+  vertical-align: middle;
+}
+.agents-bookmark-star-btn:hover {
+  color: #f59e0b;
+  transform: scale(1.15);
+  transition: transform 120ms;
+}
+.agents-bookmark-star-btn.is-starred {
+  color: #f59e0b;
+}
+.agents-bookmark-star-btn.is-starred:hover {
+  color: #d97706;
+}
+.agents-round-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+@media (prefers-color-scheme: dark) {
+  .agents-bookmarks {
+    background: #422006;
+    border-color: #78350f;
+    border-left-color: #f59e0b;
+  }
+  .agents-bookmark-item {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .agents-bookmark-star-btn {
+    color: #4b5563;
+  }
+  .agents-bookmark-star-btn.is-starred {
+    color: #fbbf24;
+  }
+}
