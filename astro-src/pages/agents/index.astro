@@ -79,9 +79,9 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <button class="button" id="agents-delete-btn" title="把当前 session 移到回收站(30 天后自动永久删除,可提前恢复)">🗑️ 删除</button>
         <button class="button" id="agents-export-btn" title="把当前 session + meta 导出为单个 JSON 文件">📦 导出</button>
         <button class="button" id="agents-report-btn" title="生成单份 markdown 实验报告">📑 报告</button>
-        <label class="button" for="agents-import-file" title="从 JSON 文件恢复 session 到 localStorage">
+        <label class="button" for="agents-import-file" title="从 JSON 文件恢复 session 到 localStorage(支持多选)">
           📥 导入
-          <input id="agents-import-file" type="file" accept="application/json,.json" hidden />
+          <input id="agents-import-file" type="file" accept="application/json,.json" multiple hidden />
         </label>
         <label class="agents-checkbox" title="勾上后会覆盖已有 rounds">
           <input id="agents-import-overwrite" type="checkbox" />
@@ -911,23 +911,39 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     async function handleImportFileInput(e: Event) {
       const input = e.target as HTMLInputElement;
-      const file = input.files?.[0];
-      if (!file) return;
+      const files = input.files ? Array.from(input.files) : [];
+      if (files.length === 0) return;
       const overwrite = ($<HTMLInputElement>('agents-import-overwrite')).checked;
-      try {
-        const r = await importSessionFromFile(file, undefined, overwrite);
-        currentSessionId = r.sid;
-        saveSessionId(r.sid);
-        sessionInput.value = r.sid;
-        refreshSessionPicker();
-        refresh();
-        $('agents-status-text').textContent =
-          `📥 已导入 "${file.name}" → "${r.sid}" (${r.roundsImported} rounds)`;
-      } catch (err) {
-        alert(`导入失败: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        input.value = '';  // reset 让同一文件能再次选
+      const results: { file: string; ok: boolean; sid?: string; rounds?: number; error?: string }[] = [];
+      let lastImportedSid = '';
+      for (const file of files) {
+        try {
+          const r = await importSessionFromFile(file, undefined, overwrite);
+          results.push({ file: file.name, ok: true, sid: r.sid, rounds: r.roundsImported });
+          lastImportedSid = r.sid;
+        } catch (err) {
+          results.push({ file: file.name, ok: false, error: err instanceof Error ? err.message : String(err) });
+        }
       }
+      // 汇总结果
+      const ok = results.filter((r) => r.ok);
+      const fail = results.filter((r) => !r.ok);
+      const totalRounds = ok.reduce((a, r) => a + (r.rounds ?? 0), 0);
+      let msg = `📥 批量导入完成: ✅ ${ok.length} 个 session (${totalRounds} rounds)`;
+      if (fail.length > 0) msg += `, ❌ ${fail.length} 个失败`;
+      if (lastImportedSid) {
+        currentSessionId = lastImportedSid;
+        saveSessionId(lastImportedSid);
+        sessionInput.value = lastImportedSid;
+      }
+      refreshSessionPicker();
+      refresh();
+      $('agents-status-text').textContent = msg;
+      if (fail.length > 0) {
+        const detail = fail.map((f) => `• ${f.file}: ${f.error}`).join('\n');
+        console.warn(`[agents] import failures:\n${detail}`);
+      }
+      input.value = '';  // reset 让能再次选
     }
 
     // iter #19 — session 删除 / 回收站(30 天软删)
