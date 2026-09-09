@@ -20,6 +20,7 @@
 
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,8 @@ function parseArgs(argv) {
     else if (a === '--status') out.status = true;
     else if (a === '--json') out.json = true;
     else if (a === '--last') out.last = Number(argv[++i]);
+    else if (a === '--new-session') out.newSession = argv[++i];
+    else if (a === '--no-run') out.noRun = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -81,6 +84,11 @@ if (args.help) {
                      (use with --session ID; no LLM, no writes)
   --json             With --status, emit machine-readable JSON instead of text
   --last N           With --status, limit recent-rounds + top-elo to last N (default 5)
+  --new-session GOAL Bootstrap mode: create archive/<sid>/{meta,rounds/} from GOAL,
+                     generate 8-char sid, print sid to stdout. Combine with
+                     --rounds N to immediately run N rounds on the new session.
+                     Use --no-run to skip the round run.
+  --no-run           With --new-session, only create the dir + meta (skip rounds)
   --help             Show this help`);
   process.exit(0);
 }
@@ -726,6 +734,64 @@ async function loadStatusReport(sessionId, opts = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// --new-session 模式:从目标字符串生成 sid + 创建目录 + 写 meta.json
+// ---------------------------------------------------------------------------
+
+/**
+ * generateSessionId(goal, opts) — 从 goal 派生 8 字符 hex session ID。
+ * 算法:sha256(goal + ':' + timestamp) 取前 8 字符。
+ * - 同时辰同 goal → 同 sid(幂等,CLI 重试友好)
+ * - 同 goal 不同 timestamp → 不同 sid(允许同名 goal 跑多 session)
+ * - sid 匹配 listSessions() 的 /^[a-f0-9]{8,}$/ 正则
+ *
+ * 纯函数,tests 可注入 timestamp 验证幂等性。
+ */
+export function generateSessionId(goal, opts = {}) {
+  const ts = opts.timestamp ?? Date.now();
+  const salt = opts.salt ?? '';
+  const input = `${String(goal ?? '').trim()}:${ts}:${salt}`;
+  return createHash('sha256').update(input).digest('hex').slice(0, 8);
+}
+
+/**
+ * createSession(sessionId, opts) — 创建 archive/<sessionId>/ 目录 + meta.json。
+ * 幂等:目录已存在则保留,meta.json 已存在则不覆盖(返回 existing=true)。
+ *
+ * meta.json 字段:
+ *   session_id, goal, created_at, rounds_requested, dry_run, schema_version
+ *
+ * 返回:{ sessionId, dir, metaPath, created: boolean, existing: boolean }
+ */
+export async function createSession(sessionId, opts = {}) {
+  const dir = join('archive', sessionId);
+  await mkdir(dir, { recursive: true });
+  await mkdir(join(dir, 'rounds'), { recursive: true });
+  const metaPath = join(dir, 'meta.json');
+  let existing = false;
+  try {
+    await readFile(metaPath, 'utf8');
+    existing = true;
+  } catch {
+    // 不存在,继续写
+  }
+  let created = false;
+  if (!existing) {
+    const meta = {
+      schema_version: 1,
+      session_id: sessionId,
+      goal: opts.goal ?? null,
+      created_at: opts.created_at ?? Date.now(),
+      rounds_requested: opts.rounds ?? null,
+      dry_run: opts.dryRun ?? false,
+      preset: opts.preset ?? 'balanced',
+    };
+    await writeFile(metaPath, JSON.stringify(meta, null, 2));
+    created = true;
+  }
+  return { sessionId, dir, metaPath, created, existing };
+}
+
+// ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
 
@@ -738,6 +804,46 @@ async function main() {
 
   const caller = makeLLMCaller({});
   const dryRun = !!args.dryRun;
+
+  // 模式 -1: --new-session (bootstrap,优先于所有其他模式)
+  if (args.newSession !== undefined) {
+    const goal = args.newSession;
+    if (typeof goal !== 'string' || goal.trim().length === 0) {
+      console.error('[error] --new-session requires a non-empty GOAL string');
+      process.exit(2);
+    }
+    // sid 优先级:--session > 派生。允许覆盖便于幂等重试。
+    const sid = args.project ?? args.session ?? generateSessionId(goal);
+    const { created, existing } = await createSession(sid, {
+      goal,
+      rounds: args.maxRounds ?? null,
+      dryRun,
+      preset,
+    });
+    if (args.json) {
+      console.log(JSON.stringify({
+        sessionId: sid,
+        goal,
+        created,
+        existing,
+        roundsRequested: args.noRun ? 0 : (args.maxRounds ?? 3),
+        skipRun: !!args.noRun,
+      }, null, 2));
+    } else {
+      if (created) console.log(`✨ Created session ${sid} (goal: ${goal.slice(0, 60)}${goal.length > 60 ? '...' : ''})`);
+      else if (existing) console.log(`♻️  Reusing existing session ${sid} (goal already bootstrapped)`);
+      else console.log(`✓ Session ${sid} ready`);
+    }
+    if (args.noRun) {
+      return;
+    }
+    // 自动设置 --session 并 fall through 到 runOneSession
+    args.project = sid;
+    args.session = sid;
+    if (!args.maxRounds) args.maxRounds = 3;
+    console.log(`[new-session] → running ${args.maxRounds} round(s) on ${sid} ...`);
+    // 继续到下面的 session 处理
+  }
 
   // 模式 0: --status (inspect only, 无 LLM 调用)
   if (args.status) {

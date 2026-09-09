@@ -35,6 +35,7 @@
 
 ## 🆕 最近更新
 
+- **2026-09-09** 🌱 多智能体 `--new-session` 引导模式：`astro-src/scripts/agents-run.mjs` 新增 `--new-session "<GOAL>" [--no-run] [--rounds N]`,从目标字符串用 sha256(goal+timestamp)[:8] 派生 8 字符 hex sid,自动创建 `archive/<sid>/{meta.json, rounds/}` 并 stdout 输出 sid,可选立即跑 N 轮;`createSession` 幂等(已存在 meta.json 不覆盖),`generateSessionId` / `createSession` 是 export 的纯函数 + 异步 IO 便于测试;`tests/test_agents_new_session_cli.mjs` 21 个 case 全过。从此无需预先准备 `archive/<sid>/` 即可上手 CLI——本地新用户用一条 `--new-session` 就能 bootstrap。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
 - **2026-09-09** 🔍 多智能体 `--status` 模式 + 跨平台 main guard 修复：`astro-src/scripts/agents-run.mjs` 新增 `--status [--session ID] [--json] [--last N]` inspect-only 模式,纯读已有 `archive/<sid>/rounds/*.json` 输出 rounds 数 / avg score / apply rate / proposal type mix / gate histogram / top Elo proposals / recent rounds 表,无 LLM 调用、无文件写入;`buildStatusReport` / `formatStatusReportText` 拆为 export 纯函数,`tests/test_agents_status_cli.mjs` 18 个 case 全过;顺手修一个 Windows 下 main 永远不跑的 pre-existing bug(`import.meta.url === file://${argv[1]}` 在 Windows 上字符串永远不等,改 `realpathSync` 双端归一化跨平台比较)。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
 - **2026-07-19** 📅 首页浏览体验升级：新增按发布日期浏览的论文日历，联动年 / 月下拉一次切换一个月份；主题分类统一按 `task` 标签归类，兼容旧版 `query:` tags 并展示每个主题下的全部论文。
 - **2026-07-19** 📚 论文库回归检索与整理：移除 cytoscape 相似度网络，改为居中的全量论文列表，保留搜索、标签筛选、详情抽屉、用户标签编辑与隐藏管理。
@@ -737,7 +738,14 @@ node astro-src/scripts/agents-run.mjs --session my-research --digest-only
 # Inspect-only: 不跑轮,只看历史(stdout,不写文件)
 node astro-src/scripts/agents-run.mjs --status --session my-research
 node astro-src/scripts/agents-run.mjs --status --session my-research --json --last 10
+
+# Bootstrap: 从研究目标生成新 sid + 创建 archive/<sid>/{meta,rounds/}
+# 单跑引导不跑轮(--no-run),或者立即跟 --rounds N 跑 N 轮
+node astro-src/scripts/agents-run.mjs --new-session "多智能体协作研究 RLHF" --no-run --json
+node astro-src/scripts/agents-run.mjs --new-session "多智能体协作研究 RLHF" --rounds 3 --dry-run
 ```
+
+`--new-session` 用 sha256(goal + timestamp)[:8] 派生 8 字符 sid(同时辰同 goal 幂等,可重试);`createSession` 幂等,二次调用若 meta.json 已存在则跳过,goal 不被覆盖。继续一个旧 session 用 `--session <sid>` 而不是 `--new-session`。`generateSessionId` / `createSession` 是 export 纯函数 + 异步 IO,便于测试。
 
 `--status` 输出 rounds 数、first/last activity、avg score、apply rate、proposal type mix、gate histogram、top Elo proposals、recent rounds 表;`--json` 给机器读,`--last N` 限制 top-elo/recent 数量(默认 5)。`buildStatusReport` / `formatStatusReportText` 是 export 的纯函数,便于测试。
 
