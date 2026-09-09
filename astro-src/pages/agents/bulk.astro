@@ -1,0 +1,300 @@
+---
+// astro-src/pages/agents/bulk.astro
+//
+// iter #50 — Bulk multi-session operations.
+//
+// Loads /data/agents-archive-manifest.json (precomputed by
+// build-archive-manifest.mjs), lets the user select multiple sessions
+// via checkboxes, and runs three client-side actions:
+//
+//   (1) Export bundle — fetches meta.json + each round_NNN.json +
+//       synthesis_NNN.md for every selected session, packages into one
+//       JSON blob, triggers download as bulk-export-<ts>.json.
+//
+//   (2) Markdown report — synthesizes a markdown summary table of
+//       the selected sessions (sid, rounds, avg score, applied, verdict,
+//       last activity), triggers download.
+//
+//   (3) Diff commands — generates a list of `node --diff` CLI commands
+//       comparing every pair of selected sessions, displayed as a copyable
+//       pre block.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="Bulk operations">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / bulk</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>📦 Bulk Operations</h1>
+      <p class="muted">
+        勾选多个 session,一次性 <strong>导出 JSON bundle</strong> / <strong>生成 markdown 汇总报告</strong> /
+        <strong>生成 pairwise diff CLI 命令</strong>。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>✅ 选择 sessions</h2>
+      <p>
+        <button type="button" class="button" id="agents-bulk-select-all">全选</button>
+        <button type="button" class="button" id="agents-bulk-select-none">全不选</button>
+        <button type="button" class="button" id="agents-bulk-select-converged">只选已收敛</button>
+        <span class="muted" id="agents-bulk-count" style="margin-left:0.5rem">— 加载中</span>
+      </p>
+      <div id="agents-bulk-list" class="agents-bulk-list">
+        <p class="muted">加载 manifest 中…</p>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 动作</h2>
+      <p>
+        <button type="button" class="button" id="agents-bulk-export" disabled>📦 导出 JSON bundle</button>
+        <button type="button" class="button" id="agents-bulk-report" disabled>📝 生成 markdown 报告</button>
+        <button type="button" class="button" id="agents-bulk-diff" disabled>🔁 生成 pairwise diff 命令</button>
+      </p>
+    </section>
+
+    <section class="agents-session-section" id="agents-bulk-output-section" hidden>
+      <h2>📋 输出</h2>
+      <p id="agents-bulk-output-meta" class="muted"></p>
+      <pre id="agents-bulk-output" class="agents-auto-cmd" tabindex="0"></pre>
+      <p>
+        <button type="button" class="button" id="agents-bulk-copy">📋 复制到剪贴板</button>
+        <button type="button" class="button" id="agents-bulk-download" hidden>💾 下载文件</button>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<script type="module">
+  const base = (document.querySelector('base')?.href || '/').replace(/\/$/, '');
+  const $ = (id) => document.getElementById(id);
+  const listEl = $('agents-bulk-list');
+  const countEl = $('agents-bulk-count');
+  const outSection = $('agents-bulk-output-section');
+  const outMeta = $('agents-bulk-output-meta');
+  const outEl = $('agents-bulk-output');
+  const dlBtn = $('agents-bulk-download');
+
+  let manifest = null;
+  let selectedSids = new Set();
+  let lastDownloadBlob = null;
+
+  function escapeHtml(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+    }[c] ?? c));
+  }
+
+  function verdictClass(v) {
+    if (v === '已收敛' || v === '收敛中') return 'agents-verdict-high';
+    if (v === '部分收敛' || v === '起步') return 'agents-verdict-mid';
+    if (v === '停滞') return 'agents-verdict-low';
+    return 'agents-verdict-muted';
+  }
+
+  function fmtTime(ms) {
+    if (!ms) return '—';
+    return new Date(ms).toLocaleString();
+  }
+
+  function renderList() {
+    if (!manifest) {
+      listEl.innerHTML = '<p class="muted">未加载 manifest。</p>';
+      return;
+    }
+    const rows = manifest.sessions.map((s) => {
+      const checked = selectedSids.has(s.sid) ? 'checked' : '';
+      return `<label class="agents-bulk-row">
+        <input type="checkbox" data-sid="${escapeHtml(s.sid)}" ${checked} />
+        <span class="agents-bulk-row-main">
+          <strong>${escapeHtml(s.sid)}</strong>
+          <span class="agents-verdict-badge ${verdictClass(s.verdict)}">${escapeHtml(s.verdict ?? '?')}</span>
+          <small class="muted">${s.rounds}r · ${s.proposals}p · avg ${s.avgScore} · applied ${s.applied} · ${fmtTime(s.lastAt)}</small>
+        </span>
+      </label>`;
+    }).join('');
+    listEl.innerHTML = `<div class="agents-bulk-list-inner">${rows}</div>`;
+    listEl.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const sid = cb.getAttribute('data-sid');
+        if (cb.checked) selectedSids.add(sid); else selectedSids.delete(sid);
+        updateCount();
+      });
+    });
+    updateCount();
+  }
+
+  function updateCount() {
+    countEl.textContent = `已选 ${selectedSids.size} / ${manifest?.sessions.length ?? 0}`;
+    const has = selectedSids.size > 0;
+    ['agents-bulk-export', 'agents-bulk-report', 'agents-bulk-diff'].forEach((id) => { $(id).disabled = !has; });
+  }
+
+  $('agents-bulk-select-all')?.addEventListener('click', () => {
+    manifest?.sessions.forEach((s) => selectedSids.add(s.sid));
+    renderList();
+  });
+  $('agents-bulk-select-none')?.addEventListener('click', () => {
+    selectedSids.clear();
+    renderList();
+  });
+  $('agents-bulk-select-converged')?.addEventListener('click', () => {
+    selectedSids.clear();
+    manifest?.sessions.forEach((s) => {
+      if (s.verdict === '已收敛' || s.verdict === '收敛中') selectedSids.add(s.sid);
+    });
+    renderList();
+  });
+
+  // (1) 导出 JSON bundle
+  $('agents-bulk-export')?.addEventListener('click', async () => {
+    if (!manifest || selectedSids.size === 0) return;
+    outSection.hidden = false;
+    outMeta.textContent = `导出 ${selectedSids.size} 个 session (并行 fetch archive/<sid>/{meta, rounds/*.json, synthesis/*.md})…`;
+    outEl.textContent = '';
+
+    const bundle = { generated_at: new Date().toISOString(), sessions: {} };
+    const tasks = [...selectedSids].map(async (sid) => {
+      // 拉 manifest 里该 session 的索引(需要 round count + synthesis count),从 manifest 拿 round count
+      const meta = manifest.sessions.find((s) => s.sid === sid);
+      const roundCount = meta?.rounds ?? 0;
+      // 没法精确知道 synthesis count,尝试 fetch 1..N 然后容忍 404
+      const out = { meta: null, rounds: {}, syntheses: {} };
+      try {
+        const r = await fetch(`${base}/archive/${encodeURIComponent(sid)}/meta.json`);
+        if (r.ok) out.meta = await r.json();
+      } catch {}
+      for (let i = 1; i <= roundCount; i++) {
+        const padded = String(i).padStart(3, '0');
+        try {
+          const r = await fetch(`${base}/archive/${encodeURIComponent(sid)}/rounds/round_${padded}.json`);
+          if (r.ok) out.rounds[padded] = await r.json();
+        } catch {}
+      }
+      // synthesis 索引:从 dashboard 没法直接拿,试 sidx 1..roundCount (常见 ≤ rounds)
+      for (let i = 1; i <= Math.min(roundCount + 1, 20); i++) {
+        const padded = String(i).padStart(3, '0');
+        try {
+          const r = await fetch(`${base}/archive/${encodeURIComponent(sid)}/synthesis/synthesis_${padded}.md`);
+          if (r.ok) out.syntheses[padded] = await r.text();
+        } catch {}
+      }
+      bundle.sessions[sid] = out;
+    });
+    await Promise.all(tasks);
+
+    const text = JSON.stringify(bundle, null, 2);
+    outMeta.textContent = `✓ 已生成 ${selectedSids.size} 个 session 的 bundle · ${(text.length / 1024).toFixed(1)} KB`;
+    outEl.textContent = `(太长不适合内联展示 — 请点 "下载文件")`;
+    lastDownloadBlob = new Blob([text], { type: 'application/json' });
+    dlBtn.hidden = false;
+  });
+
+  // (2) 生成 markdown 报告
+  $('agents-bulk-report')?.addEventListener('click', () => {
+    if (!manifest || selectedSids.size === 0) return;
+    const rows = manifest.sessions.filter((s) => selectedSids.has(s.sid));
+    const lines = [];
+    lines.push(`# Bulk session report`);
+    lines.push(``);
+    lines.push(`Generated at ${new Date().toISOString()} · ${rows.length} sessions`);
+    lines.push(``);
+    lines.push(`| sid | rounds | proposals | avg score | avg elo | applied | skipped | verdict | last activity |`);
+    lines.push(`|---|---|---|---|---|---|---|---|---|`);
+    for (const s of rows) {
+      lines.push(`| \`${s.sid}\` | ${s.rounds} | ${s.proposals} | ${s.avgScore} | ${s.avgElo} | ${s.applied} | ${s.skipped} | ${s.verdict} | ${fmtTime(s.lastAt)} |`);
+    }
+    lines.push(``);
+    lines.push(`## Top applied titles`);
+    for (const s of rows) {
+      if (s.topAppliedTitles?.length) {
+        lines.push(`### ${s.sid}`);
+        for (const t of s.topAppliedTitles) lines.push(`- ${t}`);
+      }
+    }
+    const text = lines.join('\n');
+    outSection.hidden = false;
+    outMeta.textContent = `✓ ${rows.length} 个 session 的 markdown 报告 · ${(text.length / 1024).toFixed(1)} KB`;
+    outEl.textContent = text;
+    lastDownloadBlob = new Blob([text], { type: 'text/markdown' });
+    dlBtn.hidden = false;
+  });
+
+  // (3) 生成 pairwise diff CLI 命令
+  $('agents-bulk-diff')?.addEventListener('click', () => {
+    if (!manifest || selectedSids.size < 2) {
+      alert('pairwise diff 需要至少 2 个 session');
+      return;
+    }
+    const sids = [...selectedSids];
+    const lines = [];
+    lines.push(`# pairwise diff commands for ${sids.length} sessions`);
+    lines.push(`# 每对 (a, b) 生成一条 node --diff 命令`);
+    lines.push(`# 跑前先确认 --diff 支持跨 session(目前是同 session 内两个 round;跨 session 见 --compare-sessions)`);
+    lines.push(``);
+    for (let i = 0; i < sids.length; i++) {
+      for (let j = i + 1; j < sids.length; j++) {
+        lines.push(`# ${sids[i]} ↔ ${sids[j]}`);
+        lines.push(`node astro-src/scripts/agents-run.mjs --compare-sessions --a ${sids[i]} --b ${sids[j]}`);
+        lines.push(``);
+      }
+    }
+    const text = lines.join('\n');
+    outSection.hidden = false;
+    outMeta.textContent = `✓ ${sids.length * (sids.length - 1) / 2} 对 pairwise diff`;
+    outEl.textContent = text;
+    dlBtn.hidden = false;
+    lastDownloadBlob = new Blob([text], { type: 'text/plain' });
+  });
+
+  $('agents-bulk-copy')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(outEl.textContent ?? '');
+      $('agents-bulk-copy').textContent = '✓ 已复制';
+      setTimeout(() => { $('agents-bulk-copy').textContent = '📋 复制到剪贴板'; }, 2000);
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(outEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+
+  $('agents-bulk-download')?.addEventListener('click', () => {
+    if (!lastDownloadBlob) return;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const ext = lastDownloadBlob.type === 'application/json' ? 'json'
+      : lastDownloadBlob.type === 'text/markdown' ? 'md' : 'txt';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(lastDownloadBlob);
+    a.download = `bulk-export-${ts}.${ext}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+
+  // 拉 manifest
+  (async () => {
+    try {
+      const r = await fetch(`${base}/data/agents-archive-manifest.json`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      manifest = await r.json();
+      renderList();
+    } catch (e) {
+      listEl.innerHTML = `<p style="color:#b91c1c">⚠️ 加载 manifest 失败:${escapeHtml(String(e))}</p>
+        <p><small>manifest 是在 prebuild 时生成的。试试 <code>npm run build</code> 重跑 prebuild。</small></p>`;
+      countEl.textContent = '加载失败';
+    }
+  })();
+</script>

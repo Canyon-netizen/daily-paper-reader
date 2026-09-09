@@ -1862,3 +1862,35 @@ mark {
   .agents-tl-missing { background: rgba(255,255,255,0.04); color: #6b7280; }
   .agents-tl-applied { color: #c4b5fd; }
 }
+
+/* iter #50 — Bulk operations */
+.agents-bulk-list { margin-top: 0.75rem; }
+.agents-bulk-list-inner {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 0.5rem;
+}
+.agents-bulk-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 4px;
+  background: var(--surface, #fff);
+  cursor: pointer;
+}
+.agents-bulk-row:hover {
+  border-color: var(--link, #3b82f6);
+}
+.agents-bulk-row input[type=checkbox] { margin: 0; }
+.agents-bulk-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.85rem;
+}
+.agents-bulk-row-main small { font-size: 0.75rem; }
+@media (prefers-color-scheme: dark) {
+  .agents-bulk-row { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.1); }
+}
