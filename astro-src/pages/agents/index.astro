@@ -355,6 +355,19 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       div.dataset.roundIndex = String(rec.round);
       const starred = hasBookmarkUI(currentSessionId, rec.round);
       const starTitle = starred ? '取消收藏此 round' : '收藏此 round(跨 session 看)';
+      // iter #28 — delta badge vs prev round
+      const idx = roundsCache.findIndex((r) => r.round === rec.round);
+      const prev = idx > 0 ? roundsCache[idx - 1] : null;
+      const delta = avgScoreDelta(prev, rec);
+      const badge = deltaBadge(delta);
+      // sparkline: scores of all rounds up to this one
+      const sofar = scores.slice(0, idx + 1);
+      const spark = buildSparkline(sofar, { width: 80, height: 22, padding: 2 });
+      const sparkSvg = spark.d
+        ? `<svg class="agents-round-sparkline" viewBox="0 0 80 22" aria-hidden="true">
+             <path d="${spark.d}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+           </svg>`
+        : '';
       div.innerHTML = `
         <header class="agents-round-header">
           <h3>
@@ -362,6 +375,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
               ${starred ? '★' : '☆'}
             </button>
             <a class="agents-link" href="/agents/${encodeURIComponent(currentSessionId)}/${String(rec.round).padStart(3, '0')}/" target="_blank">Round ${rec.round} ↗</a>
+            <span class="agents-round-delta agents-round-delta-${badge.color}" title="${badge.color === 'pos' ? '↑ 比上轮好' : badge.color === 'neg' ? '↓ 比上轮差' : badge.color === 'zero' ? '= 与上轮持平' : '无上轮数据'}">
+              ${badge.color === 'pos' ? '↑' : badge.color === 'neg' ? '↓' : badge.color === 'zero' ? '=' : ''}${badge.text}
+            </span>
+            ${sparkSvg}
           </h3>
           <span class="agents-round-meta">
             ${new Date(rec.started_at).toLocaleString()} · ${rec.feedback.total_tokens} tok
@@ -423,6 +440,55 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       }[c] ?? c));
     }
 
+    // ─── iter #28 — round card delta + sparkline helpers ─────────────────
+    // avgScoreCached(rec):返回该 round 平均分,无 critique → null
+    function avgScoreCached(rec: RoundRecord): number | null {
+      const cs = rec?.feedback?.critiques;
+      if (!Array.isArray(cs) || cs.length === 0) return null;
+      return cs.reduce((a, c) => a + (Number(c.total) || 0), 0) / cs.length;
+    }
+    // avgScoreDelta(prev, curr):curr.avg - prev.avg;任一 null → null
+    function avgScoreDelta(prev: RoundRecord | null, curr: RoundRecord): number | null {
+      const p = prev ? avgScoreCached(prev) : null;
+      const c = avgScoreCached(curr);
+      if (p === null || c === null) return null;
+      return c - p;
+    }
+    // deltaBadge(delta):{ sign, color, text, value }
+    //   pos / neg / zero / none(没数据)
+    function deltaBadge(delta: number | null): { sign: string; color: string; text: string; value: number | null } {
+      if (delta === null || !isFinite(delta)) {
+        return { sign: 'none', color: 'none', text: '—', value: null };
+      }
+      if (delta > 0.05) return { sign: '+', color: 'pos', text: `+${delta.toFixed(2)}`, value: delta };
+      if (delta < -0.05) return { sign: '-', color: 'neg', text: delta.toFixed(2), value: delta };
+      return { sign: '0', color: 'zero', text: '0', value: 0 };
+    }
+    // buildSparkline(scores, opts):返回 SVG path d="" + points
+    //   长度 < 2 或全 null → d: null
+    function buildSparkline(scores: (number | null)[], opts: { width?: number; height?: number; padding?: number } = {}): { d: string | null; points: number[][] } {
+      const w = opts.width ?? 80;
+      const h = opts.height ?? 24;
+      const p = opts.padding ?? 3;
+      if (!Array.isArray(scores) || scores.length < 2) return { d: null, points: [] };
+      const valid: number[] = scores.filter((s): s is number => typeof s === 'number' && Number.isFinite(s));
+      if (valid.length < 2) return { d: null, points: [] };
+      const min = Math.min(...valid);
+      const max = Math.max(...valid);
+      const range = max - min || 1;
+      const dx = (w - 2 * p) / (valid.length - 1);
+      const points = valid.map((s, i) => {
+        const x = p + i * dx;
+        const y = p + (h - 2 * p) * (1 - (s - min) / range);
+        return [x, y];
+      });
+      const d = points.map((pt, i) => `${i === 0 ? 'M' : 'L'}${pt[0].toFixed(1)},${pt[1].toFixed(1)}`).join(' ');
+      return { d, points };
+    }
+    // caches(刷新时填充,renderRound 读)
+    let roundsCache: RoundRecord[] = [];
+    let scores: (number | null)[] = [];
+
     function actionTargetLink(a: { kind: string; payload: Record<string, unknown> }): string {
       const p = a.payload as Record<string, string>;
       if (a.kind === 'create_draft_outline' && p.writing_id) {
@@ -460,11 +526,16 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       if (records.length === 0) {
         empty.hidden = false;
         $('agents-rounds').hidden = true;
+        roundsCache = [];
+        scores = [];
       } else {
         empty.hidden = true;
         $('agents-rounds').hidden = false;
-        for (const rec of records) list.appendChild(renderRound(rec));
-        wireExportButtons(records);
+        // iter #28 — cache sorted rounds + their avg scores for delta/sparkline
+        roundsCache = records.slice().sort((a, b) => a.round - b.round);
+        scores = roundsCache.map(avgScoreCached);
+        for (const rec of roundsCache) list.appendChild(renderRound(rec));
+        wireExportButtons(roundsCache);
       }
       refreshTokenPanel(records);
     }
