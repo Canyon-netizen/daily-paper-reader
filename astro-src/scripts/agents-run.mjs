@@ -422,9 +422,164 @@ function clampScore(s) {
 // Modifier CLI(stub-only,不真写 upstream localStorage)
 // ---------------------------------------------------------------------------
 
+/**
+ * formatDraftFrontmatter(proposal, ctx) — 写 deliverable .md 顶部的 YAML frontmatter。
+ * 纯函数;create_draft / literature_review 共用。
+ */
+function formatDraftFrontmatter(proposal, ctx = {}) {
+  const titleEsc = String(proposal.title ?? '').replace(/"/g, '\\"');
+  const paperIds = proposal.evidence?.paperIds ?? [];
+  const lines = [
+    '---',
+    `title: "${titleEsc}"`,
+    `type: ${proposal.type}`,
+    `decision: ${ctx.decision ?? 'candidate'}`,
+    `session_id: "${ctx.session_id ?? 'unknown'}"`,
+    `round: ${ctx.round ?? '?'}`,
+    `created_at: "${ctx.created_at ?? new Date().toISOString()}"`,
+    `dry_run: ${ctx.dryRun ? 'true' : 'false'}`,
+    `estimated_effort: ${proposal.estimated_effort ?? 'medium'}`,
+    `related_papers: [${paperIds.map((p) => `"${String(p).replace(/"/g, '\\"')}"`).join(', ')}]`,
+    `tags: [${(proposal.tags ?? []).map((t) => `"${String(t).replace(/"/g, '\\"')}"`).join(', ')}]`,
+    '---',
+  ];
+  return lines.join('\n');
+}
+
+/**
+ * formatDraftMarkdown(proposal, ctx) — create_draft 类型的 markdown 草稿。
+ * 纯函数;dry-run 时输出"占位符骨架 + ⚠️ DRY-RUN"提示,真实 LLM 跑时可注入 ctx.body 覆盖。
+ */
+export function formatDraftMarkdown(proposal, ctx = {}) {
+  const fm = formatDraftFrontmatter(proposal, ctx);
+  const paperIds = proposal.evidence?.paperIds ?? [];
+  const body = ctx.body ?? null;
+  const sections = [
+    fm,
+    '',
+    `# ${proposal.title ?? '(untitled draft)'}`,
+    '',
+    `> Round ${ctx.round ?? '?'} · ${ctx.decision ?? 'candidate'} · session \`${ctx.session_id ?? 'unknown'}\``,
+    '',
+    '## 动机 / Rationale',
+    proposal.rationale || '_(未提供)_',
+    '',
+    '## 证据 / 相关论文',
+    paperIds.length ? paperIds.map((id) => `- ${id}`).join('\n') : '- (无引用论文)',
+    '',
+    '## 风险',
+    proposal.risk || '_(未声明)_',
+    '',
+    '## 预估投入',
+    proposal.estimated_effort || 'medium',
+    '',
+    '## 草稿正文',
+    '',
+    body ?? (
+      ctx.dryRun
+        ? '> ⚠️ DRY-RUN 占位符:配置 LLM_BASE_URL + LLM_API_KEY 后重跑,Designer 会用 LLM 生成正文覆盖此段。'
+        : '> 在此区域直接编辑草稿;完成后回 /agents/ 标记 promoted。'
+    ),
+    '',
+    '## 下一步',
+    ctx.dryRun
+      ? '- [ ] 配置 LLM key 重跑 `--rounds 1` 让 Designer 生成真实正文'
+      : '- [ ] 编辑正文 → 回 /agents/ 标记 promoted → 进入下一 round',
+    '',
+  ];
+  return sections.join('\n');
+}
+
+/**
+ * formatReviewMarkdown(proposal, ctx) — literature_review 类型的 markdown 综述。
+ * 纯函数;结构:摘要 / 论文清单 / 主题分类 / 关键 gap / 推荐阅读顺序。
+ */
+export function formatReviewMarkdown(proposal, ctx = {}) {
+  const fm = formatDraftFrontmatter(proposal, ctx);
+  const paperIds = proposal.evidence?.paperIds ?? [];
+  const body = ctx.body ?? null;
+  const sections = [
+    fm,
+    '',
+    `# 📚 ${proposal.title ?? '(untitled review)'}`,
+    '',
+    `> Round ${ctx.round ?? '?'} · ${ctx.decision ?? 'candidate'} · session \`${ctx.session_id ?? 'unknown'}\``,
+    '',
+    '## 摘要',
+    proposal.rationale || '_(未提供)_',
+    '',
+    '## 引用论文清单',
+    paperIds.length ? paperIds.map((id) => `- ${id}`).join('\n') : '- (无)',
+    '',
+    '## 主题分类',
+    body?.themes ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下自动聚类。'
+        : '> 由 LLM 自动生成主题聚类(本轮 stub 模式留空)。'
+    ),
+    '',
+    '## 关键 Gap / 待研究问题',
+    body?.gaps ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下从 critiques 综合。'
+        : '> 由 Feedback 3 persona 综合生成(本轮 stub 模式留空)。'
+    ),
+    '',
+    '## 推荐阅读顺序',
+    body?.reading_order ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符。'
+        : '> 1. 先读 survey → 2. 跳到最新 baseline → 3. 沿 timeline 补全关键 gap。'
+    ),
+    '',
+    '## 风险',
+    proposal.risk || '_(未声明)_',
+    '',
+    '---',
+    '',
+    '## 下一步',
+    ctx.dryRun
+      ? '- [ ] 配置 LLM key 让 Designer 用真 LLM 生成 themes/gaps/reading_order'
+      : '- [ ] 审阅 → 编辑 → 回 /agents/ 标记 promoted',
+    '',
+  ];
+  return sections.join('\n');
+}
+
+/**
+ * writeDeliverable(proposal, ctx) — 把 proposal 写成真 .md 文件。
+ * 路径:archive/<sid>/{drafts,reviews}/<type>_<round>_<idx>.md
+ * 幂等:文件已存在则不覆盖,返回 skipped=true。
+ * 返回:{ written: bool, path: string|null, kind: 'draft'|'review'|null }
+ */
+export async function writeDeliverable(proposal, ctx = {}) {
+  const sid = ctx.session_id;
+  if (!sid) return { written: false, path: null, kind: null, reason: 'missing session_id' };
+  let subdir = null;
+  let formatter = null;
+  if (proposal.type === 'create_draft') { subdir = 'drafts'; formatter = formatDraftMarkdown; }
+  else if (proposal.type === 'literature_review') { subdir = 'reviews'; formatter = formatReviewMarkdown; }
+  else return { written: false, path: null, kind: null, reason: `unsupported type ${proposal.type}` };
+
+  const round = ctx.round ?? 0;
+  const idx = ctx.idx ?? 0;
+  const dir = join('archive', sid, subdir);
+  const file = join(dir, `${subdir === 'drafts' ? 'draft' : 'review'}_r${String(round).padStart(3, '0')}_${idx}.md`);
+  await mkdir(dir, { recursive: true });
+  // 幂等:文件已存在不覆盖
+  if (existsSync(file)) {
+    return { written: false, path: file, kind: subdir === 'drafts' ? 'draft' : 'review', skipped: true };
+  }
+  const content = formatter(proposal, ctx);
+  await writeFile(file, content);
+  return { written: true, path: file, kind: subdir === 'drafts' ? 'draft' : 'review', skipped: false };
+}
+
 async function modifierCLI(verdicts, proposals, input, dryRun) {
   const applied = [];
   const skipped = [];
+  // 记录每个 type 在本 round 已写过的 idx(同 round 多 proposal → 不同 idx)
+  const writeIdxByType = new Map();
   for (const v of verdicts) {
     const p = proposals.find((x) => x.id === v.proposal_id);
     if (!p) {
@@ -432,9 +587,32 @@ async function modifierCLI(verdicts, proposals, input, dryRun) {
       continue;
     }
     if (v.decision === 'promoted' || v.decision === 'candidate') {
+      // 真写 deliverable:create_draft / literature_review → archive/<sid>/{drafts,reviews}/*.md
+      // add_paper / experiment_plan / rebuttal → 暂时仍走 archive_round_summary
+      // (等后续 iter 补 experiment_plan / rebuttal 的 writer)
+      let deliverableResult = null;
+      if (p.type === 'create_draft' || p.type === 'literature_review') {
+        const idx = writeIdxByType.get(p.type) ?? 0;
+        writeIdxByType.set(p.type, idx + 1);
+        try {
+          deliverableResult = await writeDeliverable(p, {
+            session_id: input.session_id ?? input.project?.id,
+            round: input.round,
+            idx,
+            decision: v.decision,
+            dryRun,
+          });
+        } catch (err) {
+          deliverableResult = { written: false, error: err.message };
+        }
+      }
       applied.push({
         id: `m_${Date.now()}_${applied.length}`,
-        kind: 'archive_round_summary',
+        kind: deliverableResult?.written
+          ? (deliverableResult.kind === 'draft' ? 'write_draft_md' : 'write_review_md')
+          : (deliverableResult?.skipped
+              ? 'deliverable_already_exists'
+              : 'archive_round_summary'),
         proposal_id: p.id,
         payload: {
           would_call: p.type,
@@ -442,6 +620,7 @@ async function modifierCLI(verdicts, proposals, input, dryRun) {
           evidence: p.evidence.paperIds,
           decision: v.decision,
           dry_run: dryRun,
+          ...(deliverableResult ?? {}),
         },
         applied_at: Date.now(),
       });
