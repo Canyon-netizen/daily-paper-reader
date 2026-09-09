@@ -1253,6 +1253,91 @@ export function formatReviewMarkdown(proposal, ctx = {}) {
 }
 
 /**
+ * formatAddPaperMarkdown(proposal, ctx) — add_paper 类型的 markdown 引用清单。
+ * 纯函数;列出 evidence.paperIds + rationale + 下一步。
+ */
+export function formatAddPaperMarkdown(proposal, ctx = {}) {
+  const fm = formatDraftFrontmatter(proposal, ctx);
+  const paperIds = proposal.evidence?.paperIds ?? [];
+  const sections = [
+    fm,
+    '',
+    `# 📄 ${proposal.title ?? '(untitled paper addition)'}`,
+    '',
+    `> Round ${ctx.round ?? '?'} · ${ctx.decision ?? 'candidate'} · session \`${ctx.session_id ?? 'unknown'}\``,
+    '',
+    '## 加入理由 / Why',
+    proposal.rationale || '_(未提供)_',
+    '',
+    '## 候选论文 IDs',
+    paperIds.length ? paperIds.map((id) => `- ${id}`).join('\n') : '- (无)',
+    '',
+    '## 风险',
+    proposal.risk || '_(未声明)_',
+    '',
+    '## 下一步',
+    ctx.dryRun
+      ? '- [ ] 用 paper-analyzer 对每个 paperId 跑速览,生成中文摘要'
+      : '- [ ] 查 arxiv → 写入 docs/papers/<id>.md → /papers/ 列表可见',
+    '',
+  ];
+  return sections.join('\n');
+}
+
+/**
+ * formatRebuttalMarkdown(proposal, ctx) — rebuttal 类型的 markdown 反驳信骨架。
+ * 纯函数;结构:reviewer comments / responses / changes to manuscript。
+ */
+export function formatRebuttalMarkdown(proposal, ctx = {}) {
+  const fm = formatDraftFrontmatter(proposal, ctx);
+  const paperIds = proposal.evidence?.paperIds ?? [];
+  const sections = [
+    fm,
+    '',
+    `# ✉️ ${proposal.title ?? '(untitled rebuttal)'}`,
+    '',
+    `> Round ${ctx.round ?? '?'} · ${ctx.decision ?? 'candidate'} · session \`${ctx.session_id ?? 'unknown'}\``,
+    '',
+    '## 摘要 / Summary',
+    proposal.rationale || '_(未提供)_',
+    '',
+    '## 目标论文',
+    paperIds.length ? paperIds.map((id) => `- ${id}`).join('\n') : '- (未指定)',
+    '',
+    '## Reviewer Comments',
+    ctx.body?.reviewer_comments ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下从 OpenReview / 会议 review 抓取。'
+        : '> - Reviewer 1:\n> - Reviewer 2:\n> - Reviewer 3:'
+    ),
+    '',
+    '## Responses',
+    ctx.body?.responses ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下逐条回复。'
+        : '> 对每条 reviewer comment 给出:(a) 同意 / 部分同意 / 不同意 + 理由; (b) 实验 / 引用补充。'
+    ),
+    '',
+    '## 论文修改 / Changes to Manuscript',
+    ctx.body?.changes ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符。'
+        : '> - Section X 增加 Y 实验\n> - Figure Z 重画\n> - 引用补充 W'
+    ),
+    '',
+    '## 风险',
+    proposal.risk || '_(未声明)_',
+    '',
+    '## 下一步',
+    ctx.dryRun
+      ? '- [ ] 配置 LLM key 让 Designer 用真 LLM 生成 reviewer_comments / responses / changes'
+      : '- [ ] 对每条 review 写 response → 修改论文 → 上传 rebuttal',
+    '',
+  ];
+  return sections.join('\n');
+}
+
+/**
  * formatExperimentMarkdown(proposal, ctx) — experiment_plan 类型的 markdown 实验方案。
  * 纯函数;结构:hypothesis / method / dataset / metrics / risks / next-steps。
  * 字段 hypothesis / method / dataset / metrics 接受 ctx.body 注入(LLM 真跑时覆盖)。
@@ -1328,21 +1413,37 @@ export async function writeDeliverable(proposal, ctx = {}) {
   if (proposal.type === 'create_draft') { subdir = 'drafts'; formatter = formatDraftMarkdown; }
   else if (proposal.type === 'literature_review') { subdir = 'reviews'; formatter = formatReviewMarkdown; }
   else if (proposal.type === 'experiment_plan') { subdir = 'experiments'; formatter = formatExperimentMarkdown; }
+  else if (proposal.type === 'add_paper') { subdir = 'paper_additions'; formatter = formatAddPaperMarkdown; }
+  else if (proposal.type === 'rebuttal') { subdir = 'rebuttals'; formatter = formatRebuttalMarkdown; }
   else return { written: false, path: null, kind: null, reason: `unsupported type ${proposal.type}` };
 
   const round = ctx.round ?? 0;
   const idx = ctx.idx ?? 0;
-  const prefix = subdir === 'drafts' ? 'draft' : subdir === 'reviews' ? 'review' : 'exp';
+  const prefixByType = {
+    drafts: 'draft',
+    reviews: 'review',
+    experiments: 'exp',
+    paper_additions: 'paper',
+    rebuttals: 'rebuttal',
+  };
+  const kindByType = {
+    drafts: 'draft',
+    reviews: 'review',
+    experiments: 'experiment',
+    paper_additions: 'paper_addition',
+    rebuttals: 'rebuttal',
+  };
+  const prefix = prefixByType[subdir];
   const dir = join('archive', sid, subdir);
   const file = join(dir, `${prefix}_r${String(round).padStart(3, '0')}_${idx}.md`);
   await mkdir(dir, { recursive: true });
   // 幂等:文件已存在不覆盖
   if (existsSync(file)) {
-    return { written: false, path: file, kind: subdir === 'drafts' ? 'draft' : subdir === 'reviews' ? 'review' : 'experiment', skipped: true };
+    return { written: false, path: file, kind: kindByType[subdir], skipped: true };
   }
   const content = formatter(proposal, ctx);
   await writeFile(file, content);
-  return { written: true, path: file, kind: subdir === 'drafts' ? 'draft' : subdir === 'reviews' ? 'review' : 'experiment', skipped: false };
+  return { written: true, path: file, kind: kindByType[subdir], skipped: false };
 }
 
 async function modifierCLI(verdicts, proposals, input, dryRun) {
@@ -1357,11 +1458,10 @@ async function modifierCLI(verdicts, proposals, input, dryRun) {
       continue;
     }
     if (v.decision === 'promoted' || v.decision === 'candidate') {
-      // 真写 deliverable:create_draft / literature_review / experiment_plan
-      // → archive/<sid>/{drafts,reviews,experiments}/*.md
-      // add_paper / rebuttal → 暂时仍走 archive_round_summary
+      // 真写 deliverable:5 种 ProposalType 全覆盖
+      // → archive/<sid>/{drafts,reviews,experiments,paper_additions,rebuttals}/*.md
       let deliverableResult = null;
-      if (p.type === 'create_draft' || p.type === 'literature_review' || p.type === 'experiment_plan') {
+      if (['create_draft', 'literature_review', 'experiment_plan', 'add_paper', 'rebuttal'].includes(p.type)) {
         const idx = writeIdxByType.get(p.type) ?? 0;
         writeIdxByType.set(p.type, idx + 1);
         try {
@@ -1379,9 +1479,13 @@ async function modifierCLI(verdicts, proposals, input, dryRun) {
       applied.push({
         id: `m_${Date.now()}_${applied.length}`,
         kind: deliverableResult?.written
-          ? (deliverableResult.kind === 'draft' ? 'write_draft_md'
-              : deliverableResult.kind === 'review' ? 'write_review_md'
-              : 'write_experiment_md')
+          ? ({
+              draft: 'write_draft_md',
+              review: 'write_review_md',
+              experiment: 'write_experiment_md',
+              paper_addition: 'write_paper_addition_md',
+              rebuttal: 'write_rebuttal_md',
+            }[deliverableResult.kind] ?? 'archive_round_summary')
           : (deliverableResult?.skipped
               ? 'deliverable_already_exists'
               : 'archive_round_summary'),

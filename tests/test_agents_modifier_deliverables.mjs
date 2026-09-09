@@ -241,12 +241,13 @@ describe('writeDeliverable', () => {
     assert.ok(existsSync(r.path));
   });
 
-  it('unsupported type → returns reason, written=false', async () => {
-    const r = await writeDeliverable(makeProposal({ type: 'add_paper' }), {
+  it('truly unsupported type → returns reason, written=false', async () => {
+    // iter #38 加了 add_paper / rebuttal 路由,改用 'made_up_type' 测 unsupported
+    const r = await writeDeliverable(makeProposal({ type: 'made_up_type' }), {
       session_id: 'wtest03', round: 1, idx: 0,
     });
     assert.equal(r.written, false);
-    assert.match(r.reason, /unsupported type add_paper/);
+    assert.match(r.reason, /unsupported type made_up_type/);
   });
 
   it('missing session_id → returns reason, written=false', async () => {

@@ -220,14 +220,10 @@ describe('writeDeliverable experiment_plan routing', () => {
     assert.ok(b.path.endsWith('exp_r001_1.md'));
   });
 
-  it('add_paper / rebuttal still unsupported (writeDeliverable returns reason)', async () => {
-    const r1 = await writeDeliverable({ type: 'add_paper' }, { session_id: 'exp05', round: 1 });
-    assert.equal(r1.written, false);
-    assert.match(r1.reason, /unsupported type add_paper/);
-
-    const r2 = await writeDeliverable({ type: 'rebuttal' }, { session_id: 'exp05', round: 1 });
-    assert.equal(r2.written, false);
-    assert.match(r2.reason, /unsupported type rebuttal/);
+  it('made-up type still unsupported (writeDeliverable returns reason)', async () => {
+    const r = await writeDeliverable({ type: 'made_up_type' }, { session_id: 'exp05', round: 1 });
+    assert.equal(r.written, false);
+    assert.match(r.reason, /unsupported type made_up_type/);
   });
 });
 
