@@ -57,6 +57,7 @@ function parseArgs(argv) {
     else if (a === '--last') out.last = Number(argv[++i]);
     else if (a === '--new-session') out.newSession = argv[++i];
     else if (a === '--no-run') out.noRun = true;
+    else if (a === '--diff') out.diff = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -89,6 +90,10 @@ if (args.help) {
                      --rounds N to immediately run N rounds on the new session.
                      Use --no-run to skip the round run.
   --no-run           With --new-session, only create the dir + meta (skip rounds)
+  --diff             Compare two rounds of a session (use with --session ID
+                     and two positional round numbers). Outputs proposals
+                     added/removed/changed + score delta + gate decision
+                     transitions. JSON via --json.
   --help             Show this help`);
   process.exit(0);
 }
@@ -416,6 +421,174 @@ function parseScoreCritique(raw) {
 function clampScore(s) {
   if (!Number.isFinite(s)) return 5;
   return Math.max(0, Math.min(10, Math.round(s)));
+}
+
+// ---------------------------------------------------------------------------
+// --diff 模式:两 round diff (added / removed / changed / score delta / gate transition)
+// ---------------------------------------------------------------------------
+
+/**
+ * diffRounds(roundA, roundB) — 纯函数,比较两个 RoundRecord。
+ * 匹配维度:proposal.id(LLM 可能在重生成时给不同 id,所以 id 不匹配即视为 added/removed)。
+ * 输出:
+ *   {
+ *     roundA, roundB,
+ *     added:     [{ id, title, type, score, decision }]   // 只在 B 里
+ *     removed:   [{ id, title, type, score, decision }]   // 只在 A 里
+ *     changed:   [{ id, title, type, scoreA, scoreB, scoreDelta,
+ *                   decisionA, decisionB, decisionChange }]
+ *     unchanged: [...]                                     // 在两边 + score/decision 都相同
+ *     stats: { proposalsA, proposalsB, avgScoreA, avgScoreB,
+ *              avgScoreDelta, promotedA, promotedB }
+ *   }
+ */
+export function diffRounds(roundA, roundB) {
+  const proposalsA = new Map((roundA?.designer?.proposals ?? []).map((p) => [p.id, p]));
+  const proposalsB = new Map((roundB?.designer?.proposals ?? []).map((p) => [p.id, p]));
+
+  const scoreA = new Map((roundA?.feedback?.critiques ?? []).map((c) => [c.proposal_id, c]));
+  const scoreB = new Map((roundB?.feedback?.critiques ?? []).map((c) => [c.proposal_id, c]));
+  const gateA = new Map((roundA?.gate?.verdicts ?? []).map((v) => [v.proposal_id, v]));
+  const gateB = new Map((roundB?.gate?.verdicts ?? []).map((v) => [v.proposal_id, v]));
+
+  const added = [];
+  const removed = [];
+  const changed = [];
+  const unchanged = [];
+
+  for (const [id, pB] of proposalsB) {
+    if (!proposalsA.has(id)) {
+      added.push({
+        id,
+        title: pB.title,
+        type: pB.type,
+        score: scoreB.get(id)?.total ?? null,
+        decision: gateB.get(id)?.decision ?? null,
+      });
+      continue;
+    }
+    const sA = scoreA.get(id);
+    const sB = scoreB.get(id);
+    const gA = gateA.get(id)?.decision ?? null;
+    const gB = gateB.get(id)?.decision ?? null;
+    // NaN-safe: non-number total → null(而非 'bad' / NaN)
+    const numA = sA ? Number(sA.total) : NaN;
+    const numB = sB ? Number(sB.total) : NaN;
+    const validA = Number.isFinite(numA) ? numA : null;
+    const validB = Number.isFinite(numB) ? numB : null;
+    const scoreDelta = validA != null && validB != null ? Math.round((validB - validA) * 100) / 100 : null;
+    // scoreChanged:两侧都存在且数值不同(invalid → valid 也算 changed)
+    const scoreChanged = sA && sB && validA !== validB;
+    const gateChanged = gA !== gB;
+    const entry = {
+      id,
+      title: pB.title ?? proposalsA.get(id)?.title,
+      type: pB.type ?? proposalsA.get(id)?.type,
+      scoreA: validA,
+      scoreB: validB,
+      scoreDelta,
+      decisionA: gA,
+      decisionB: gB,
+      decisionChange: gateChanged ? { from: gA, to: gB } : null,
+    };
+    if (scoreChanged || gateChanged) changed.push(entry);
+    else unchanged.push(entry);
+  }
+
+  for (const [id, pA] of proposalsA) {
+    if (!proposalsB.has(id)) {
+      removed.push({
+        id,
+        title: pA.title,
+        type: pA.type,
+        score: scoreA.get(id)?.total ?? null,
+        decision: gateA.get(id)?.decision ?? null,
+      });
+    }
+  }
+
+  // 排序:scoreDelta 绝对值大的优先,便于用户看到"波动最大的 proposal"
+  changed.sort((a, b) => Math.abs(b.scoreDelta ?? 0) - Math.abs(a.scoreDelta ?? 0));
+
+  const avgOf = (m) => (m.size ? [...m.values()].reduce((s, c) => s + (Number(c.total) || 0), 0) / m.size : 0);
+  const avgA = avgOf(scoreA);
+  const avgB = avgOf(scoreB);
+
+  return {
+    roundA: roundA?.round ?? null,
+    roundB: roundB?.round ?? null,
+    added,
+    removed,
+    changed,
+    unchanged,
+    stats: {
+      proposalsA: proposalsA.size,
+      proposalsB: proposalsB.size,
+      avgScoreA: Math.round(avgA * 100) / 100,
+      avgScoreB: Math.round(avgB * 100) / 100,
+      avgScoreDelta: Math.round((avgB - avgA) * 100) / 100,
+      promotedA: roundA?.gate?.promoted?.length ?? 0,
+      promotedB: roundB?.gate?.promoted?.length ?? 0,
+    },
+  };
+}
+
+/**
+ * formatDiffText(diff) — 把 diffRounds 输出渲染成 stdout 文本。
+ */
+export function formatDiffText(diff) {
+  const lines = [];
+  lines.push(`🔄 Round ${diff.roundA} → Round ${diff.roundB}`);
+  const sign = diff.stats.avgScoreDelta >= 0 ? '+' : '';
+  lines.push(
+    `Stats: avg score ${diff.stats.avgScoreA} → ${diff.stats.avgScoreB} (Δ ${sign}${diff.stats.avgScoreDelta}); promoted ${diff.stats.promotedA} → ${diff.stats.promotedB}; proposals ${diff.stats.proposalsA} → ${diff.stats.proposalsB}`,
+  );
+  if (diff.added.length) {
+    lines.push('');
+    lines.push(`➕ Added (${diff.added.length}):`);
+    for (const p of diff.added) {
+      lines.push(`  + ${p.title}  [${p.type}]  score=${p.score ?? '?'}, decision=${p.decision ?? '?'}`);
+    }
+  }
+  if (diff.removed.length) {
+    lines.push('');
+    lines.push(`➖ Removed (${diff.removed.length}):`);
+    for (const p of diff.removed) {
+      lines.push(`  - ${p.title}  [${p.type}]  was score=${p.score ?? '?'}, was decision=${p.decision ?? '?'}`);
+    }
+  }
+  if (diff.changed.length) {
+    lines.push('');
+    lines.push(`🔁 Changed (${diff.changed.length}):`);
+    for (const p of diff.changed) {
+      const sDelta = p.scoreDelta != null ? `Δscore=${p.scoreDelta >= 0 ? '+' : ''}${p.scoreDelta}` : 'Δscore=?';
+      const gChange = p.decisionChange ? `decision ${p.decisionChange.from} → ${p.decisionChange.to}` : '';
+      lines.push(`  ~ ${p.title}  [${p.type}]  ${sDelta}${gChange ? ', ' + gChange : ''}`);
+    }
+  }
+  if (diff.unchanged.length) {
+    lines.push('');
+    lines.push(`✓ Unchanged (${diff.unchanged.length})`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * loadDiff(sessionId, roundA, roundB) — IO wrapper,读 archive/<sid>/rounds/round_<A|B>.json。
+ * 找不到 roundA / roundB → throws with descriptive error。
+ */
+async function loadDiff(sessionId, roundA, roundB) {
+  const files = await listExistingRounds(sessionId);
+  const byRound = new Map();
+  for (const f of files) {
+    const m = f.match(/round_(\d+)\.json$/);
+    if (m) byRound.set(Number(m[1]), f);
+  }
+  if (!byRound.has(roundA)) throw new Error(`round ${roundA} not found in archive/${sessionId}/rounds/`);
+  if (!byRound.has(roundB)) throw new Error(`round ${roundB} not found in archive/${sessionId}/rounds/`);
+  const recA = JSON.parse(await readFile(byRound.get(roundA), 'utf8'));
+  const recB = JSON.parse(await readFile(byRound.get(roundB), 'utf8'));
+  return diffRounds(recA, recB);
 }
 
 // ---------------------------------------------------------------------------
@@ -1040,6 +1213,33 @@ async function main() {
       if (report.rounds === 0) {
         // exit 0 表示"跑成功了但无内容";调用方可用 --json + parse 区分
       }
+    }
+    return;
+  }
+
+  // 模式 0.5: --diff (两 round diff,无 LLM 调用)
+  if (args.diff) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --diff requires --session ID');
+      process.exit(2);
+    }
+    const positions = args._.map((x) => Number(x)).filter((n) => Number.isFinite(n));
+    if (positions.length < 2) {
+      console.error('[error] --diff requires two positional round numbers, e.g. --diff 1 3');
+      process.exit(2);
+    }
+    const [roundA, roundB] = positions;
+    try {
+      const diff = await loadDiff(sessionId, roundA, roundB);
+      if (args.json) {
+        console.log(JSON.stringify({ sessionId, ...diff }, null, 2));
+      } else {
+        console.log(formatDiffText(diff));
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
     }
     return;
   }

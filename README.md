@@ -35,6 +35,7 @@
 
 ## 🆕 最近更新
 
+- **2026-09-09** 🔄 两轮 `--diff` 对比模式（iter #33）：CLI 新增 `--diff --session SID <A> <B>`,positional 传两个 round 数字;`diffRounds(recA, recB)` 纯函数输出 `added` / `removed` / `changed` / `unchanged` 四组 proposals + stats(avg score delta / promoted delta / proposals 数量变化),`changed` 按 |scoreDelta| 倒序展示波动最大的 proposal;支持 `--json` 机器读;`formatDiffText` 渲染 emoji 分区;`loadDiff(sessionId, A, B)` IO wrapper 找不到 round 时 exit 2 + 清晰错误;`tests/test_agents_diff_cli.mjs` 14 个 case 全过。注意 diff 按 `proposal.id` 匹配,stub LLM 每轮生成新 random id 时 diff 显示全 add+remove,真实 LLM 跑出稳定 id 才有意义(后续可加 title 模糊匹配 fallback)。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
 - **2026-09-09** ✍️ Modifier 真写 deliverable `.md`(iter #32)：CLI modifier 当 proposal 类型是 `create_draft` 或 `literature_review` 且 gate 决策为 `promoted` / `candidate` 时,真把 markdown 写到 `archive/<sid>/{drafts,reviews}/<type>_r<NNN>_<idx>.md`(frontmatter 含 session_id/round/decision/created_at/dry_run/related_papers/tags + 动机 / 证据 / 风险 / 草稿正文 sections);dry-run 正文带 ⚠️ 占位符提示,LLM 真跑可通过 `ctx.body` 注入真实内容;同 (round, idx) 二次调用幂等不覆盖;`formatDraftMarkdown` / `formatReviewMarkdown` / `writeDeliverable` 是 export 纯函数 / 异步 IO,`tests/test_agents_modifier_deliverables.mjs` 22 个 case 全过。从此 CLI 不再只是"观察工具",每 round 都有真 git-trackable 的草稿 / 综述产出。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
 - **2026-09-09** 🌱 多智能体 `--new-session` 引导模式：`astro-src/scripts/agents-run.mjs` 新增 `--new-session "<GOAL>" [--no-run] [--rounds N]`,从目标字符串用 sha256(goal+timestamp)[:8] 派生 8 字符 hex sid,自动创建 `archive/<sid>/{meta.json, rounds/}` 并 stdout 输出 sid,可选立即跑 N 轮;`createSession` 幂等(已存在 meta.json 不覆盖),`generateSessionId` / `createSession` 是 export 的纯函数 + 异步 IO 便于测试;`tests/test_agents_new_session_cli.mjs` 21 个 case 全过。从此无需预先准备 `archive/<sid>/` 即可上手 CLI——本地新用户用一条 `--new-session` 就能 bootstrap。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
 - **2026-09-09** 🔍 多智能体 `--status` 模式 + 跨平台 main guard 修复：`astro-src/scripts/agents-run.mjs` 新增 `--status [--session ID] [--json] [--last N]` inspect-only 模式,纯读已有 `archive/<sid>/rounds/*.json` 输出 rounds 数 / avg score / apply rate / proposal type mix / gate histogram / top Elo proposals / recent rounds 表,无 LLM 调用、无文件写入;`buildStatusReport` / `formatStatusReportText` 拆为 export 纯函数,`tests/test_agents_status_cli.mjs` 18 个 case 全过;顺手修一个 Windows 下 main 永远不跑的 pre-existing bug(`import.meta.url === file://${argv[1]}` 在 Windows 上字符串永远不等,改 `realpathSync` 双端归一化跨平台比较)。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
@@ -750,6 +751,10 @@ node astro-src/scripts/agents-run.mjs --new-session "多智能体协作研究 RL
 node astro-src/scripts/agents-run.mjs --new-session "deliv demo" --rounds 1 --dry-run --preset aggressive
 ls archive/<sid>/drafts/   # create_draft 类型
 ls archive/<sid>/reviews/  # literature_review 类型
+
+# 两轮 diff:看 proposals added / removed / changed + score delta + decision 变迁
+node astro-src/scripts/agents-run.mjs --diff --session my-research 1 3
+node astro-src/scripts/agents-run.mjs --diff --session my-research 1 3 --json
 ```
 
 `--new-session` 用 sha256(goal + timestamp)[:8] 派生 8 字符 sid(同时辰同 goal 幂等,可重试);`createSession` 幂等,二次调用若 meta.json 已存在则跳过,goal 不被覆盖。继续一个旧 session 用 `--session <sid>` 而不是 `--new-session`。`generateSessionId` / `createSession` 是 export 纯函数 + 异步 IO,便于测试。
@@ -757,6 +762,8 @@ ls archive/<sid>/reviews/  # literature_review 类型
 `--status` 输出 rounds 数、first/last activity、avg score、apply rate、proposal type mix、gate histogram、top Elo proposals、recent rounds 表;`--json` 给机器读,`--last N` 限制 top-elo/recent 数量(默认 5)。`buildStatusReport` / `formatStatusReportText` 是 export 的纯函数,便于测试。
 
 **Modifier 真写 deliverables(iter #32)**:当 proposal 类型是 `create_draft` 或 `literature_review` 且 gate 决策是 `promoted` / `candidate` 时,Modifier 真把 markdown 写到 `archive/<sid>/{drafts,reviews}/<type>_r<NNN>_<idx>.md`(frontmatter + 动机 / 证据 / 风险 / 正文占位符)。dry-run 时正文带 ⚠️ DRY-RUN 占位符;LLM 真跑可通过 `ctx.body` 注入真实内容。幂等:同 (round, idx) 二次调用不覆盖。`formatDraftMarkdown` / `formatReviewMarkdown` / `writeDeliverable` 是 export 纯函数 / 异步 IO,`tests/test_agents_modifier_deliverables.mjs` 22 个 case 全过。
+
+**两轮 diff(iter #33)**:`--diff --session SID <A> <B>`(两个 round 数字作 positional arg)比较同 session 两 round 的 proposals added / removed / changed + score delta + decision transition(gate 桶变化);changed 按 |scoreDelta| 倒序展示波动最大的 proposal;`--json` 输出机器可读格式;找不到 round 时 exit 2 + 清晰错误信息。`diffRounds` / `formatDiffText` / `loadDiff` 是 export 纯函数 / 异步 IO,`tests/test_agents_diff_cli.mjs` 14 个 case 全过。**注意**:diff 按 proposal.id 匹配;stub LLM 每轮生成新 random id 所以 diff 看起来都是 added+removed,真实 LLM 跑出稳定 id 时才有意义(后续 iter 可加 title 模糊匹配作为 fallback)。
 
 每 round 落 `archive/<session>/rounds/round_<NNN>.json`(RoundRecord 含 designer/feedback/gate/modifier 4 段),session 结束写 `digest_<YYYYMMDD>.md`(git-trackable,人类可读)。
 
