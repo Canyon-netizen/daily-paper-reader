@@ -18,6 +18,7 @@ import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS = [
+  { name: 'check-imports', cmd: 'node', args: [join(HERE, 'check-import-depth.mjs')] },
   { name: 'arxiv-index', cmd: 'node', args: [join(HERE, 'build-arxiv-index.mjs')] },
   { name: 'copy-docs', cmd: 'node', args: [join(HERE, 'copy-docs-assets.mjs')] },
   { name: 'search-corpus', cmd: 'node', args: [join(HERE, 'build-search-corpus.mjs')] },
