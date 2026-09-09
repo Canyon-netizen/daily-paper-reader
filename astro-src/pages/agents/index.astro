@@ -200,7 +200,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       <p class="agents-status-text" id="agents-status-text">就绪</p>
       <p class="agents-status-candidates muted" id="agents-status-candidates" hidden></p>
       <p class="muted" style="margin-top:0.25rem; font-size:0.85rem">
-        提示:<kbd>⌘/Ctrl + Enter</kbd> 跑一轮 · <kbd>⌘/Ctrl + .</kbd> 停止 · <kbd>?</kbd> 看帮助
+        提示:<kbd>⌘/Ctrl + Enter</kbd> 跑一轮 · <kbd>⌘/Ctrl + .</kbd> 停止 · <kbd>n</kbd> 跳到 session id · <kbd>e</kbd> 导出 · <kbd>d</kbd> 复制 · <kbd>/</kbd> 搜 · <kbd>?</kbd> 看帮助
       </p>
     </section>
 
@@ -2009,69 +2009,210 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     refresh();
 
     // ---------------------------------------------------------------------
-    // 键盘快捷键
-    //   Cmd/Ctrl + Enter → 跑一轮
-    //   Cmd/Ctrl + .     → 停止(与 abort 按钮等价)
-    //   ?                → 显示快捷键帮助
-    // 注:在 input/textarea 里按下时不要拦截,避免抢用户的输入
+    // 键盘快捷键 (iter #11 + iter #26 扩展)
+    //   ⌘/Ctrl + Enter      → 跑一轮
+    //   ⌘/Ctrl + Shift+Enter → 自动迭代开/关
+    //   ⌘/Ctrl + .           → 停止
+    //   x                     → 停止(无修饰键)
+    //   n                     → 聚焦 session-id 输入框
+    //   e                     → 导出当前 session
+    //   r                     → 生成实验报告
+    //   d                     → 复制 session
+    //   t                     → 切换 auto-iterate checkbox
+    //   /                     → 聚焦搜索框
+    //   ?                     → 显示 / 隐藏帮助面板
+    //   Escape                → 关闭帮助面板
+    // 注:在 input/textarea/select/contentEditable 里按下时不要拦截
     // ---------------------------------------------------------------------
-    document.addEventListener('keydown', (e) => {
-      const t = e.target as HTMLElement | null;
-      const tag = t?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return;
-      const mod = e.metaKey || e.ctrlKey;
+    type Shortcut = { spec: string; desc: string; category: string; run: () => void };
 
-      if (mod && e.key === 'Enter') {
-        e.preventDefault();
-        $<HTMLButtonElement>('agents-run-btn').click();
-        return;
+    function isMac(): boolean {
+      return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+    }
+
+    // 解析 spec -> { mod, shift, alt, key }
+    function parseShortcutSpec(spec: string): { mod: boolean; shift: boolean; alt: boolean; key: string } {
+      const parts = spec.split('+').map((s) => s.trim());
+      const out = { mod: false, shift: false, alt: false, key: '' };
+      for (const p of parts) {
+        if (p === '⌘' || p === 'Ctrl' || p === 'Cmd' || p === 'Mod') out.mod = true;
+        else if (p === 'Shift') out.shift = true;
+        else if (p === 'Alt' || p === 'Option') out.alt = true;
+        else if (p === 'Esc' || p === 'Escape') out.key = 'Escape';
+        else out.key = p;
       }
-      if (mod && e.key === '.') {
-        e.preventDefault();
-        const btn = $<HTMLButtonElement>('agents-abort-btn');
-        if (!btn.hidden) btn.click();
-        return;
-      }
-      if (e.key === '?' && !mod) {
-        e.preventDefault();
-        toggleShortcutHelp();
-        return;
+      return out;
+    }
+
+    function formatShortcutKey(spec: string, mac: boolean): string {
+      const p = parseShortcutSpec(spec);
+      const parts: string[] = [];
+      if (p.mod) parts.push(mac ? '⌘' : 'Ctrl');
+      if (p.shift) parts.push('Shift');
+      if (p.alt) parts.push(mac ? '⌥' : 'Alt');
+      parts.push(p.key);
+      return parts.join(mac ? ' ' : '+');
+    }
+
+    function shouldIgnoreShortcutTarget(e: KeyboardEvent): boolean {
+      const t = e.target as HTMLElement | null;
+      if (!t || !t.tagName) return false;
+      const tag = String(t.tagName).toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return true;
+      if ((t as HTMLElement).isContentEditable) return true;
+      return false;
+    }
+
+    function matchesShortcutSpec(e: KeyboardEvent, spec: string): boolean {
+      const p = parseShortcutSpec(spec);
+      const hasMod = e.metaKey || e.ctrlKey;
+      if (p.mod !== hasMod) return false;
+      if (p.shift !== e.shiftKey) return false;
+      if (p.alt !== e.altKey) return false;
+      return e.key === p.key;
+    }
+
+    // 单字母 → 大小写不敏感(忽略 shift)
+    function matchesPlainLetter(e: KeyboardEvent, letter: string): boolean {
+      return !e.metaKey && !e.ctrlKey && !e.altKey
+        && e.key.toLowerCase() === letter.toLowerCase();
+    }
+
+    const shortcutDefs: Shortcut[] = [
+      {
+        spec: '⌘+Enter', desc: '跑一轮', category: 'Run',
+        run: () => $<HTMLButtonElement>('agents-run-btn').click(),
+      },
+      {
+        spec: '⌘+Shift+Enter', desc: '开始 / 停止自动迭代', category: 'Run',
+        run: () => {
+          const cb = $<HTMLInputElement>('agents-auto-iterate');
+          cb.checked = !cb.checked;
+          cb.dispatchEvent(new Event('change'));
+          showToast(cb.checked ? '🔁 自动迭代已开启' : '⏸ 自动迭代已关闭', 'info');
+        },
+      },
+      {
+        spec: 'x', desc: '停止当前 round', category: 'Run',
+        run: () => {
+          const btn = $<HTMLButtonElement>('agents-abort-btn');
+          if (!btn.hidden) {
+            btn.click();
+          } else {
+            showToast('当前没有 round 在跑', 'info');
+          }
+        },
+      },
+      {
+        spec: 'n', desc: '聚焦 session-id 输入框', category: 'Navigate',
+        run: () => {
+          $<HTMLInputElement>('agents-session-id').focus();
+          $<HTMLInputElement>('agents-session-id').select();
+        },
+      },
+      {
+        spec: 'e', desc: '导出当前 session', category: 'Export',
+        run: () => downloadCurrentSession(),
+      },
+      {
+        spec: 'r', desc: '生成实验报告', category: 'Export',
+        run: () => downloadExperimentReport(),
+      },
+      {
+        spec: 'd', desc: '复制 session', category: 'Session',
+        run: () => duplicateCurrentSession(),
+      },
+      {
+        spec: 't', desc: '切换 auto-iterate 开关', category: 'Run',
+        run: () => {
+          const cb = $<HTMLInputElement>('agents-auto-iterate');
+          cb.checked = !cb.checked;
+          cb.dispatchEvent(new Event('change'));
+          showToast(cb.checked ? '🔁 自动迭代已开启' : '⏸ 自动迭代已关闭', 'info');
+        },
+      },
+      {
+        spec: '/', desc: '聚焦搜索框', category: 'Navigate',
+        run: () => {
+          const search = $<HTMLInputElement>('agents-search');
+          if (search) {
+            search.focus();
+            search.select();
+          } else {
+            showToast('搜索框未找到', 'warning');
+          }
+        },
+      },
+      {
+        spec: '?', desc: '显示 / 隐藏这个帮助', category: 'Help',
+        run: () => toggleShortcutHelp(),
+      },
+      {
+        spec: 'Escape', desc: '关闭弹窗', category: 'Help',
+        run: () => {
+          const dialog = document.getElementById('agents-shortcut-help');
+          if (dialog) dialog.remove();
+        },
+      },
+    ];
+
+    document.addEventListener('keydown', (e) => {
+      if (shouldIgnoreShortcutTarget(e)) return;
+      for (const sc of shortcutDefs) {
+        const spec = parseShortcutSpec(sc.spec);
+        const isSingleLetter = spec.key.length === 1 && !spec.mod;
+        const matched = isSingleLetter
+          ? matchesPlainLetter(e, spec.key)
+          : matchesShortcutSpec(e, sc.spec);
+        if (matched) {
+          e.preventDefault();
+          sc.run();
+          return;
+        }
       }
     });
 
-    function toggleShortcutHelp() {
-      let dialog = document.getElementById('agents-shortcut-help');
-      if (dialog) {
-        dialog.remove();
-        return;
+    function renderShortcutHelpHtml(): string {
+      const mac = isMac();
+      const grouped = new Map<string, Shortcut[]>();
+      for (const s of shortcutDefs) {
+        if (!grouped.has(s.category)) grouped.set(s.category, []);
+        grouped.get(s.category)!.push(s);
       }
-      dialog = document.createElement('div');
+      const catOrder = ['Run', 'Session', 'Export', 'Navigate', 'Help'];
+      let html = '<h3>⌨️ 键盘快捷键</h3>';
+      html += '<table class="agents-shortcut-table">';
+      for (const cat of catOrder) {
+        const items = grouped.get(cat);
+        if (!items) continue;
+        html += `<tr class="agents-shortcut-cat"><th colspan="2">${cat}</th></tr>`;
+        for (const s of items) {
+          const key = formatShortcutKey(s.spec, mac);
+          const safeDesc = s.desc.replace(/[&<>"']/g, (c) =>
+            ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c),
+          );
+          html += `<tr class="agents-shortcut-row"><th><kbd>${key}</kbd></th><td>${safeDesc}</td></tr>`;
+        }
+      }
+      html += '</table>';
+      html += '<p class="muted agents-shortcut-hint"><small>在 input/textarea 里按不会触发。按 ? 或 Esc 关闭。</small></p>';
+      return html;
+    }
+
+    function toggleShortcutHelp() {
+      const existing = document.getElementById('agents-shortcut-help');
+      if (existing) { existing.remove(); return; }
+      const dialog = document.createElement('div');
       dialog.id = 'agents-shortcut-help';
       dialog.className = 'agents-shortcut-help';
       dialog.setAttribute('role', 'dialog');
       dialog.setAttribute('aria-label', '键盘快捷键');
-      dialog.innerHTML = `
-        <h3>键盘快捷键</h3>
-        <table>
-          <tr><th>${isMac() ? '⌘' : 'Ctrl'} + Enter</th><td>跑一轮(同 ▶️ 跑一轮 按钮)</td></tr>
-          <tr><th>${isMac() ? '⌘' : 'Ctrl'} + .</th><td>停止(同 🛑 停止)</td></tr>
-          <tr><th>?</th><td>显示 / 隐藏这个帮助</td></tr>
-        </table>
-        <p class="muted"><small>在 input/textarea 里按不会触发。</small></p>
-      `;
+      dialog.innerHTML = renderShortcutHelpHtml();
       document.body.appendChild(dialog);
-      // 再次按 ? 或 Esc 关闭
-      const closer = (ev: KeyboardEvent) => {
-        if (ev.key === 'Escape' || ev.key === '?') {
-          dialog!.remove();
-          document.removeEventListener('keydown', closer);
-        }
-      };
-      document.addEventListener('keydown', closer);
-    }
-
-    function isMac(): boolean {
-      return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+      // 点击空白处关闭
+      dialog.addEventListener('click', (e) => {
+        if (e.target === dialog) dialog.remove();
+      });
     }
 
     // ---------------------------------------------------------------------
