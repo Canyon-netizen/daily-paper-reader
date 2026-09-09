@@ -50,6 +50,7 @@ function parseArgs(argv) {
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--digest-only') out.digestOnly = true;
     else if (a === '--resume') out.resume = true;
+    else if (a === '--no-candidates') out.noCandidates = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -71,6 +72,7 @@ if (args.help) {
   --digest-only      Skip round generation; only emit digest
   --resume           Load previous round JSONs into Designer's context
                      (so it doesn't repeat the same proposals)
+  --no-candidates    Skip auto-loading papers from archive/<session>/recommend/
   --preset NAME      conservative | balanced | aggressive
   --help             Show this help`);
   process.exit(0);
@@ -84,11 +86,12 @@ function makeLLMCaller(opts) {
   const baseUrl = opts.baseUrl ?? process.env.LLM_BASE_URL ?? '';
   const apiKey = opts.apiKey ?? process.env.LLM_API_KEY ?? '';
   const model = opts.model ?? process.env.LLM_MODEL ?? 'gpt-4o-mini';
+  const stubCandidates = opts.stubCandidates ?? [];
 
   if (!baseUrl || !apiKey) {
     return {
       async callLLM({ system, user, model: m }) {
-        return stubLLMResponse(system, user, m ?? model);
+        return stubLLMResponse(system, user, m ?? model, stubCandidates);
       },
     };
   }
@@ -121,15 +124,19 @@ function makeLLMCaller(opts) {
   };
 }
 
-function stubLLMResponse(system, user, model) {
-  // Designer stub: 1 条占位 proposal
+function stubLLMResponse(system, user, model, candidates = []) {
+  // Designer stub: 1 条占位 proposal(若有 candidates,把前 5 个 paperId 塞进 evidence,
+  // 让用户看到 candidates 真的接入了)
   if (system.includes('资深科研合作者')) {
+    const seedIds = candidates.slice(0, 5).map((c) => c.arxivId);
     return JSON.stringify([
       {
         type: 'literature_review',
         title: '【stub】 整理已有候选论文到 literature review',
-        rationale: '(LLM 未配置; stub proposal 让 round 跑通骨架)',
-        evidence: { paperIds: [], quotes: [] },
+        rationale: candidates.length
+          ? `(LLM 未配置; stub 用 ${candidates.length} 个候选论文作为 evidence 演示 integration)`
+          : '(LLM 未配置; stub proposal 让 round 跑通骨架)',
+        evidence: { paperIds: seedIds, quotes: [] },
         target: { draftTitle: 'stub review' },
         estimated_effort: 'low',
         risk: 'dry-run',
@@ -196,12 +203,21 @@ async function runOneRoundCLI(roundN, input, caller, preset, dryRun) {
 async function designerCLI(input, caller) {
   const userPrompt = buildDesignerUserPrompt(input);
   const system = DESIGNER_SYSTEM_PROMPT;
+  // 检测是否在 stub 模式(无 LLM key):直接走 candidate-aware stub,
+  // 避免 LLM caller 没有传 candidates 的上下文
+  const isStub = !process.env.LLM_BASE_URL || !process.env.LLM_API_KEY;
+  if (isStub) {
+    return parseProposalsCLI(
+      stubLLMResponse(system, userPrompt, 'stub', input.candidates ?? []),
+      input.round ?? 1,
+    );
+  }
   let raw = '';
   try {
     raw = await caller.callLLM({ system, user: userPrompt, temperature: 0.7, max_tokens: 2048 });
   } catch (err) {
     console.warn('[designer] LLM failed, using stub:', err.message);
-    raw = stubLLMResponse(system, userPrompt, 'stub');
+    raw = stubLLMResponse(system, userPrompt, 'stub', input.candidates ?? []);
   }
   return parseProposalsCLI(raw, input.round ?? 1);
 }
@@ -484,6 +500,41 @@ async function listSessions() {
 }
 
 // ---------------------------------------------------------------------------
+// 从 archive/<session>/recommend/arxiv_papers_*.json 读 candidates
+// ---------------------------------------------------------------------------
+
+export async function loadCandidatesFromArchive(sessionId, maxPapers = 30) {
+  const dir = join('archive', sessionId, 'recommend');
+  if (!existsSync(dir)) return [];
+  let files;
+  try {
+    files = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const paperFiles = files.filter((f) => /^arxiv_papers_.*\.json$/.test(f));
+  if (!paperFiles.length) return [];
+  paperFiles.sort();
+  const latest = paperFiles[paperFiles.length - 1];
+  let raw;
+  try {
+    raw = JSON.parse(await readFile(join(dir, latest), 'utf8'));
+  } catch (err) {
+    console.warn(`[candidates] failed to read ${latest}: ${err.message}`);
+    return [];
+  }
+  const items = [...(raw.deep_dive ?? []), ...(raw.quick_skim ?? [])];
+  return items
+    .slice(0, maxPapers)
+    .map((p) => ({
+      arxivId: p.id,
+      title: p.title,
+      tldr: p.llm_tldr_cn ?? p.llm_tldr_en ?? p.llm_tldr ?? undefined,
+    }))
+    .filter((c) => c.arxivId && c.title);
+}
+
+// ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
 
@@ -511,7 +562,11 @@ async function main() {
     const sessions = await listSessions();
     const maxRounds = args.maxRounds ?? 1;
     for (const sid of sessions) {
-      await runOneSession(sid, caller, { maxRounds, dryRun, preset, resume: !!args.resume });
+      await runOneSession(sid, caller, {
+        maxRounds, dryRun, preset,
+        resume: !!args.resume,
+        noCandidates: !!args.noCandidates,
+      });
     }
     return;
   }
@@ -527,6 +582,7 @@ async function main() {
     dryRun,
     preset,
     resume: !!args.resume,
+    noCandidates: !!args.noCandidates,
   });
 }
 
@@ -542,9 +598,19 @@ async function runOneSession(sessionId, caller, opts) {
     console.log(`  [resume] loaded ${previousRounds.length} previous round summary`);
   }
 
+  // 自动从 archive/<session>/recommend/ 加载 candidates
+  // 除非用户用 --no-candidates 显式关掉
+  let candidates = [];
+  if (!opts.noCandidates) {
+    candidates = await loadCandidatesFromArchive(sessionId, 30);
+    if (candidates.length) {
+      console.log(`  [candidates] loaded ${candidates.length} papers from archive/${sessionId}/recommend/`);
+    }
+  }
+
   const input = {
     project: { id: sessionId, name: sessionId, statement: '(auto)' },
-    candidates: [],
+    candidates,
     user_goal: '(CLI auto-run)',
     round: startRound,
     session_id: sessionId,
@@ -573,7 +639,13 @@ async function runOneSession(sessionId, caller, opts) {
   console.log(`[session ${sessionId}] digest → ${digest}`);
 }
 
-main().catch((err) => {
-  console.error('[fatal]', err);
-  process.exit(1);
-});
+// 仅当作为主入口运行时才跑 main();被 import 时不触发(便于测试)
+import { fileURLToPath } from 'node:url';
+import { argv } from 'node:process';
+
+if (import.meta.url === `file://${argv[1]}`) {
+  main().catch((err) => {
+    console.error('[fatal]', err);
+    process.exit(1);
+  });
+}
