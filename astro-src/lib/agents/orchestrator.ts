@@ -47,6 +47,16 @@ export interface OrchestratorConfig {
   maxRounds?: number;
   tokenBudgetPerRound?: number;
   maxEmptyRounds?: number;
+  /**
+   * Plateau 阈值:最后 N 轮 avg score 标准差 < 此值即认为收敛,停。
+   * 默认 0.3(≈一档 rubric 之差)。关闭传 Infinity。
+   * 触发后 stoppedReason = 'plateau'。
+   */
+  plateauThreshold?: number;
+  /**
+   * Plateau 窗口:看最后几轮的 avg score 来判断 plateau,默认 3。
+   */
+  plateauWindow?: number;
 }
 
 export interface OrchestratorRunOpts {
@@ -58,7 +68,7 @@ export interface OrchestratorRunOpts {
 
 export interface OrchestratorRunResult {
   records: RoundRecord[];
-  stoppedReason: 'completed' | 'max_rounds' | 'empty_streak' | 'error' | 'cancelled';
+  stoppedReason: 'completed' | 'max_rounds' | 'empty_streak' | 'error' | 'cancelled' | 'plateau';
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +84,8 @@ export async function runRounds(
   const maxRounds = config.maxRounds ?? 5;
   const maxEmpty = config.maxEmptyRounds ?? 3;
   const preset = config.gatePreset ?? 'balanced';
+  const plateauThreshold = config.plateauThreshold ?? 0.3;
+  const plateauWindow = config.plateauWindow ?? 3;
 
   const records: RoundRecord[] = [];
   // 初始 previous_rounds 由 caller 注入(常见用法:--resume 模式)
@@ -106,6 +118,29 @@ export async function runRounds(
 
     // 累加本轮摘要,供下一轮 Designer 参考
     prevSummaries = [...prevSummaries, summarizeRound(rec)];
+
+    // -------- 自动收敛检测(plateau):last N 轮 avg score 标准差 < 阈值 --------
+    // 触发条件:
+    //   1. 至少 plateauWindow 轮已完成(不能刚跑 1 轮就判收敛)
+    //   2. 所有被检轮都至少有 critique(no-critique 轮的 avg = 0 会拉低 stdDev 误判)
+    //   3. stdDev(roundAvgScores[-window:]) < plateauThreshold
+    if (
+      isFinite(plateauThreshold)
+      && records.length >= plateauWindow
+      && records.every((r) => r.feedback.critiques.length > 0)
+    ) {
+      const tail = records.slice(-plateauWindow).map((r) => {
+        const cs = r.feedback.critiques;
+        return cs.reduce((a, c) => a + c.total, 0) / cs.length;
+      });
+      const m = tail.reduce((a, b) => a + b, 0) / tail.length;
+      const variance = tail.reduce((a, b) => a + (b - m) ** 2, 0) / tail.length;
+      const stddev = Math.sqrt(variance);
+      if (stddev < plateauThreshold) {
+        stopped = 'plateau';
+        break;
+      }
+    }
 
     if (rec.modifier.applied.length === 0) {
       emptyStreak++;

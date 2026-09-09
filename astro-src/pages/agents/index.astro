@@ -69,6 +69,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           <input id="agents-dry-run" type="checkbox" checked />
           <span>Dry-run (无 LLM 调用)</span>
         </label>
+        <label class="agents-checkbox">
+          <input id="agents-auto-iterate" type="checkbox" />
+          <span title="自动迭代直到 avg score 收敛(连续 N 轮 stdDev &lt; 0.3)或达到上限">🔁 自动迭代到收敛</span>
+        </label>
         <button class="button primary" id="agents-run-btn">▶️ 跑一轮</button>
         <button class="button" id="agents-abort-btn" hidden title="中断当前 round 循环(已完成本轮后立即退出)">🛑 停止</button>
         <a class="button" href="/agents/compare/" title="多会话并排对比">📊 对比</a>
@@ -466,7 +470,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       saveSessionId(sid);
 
       const preset = ($<HTMLSelectElement>('agents-preset')).value as 'conservative' | 'balanced' | 'aggressive';
-      const maxRounds = Number(($<HTMLInputElement>('agents-max-rounds')).value) || 3;
+      const userMaxRounds = Number(($<HTMLInputElement>('agents-max-rounds')).value) || 3;
+      const autoIterate = ($<HTMLInputElement>('agents-auto-iterate')).checked;
+      // auto-iterate:把上限放宽到 50,让 plateau 检测有足够轮次判断收敛
+      const maxRounds = autoIterate ? Math.max(50, userMaxRounds) : userMaxRounds;
       const dryRun = ($<HTMLInputElement>('agents-dry-run')).checked;
 
       const status = $('agents-status');
@@ -477,9 +484,11 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       isRunning = true;
       activeAbort = new AbortController();
       runBtn.disabled = true;
-      runBtn.textContent = '⏳ 跑 round 中...';
+      runBtn.textContent = autoIterate ? '🔁 自动迭代中...' : '⏳ 跑 round 中...';
       abortBtn.hidden = false;
-      statusText.textContent = `跑 round (dry=${dryRun}, preset=${preset})...`;
+      statusText.textContent = autoIterate
+        ? `🔁 自动迭代 (dry=${dryRun}, preset=${preset}, max=${maxRounds}, plateau<0.3)...`
+        : `跑 round (dry=${dryRun}, preset=${preset})...`;
 
       try {
         const cfg = dryRun ? null : readLLMConfig();
@@ -491,7 +500,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         const startRound = existing.length + 1;
 
         const { records, stoppedReason } = await runRounds(
-          { caller, adapter, gatePreset: preset, maxRounds },
+          { caller, adapter, gatePreset: preset, maxRounds, plateauThreshold: autoIterate ? 0.3 : Infinity },
           {
             sessionId: sid,
             input: {
@@ -514,7 +523,9 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         );
 
         saveRounds(sid, [...existing, ...records]);
-        const cancelTag = stoppedReason === 'cancelled' ? ' 🛑 已停止' : '';
+        const cancelTag = stoppedReason === 'cancelled' ? ' 🛑 已停止'
+          : stoppedReason === 'plateau' ? ' 📉 已收敛'
+          : '';
         statusText.textContent = `完成 ${records.length} round(s), stopped: ${stoppedReason}${cancelTag}`;
         refreshSessionPicker();
         refresh();
