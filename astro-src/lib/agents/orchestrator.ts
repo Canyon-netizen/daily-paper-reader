@@ -137,7 +137,9 @@ async function runOneRound(
       model: config.model,
       judgeRounds: 2,
     });
-    tokensUsed = estimateTokens(proposals.length, critiques.length);
+    // 3 persona 评分 + Swiss pair Elo judge(2 轮 × pairs.length 次)
+    const swissPairsCount = proposals.length >= 2 ? Math.floor(proposals.length / 2) : 0;
+    tokensUsed = estimateTokens(proposals.length, critiques.length, swissPairsCount * 2);
   } catch (err) {
     console.warn('[orchestrator] feedback failed, falling back to stub:', err);
     critiques = stubFeedback(proposals);
@@ -169,7 +171,7 @@ async function runOneRound(
     },
     feedback: {
       critiques,
-      judge_calls: critiques.length * 3 + (proposals.length >= 2 ? 2 : 0),
+      judge_calls: critiques.length * 3 + (proposals.length >= 2 ? Math.floor(proposals.length / 2) * 2 : 0),
       total_tokens: tokensUsed,
     },
     gate: {
@@ -204,10 +206,11 @@ function optsSessionId(input: RoundInput): string {
   return input.project.id;
 }
 
-function estimateTokens(proposalsCount: number, critiquesCount: number): number {
+function estimateTokens(proposalsCount: number, critiquesCount: number, judgeCalls: number = 0): number {
   // 粗估:每个 proposal 的 designer 输出 ~ 250 tokens,
-  // 每个 critique(3 persona + 1 judge) ~ 600 tokens
-  return proposalsCount * 250 + critiquesCount * 600;
+  // 每个 critique(3 persona) ~ 600 tokens,
+  // 每个 LLM Elo judge 调用 ~ 300 tokens(2 个 proposal 输入 + JSON 输出)
+  return proposalsCount * 250 + critiquesCount * 600 + judgeCalls * 300;
 }
 
 // ---------------------------------------------------------------------------
