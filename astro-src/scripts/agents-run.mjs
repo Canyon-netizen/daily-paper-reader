@@ -925,10 +925,72 @@ export function formatReviewMarkdown(proposal, ctx = {}) {
 }
 
 /**
+ * formatExperimentMarkdown(proposal, ctx) — experiment_plan 类型的 markdown 实验方案。
+ * 纯函数;结构:hypothesis / method / dataset / metrics / risks / next-steps。
+ * 字段 hypothesis / method / dataset / metrics 接受 ctx.body 注入(LLM 真跑时覆盖)。
+ */
+export function formatExperimentMarkdown(proposal, ctx = {}) {
+  const fm = formatDraftFrontmatter(proposal, ctx);
+  const paperIds = proposal.evidence?.paperIds ?? [];
+  const body = ctx.body ?? null;
+  const sections = [
+    fm,
+    '',
+    `# 🧪 ${proposal.title ?? '(untitled experiment)'}`,
+    '',
+    `> Round ${ctx.round ?? '?'} · ${ctx.decision ?? 'candidate'} · session \`${ctx.session_id ?? 'unknown'}\``,
+    '',
+    '## 假设 / Hypothesis',
+    body?.hypothesis ?? proposal.rationale ?? '_(未提供)_',
+    '',
+    '## 方法 / Method',
+    body?.method ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下生成实验步骤。'
+        : '> 在此区域详细描述实验步骤 / 模型架构 / 训练流程。'
+    ),
+    '',
+    '## 数据集 / Dataset',
+    body?.dataset ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下指定数据集 + 划分方式。'
+        : '> - 数据集:\n> - 划分:train / val / test\n> - 规模:'
+    ),
+    '',
+    '## 评估指标 / Metrics',
+    body?.metrics ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下指定主指标 + 辅助指标。'
+        : '> - 主指标:\n> - 辅助指标:\n> - baseline 对比:'
+    ),
+    '',
+    '## 算力 / Compute',
+    body?.compute ?? (
+      ctx.dryRun
+        ? '> DRY-RUN 占位符;LLM 模式下估算 GPU·h / 内存峰值。'
+        : '> 估算:约 N GPU·h(单卡 A100 / 8×A100 / TPU pod)'
+    ),
+    '',
+    '## 相关论文 / Related Work',
+    paperIds.length ? paperIds.map((id) => `- ${id}`).join('\n') : '- (无)',
+    '',
+    '## 风险 / Risks',
+    proposal.risk || '_(未声明)_',
+    '',
+    '## 下一步',
+    ctx.dryRun
+      ? '- [ ] 配置 LLM key 重跑,Designer 生成完整 method / dataset / metrics'
+      : '- [ ] 细化方法 → 准备数据 → baseline 跑通 → 主实验',
+    '',
+  ];
+  return sections.join('\n');
+}
+
+/**
  * writeDeliverable(proposal, ctx) — 把 proposal 写成真 .md 文件。
- * 路径:archive/<sid>/{drafts,reviews}/<type>_<round>_<idx>.md
+ * 路径:archive/<sid>/{drafts,reviews,experiments}/<type>_<round>_<idx>.md
  * 幂等:文件已存在则不覆盖,返回 skipped=true。
- * 返回:{ written: bool, path: string|null, kind: 'draft'|'review'|null }
+ * 返回:{ written: bool, path: string|null, kind: 'draft'|'review'|'experiment'|null }
  */
 export async function writeDeliverable(proposal, ctx = {}) {
   const sid = ctx.session_id;
@@ -937,20 +999,22 @@ export async function writeDeliverable(proposal, ctx = {}) {
   let formatter = null;
   if (proposal.type === 'create_draft') { subdir = 'drafts'; formatter = formatDraftMarkdown; }
   else if (proposal.type === 'literature_review') { subdir = 'reviews'; formatter = formatReviewMarkdown; }
+  else if (proposal.type === 'experiment_plan') { subdir = 'experiments'; formatter = formatExperimentMarkdown; }
   else return { written: false, path: null, kind: null, reason: `unsupported type ${proposal.type}` };
 
   const round = ctx.round ?? 0;
   const idx = ctx.idx ?? 0;
+  const prefix = subdir === 'drafts' ? 'draft' : subdir === 'reviews' ? 'review' : 'exp';
   const dir = join('archive', sid, subdir);
-  const file = join(dir, `${subdir === 'drafts' ? 'draft' : 'review'}_r${String(round).padStart(3, '0')}_${idx}.md`);
+  const file = join(dir, `${prefix}_r${String(round).padStart(3, '0')}_${idx}.md`);
   await mkdir(dir, { recursive: true });
   // 幂等:文件已存在不覆盖
   if (existsSync(file)) {
-    return { written: false, path: file, kind: subdir === 'drafts' ? 'draft' : 'review', skipped: true };
+    return { written: false, path: file, kind: subdir === 'drafts' ? 'draft' : subdir === 'reviews' ? 'review' : 'experiment', skipped: true };
   }
   const content = formatter(proposal, ctx);
   await writeFile(file, content);
-  return { written: true, path: file, kind: subdir === 'drafts' ? 'draft' : 'review', skipped: false };
+  return { written: true, path: file, kind: subdir === 'drafts' ? 'draft' : subdir === 'reviews' ? 'review' : 'experiment', skipped: false };
 }
 
 async function modifierCLI(verdicts, proposals, input, dryRun) {
@@ -965,11 +1029,11 @@ async function modifierCLI(verdicts, proposals, input, dryRun) {
       continue;
     }
     if (v.decision === 'promoted' || v.decision === 'candidate') {
-      // 真写 deliverable:create_draft / literature_review → archive/<sid>/{drafts,reviews}/*.md
-      // add_paper / experiment_plan / rebuttal → 暂时仍走 archive_round_summary
-      // (等后续 iter 补 experiment_plan / rebuttal 的 writer)
+      // 真写 deliverable:create_draft / literature_review / experiment_plan
+      // → archive/<sid>/{drafts,reviews,experiments}/*.md
+      // add_paper / rebuttal → 暂时仍走 archive_round_summary
       let deliverableResult = null;
-      if (p.type === 'create_draft' || p.type === 'literature_review') {
+      if (p.type === 'create_draft' || p.type === 'literature_review' || p.type === 'experiment_plan') {
         const idx = writeIdxByType.get(p.type) ?? 0;
         writeIdxByType.set(p.type, idx + 1);
         try {
@@ -987,7 +1051,9 @@ async function modifierCLI(verdicts, proposals, input, dryRun) {
       applied.push({
         id: `m_${Date.now()}_${applied.length}`,
         kind: deliverableResult?.written
-          ? (deliverableResult.kind === 'draft' ? 'write_draft_md' : 'write_review_md')
+          ? (deliverableResult.kind === 'draft' ? 'write_draft_md'
+              : deliverableResult.kind === 'review' ? 'write_review_md'
+              : 'write_experiment_md')
           : (deliverableResult?.skipped
               ? 'deliverable_already_exists'
               : 'archive_round_summary'),
