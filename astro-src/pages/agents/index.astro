@@ -77,6 +77,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <button class="button" id="agents-abort-btn" hidden title="中断当前 round 循环(已完成本轮后立即退出)">🛑 停止</button>
         <button class="button" id="agents-duplicate-btn" title="把当前 session 的所有 rounds 复制到新 sid,方便换个 preset/maxRounds 重跑同一基线">📋 复制</button>
         <button class="button" id="agents-export-btn" title="把当前 session + meta 导出为单个 JSON 文件">📦 导出</button>
+        <button class="button" id="agents-report-btn" title="生成单份 markdown 实验报告">📑 报告</button>
         <label class="button" for="agents-import-file" title="从 JSON 文件恢复 session 到 localStorage">
           📥 导入
           <input id="agents-import-file" type="file" accept="application/json,.json" hidden />
@@ -647,6 +648,153 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       };
     }
 
+    // iter #18 — 实验报告 markdown
+    //
+    // 把整个 session 拼成单份 markdown,方便分享/存档。
+    // 跟 JSON 导出互为补充:JSON 给机器读,.md 给人读。
+    function avgScores(r: RoundRecord): number | null {
+      const cs = r.feedback?.critiques ?? [];
+      if (cs.length === 0) return null;
+      return cs.reduce((a, c) => a + c.total, 0) / cs.length;
+    }
+    function avgElo(r: RoundRecord): number | null {
+      const cs = r.feedback?.critiques ?? [];
+      if (cs.length === 0) return null;
+      return cs.reduce((a, c) => a + c.elo, 0) / cs.length;
+    }
+
+    function buildReport(sid: string, meta: { title: string; notes: string; createdAt: number; updatedAt: number }, rounds: RoundRecord[]): string {
+      const title = (meta.title ?? '').trim() || sid;
+      const lines: string[] = [];
+      lines.push(`# ${title}`);
+      lines.push('');
+      if (meta.notes?.trim()) {
+        lines.push(meta.notes.trim());
+        lines.push('');
+      }
+      const createdAt = meta.createdAt ? new Date(meta.createdAt).toISOString() : '—';
+      const updatedAt = meta.updatedAt ? new Date(meta.updatedAt).toISOString() : '—';
+      const totalApplied = rounds.reduce((a, r) => a + (r.modifier?.applied?.length ?? 0), 0);
+      const totalTokens = rounds.reduce((a, r) => a + (r.feedback?.total_tokens ?? 0), 0);
+      lines.push('## 📋 元数据');
+      lines.push('');
+      lines.push(`- **sid**: \`${sid}\``);
+      lines.push(`- **创建**: ${createdAt}`);
+      lines.push(`- **最近编辑**: ${updatedAt}`);
+      lines.push(`- **rounds**: ${rounds.length}`);
+      lines.push(`- **applied 总数**: ${totalApplied}`);
+      lines.push(`- **tokens 估算**: ${totalTokens}`);
+      lines.push('');
+      lines.push('## 📊 per-round 概览');
+      lines.push('');
+      lines.push('| Round | Proposals | Promoted | Applied | Avg Score | Avg Elo | Tokens |');
+      lines.push('|------:|----------:|---------:|--------:|----------:|--------:|-------:|');
+      for (const r of rounds) {
+        const sc = avgScores(r);
+        const elo = avgElo(r);
+        lines.push(`| R${r.round} | ${r.designer?.proposals?.length ?? 0} | ${r.gate?.promoted?.length ?? 0} | ${r.modifier?.applied?.length ?? 0} | ${sc === null ? '—' : sc.toFixed(2)} | ${elo === null ? '—' : elo.toFixed(0)} | ${r.feedback?.total_tokens ?? 0} |`);
+      }
+      lines.push('');
+      lines.push('## 📈 score delta (vs 上轮)');
+      lines.push('');
+      const nonNullDeltas: { round: number; delta: number }[] = [];
+      for (let i = 0; i < rounds.length; i++) {
+        const curr = rounds[i];
+        const prev = i > 0 ? rounds[i - 1] : null;
+        const cs = avgScores(curr);
+        const ps = prev ? avgScores(prev) : null;
+        if (cs !== null && ps !== null) nonNullDeltas.push({ round: curr.round, delta: cs - ps });
+      }
+      if (nonNullDeltas.length > 0) {
+        lines.push('| Round | Δ score |');
+        lines.push('|------:|--------:|');
+        for (const d of nonNullDeltas) {
+          const sign = d.delta > 0 ? '+' : '';
+          lines.push(`| R${d.round} | ${sign}${d.delta.toFixed(2)} |`);
+        }
+        lines.push('');
+      } else {
+        lines.push('_只有一轮,无对比_');
+        lines.push('');
+      }
+      lines.push('## ⭐ 实际写入 (按出现频次)');
+      lines.push('');
+      const appliedCounts = new Map<string, number>();
+      for (const r of rounds) {
+        for (const a of (r.modifier?.applied ?? [])) {
+          const t = a.payload?.title
+            ?? r.designer?.proposals?.find((p) => p.id === a.proposal_id)?.title
+            ?? a.proposal_id;
+          appliedCounts.set(t as string, (appliedCounts.get(t as string) ?? 0) + 1);
+        }
+      }
+      if (appliedCounts.size > 0) {
+        const sorted = [...appliedCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+        for (const [t, n] of sorted) lines.push(`- (${n}×) ${t}`);
+        lines.push('');
+      } else {
+        lines.push('_本 session 无任何写入_');
+        lines.push('');
+      }
+      lines.push('## 📝 详细 rounds');
+      lines.push('');
+      for (const r of rounds) {
+        lines.push(`### Round ${r.round}`);
+        lines.push('');
+        lines.push(`- 时间: ${new Date(r.started_at).toISOString()} → ${new Date(r.finished_at).toISOString()}`);
+        lines.push(`- proposals: ${r.designer?.proposals?.length ?? 0}, applied: ${r.modifier?.applied?.length ?? 0}, skipped: ${r.modifier?.skipped?.length ?? 0}`);
+        const sc = avgScores(r);
+        if (sc !== null) lines.push(`- avg score: ${sc.toFixed(2)}`);
+        if (r.gate) {
+          const buckets = [
+            ['promoted', r.gate.promoted?.length ?? 0],
+            ['candidate', r.gate.candidate?.length ?? 0],
+            ['sketch', r.gate.sketch?.length ?? 0],
+            ['rejected', r.gate.rejected?.length ?? 0],
+          ];
+          lines.push(`- gate: ${buckets.map(([k, n]) => `${k}=${n}`).join(', ')}`);
+        }
+        lines.push('');
+        if (r.modifier?.applied?.length) {
+          lines.push('**Applied**:');
+          for (const a of r.modifier.applied) {
+            const t = a.payload?.title
+              ?? r.designer?.proposals?.find((p) => p.id === a.proposal_id)?.title
+              ?? a.proposal_id;
+            const kind = a.kind ? ` [${a.kind}]` : '';
+            lines.push(`- ${t}${kind}`);
+          }
+          lines.push('');
+        }
+      }
+      return lines.join('\n');
+    }
+
+    function downloadExperimentReport() {
+      if (!currentSessionId) {
+        alert('先选一个 session');
+        return;
+      }
+      const sid = currentSessionId;
+      const rounds = loadRounds(sid);
+      const meta = loadMeta(sid);
+      const md = buildReport(sid, meta, rounds);
+      const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.href = url;
+      a.download = `agents-report-${sid}-${ts}.md`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 100);
+      $('agents-status-text').textContent =
+        `📑 已生成报告 "${sid}" (${rounds.length} rounds, ${md.length} bytes)`;
+    }
+
     function downloadCurrentSession() {
       if (!currentSessionId) {
         alert('先选一个 session');
@@ -727,6 +875,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     function wireExportImport() {
       $('agents-export-btn').addEventListener('click', downloadCurrentSession);
+      $('agents-report-btn').addEventListener('click', downloadExperimentReport);
       $('agents-import-file').addEventListener('change', handleImportFileInput);
     }
 
