@@ -122,6 +122,19 @@ export interface RoundInput {
     draft_count: number;
     last_activity_at?: number;
   };
+  /**
+   * 历史 round 摘要(由 orchestrator / CLI resume 注入)。
+   * Designer 会读取最近 N 轮的 promoted/applied/rejected 标题,
+   * 避免重复提议已做过的动作。
+   */
+  previous_rounds?: PreviousRoundSummary[];
+}
+
+export interface PreviousRoundSummary {
+  round: number;
+  promoted_titles: string[];   // gate 判 promoted 的 proposal 标题
+  applied_titles: string[];    // modifier 实际写入的 proposal 标题
+  rejected_titles: string[];   // gate 判 rejected 的 proposal 标题
 }
 
 export interface RoundRecord {

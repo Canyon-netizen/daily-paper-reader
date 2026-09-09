@@ -16,6 +16,7 @@
 import type {
   Critique,
   GateVerdict,
+  PreviousRoundSummary,
   Proposal,
   RoundInput,
   RoundRecord,
@@ -75,6 +76,8 @@ export async function runRounds(
   const preset = config.gatePreset ?? 'balanced';
 
   const records: RoundRecord[] = [];
+  // 初始 previous_rounds 由 caller 注入(常见用法:--resume 模式)
+  let prevSummaries: PreviousRoundSummary[] = [...(opts.input.previous_rounds ?? [])];
   let emptyStreak = 0;
   let roundN = opts.startRound ?? 1;
   let stopped: OrchestratorRunResult['stoppedReason'] = 'completed';
@@ -82,9 +85,16 @@ export async function runRounds(
   for (let i = 0; i < maxRounds; i++) {
     if (signal?.aborted) { stopped = 'cancelled'; break; }
 
+    // 把累积的 previous_rounds 喂给下一轮的 input
+    const roundInput: RoundInput = {
+      ...opts.input,
+      round: roundN,
+      previous_rounds: prevSummaries,
+    };
+
     let rec: RoundRecord;
     try {
-      rec = await runOneRound(roundN, opts.input, config, adapter, preset);
+      rec = await runOneRound(roundN, roundInput, config, adapter, preset);
     } catch (err) {
       console.error(`[orchestrator] round ${roundN} failed:`, err);
       stopped = 'error';
@@ -93,6 +103,9 @@ export async function runRounds(
 
     records.push(rec);
     if (opts.onRoundComplete) await opts.onRoundComplete(rec);
+
+    // 累加本轮摘要,供下一轮 Designer 参考
+    prevSummaries = [...prevSummaries, summarizeRound(rec)];
 
     if (rec.modifier.applied.length === 0) {
       emptyStreak++;
@@ -199,6 +212,41 @@ function partitionByDecisionLocal(verdicts: GateVerdict[]) {
   const out = { promoted: [] as string[], candidate: [] as string[], sketch: [] as string[], rejected: [] as string[] };
   for (const v of verdicts) out[v.decision].push(v.proposal_id);
   return out;
+}
+
+/**
+ * 把 RoundRecord 压缩成 PreviousRoundSummary,供下一轮 Designer 看到。
+ * 标题按 gate decision + 写入结果分类,避免重复提议已做过的动作。
+ */
+export function summarizeRound(rec: RoundRecord): PreviousRoundSummary {
+  const byId = new Map<string, Proposal>();
+  for (const p of rec.designer.proposals) byId.set(p.id, p);
+
+  const promoted_titles: string[] = [];
+  const rejected_titles: string[] = [];
+  for (const v of rec.gate.verdicts) {
+    const p = byId.get(v.proposal_id);
+    if (!p) continue;
+    if (v.decision === 'promoted') promoted_titles.push(p.title);
+    else if (v.decision === 'rejected') rejected_titles.push(p.title);
+  }
+
+  // 实际写入 = applied 列表里能匹配到 proposal 标题的;落空也算 applied
+  const applied_titles = rec.modifier.applied
+    .map((a) => {
+      const t = a.payload?.title;
+      if (typeof t === 'string' && t) return t;
+      // 用 proposal_id 找标题
+      return byId.get(a.proposal_id)?.title;
+    })
+    .filter((t): t is string => typeof t === 'string' && t.length > 0);
+
+  return {
+    round: rec.round,
+    promoted_titles,
+    applied_titles,
+    rejected_titles,
+  };
 }
 
 function optsSessionId(input: RoundInput): string {

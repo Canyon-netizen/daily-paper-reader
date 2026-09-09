@@ -54,7 +54,7 @@ const DESIGNER_SYSTEM_PROMPT = `你是一位资深科研合作者,正在帮用�
 - 输出必须是合法 JSON 数组,不要 markdown fence`;
 
 function buildUserPrompt(input: RoundInput): string {
-  const { project, candidates, user_goal, project_state } = input;
+  const { project, candidates, user_goal, project_state, previous_rounds } = input;
   const lines: string[] = [];
 
   lines.push(`## Project\n- id: ${project.id}\n- name: ${project.name}\n- statement: ${project.statement ?? '(none)'}`);
@@ -67,6 +67,26 @@ function buildUserPrompt(input: RoundInput): string {
     for (const c of candidates.slice(0, 30)) {
       lines.push(`- ${c.arxivId}: ${c.title}${c.tldr ? ' — ' + c.tldr : ''}`);
     }
+  }
+
+  // 上一轮已做的事 — 让 Designer 避免重复
+  if (previous_rounds && previous_rounds.length) {
+    const recent = previous_rounds.slice(-5); // 只看最近 5 轮,避免 prompt 过长
+    lines.push(`\n## 已跑过的轮次(${previous_rounds.length} 轮,展示最近 ${recent.length})`);
+    for (const prev of recent) {
+      const parts: string[] = [`Round ${prev.round}`];
+      if (prev.promoted_titles.length) {
+        parts.push(`已 promote(动 project): ${prev.promoted_titles.slice(0, 5).join(' | ')}`);
+      }
+      if (prev.applied_titles.length) {
+        parts.push(`已 apply(写入 archive): ${prev.applied_titles.slice(0, 5).join(' | ')}`);
+      }
+      if (prev.rejected_titles.length) {
+        parts.push(`已 reject: ${prev.rejected_titles.slice(0, 3).join(' | ')}`);
+      }
+      lines.push(`- ${parts.join(' · ')}`);
+    }
+    lines.push(`\n→ 关键:不要重复上面已经 promote / apply 过的动作;聚焦新的角度(更难的 idea、sub-task、follow-up)`);
   }
 
   if (user_goal) lines.push(`\n## 用户目标\n${user_goal}`);

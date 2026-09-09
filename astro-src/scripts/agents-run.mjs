@@ -49,6 +49,7 @@ function parseArgs(argv) {
     if (a === '--all') out.all = true;
     else if (a === '--dry-run') out.dryRun = true;
     else if (a === '--digest-only') out.digestOnly = true;
+    else if (a === '--resume') out.resume = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -68,6 +69,8 @@ if (args.help) {
   --limit N          Cap sessions in --all mode (default 5)
   --dry-run          Use stub LLM caller; no external calls
   --digest-only      Skip round generation; only emit digest
+  --resume           Load previous round JSONs into Designer's context
+                     (so it doesn't repeat the same proposals)
   --preset NAME      conservative | balanced | aggressive
   --help             Show this help`);
   process.exit(0);
@@ -219,8 +222,61 @@ function buildDesignerUserPrompt(input) {
       lines.push(`- ${c.arxivId}: ${c.title}${c.tldr ? ' — ' + c.tldr : ''}`);
     }
   }
+  // 上一轮已做的事 — 让 Designer 避免重复(--resume 模式)
+  if (input.previous_rounds?.length) {
+    const recent = input.previous_rounds.slice(-5);
+    lines.push(`\nPrevious rounds (${input.previous_rounds.length} total, last ${recent.length} shown):`);
+    for (const prev of recent) {
+      const parts = [`Round ${prev.round}`];
+      if (prev.promoted_titles?.length) parts.push(`promoted: ${prev.promoted_titles.slice(0, 5).join(' | ')}`);
+      if (prev.applied_titles?.length) parts.push(`applied: ${prev.applied_titles.slice(0, 5).join(' | ')}`);
+      if (prev.rejected_titles?.length) parts.push(`rejected: ${prev.rejected_titles.slice(0, 3).join(' | ')}`);
+      lines.push(`- ${parts.join(' · ')}`);
+    }
+    lines.push(`→ Do NOT repeat promoted/applied proposals. Suggest new angles or follow-ups.`);
+  }
   if (input.user_goal) lines.push(`Goal: ${input.user_goal}`);
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Previous-rounds 加载与摘要(--resume 模式)
+// ---------------------------------------------------------------------------
+
+async function loadPreviousRounds(sessionId) {
+  const files = await listExistingRounds(sessionId);
+  const out = [];
+  for (const f of files) {
+    try {
+      const raw = await readFile(f, 'utf8');
+      out.push(summarizeRec(JSON.parse(raw)));
+    } catch (err) {
+      console.warn(`[resume] skip ${f}: ${err.message}`);
+    }
+  }
+  return out;
+}
+
+function summarizeRec(rec) {
+  const byId = new Map();
+  for (const p of rec.designer.proposals ?? []) byId.set(p.id, p);
+  const promoted = [];
+  const rejected = [];
+  for (const v of rec.gate?.verdicts ?? []) {
+    const p = byId.get(v.proposal_id);
+    if (!p) continue;
+    if (v.decision === 'promoted') promoted.push(p.title);
+    else if (v.decision === 'rejected') rejected.push(p.title);
+  }
+  const applied = (rec.modifier?.applied ?? [])
+    .map((a) => a.payload?.title ?? byId.get(a.proposal_id)?.title)
+    .filter((t) => typeof t === 'string' && t.length > 0);
+  return {
+    round: rec.round,
+    promoted_titles: promoted,
+    applied_titles: applied,
+    rejected_titles: rejected,
+  };
 }
 
 function parseProposalsCLI(raw, round) {
@@ -455,7 +511,7 @@ async function main() {
     const sessions = await listSessions();
     const maxRounds = args.maxRounds ?? 1;
     for (const sid of sessions) {
-      await runOneSession(sid, caller, { maxRounds, dryRun, preset });
+      await runOneSession(sid, caller, { maxRounds, dryRun, preset, resume: !!args.resume });
     }
     return;
   }
@@ -470,6 +526,7 @@ async function main() {
     maxRounds: args.maxRounds ?? 3,
     dryRun,
     preset,
+    resume: !!args.resume,
   });
 }
 
@@ -478,12 +535,20 @@ async function runOneSession(sessionId, caller, opts) {
   const existing = await listExistingRounds(sessionId);
   const startRound = existing.length + 1;
 
+  // --resume 模式:从已有 round JSONs 读出 previous_rounds,让 Designer 看到历史
+  let previousRounds = [];
+  if (opts.resume && existing.length > 0) {
+    previousRounds = await loadPreviousRounds(sessionId);
+    console.log(`  [resume] loaded ${previousRounds.length} previous round summary`);
+  }
+
   const input = {
     project: { id: sessionId, name: sessionId, statement: '(auto)' },
     candidates: [],
     user_goal: '(CLI auto-run)',
     round: startRound,
     session_id: sessionId,
+    previous_rounds: previousRounds,
   };
 
   for (let i = 0; i < opts.maxRounds; i++) {
@@ -492,6 +557,11 @@ async function runOneSession(sessionId, caller, opts) {
     const rec = await runOneRoundCLI(roundN, input, caller, opts.preset, opts.dryRun);
     const file = await writeRound(rec, sessionId);
     console.log(`  [round ${roundN}] → ${file}  (proposals=${rec.designer.proposals.length}, applied=${rec.modifier.applied.length})`);
+
+    if (opts.resume) {
+      // resume 模式:每跑完一轮,把本轮摘要追加到 previous_rounds,供下一轮用
+      input.previous_rounds = [...(input.previous_rounds ?? []), summarizeRec(rec)];
+    }
 
     if (rec.modifier.applied.length === 0 && i >= 1) {
       console.log(`  [empty] 0 applied for 2 consecutive rounds; stopping early`);
