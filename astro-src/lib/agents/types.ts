@@ -191,3 +191,35 @@ export interface ProjectActivity {
   detail?: string;
   at: number;
 }
+
+// ---------------------------------------------------------------------------
+// 字段默认值 / 工厂函数(便于 JS 直接调用,镜像 types.mjs)
+// ---------------------------------------------------------------------------
+
+export function makeEmptyProposal(round: number): Omit<Proposal, 'id'> & { id: string } {
+  return {
+    id: '',
+    round,
+    type: 'add_paper',
+    title: '',
+    rationale: '',
+    evidence: { paperIds: [], quotes: [] },
+    target: {},
+    estimated_effort: 'medium',
+    risk: '',
+    created_at: Date.now(),
+  };
+}
+
+export function makeEmptyCritique(proposal_id: string): Critique {
+  return {
+    proposal_id,
+    scores: { methodologist: 0, engineer: 0, skeptic: 0 },
+    total: 0,
+    critique: '',
+    elo: 1200,
+    matches: 0,
+    wins: 0,
+    persona_attribution: { methodologist: '', engineer: '', skeptic: '' },
+  };
+}

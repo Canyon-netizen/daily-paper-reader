@@ -300,10 +300,10 @@ async function runEloRounds(
       const verdict = await judgePair(pa, pb, sa, sb, caller, model);
       const stA = state.get(a.id)!;
       const stB = state.get(b.id)!;
-      const [newA, newB] = updateElo(stA.elo, stB.elo, verdict);
+      const [newA, newB] = updateElo(stA.elo, stB.elo, verdict.winner);
       stA.elo = newA; stA.matches++; stB.elo = newB; stB.matches++;
-      if (verdict === 'a') stA.wins++;
-      else if (verdict === 'b') stB.wins++;
+      if (verdict.winner === 'a') stA.wins++;
+      else if (verdict.winner === 'b') stB.wins++;
     }
   }
   return state;

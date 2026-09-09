@@ -70,6 +70,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           <span>Dry-run (无 LLM 调用)</span>
         </label>
         <button class="button primary" id="agents-run-btn">▶️ 跑一轮</button>
+        <button class="button" id="agents-abort-btn" hidden title="中断当前 round 循环(已完成本轮后立即退出)">🛑 停止</button>
       </div>
     </section>
 
@@ -138,6 +139,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     const STORAGE_KEY = 'dpr_agents_session_v1';
     const ROUNDS_KEY = (sid: string) => `dpr_agents_rounds_${sid}`;
+
+    // 当前 round 循环的 AbortController;点击 🛑 停止 时 .abort(),
+    // orchestrator 在每轮开头检查 signal.aborted → stoppedReason = 'cancelled'
+    let activeAbort: AbortController | null = null;
 
     const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
       const el = document.getElementById(id);
@@ -462,8 +467,14 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
       const status = $('agents-status');
       const statusText = $('agents-status-text');
+      const runBtn = $<HTMLButtonElement>('agents-run-btn');
+      const abortBtn = $<HTMLButtonElement>('agents-abort-btn');
       status.hidden = false;
       isRunning = true;
+      activeAbort = new AbortController();
+      runBtn.disabled = true;
+      runBtn.textContent = '⏳ 跑 round 中...';
+      abortBtn.hidden = false;
       statusText.textContent = `跑 round (dry=${dryRun}, preset=${preset})...`;
 
       try {
@@ -495,16 +506,22 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
               saveRounds(sid, [...existing, ...sink.records]);
             },
           },
+          activeAbort.signal,
         );
 
         saveRounds(sid, [...existing, ...records]);
-        statusText.textContent = `完成 ${records.length} round(s), stopped: ${stoppedReason}`;
+        const cancelTag = stoppedReason === 'cancelled' ? ' 🛑 已停止' : '';
+        statusText.textContent = `完成 ${records.length} round(s), stopped: ${stoppedReason}${cancelTag}`;
         refreshSessionPicker();
         refresh();
       } catch (err) {
         statusText.textContent = `错误: ${err instanceof Error ? err.message : String(err)}`;
       } finally {
         isRunning = false;
+        activeAbort = null;
+        runBtn.disabled = false;
+        runBtn.textContent = '▶️ 跑一轮';
+        abortBtn.hidden = true;
       }
     }
 
@@ -561,6 +578,12 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       refresh();
     });
     $('agents-run-btn').addEventListener('click', runOnce);
+    $('agents-abort-btn').addEventListener('click', () => {
+      if (activeAbort) {
+        activeAbort.abort();
+        $('agents-status-text').textContent = '🛑 已请求停止(本轮完成后退出)...';
+      }
+    });
     refresh();
 
     // ---------------------------------------------------------------------
