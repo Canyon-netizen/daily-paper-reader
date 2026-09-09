@@ -47,6 +47,13 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           <input id="agents-session-id" type="text" placeholder="my-research-project" />
         </label>
         <label>
+          <span>项目(可选)</span>
+          <select id="agents-project-picker" title="从 UserLibrary 选一个,自动加载其论文作为 candidates">
+            <option value="">— 不选 —</option>
+          </select>
+        </label>
+        <button class="button small" id="agents-load-papers-btn" title="从选中项目读 paperIds → 论文库 → 写入 candidates">📚 载入论文</button>
+        <label>
           <span>Gate 阈值</span>
           <select id="agents-preset">
             <option value="balanced" selected>balanced</option>
@@ -68,6 +75,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     <section class="agents-status" id="agents-status" hidden>
       <p class="agents-status-text" id="agents-status-text">就绪</p>
+      <p class="agents-status-candidates muted" id="agents-status-candidates" hidden></p>
     </section>
 
     <section class="agents-rounds" id="agents-rounds">
@@ -85,6 +93,8 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     import { makeBrowserAdapter } from '../../lib/agents/modifier';
     import type { RoundRecord } from '../../lib/agents/types';
     import { STORAGE_KEYS } from '../../scripts/settings/storage';
+    import { listUserLibraries } from '../../lib/user-libraries';
+    import { buildCandidatesFromLibrary } from '../../lib/agents/candidates';
 
     // localStorage 里 LLM 配置的 shape(dpr_analyzer_v1 JSON)
     interface BrowserLLMConfig {
@@ -115,6 +125,8 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     let currentSessionId = '';
     let isRunning = false;
+    let loadedCandidates: { arxivId: string; title: string; tldr?: string }[] = [];
+    let loadedProjectId = '';
 
     function loadSessionId(): string {
       return localStorage.getItem(STORAGE_KEY) ?? '';
@@ -447,9 +459,12 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
             sessionId: sid,
             input: {
               project: { id: sid, name: sid, statement: '(browser auto-run)' },
-              candidates: [],
+              candidates: loadedCandidates,
               user_goal: '(browser auto-run)',
-              project_state: { paper_count: 0, draft_count: 0 },
+              project_state: {
+                paper_count: loadedCandidates.length,
+                draft_count: 0,
+              },
               round: startRound,
             },
             startRound,
@@ -525,5 +540,72 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     });
     $('agents-run-btn').addEventListener('click', runOnce);
     refresh();
+
+    // ---------------------------------------------------------------------
+    // 项目选择 + 载入论文(UserLibrary → candidates)
+    // ---------------------------------------------------------------------
+
+    const projectPicker = $<HTMLSelectElement>('agents-project-picker');
+
+    function refreshProjectPicker() {
+      const libs = listUserLibraries();
+      projectPicker.innerHTML = '<option value="">— 不选 —</option>' +
+        libs.map((l) => {
+          const sel = l.id === loadedProjectId ? ' selected' : '';
+          return `<option value="${escapeHtml(l.id)}"${sel}>${escapeHtml(l.name)} · ${l.paperIds.length} 篇</option>`;
+        }).join('');
+    }
+
+    async function loadPapersFromProject() {
+      const libId = projectPicker.value;
+      const statusCand = $('agents-status-candidates');
+      if (!libId) {
+        loadedCandidates = [];
+        loadedProjectId = '';
+        statusCand.hidden = true;
+        return;
+      }
+      const libs = listUserLibraries();
+      const lib = libs.find((l) => l.id === libId);
+      if (!lib) {
+        alert(`项目 ${libId} 不存在(可能 localStorage 被清理)`);
+        return;
+      }
+
+      // 动态 import paper.ts 拿到 readPaper(避免主 bundle 变重)
+      const paperMod = await import('../../lib/paper');
+      const lookup = async (arxivId: string) => {
+        const p = await paperMod.readPaper(arxivId);
+        if (!p) return null;
+        // Paper 类型的字段映射到 PaperMetaLike
+        return {
+          title: p.title,
+          title_zh: (p as any).title_zh,
+          tldr: p.tldr,
+          tldr_zh: (p as any).tldr_zh,
+        };
+      };
+
+      const isRunning2 = isRunning;
+      if (isRunning2) return;
+      isRunning = true;
+      try {
+        loadedCandidates = await buildCandidatesFromLibrary(lib, lookup, { maxPapers: 30 });
+        loadedProjectId = libId;
+        const missing = loadedCandidates.filter((c) => c.title.startsWith('(missing)')).length;
+        statusCand.hidden = false;
+        statusCand.textContent = `📚 ${lib.name}: 载入 ${loadedCandidates.length} 篇` +
+          (missing > 0 ? `(${missing} 篇无元数据,占位)` : '');
+      } catch (err) {
+        statusCand.hidden = false;
+        statusCand.textContent = `📚 载入失败: ${err instanceof Error ? err.message : String(err)}`;
+      } finally {
+        isRunning = isRunning2;
+      }
+    }
+
+    projectPicker.addEventListener('change', loadPapersFromProject);
+    $('agents-load-papers-btn').addEventListener('click', loadPapersFromProject);
+    refreshProjectPicker();
   </script>
 </BaseLayout>
