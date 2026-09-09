@@ -1,0 +1,300 @@
+---
+// /agents/[sessionId]/[roundId]/ — Round detail page.
+//
+// 在 build 时扫描 archive/<sessionId>/rounds/round_<NNN>.json,
+// 每个 round 生成一个静态页;同时支持 client-side 从 localStorage 加载
+// (浏览器侧 round,archive 还没有落盘的情况下)。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string; roundId: string } }[] = [];
+  let sessions: string[] = [];
+  try {
+    sessions = await readdir(root);
+  } catch {
+    return [];
+  }
+  for (const sid of sessions) {
+    const dir = join(root, sid, 'rounds');
+    if (!existsSync(dir)) continue;
+    let files: string[] = [];
+    try {
+      files = await readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const m = f.match(/^round_(\d+)\.json$/);
+      if (m) {
+        out.push({ params: { sessionId: sid, roundId: m[1] } });
+      }
+    }
+  }
+  return out;
+}
+
+const { sessionId, roundId } = Astro.params;
+
+// 服务端读 JSON(build time 已落盘)
+const file = join(process.cwd(), 'archive', sessionId, 'rounds', `round_${String(roundId).padStart(3, '0')}.json`);
+
+interface Proposal {
+  id: string;
+  type: string;
+  title: string;
+  rationale: string;
+  evidence: { paperIds: string[]; quotes?: string[] };
+  target: Record<string, unknown>;
+  estimated_effort: string;
+  risk: string;
+  created_at: number;
+}
+interface Critique {
+  proposal_id: string;
+  scores: { methodologist: number; engineer: number; skeptic: number };
+  total: number;
+  critique: string;
+  elo: number;
+  matches: number;
+  wins: number;
+  persona_attribution: Record<string, string>;
+}
+interface GateVerdict {
+  proposal_id: string;
+  decision: 'promoted' | 'candidate' | 'sketch' | 'rejected';
+  reasons: string[];
+}
+interface ModifierAction {
+  id: string;
+  kind: string;
+  proposal_id: string;
+  payload: Record<string, unknown>;
+  applied_at: number;
+}
+interface ModifierSkip {
+  proposal_id: string;
+  reason: string;
+}
+interface RoundRecord {
+  schema_version: 1;
+  round: number;
+  project_id: string;
+  started_at: number;
+  finished_at: number;
+  designer: { proposals: Proposal[]; prompt_summary: string; model: string };
+  feedback: { critiques: Critique[]; judge_calls: number; total_tokens: number };
+  gate: {
+    verdicts: GateVerdict[];
+    promoted: string[];
+    candidate: string[];
+    sketch: string[];
+    rejected: string[];
+  };
+  modifier: { applied: ModifierAction[]; skipped: ModifierSkip[] };
+  meta: { session_id: string; dry_run: boolean };
+}
+
+let rec: RoundRecord | null = null;
+let loadError: string | null = null;
+try {
+  const raw = await readFile(file, 'utf8');
+  rec = JSON.parse(raw) as RoundRecord;
+} catch (err) {
+  loadError = err instanceof Error ? err.message : String(err);
+}
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function actionTargetHref(action: ModifierAction, base: string): string {
+  const p = action.payload as Record<string, string>;
+  if (action.kind === 'create_draft_outline' && p.writing_id) {
+    return `${base}/writing/${p.writing_id}/`;
+  }
+  if (action.kind === 'archive_round_summary' && p.experiment_id) {
+    return `${base}/experiments/${p.experiment_id}/`;
+  }
+  if (action.kind === 'add_paper_to_stage' && p.arxivId) {
+    return `${base}/papers/${p.arxivId}/`;
+  }
+  return '';
+}
+
+function badgeClass(decision: string): string {
+  if (decision === 'promoted') return 'badge badge-high';
+  if (decision === 'candidate') return 'badge badge-mid';
+  if (decision === 'sketch') return 'badge badge-low';
+  return 'badge badge-none';
+}
+
+const startedAtIso = rec ? new Date(rec.started_at).toISOString() : '';
+const finishedAtIso = rec ? new Date(rec.finished_at).toISOString() : '';
+const elapsedMs = rec ? rec.finished_at - rec.started_at : 0;
+---
+
+<BaseLayout title={rec ? `Round ${rec.round} · ${rec.project_id}` : 'Round 详情'}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / {sessionId} / round {roundId}</span>
+    </nav>
+
+    {loadError && (
+      <section class="agents-status" id="agents-status">
+        <p class="agents-status-text">
+          ⚠️ 未找到 round JSON: archive/{sessionId}/rounds/round_{String(roundId).padStart(3, '0')}.json
+          (若该 round 仅存在 localStorage,请到 <a href={`${base}/agents/`}>/agents/</a> 查看)
+        </p>
+      </section>
+    )}
+
+    {rec && (
+      <>
+        <header class="agents-round-detail-header">
+          <h1>Round {rec.round} · {escapeHtml(rec.project_id)}</h1>
+          <p class="muted">
+            开始: {startedAtIso} · 结束: {finishedAtIso} · 用时 {(elapsedMs / 1000).toFixed(1)}s
+            · token ≈ {rec.feedback.total_tokens}
+            · model: <code>{escapeHtml(rec.designer.model)}</code>
+            {rec.meta.dry_run && <span class="badge badge-low" style="margin-left:0.5rem">DRY-RUN</span>}
+          </p>
+        </header>
+
+        <section class="agents-round-detail-section">
+          <h2>📊 概览</h2>
+          <div class="agents-detail-grid">
+            <div>
+              <strong>Designer</strong>: {rec.designer.proposals.length} proposals
+            </div>
+            <div>
+              <strong>Feedback</strong>: {rec.feedback.critiques.length} critiques, {rec.feedback.judge_calls} LLM calls
+            </div>
+            <div>
+              <strong>Gate</strong>:
+              <span class="badge badge-high">{rec.gate.promoted.length} promoted</span>
+              <span class="badge badge-mid">{rec.gate.candidate.length} candidate</span>
+              <span class="badge badge-low">{rec.gate.sketch.length} sketch</span>
+              <span class="badge badge-none">{rec.gate.rejected.length} rejected</span>
+            </div>
+            <div>
+              <strong>Modifier</strong>:
+              <span class="badge badge-mid">{rec.modifier.applied.length} applied</span>
+              <span class="badge badge-low">{rec.modifier.skipped.length} skipped</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="agents-round-detail-section">
+          <h2>📝 Designer Proposals ({rec.designer.proposals.length})</h2>
+          <p class="muted">prompt: {escapeHtml(rec.designer.prompt_summary)}</p>
+          <ol class="agents-detail-proposals">
+            {rec.designer.proposals.map((p, idx) => {
+              const verdict = rec!.gate.verdicts.find((v) => v.proposal_id === p.id);
+              const critique = rec!.feedback.critiques.find((c) => c.proposal_id === p.id);
+              return (
+                <li class="agents-detail-proposal">
+                  <header>
+                    <span class="agents-detail-proposal-num">#{idx + 1}</span>
+                    <span class="badge">{p.type}</span>
+                    {verdict && <span class={badgeClass(verdict.decision)}>{verdict.decision}</span>}
+                    <h3>{escapeHtml(p.title)}</h3>
+                  </header>
+                  <p class="muted">rationale: {escapeHtml(p.rationale)}</p>
+                  <p class="muted">
+                    effort={p.estimated_effort} · risk={escapeHtml(p.risk)}
+                  </p>
+                  {p.evidence.paperIds.length > 0 && (
+                    <p>
+                      <strong>papers:</strong>
+                      {p.evidence.paperIds.map((aid, i) => (
+                        <>
+                          {i > 0 && ' · '}
+                          <a href={`${base}/papers/${aid}/`} class="agents-link" target="_blank">
+                            {aid}
+                          </a>
+                        </>
+                      ))}
+                    </p>
+                  )}
+                  {critique && (
+                    <details class="agents-detail-critique">
+                      <summary>
+                        <strong>Feedback</strong>:
+                        <span class={badgeClass(critique.total >= 8 ? 'promoted' : critique.total >= 6 ? 'candidate' : 'sketch')}>
+                          total={critique.total.toFixed(1)}
+                        </span>
+                        m={critique.scores.methodologist} e={critique.scores.engineer} s={critique.scores.skeptic}
+                        · Elo={critique.elo.toFixed(0)} (m={critique.matches} w={critique.wins})
+                      </summary>
+                      <p><em>综合:</em> {escapeHtml(critique.critique)}</p>
+                      <ul>
+                        <li><strong>methodologist:</strong> {escapeHtml(critique.persona_attribution.methodologist ?? '')}</li>
+                        <li><strong>engineer:</strong> {escapeHtml(critique.persona_attribution.engineer ?? '')}</li>
+                        <li><strong>skeptic:</strong> {escapeHtml(critique.persona_attribution.skeptic ?? '')}</li>
+                      </ul>
+                    </details>
+                  )}
+                  {verdict && verdict.reasons.length > 0 && (
+                    <p class="muted">
+                      <strong>Gate reasons:</strong> {verdict.reasons.map((r) => escapeHtml(r)).join('; ')}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </section>
+
+        <section class="agents-round-detail-section">
+          <h2>✏️ Modifier Actions ({rec.modifier.applied.length})</h2>
+          {rec.modifier.applied.length === 0 ? (
+            <p class="muted">本轮无写入动作</p>
+          ) : (
+            <ul>
+              {rec.modifier.applied.map((a) => {
+                const href = actionTargetHref(a, base);
+                return (
+                  <li>
+                    <span class="badge badge-mid">{a.kind}</span>
+                    {' '}
+                    {href
+                      ? <a class="agents-link" href={href} target="_blank">→ 打开目标</a>
+                      : <code class="muted">{JSON.stringify(a.payload).slice(0, 80)}</code>
+                    }
+                    <span class="muted"> — proposal_id: <code>{a.proposal_id}</code></span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {rec.modifier.skipped.length > 0 && (
+            <details>
+              <summary>skipped ({rec.modifier.skipped.length})</summary>
+              <ul>
+                {rec.modifier.skipped.map((s) => (
+                  <li>
+                    <code>{s.proposal_id}</code>: {escapeHtml(s.reason)}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </section>
+      </>
+    )}
+  </main>
+</BaseLayout>

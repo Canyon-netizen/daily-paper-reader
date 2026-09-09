@@ -222,7 +222,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       div.dataset.roundIndex = String(rec.round);
       div.innerHTML = `
         <header class="agents-round-header">
-          <h3>Round ${rec.round}</h3>
+          <h3><a class="agents-link" href="/agents/${encodeURIComponent(currentSessionId)}/${String(rec.round).padStart(3, '0')}/" target="_blank">Round ${rec.round} ↗</a></h3>
           <span class="agents-round-meta">
             ${new Date(rec.started_at).toLocaleString()} · ${rec.feedback.total_tokens} tok
             <button class="button small agents-export-btn" data-fmt="json" title="导出此 round 的完整 JSON">📥 JSON</button>
