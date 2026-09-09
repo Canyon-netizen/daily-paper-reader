@@ -121,7 +121,7 @@ describe('formatExportMarkdown', () => {
     assert.match(md, /### Synthesis #1/);
     assert.match(md, /# Synth/);
     assert.match(md, /# Digest/);
-    assert.match(md, /Exported by DPR agents-run\.mjs --export-md/);
+    assert.match(md, /Exported by DPR agents export-bundle lib \(iter #59\)/);
   });
 
   it('returns fallback for null bundle', () => {

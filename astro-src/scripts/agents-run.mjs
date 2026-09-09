@@ -37,6 +37,14 @@ import {
 
 import { makeRoundRecord } from '../lib/agents/types.mjs';
 
+// Export-bundle builders are now a shared lib (iter #59):
+//   agents-run.mjs --export-md (CLI)  ──┐
+//   /agents/<sid>/export/ (browser)  ──┴── both import from lib/agents/export-bundle.mjs
+// 同时 import 进本地作用域,供本文件 loadExportBundle() 内部使用;
+// 末尾再 re-export 保持向后兼容(测试 + 外部 import 都从同一处拿)。
+import { buildExportBundle, formatExportMarkdown } from '../lib/agents/export-bundle.mjs';
+export { buildExportBundle, formatExportMarkdown };
+
 // ---------------------------------------------------------------------------
 // CLI 参数解析
 // ---------------------------------------------------------------------------
@@ -1285,182 +1293,13 @@ export function formatDiffText(diff) {
 // ---------------------------------------------------------------------------
 // --export-md 模式(iter #57):把整 session 打包成 1 个自包含 markdown
 //
-// bundle = { meta, rounds[], syntheses[], digest }
-//   meta: 原始 meta.json 对象
-//   rounds: 每 round 1 段: proposals + critiques + gate verdicts + modifier actions
-//   syntheses: 每份 synthesis markdown 原文嵌入
-//   digest: 最新 1 份 digest 原文
+// 纯函数 buildExportBundle / formatExportMarkdown 已抽到 lib/agents/export-bundle.mjs
+// (iter #59),CLI + 浏览器 export 页共享同一份实现。CLI 端从顶部 import + re-export,
+// 见 file head。
 //
-// formatExportMarkdown(bundle) 纯函数 → markdown 文本
-// loadExportBundle(sessionId)  IO:读 archive/<sid>/{meta,rounds,digest,synthesis}
-// writeExportMarkdown(sessionId, opts)  IO:load + format + writeFile
+// IO 部分(留在 CLI 这一侧):
+//   loadExportBundle(sessionId)  — 读 archive/<sid>/{meta,rounds,digest,synthesis}
 // ---------------------------------------------------------------------------
-
-/**
- * buildExportBundle(input) — 把 1 个 session 的所有产物聚成 1 个 bundle 对象。
- * input: { meta, rounds, syntheses, digest }
- *   meta:      parsed meta.json object (or null)
- *   rounds:    parsed RoundRecord[] (sorted ascending by round)
- *   syntheses: [{ idx, raw }]            (sorted by idx)
- *   digest:    string  (or null)
- * 返回:{ sessionId, generatedAt, meta, rounds, syntheses, digest, stats }
- *   stats = { rounds: N, proposals: N, applied: N, syntheses: N, hasDigest: bool }
- */
-export function buildExportBundle(input) {
-  const { meta, rounds = [], syntheses = [], digest = null } = input ?? {};
-  let proposals = 0, applied = 0;
-  for (const r of rounds) {
-    proposals += r.designer?.proposals?.length ?? 0;
-    applied += r.modifier?.applied?.length ?? 0;
-  }
-  return {
-    sessionId: meta?.session_id ?? '(unknown)',
-    generatedAt: new Date().toISOString(),
-    meta,
-    rounds: rounds.map((r) => ({
-      round: r.round,
-      started_at: r.started_at,
-      finished_at: r.finished_at,
-      designer: r.designer,
-      feedback: r.feedback,
-      gate: r.gate,
-      modifier: r.modifier,
-    })),
-    syntheses,
-    digest,
-    stats: {
-      rounds: rounds.length,
-      proposals,
-      applied,
-      syntheses: syntheses.length,
-      hasDigest: typeof digest === 'string' && digest.length > 0,
-    },
-  };
-}
-
-/**
- * formatExportMarkdown(bundle) — 把 bundle 渲染成 1 份自包含 markdown。
- * 纯函数,无 IO;输入 null/empty 时返回 fallback string。
- */
-export function formatExportMarkdown(bundle) {
-  if (!bundle) return '# Export bundle\n\n(bundle is empty)\n';
-  const lines = [];
-  const sid = bundle.sessionId ?? '(unknown)';
-  const meta = bundle.meta;
-  const stats = bundle.stats ?? {};
-  const generatedAt = bundle.generatedAt ?? new Date().toISOString();
-
-  lines.push(`# Agents Session Export — ${sid}`);
-  lines.push('');
-  lines.push(`> Generated ${generatedAt}`);
-  lines.push('');
-  lines.push(`## 📊 Stats`);
-  lines.push(`- rounds: **${stats.rounds ?? 0}**`);
-  lines.push(`- proposals: **${stats.proposals ?? 0}**`);
-  lines.push(`- modifier applied: **${stats.applied ?? 0}**`);
-  lines.push(`- syntheses: **${stats.syntheses ?? 0}**`);
-  lines.push(`- has digest: **${stats.hasDigest ? 'yes' : 'no'}**`);
-  lines.push('');
-
-  if (meta) {
-    lines.push(`## 🎯 Meta`);
-    lines.push(`- session_id: \`${meta.session_id ?? sid}\``);
-    lines.push(`- goal: ${meta.goal ?? '(none)'}`);
-    if (meta.created_at) lines.push(`- created_at: ${new Date(meta.created_at).toISOString()}`);
-    if (meta.rounds_requested != null) lines.push(`- rounds_requested: ${meta.rounds_requested}`);
-    if (meta.preset) lines.push(`- preset: ${meta.preset}`);
-    if (meta.dry_run != null) lines.push(`- dry_run: ${meta.dry_run}`);
-    lines.push('');
-  }
-
-  const rounds = bundle.rounds ?? [];
-  if (rounds.length) {
-    lines.push(`## 🔄 Rounds (${rounds.length})`);
-    for (const r of rounds) {
-      lines.push('');
-      lines.push(`### Round ${r.round}`);
-      if (r.started_at) lines.push(`- started: ${new Date(r.started_at).toISOString()}`);
-      if (r.finished_at) lines.push(`- finished: ${new Date(r.finished_at).toISOString()}`);
-      const d = r.designer ?? {};
-      lines.push(`- designer: ${(d.proposals ?? []).length} proposals (model: ${d.model ?? '?'})`);
-      const f = r.feedback ?? {};
-      lines.push(`- feedback: ${(f.critiques ?? []).length} critiques, judge_calls=${f.judge_calls ?? '?'}, tokens=${f.total_tokens ?? '?'}`);
-      const g = r.gate ?? {};
-      lines.push(`- gate: promoted=${(g.promoted ?? []).length} candidate=${(g.candidate ?? []).length} sketch=${(g.sketch ?? []).length} rejected=${(g.rejected ?? []).length}`);
-
-      // Proposal 列表
-      const proposals = d.proposals ?? [];
-      if (proposals.length) {
-        lines.push('');
-        lines.push('#### Proposals');
-        for (const p of proposals) {
-          lines.push(`- **${p.title ?? '(untitled)'}** [${p.type ?? '?'}]`);
-          if (p.rationale) lines.push(`  - rationale: ${p.rationale}`);
-          if (p.estimated_effort) lines.push(`  - effort: ${p.estimated_effort}`);
-          if (p.risk) lines.push(`  - risk: ${p.risk}`);
-        }
-      }
-
-      // Critique 摘要(每条 proposal 的 total + Elo)
-      const critiques = f.critiques ?? [];
-      if (critiques.length) {
-        lines.push('');
-        lines.push('#### Critiques');
-        for (const c of critiques) {
-          const total = c.total != null ? c.total.toFixed(1) : '?';
-          const elo = c.elo != null ? Math.round(c.elo) : '?';
-          lines.push(`- \`${c.proposal_id}\`: total=${total}, elo=${elo}, matches=${c.matches ?? 0}, wins=${c.wins ?? 0}`);
-        }
-      }
-
-      // Gate verdicts(promoted/candidate 单独列)
-      const promoted = g.promoted ?? [];
-      const candidate = g.candidate ?? [];
-      if (promoted.length || candidate.length) {
-        lines.push('');
-        lines.push('#### Gate');
-        if (promoted.length) lines.push(`- promoted: ${promoted.join(', ')}`);
-        if (candidate.length) lines.push(`- candidate: ${candidate.join(', ')}`);
-      }
-
-      // Modifier applied actions
-      const applied = r.modifier?.applied ?? [];
-      if (applied.length) {
-        lines.push('');
-        lines.push('#### Modifier applied');
-        for (const a of applied) {
-          lines.push(`- ${a.kind ?? '?'} ← \`${a.proposal_id}\``);
-        }
-      }
-    }
-    lines.push('');
-  }
-
-  // Syntheses:每份内嵌
-  const syntheses = bundle.syntheses ?? [];
-  if (syntheses.length) {
-    lines.push(`## 📝 Syntheses (${syntheses.length})`);
-    for (const s of syntheses) {
-      lines.push('');
-      lines.push(`### Synthesis #${s.idx ?? '?'}`);
-      lines.push('');
-      lines.push(s.raw ?? '');
-    }
-    lines.push('');
-  }
-
-  // Digest:整段嵌入
-  if (bundle.digest) {
-    lines.push(`## 📋 Digest`);
-    lines.push('');
-    lines.push(bundle.digest);
-    lines.push('');
-  }
-
-  lines.push('---');
-  lines.push(`*Exported by DPR agents-run.mjs --export-md (iter #57)*`);
-  return lines.join('\n');
-}
 
 /**
  * loadExportBundle(sessionId) — IO:从 archive/<sid>/ 读 meta + rounds + syntheses + digest。

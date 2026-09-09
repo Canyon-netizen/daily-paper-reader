@@ -85,20 +85,19 @@ describe('export.astro page structure (iter #58)', () => {
 
 describe('export.astro client script (iter #58)', () => {
   it('defines buildExportBundle pure function (mirror of CLI)', () => {
-    assert.match(exportPageSrc, /function buildExportBundle\(input\)/);
-    assert.match(exportPageSrc, /sessionId: meta\?\.session_id/);
-    assert.match(exportPageSrc, /stats:\s*\{[\s\S]*?rounds:/);
+    // iter #59: 浏览器页 import 自 lib/agents/export-bundle.mjs,不再 inline 定义
+    assert.match(
+      exportPageSrc,
+      /import\s*\{[^}]*buildExportBundle[^}]*\}\s*from\s*['"][^'"]*lib\/agents\/export-bundle\.mjs['"]/,
+    );
   });
 
   it('defines formatExportMarkdown pure function (mirror of CLI)', () => {
-    assert.match(exportPageSrc, /function formatExportMarkdown\(bundle\)/);
-    assert.match(exportPageSrc, /# Agents Session Export —/);
-    assert.match(exportPageSrc, /## 📊 Stats/);
-    assert.match(exportPageSrc, /## 🎯 Meta/);
-    assert.match(exportPageSrc, /## 🔄 Rounds/);
-    assert.match(exportPageSrc, /## 📝 Syntheses/);
-    assert.match(exportPageSrc, /## 📋 Digest/);
-    assert.match(exportPageSrc, /iter #58/);
+    // iter #59: 同上,从 lib import
+    assert.match(
+      exportPageSrc,
+      /import\s*\{[^}]*formatExportMarkdown[^}]*\}\s*from\s*['"][^'"]*lib\/agents\/export-bundle\.mjs['"]/,
+    );
   });
 
   it('reads localStorage keys dpr_agents_rounds_<sid> + dpr_agents_meta_<sid>', () => {
