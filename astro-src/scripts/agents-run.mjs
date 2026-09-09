@@ -70,6 +70,7 @@ function parseArgs(argv) {
     else if (a === '--auto-stop-threshold') out.autoStopThreshold = Number(argv[++i]);
     else if (a === '--auto-resume') out.autoResume = true;
     else if (a === '--write-deliverable') out.writeDeliverable = true;
+    else if (a === '--few-shot-from') out.fewShotFrom = Number(argv[++i]);
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -156,6 +157,11 @@ if (args.help) {
                      create a new session. Refuses with exit 2 if the
                      session's archive/<sid>/meta.json doesn't exist.
                      Use to pick up a previously-stopped session.
+  --few-shot-from N  With --new-session, inject top-N proposals from all
+                     other sessions (by Elo, from --leaderboard topElo)
+                     as Designer few-shot examples. Closes iter #34 ↔
+                     iter #31 loop: new sessions learn from past wins.
+                     Default 0 (disabled). Capped at 20 to bound prompt.
   --help             Show this help`);
   process.exit(0);
 }
@@ -350,6 +356,10 @@ function buildDesignerUserPrompt(input) {
     }
     lines.push(`→ Do NOT repeat promoted/applied proposals. Suggest new angles or follow-ups.`);
   }
+  // 跨 session few-shot examples(iter #39)
+  if (input.previous_designer_examples?.length) {
+    lines.push(formatFewShotExamples(input.previous_designer_examples));
+  }
   if (input.user_goal) lines.push(`Goal: ${input.user_goal}`);
   return lines.join('\n');
 }
@@ -500,6 +510,80 @@ function parseScoreCritique(raw) {
 function clampScore(s) {
   if (!Number.isFinite(s)) return 5;
   return Math.max(0, Math.min(10, Math.round(s)));
+}
+
+// ---------------------------------------------------------------------------
+// --few-shot-from:跨 session 学习的 top proposals 拉取(iter #39)
+// ---------------------------------------------------------------------------
+
+/**
+ * loadTopProposals(opts) — IO wrapper,扫所有 session 聚合 top-Elo proposals。
+ * 用于 --few-shot-from N:把过去胜出的 proposals 作为新 session Designer 的 few-shot examples。
+ *
+ * opts:
+ *   topN:           max proposals to return (default 5, cap 20)
+ *   excludeSid:     排除当前 session(避免 self-reference)
+ *   minMatches:     过滤 matches=0 的初始 Elo=1200(default 1)
+ *
+ * 返回:[{ sessionId, round, title, type, total, elo, matches, wins }]
+ *     按 elo 倒序,只含 matches > 0 且 matches > minMatches
+ */
+export async function loadTopProposals(opts = {}) {
+  const topN = Math.min(opts.topN ?? 5, 20);
+  const excludeSid = opts.excludeSid ?? null;
+  const minMatches = opts.minMatches ?? 1;
+
+  if (!existsSync('archive')) return [];
+  const entries = await readdir('archive', { withFileTypes: true });
+  const sessionIds = entries
+    .filter((e) => e.isDirectory() && /^[a-f0-9]{8,}$/.test(e.name))
+    .map((e) => e.name)
+    .filter((sid) => sid !== excludeSid);
+
+  const all = [];
+  for (const sid of sessionIds) {
+    const files = await listExistingRounds(sid);
+    for (const f of files) {
+      try {
+        const rec = JSON.parse(await readFile(f, 'utf8'));
+        const proposalsById = new Map((rec.designer?.proposals ?? []).map((p) => [p.id, p]));
+        for (const c of rec.feedback?.critiques ?? []) {
+          const matches = Number(c.matches) || 0;
+          if (matches < minMatches) continue;
+          const p = proposalsById.get(c.proposal_id);
+          if (!p) continue;
+          all.push({
+            sessionId: sid,
+            round: rec.round,
+            proposal_id: c.proposal_id,
+            title: p.title,
+            type: p.type,
+            total: Number(c.total) || 0,
+            elo: Number(c.elo) || 0,
+            matches,
+            wins: Number(c.wins) || 0,
+          });
+        }
+      } catch { /* skip corrupt */ }
+    }
+  }
+
+  all.sort((a, b) => b.elo - a.elo);
+  return all.slice(0, topN);
+}
+
+/**
+ * formatFewShotExamples(examples) — 把 top proposals 渲染成 Designer prompt 段。
+ * 给 buildDesignerUserPrompt 内部调用。
+ */
+function formatFewShotExamples(examples) {
+  if (!examples || examples.length === 0) return '';
+  const lines = ['\nFew-shot examples (top past proposals by Elo):'];
+  for (const ex of examples) {
+    lines.push(`- [${ex.sessionId} r${ex.round}] ${ex.title}  [${ex.type}]  elo=${ex.elo}, score=${ex.total}, ${ex.matches}m/${ex.wins}w`);
+  }
+  lines.push('→ 这些是过去 session 表现好的 proposal 类型 / 模式。新 session 借鉴其思路,但不要重复同一论文 ID。');
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -2001,6 +2085,17 @@ async function main() {
     args.project = sid;
     args.session = sid;
     if (!args.maxRounds) args.maxRounds = 3;
+    // 跨 session few-shot examples(iter #39):把 leaderboard topElo 注入
+    const fewShotN = Math.max(0, Number(args.fewShotFrom ?? 0));
+    if (fewShotN > 0) {
+      const examples = await loadTopProposals({ topN: fewShotN, excludeSid: sid });
+      if (examples.length) {
+        args._fewShotExamples = examples;
+        if (!args.json) {
+          console.log(`[few-shot-from] loaded ${examples.length} examples from past sessions (excluded ${sid})`);
+        }
+      }
+    }
     console.log(`[new-session] → running ${args.maxRounds} round(s) on ${sid} ...`);
     // 继续到下面的 session 处理
   }
@@ -2146,6 +2241,7 @@ async function main() {
         resume: !!args.resume,
         noCandidates: !!args.noCandidates,
         noSynthesize: !!args.noSynthesize,
+        fewShotExamples: args._fewShotExamples ?? [],
       });
     }
     return;
@@ -2164,6 +2260,7 @@ async function main() {
     resume: !!args.resume,
     noCandidates: !!args.noCandidates,
     noSynthesize: !!args.noSynthesize,
+    fewShotExamples: args._fewShotExamples ?? [],
   });
 }
 
@@ -2196,6 +2293,7 @@ async function runOneSession(sessionId, caller, opts) {
     round: startRound,
     session_id: sessionId,
     previous_rounds: previousRounds,
+    previous_designer_examples: opts.fewShotExamples ?? [],
   };
 
   for (let i = 0; i < opts.maxRounds; i++) {
