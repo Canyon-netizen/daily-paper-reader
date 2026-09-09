@@ -285,6 +285,102 @@ const meanJaccard = pairStats.length === 0
 const driftBucket = designDrift < 0.05 ? '稳定' : designDrift < 0.15 ? '轻微漂移' : '明显漂移';
 const driftCls = designDrift < 0.05 ? 'agents-drift-low' : designDrift < 0.15 ? 'agents-drift-mid' : 'agents-drift-high';
 
+// ---------------------------------------------------------------------------
+// iter #53 — paper × persona score matrix
+// ---------------------------------------------------------------------------
+//
+// 每行 = 出现过在本 session 任意 round evidence.paperIds 里的 paper
+// 每列 = 3 个 persona (methodologist / engineer / skeptic)
+// 单元格 = 所有 critique 中,proposal evidence 含该 paper 的 critique 的对应
+//          persona 平均分。如果该 paper 在某 persona 列没有任何评分 → null。
+//   "score_total_avg" 列: 该 paper 的所有 critique total 分平均。
+
+interface PaperPersonaRow {
+  paperId: string;
+  rounds: number[];                       // 出现过的 round 列表
+  proposalCount: number;                  // 该 paper 参与 proposal 的次数
+  evidenceOnly: boolean;                  // true = 仅出现在 evidence,没进入 critique
+  m: number | null;                       // methodologist
+  e: number | null;                       // engineer
+  s: number | null;                       // skeptic
+  totalAvg: number | null;                // total mean
+  totalSamples: number;                   // 参与 critique 总数
+}
+
+const PERSONAS = ['m', 'e', 's'] as const;
+
+// paper_id → { rounds, proposalIds, critiqueIds }
+interface PaperAgg {
+  paperId: string;
+  rounds: Set<number>;
+  proposalIds: Set<string>;
+  critiqueIds: Set<string>;
+}
+
+const paperAggMap = new Map<string, PaperAgg>();
+for (const r of rounds) {
+  for (const p of r.designer.proposals) {
+    for (const pid of p.evidence.paperIds) {
+      let agg = paperAggMap.get(pid);
+      if (!agg) {
+        agg = { paperId: pid, rounds: new Set(), proposalIds: new Set(), critiqueIds: new Set() };
+        paperAggMap.set(pid, agg);
+      }
+      agg.rounds.add(r.round);
+      agg.proposalIds.add(p.id);
+      const cr = r.feedback.critiques.find((c) => c.proposal_id === p.id);
+      if (cr) agg.critiqueIds.add(c.proposal_id);
+    }
+  }
+}
+
+const paperRows: PaperPersonaRow[] = [...paperAggMap.values()].map((agg) => {
+  // 把该 paper 关联的所有 critique 拿过来,求各 persona 平均
+  let mSum = 0, eSum = 0, sSum = 0, tSum = 0;
+  let mN = 0, eN = 0, sN = 0, tN = 0;
+  for (const r of rounds) {
+    for (const p of r.designer.proposals) {
+      if (!agg.proposalIds.has(p.id)) continue;
+      const cr = r.feedback.critiques.find((c) => c.proposal_id === p.id);
+      if (!cr) continue;
+      const sc = cr.scores as { methodologist: number; engineer: number; skeptic: number };
+      if (sc.methodologist != null) { mSum += sc.methodologist; mN++; }
+      if (sc.engineer != null)     { eSum += sc.engineer;     eN++; }
+      if (sc.skeptic != null)      { sSum += sc.skeptic;      sN++; }
+      if (cr.total != null)        { tSum += cr.total;        tN++; }
+    }
+  }
+  return {
+    paperId: agg.paperId,
+    rounds: [...agg.rounds].sort((a, b) => a - b),
+    proposalCount: agg.proposalIds.size,
+    evidenceOnly: agg.critiqueIds.size === 0,
+    m: mN === 0 ? null : mSum / mN,
+    e: eN === 0 ? null : eSum / eN,
+    s: sN === 0 ? null : sSum / sN,
+    totalAvg: tN === 0 ? null : tSum / tN,
+    totalSamples: tN,
+  };
+}).sort((a, b) => {
+  // totalAvg 大的在前(null 排到末尾)
+  if (a.totalAvg === null && b.totalAvg === null) return a.paperId.localeCompare(b.paperId);
+  if (a.totalAvg === null) return 1;
+  if (b.totalAvg === null) return -1;
+  return b.totalAvg - a.totalAvg;
+});
+
+// 顶部 / 底部:最看好 / 最看空(只看有 totalAvg 的,且参与 ≥1 critique)
+const withScores = paperRows.filter((r) => r.totalAvg !== null && r.totalSamples > 0);
+const topPicked = withScores.filter((r) => (r.totalAvg ?? 0) >= 7);
+const topSkeptical = withScores.filter((r) => (r.totalAvg ?? 0) < 5);
+
+function scoreCls(n: number | null): string {
+  if (n === null) return 'agents-matrix-na';
+  if (n >= 8) return 'agents-matrix-cell-high';
+  if (n >= 6) return 'agents-matrix-cell-mid';
+  return 'agents-matrix-cell-low';
+}
+
 // Chart geometry — SVG viewport, max values for normalization
 const N = Math.max(1, cycleStats.length);
 const CHART_W = Math.max(280, N * 80);
@@ -549,6 +645,75 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
               </table>
               <p class="muted"><small>默认按 titles Jaccard 升序(分歧最大的在前)。</small></p>
             </details>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📚 Paper × Persona Matrix (iter #53)</h2>
+          <p class="muted">
+            行 = 本 session 出现在任意 round <code>evidence.paperIds</code> 里的论文。
+            列 = 3 个 persona。<strong>单元格</strong>是该论文关联 proposal 的 critique 中对应 persona 的平均分(0..10)。
+            灰色行表示该论文仅出现在 evidence、未参与 critique。
+          </p>
+          {paperRows.length === 0 ? (
+            <p class="muted">尚无 paper 出现在 evidence 里。</p>
+          ) : (
+            <>
+              <div class="agents-paper-persona-wrapper">
+                <table class="agents-paper-persona-table">
+                  <thead>
+                    <tr>
+                      <th>paper</th>
+                      <th>rounds</th>
+                      <th>proposals</th>
+                      <th title="methodologist">m</th>
+                      <th title="engineer">e</th>
+                      <th title="skeptic">s</th>
+                      <th title="total avg (desc)">total</th>
+                      <th>n</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paperRows.map((r) => (
+                      <tr class={r.evidenceOnly ? 'agents-paper-persona-evidence-only' : ''}>
+                        <td class="agents-paper-persona-id">
+                          <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener">{r.paperId}</a>
+                          {r.evidenceOnly && <small class="muted" title="该 paper 只出现于 evidence,未进入 critique"> (evidence-only)</small>}
+                        </td>
+                        <td><small>{r.rounds.length > 0 ? r.rounds.map((n) => `r${n}`).join(', ') : <span class="muted">—</span>}</small></td>
+                        <td>{r.proposalCount}</td>
+                        <td class={scoreCls(r.m)}>{r.m === null ? <span class="muted">—</span> : r.m.toFixed(2)}</td>
+                        <td class={scoreCls(r.e)}>{r.e === null ? <span class="muted">—</span> : r.e.toFixed(2)}</td>
+                        <td class={scoreCls(r.s)}>{r.s === null ? <span class="muted">—</span> : r.s.toFixed(2)}</td>
+                        <td class={scoreCls(r.totalAvg)}><strong>{r.totalAvg === null ? <span class="muted">—</span> : r.totalAvg.toFixed(2)}</strong></td>
+                        <td><small>{r.totalSamples}</small></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {(topPicked.length > 0 || topSkeptical.length > 0) && (
+                <div class="agents-paper-persona-summary">
+                  {topPicked.length > 0 && (
+                    <p>
+                      <span class="agents-drift-low">👍 最看好 (total ≥ 7):</span>{' '}
+                      {topPicked.map((r) => (
+                        <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener" class="agents-paper-link">{r.paperId}</a>
+                      )).reduce<any>((acc, el, i) => acc.concat(i > 0 ? [', '] : [], el), [])}
+                    </p>
+                  )}
+                  {topSkeptical.length > 0 && (
+                    <p>
+                      <span class="agents-drift-high">👎 最看空 (total &lt; 5):</span>{' '}
+                      {topSkeptical.map((r) => (
+                        <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener" class="agents-paper-link">{r.paperId}</a>
+                      )).reduce<any>((acc, el, i) => acc.concat(i > 0 ? [', '] : [], el), [])}
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </section>
 
