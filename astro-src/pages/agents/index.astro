@@ -204,6 +204,9 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       <p>暂无 round。在上方填 Session ID + 点"跑一轮"开始。</p>
     </section>
 
+    <!-- iter #25: 全局 Toast 通知浮层 -->
+    <div class="agents-toast-host" id="agents-toast-host" aria-live="polite" aria-atomic="true"></div>
+
     <section class="agents-trends" id="agents-trends" hidden>
       <h2>📈 趋势(本会话所有 round)</h2>
       <div class="agents-trends-grid">
@@ -829,7 +832,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     function downloadExperimentReport() {
       if (!currentSessionId) {
-        alert('先选一个 session');
+        showToast('先选一个 session', 'warning');
         return;
       }
       const sid = currentSessionId;
@@ -848,13 +851,15 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         URL.revokeObjectURL(url);
         a.remove();
       }, 100);
-      $('agents-status-text').textContent =
-        `📑 已生成报告 "${sid}" (${rounds.length} rounds, ${md.length} bytes)`;
+      showToast(
+        `📑 已生成报告 "${sid}" (${rounds.length} rounds, ${md.length} bytes)`,
+        'success',
+      );
     }
 
     function downloadCurrentSession() {
       if (!currentSessionId) {
-        alert('先选一个 session');
+        showToast('先选一个 session', 'warning');
         return;
       }
       const sid = currentSessionId;
@@ -872,8 +877,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         URL.revokeObjectURL(url);
         a.remove();
       }, 100);
-      $('agents-status-text').textContent =
-        `📦 已导出 "${sid}" → agents-session-${sid}-${ts}.json (${loadRounds(sid).length} rounds)`;
+      showToast(
+        `📦 已导出 "${sid}" → agents-session-${sid}-${ts}.json (${loadRounds(sid).length} rounds)`,
+        'success',
+      );
     }
 
     async function importSessionFromFile(file: File, targetSid?: string, overwrite = false) {
@@ -938,8 +945,11 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       }
       refreshSessionPicker();
       refresh();
-      $('agents-status-text').textContent = msg;
-      if (fail.length > 0) {
+      if (fail.length === 0) {
+        showToast(msg, 'success', 4000);
+      } else {
+        // 部分失败:warning 通知 + 详情列在 console
+        showToast(msg, 'warning', 5000);
         const detail = fail.map((f) => `• ${f.file}: ${f.error}`).join('\n');
         console.warn(`[agents] import failures:\n${detail}`);
       }
@@ -1023,7 +1033,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     function confirmAndSoftDelete() {
       if (!currentSessionId) {
-        alert('先选一个 session');
+        showToast('先选一个 session', 'warning');
         return;
       }
       const sid = currentSessionId;
@@ -1036,9 +1046,9 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         refreshSessionPicker();
         refresh();
         refreshTrashPanel();
-        $('agents-status-text').textContent = `🗑️ 已移到回收站 "${r.sid}" (${daysUntilExpiry(r.deletedAt)} 天后过期)`;
+        showToast(`🗑️ 已移到回收站 "${r.sid}" (${daysUntilExpiry(r.deletedAt)} 天后过期)`, 'success');
       } catch (err) {
-        alert(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+        showToast(`删除失败: ${err instanceof Error ? err.message : String(err)}`, 'error', 6000);
       }
     }
 
@@ -1102,9 +1112,9 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
             refreshSessionPicker();
             refresh();
             refreshTrashPanel();
-            $('agents-status-text').textContent = `♻️ 已恢复 "${sid}"`;
+            showToast(`♻️ 已恢复 "${sid}"`, 'success');
           } catch (err) {
-            alert(`恢复失败: ${err instanceof Error ? err.message : String(err)}`);
+            showToast(`恢复失败: ${err instanceof Error ? err.message : String(err)}`, 'error', 6000);
           }
         });
       });
@@ -1115,6 +1125,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           if (!confirm(`永久删除 "${sid}"?此操作不可撤销。`)) return;
           permanentlyDelete(sid, at);
           refreshTrashPanel();
+          showToast(`永久删除 "${sid}"`, 'warning');
         });
       });
     }
@@ -1124,7 +1135,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       $('agents-trash-purge-all').addEventListener('click', () => {
         const r = purgeExpired();
         refreshTrashPanel();
-        alert(`清空过期:删除 ${r.purged} 个,剩余 ${r.remaining} 个未过期`);
+        showToast(`清空过期:删除 ${r.purged} 个,剩余 ${r.remaining} 个未过期`, 'info');
       });
     }
 
@@ -1136,7 +1147,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
     function duplicateCurrentSession() {
       if (!currentSessionId) {
-        alert('先选一个 session');
+        showToast('先选一个 session', 'warning');
         return;
       }
       const oldSid = currentSessionId;
@@ -1144,7 +1155,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       try {
         result = duplicateSession(oldSid);
       } catch (err) {
-        alert(`复制失败: ${err instanceof Error ? err.message : String(err)}`);
+        showToast(`复制失败: ${err instanceof Error ? err.message : String(err)}`, 'error', 6000);
         return;
       }
       // 切到新 session 并刷新
@@ -1153,8 +1164,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       sessionInput.value = result.newSid;
       refreshSessionPicker();
       refresh();
-      $('agents-status-text').textContent =
-        `📋 已复制 "${oldSid}" → "${result.newSid}" (${result.roundCount} rounds)`;
+      showToast(
+        `📋 已复制 "${oldSid}" → "${result.newSid}" (${result.roundCount} rounds)`,
+        'success',
+      );
     }
 
     // iter #20 — session 标签 (multi-label)
@@ -1244,7 +1257,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         refreshTagPanel();
         refreshSessionPicker();
         refreshFilterPanel();
-        $('agents-status-text').textContent = `🏷️ 已保存 ${m.tags.length} 个标签`;
+        showToast(`🏷️ 已保存 ${m.tags.length} 个标签`, 'success');
       };
       input.addEventListener('blur', commit);
       input.addEventListener('keydown', (e) => {
@@ -1570,11 +1583,121 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
+    // ─── iter #25 全局 Toast 通知系统 ─────────────────────────────
+    // 之前各按钮的反馈散落各处:
+    //   - statusText(底部一行小字,容易错过)
+    //   - alert()(打断操作)
+    //   - console.warn(用户根本看不到)
+    // 现在统一用右下角浮层:success/error/warning/info,3 秒自动消失,
+    // 点 ✕ 或 hover 时延长停留,鼠标离开再开始倒计时。
+
+    type ToastVariant = 'success' | 'error' | 'warning' | 'info';
+    const TOAST_ICONS: Record<ToastVariant, string> = {
+      success: '✅',
+      error: '❌',
+      warning: '⚠️',
+      info: 'ℹ️',
+    };
+    const TOAST_DEFAULT_DURATION: Record<ToastVariant, number> = {
+      success: 2500,
+      error: 5000,   // 错误停留更久让人看清
+      warning: 4000,
+      info: 3000,
+    };
+    const TOAST_MAX_PER_VARIANT = 5;
+    const toastCounters: Record<ToastVariant, number> = { success: 0, error: 0, warning: 0, info: 0 };
+
+    function makeToast(message: string, variant: ToastVariant = 'info', durationMs?: number) {
+      if (typeof message !== 'string' || message.trim() === '') {
+        throw new Error('message must be a non-empty string');
+      }
+      toastCounters[variant]++;
+      return {
+        id: `t-${variant}-${toastCounters[variant]}-${Date.now()}`,
+        message: message.trim(),
+        variant,
+        durationMs: durationMs ?? TOAST_DEFAULT_DURATION[variant],
+        createdAt: Date.now(),
+      };
+    }
+
+    function escapeHtml(s: string): string {
+      return s.replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c] || c));
+    }
+
+    function showToast(message: string, variant: ToastVariant = 'info', durationMs?: number) {
+      const host = $('agents-toast-host');
+      if (!host) {
+        // fallback — DOM 还没就绪,用 alert 兜底
+        console.warn('[toast] host missing, fallback to alert:', message);
+        alert(message);
+        return null;
+      }
+      const toast = makeToast(message, variant, durationMs);
+
+      // 同 variant 上限 N 条,超出挤掉最旧的(实现同 test_agents_toast.enqueueToast)
+      const sameVariantEls = Array.from(host.querySelectorAll<HTMLElement>(`.agents-toast[data-variant="${variant}"]`));
+      if (sameVariantEls.length >= TOAST_MAX_PER_VARIANT) {
+        const old = sameVariantEls[0];
+        if (old.dataset.timerId) clearTimeout(Number(old.dataset.timerId));
+        old.remove();
+      }
+
+      const el = document.createElement('div');
+      el.className = `agents-toast agents-toast-${variant}`;
+      el.dataset.variant = variant;
+      el.dataset.id = toast.id;
+      el.setAttribute('role', variant === 'error' ? 'alert' : 'status');
+      el.innerHTML = `
+        <span class="agents-toast-icon" aria-hidden="true">${TOAST_ICONS[variant]}</span>
+        <span class="agents-toast-msg">${escapeHtml(toast.message)}</span>
+        <button type="button" class="agents-toast-close" aria-label="关闭通知">×</button>
+      `;
+
+      let dismissed = false;
+      let currentTimer: number | null = null;
+      let remainingMs = toast.durationMs;
+      let startedAt = Date.now();
+
+      function dismiss() {
+        if (dismissed) return;
+        dismissed = true;
+        if (currentTimer !== null) clearTimeout(currentTimer);
+        el.classList.add('agents-toast-leaving');
+        // 动画结束后移除
+        setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 200);
+      }
+      function startTimer() {
+        startedAt = Date.now();
+        currentTimer = window.setTimeout(dismiss, remainingMs);
+        el.dataset.timerId = String(currentTimer);
+      }
+      function pauseTimer() {
+        if (currentTimer !== null) {
+          clearTimeout(currentTimer);
+          currentTimer = null;
+          remainingMs = Math.max(0, remainingMs - (Date.now() - startedAt));
+        }
+      }
+
+      const closeBtn = el.querySelector<HTMLButtonElement>('.agents-toast-close');
+      closeBtn?.addEventListener('click', (e) => { e.stopPropagation(); dismiss(); });
+      el.addEventListener('mouseenter', pauseTimer);
+      el.addEventListener('mouseleave', startTimer);
+      el.addEventListener('click', dismiss);
+
+      host.appendChild(el);
+      startTimer();
+      return { id: toast.id, dismiss };
+    }
+
     async function runOnce() {
       if (isRunning) return;
       const sid = ($<HTMLInputElement>('agents-session-id')).value.trim();
       if (!sid) {
-        alert('请填 Session ID');
+        showToast('请填 Session ID', 'warning');
         return;
       }
       currentSessionId = sid;
@@ -1727,7 +1850,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     $('agents-abort-btn').addEventListener('click', () => {
       if (activeAbort) {
         activeAbort.abort();
-        $('agents-status-text').textContent = '🛑 已请求停止(本轮完成后退出)...';
+        showToast('🛑 已请求停止(本轮完成后退出)...', 'warning');
       }
     });
     wireTokenRate();
@@ -1836,7 +1959,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       const libs = listUserLibraries();
       const lib = libs.find((l) => l.id === libId);
       if (!lib) {
-        alert(`项目 ${libId} 不存在(可能 localStorage 被清理)`);
+        showToast(`项目 ${libId} 不存在(可能 localStorage 被清理)`, 'error', 6000);
         return;
       }
 
