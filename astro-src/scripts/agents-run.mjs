@@ -58,6 +58,9 @@ function parseArgs(argv) {
     else if (a === '--new-session') out.newSession = argv[++i];
     else if (a === '--no-run') out.noRun = true;
     else if (a === '--diff') out.diff = true;
+    else if (a === '--leaderboard') out.leaderboard = true;
+    else if (a === '--top') out.top = Number(argv[++i]);
+    else if (a === '--type') out.type = argv[++i];
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -94,6 +97,11 @@ if (args.help) {
                      and two positional round numbers). Outputs proposals
                      added/removed/changed + score delta + gate decision
                      transitions. JSON via --json.
+  --leaderboard      Cross-session aggregate: scan all archive/*/rounds/
+                     and rank top proposal types by avg score / apply rate
+                     + top Elo proposals + most-active sessions. Filter
+                     by --type X, limit --top N (default 10), --json.
+  --top N            With --leaderboard, limit each ranking to top N (default 10).
   --help             Show this help`);
   process.exit(0);
 }
@@ -421,6 +429,203 @@ function parseScoreCritique(raw) {
 function clampScore(s) {
   if (!Number.isFinite(s)) return 5;
   return Math.max(0, Math.min(10, Math.round(s)));
+}
+
+// ---------------------------------------------------------------------------
+// --leaderboard 模式:跨 session 聚合
+// ---------------------------------------------------------------------------
+
+/**
+ * aggregateLeaderboard(sessionsData, opts) — 纯函数,把多个 session 的 rounds
+ * 聚合成全局排行榜。sessionsData: [{ sessionId, records: RoundRecord[] }]。
+ *
+ * 返回:
+ *   totals: { sessions, rounds, proposals, applied, skipped }
+ *   byType: [{ type, count, avgScore, applyRate, promoted, candidate, sketch, rejected }]
+ *     按 count 倒序
+ *   topElo: [{ sessionId, round, title, type, total, elo, matches, wins }]
+ *     按 elo 倒序(过滤初始 1200)
+ *   topSessions: [{ sessionId, rounds, proposals, applied, avgScore }]
+ *     按 applied 倒序
+ */
+export function aggregateLeaderboard(sessionsData, opts = {}) {
+  const topN = opts.topN ?? 10;
+  // 同时接受 opts.type 和 opts.typeFilter,方便 caller 选喜欢的名字
+  const typeFilter = opts.type ?? opts.typeFilter ?? null;
+  const sessions = Array.isArray(sessionsData) ? sessionsData : [];
+
+  // 累加 per-type + per-session
+  const typeStats = new Map(); // type → { count, scores[], decisions, applied }
+  const sessionStats = new Map(); // sid → { rounds, proposals, applied, scores[] }
+  const allCritiques = [];
+  let totalRounds = 0;
+  let totalProposals = 0;
+  let totalApplied = 0;
+  let totalSkipped = 0;
+
+  for (const { sessionId, records } of sessions) {
+    const sStats = { rounds: records.length, proposals: 0, applied: 0, scores: [] };
+    for (const rec of records) {
+      totalRounds++;
+      const proposals = rec.designer?.proposals ?? [];
+      const critiquesById = new Map((rec.feedback?.critiques ?? []).map((c) => [c.proposal_id, c]));
+      const verdictById = new Map((rec.gate?.verdicts ?? []).map((v) => [v.proposal_id, v]));
+      const appliedIds = new Set((rec.modifier?.applied ?? []).map((a) => a.proposal_id));
+
+      for (const p of proposals) {
+        if (typeFilter && p.type !== typeFilter) continue;
+        totalProposals++;
+        sStats.proposals++;
+        const c = critiquesById.get(p.id);
+        const v = verdictById.get(p.id);
+        const score = c ? Number(c.total) : NaN;
+        const validScore = Number.isFinite(score) ? score : 0;
+        sStats.scores.push(validScore);
+        if (!typeStats.has(p.type)) {
+          typeStats.set(p.type, { count: 0, scores: [], decisions: { promoted: 0, candidate: 0, sketch: 0, rejected: 0 }, applied: 0 });
+        }
+        const ts = typeStats.get(p.type);
+        ts.count++;
+        ts.scores.push(validScore);
+        if (v?.decision && ts.decisions[v.decision] != null) ts.decisions[v.decision]++;
+        if (appliedIds.has(p.id)) ts.applied++;
+
+        if (c) {
+          allCritiques.push({
+            sessionId,
+            round: rec.round,
+            proposal_id: p.id,
+            title: p.title,
+            type: p.type,
+            total: validScore,
+            elo: Number(c.elo) || 0,
+            matches: Number(c.matches) || 0,
+            wins: Number(c.wins) || 0,
+          });
+        }
+      }
+
+      totalApplied += rec.modifier?.applied?.length ?? 0;
+      totalSkipped += rec.modifier?.skipped?.length ?? 0;
+      sStats.applied += rec.modifier?.applied?.length ?? 0;
+    }
+    sessionStats.set(sessionId, sStats);
+  }
+
+  // 派生 byType 数组
+  const byType = [...typeStats.entries()].map(([type, ts]) => {
+    const sumScores = ts.scores.reduce((a, b) => a + b, 0);
+    const applyRate = ts.count > 0 ? ts.applied / ts.count : 0;
+    return {
+      type,
+      count: ts.count,
+      avgScore: ts.count > 0 ? Math.round((sumScores / ts.count) * 100) / 100 : 0,
+      applyRate: Math.round(applyRate * 1000) / 1000,
+      promoted: ts.decisions.promoted,
+      candidate: ts.decisions.candidate,
+      sketch: ts.decisions.sketch,
+      rejected: ts.decisions.rejected,
+    };
+  }).sort((a, b) => b.count - a.count);
+
+  // 过滤 + 排序 topElo
+  const topElo = allCritiques
+    .filter((c) => c.matches > 0 || c.elo !== 1200)
+    .sort((a, b) => b.elo - a.elo)
+    .slice(0, topN);
+
+  // topSessions
+  const topSessions = [...sessionStats.entries()]
+    .map(([sessionId, s]) => ({
+      sessionId,
+      rounds: s.rounds,
+      proposals: s.proposals,
+      applied: s.applied,
+      avgScore: s.scores.length ? Math.round((s.scores.reduce((a, b) => a + b, 0) / s.scores.length) * 100) / 100 : 0,
+    }))
+    .sort((a, b) => b.applied - a.applied)
+    .slice(0, topN);
+
+  return {
+    totals: {
+      sessions: sessions.length,
+      rounds: totalRounds,
+      proposals: totalProposals,
+      applied: totalApplied,
+      skipped: totalSkipped,
+    },
+    byType,
+    topElo,
+    topSessions,
+  };
+}
+
+/**
+ * formatLeaderboardText(report, opts) — 文本模式 stdout 输出。
+ */
+export function formatLeaderboardText(report, opts = {}) {
+  const lines = [];
+  const t = report.totals;
+  lines.push(`🏆 Cross-session Leaderboard`);
+  if (opts.typeFilter) lines.push(`(filtered: type = ${opts.typeFilter})`);
+  lines.push(`Totals: ${t.sessions} sessions, ${t.rounds} rounds, ${t.proposals} proposals, ${t.applied} applied / ${t.skipped} skipped`);
+  lines.push('');
+  if (report.byType.length) {
+    lines.push(`📊 By Proposal Type (sorted by count desc):`);
+    const header = `  ${'type'.padEnd(20)} ${'count'.padStart(5)}  ${'avg'.padStart(5)}  ${'apply%'.padStart(6)}  ${'p/c/s/r'.padStart(11)}`;
+    lines.push(header);
+    for (const t of report.byType) {
+      lines.push(
+        `  ${t.type.padEnd(20)} ${String(t.count).padStart(5)}  ${String(t.avgScore).padStart(5)}  ${(t.applyRate * 100).toFixed(1).padStart(5)}%  ${String(t.promoted).padStart(3)}/${String(t.candidate).padStart(3)}/${String(t.sketch).padStart(3)}/${String(t.rejected).padStart(3)}`,
+      );
+    }
+    lines.push('');
+  } else {
+    lines.push('(no proposals match)');
+    lines.push('');
+  }
+  if (report.topElo.length) {
+    lines.push(`🥇 Top Elo Proposals (${report.topElo.length}):`);
+    for (let i = 0; i < report.topElo.length; i++) {
+      const p = report.topElo[i];
+      lines.push(`  ${i + 1}. [${p.sessionId} round ${p.round}] ${p.title}  (elo=${p.elo}, score=${p.total}, type=${p.type}, ${p.matches}m/${p.wins}w)`);
+    }
+    lines.push('');
+  }
+  if (report.topSessions.length) {
+    lines.push(`📂 Most Active Sessions (by applied count):`);
+    for (const s of report.topSessions) {
+      lines.push(`  ${s.sessionId}  rounds=${s.rounds}, proposals=${s.proposals}, applied=${s.applied}, avg=${s.avgScore}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * loadLeaderboard(opts) — 扫 archive/<sid>/rounds/*.json (所有 sid),
+ * 聚合。typeFilter 从 opts 取。
+ */
+async function loadLeaderboard(opts = {}) {
+  if (!existsSync('archive')) return { totals: { sessions: 0, rounds: 0, proposals: 0, applied: 0, skipped: 0 }, byType: [], topElo: [], topSessions: [] };
+  const entries = await readdir('archive', { withFileTypes: true });
+  const sessionIds = entries
+    .filter((e) => e.isDirectory() && /^[a-f0-9]{8,}$/.test(e.name))
+    .map((e) => e.name);
+
+  const sessionsData = [];
+  for (const sid of sessionIds) {
+    const files = await listExistingRounds(sid);
+    const records = [];
+    for (const f of files) {
+      try {
+        records.push(JSON.parse(await readFile(f, 'utf8')));
+      } catch {
+        // skip corrupt
+      }
+    }
+    if (records.length > 0) sessionsData.push({ sessionId: sid, records });
+  }
+  return aggregateLeaderboard(sessionsData, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,6 +1445,19 @@ async function main() {
     } catch (err) {
       console.error(`[error] ${err.message}`);
       process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.7: --leaderboard (跨 session 聚合,无 LLM 调用)
+  if (args.leaderboard) {
+    const topN = args.top ?? 10;
+    const typeFilter = args.type ?? null;
+    const report = await loadLeaderboard({ topN, typeFilter });
+    if (args.json) {
+      console.log(JSON.stringify({ typeFilter, topN, ...report }, null, 2));
+    } else {
+      console.log(formatLeaderboardText(report, { typeFilter }));
     }
     return;
   }
