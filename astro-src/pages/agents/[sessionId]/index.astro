@@ -767,7 +767,6 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
           <p class="muted">
             <a href={`${base}/agents/${sessionId}/synthesis/`}>查看全部 {syntheses.length} 份 synthesis →</a>
           </p>
-        </section>
 
         <section class="agents-session-section">
           <h2>🔁 继续 / resume</h2>
@@ -775,6 +774,16 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
           <pre class="agents-auto-cmd" tabindex="0">node astro-src/scripts/agents-run.mjs --auto "{escapeHtml(meta.goal)}" \
   --auto-resume --session {sessionId} \
   --max-cycles 1</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📦 导出</h2>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/export/`}>📦 浏览器下载 .md bundle / 复制到剪贴板 (iter #58) →</a>
+          </p>
+          <p class="muted">
+            CLI 等价:<code>node astro-src/scripts/agents-run.mjs --export-md --session {sessionId}</code>
+          </p>
         </section>
 
         <section class="agents-session-section">

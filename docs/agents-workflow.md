@@ -195,3 +195,4 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 | #55 | --quickstart e2e | 真实子进程端到端 smoke 6 项断言 |
 | **#56** | **--search-arxiv** | **Designer 真 tool use;关闭最大短板** |
 | **#57** | **--export-md** | **整 session 一键打包成 1 个 markdown,便于分享 / 归档 / 二次处理** |
+| **#58** | **/agents/<sid>/export/** | **浏览器版本 export 页面 — Download .md / Copy to clipboard / Preview** |

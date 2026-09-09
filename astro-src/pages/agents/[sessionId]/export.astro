@@ -1,0 +1,406 @@
+---
+// /agents/[sessionId]/export.astro — iter #58: browser-side export page.
+//
+// 静态页(getStaticPaths 列所有有 meta 的 session),SSR 阶段读
+// archive/<sid>/meta.json(若有)注入页面 <script id="session-meta">。
+// 客户端脚本 exportSessionBundle(sid) 优先读 localStorage(浏览器跑的 round),
+// 否则降级到 fetch /agents/data/session/<sid>.json(archive/ 落盘的 round)。
+// 用户点 "📦 Download bundle.md" → 触发浏览器下载。
+//
+// 重要:此页本身不写文件,不调 LLM,纯 SSR + client-side script。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths:enumerate sessions under archive/ that have meta.json
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string }; props: { hasArchive: boolean } }[] = [];
+  let sessions: string[] = [];
+  try { sessions = await readdir(root); } catch { return []; }
+  for (const sid of sessions) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (existsSync(metaPath)) out.push({ params: { sessionId: sid }, props: { hasArchive: true } });
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const { hasArchive } = Astro.props;
+
+// Try to inline the SSR meta so users without localStorage still see something.
+// 注:localStorage 在浏览器端才有,SSR 阶段拿不到;这里 SSR 只做 "session 存在 + 有 archive" 的提示。
+---
+
+<BaseLayout title={`Export ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← Agents Console</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>export</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📦 Export session <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        把整 session 打包成 1 份自包含 markdown — meta + 每 round proposals/critiques/gate/modifier +
+        所有 syntheses + 最新 digest。便于分享 / 归档 / 喂下游 LLM。
+      </p>
+    </header>
+
+    <section class="agents-stats">
+      <div class="agents-stats-row">
+        <span class="agents-stat"><strong id="export-rounds">0</strong> rounds</span>
+        <span class="agents-stat"><strong id="export-proposals">0</strong> proposals</span>
+        <span class="agents-stat"><strong id="export-applied">0</strong> applied</span>
+        <span class="agents-stat"><strong id="export-syntheses">0</strong> syntheses</span>
+        <span class="agents-stat" id="export-source-tag"></span>
+      </div>
+    </section>
+
+    <section class="agents-controls">
+      <div class="agents-controls-row">
+        <button class="button primary" id="export-download-btn" title="触发浏览器下载,文件名 <sid>-export.md">
+          📦 Download bundle.md
+        </button>
+        <button class="button" id="export-copy-btn" title="把 markdown 文本写到剪贴板">
+          📋 Copy to clipboard
+        </button>
+        <button class="button" id="export-preview-btn" title="在下面 textarea 里预览">
+          👁️ Preview
+        </button>
+        <a class="button" href={`${base}/agents/${sessionId}/`} title="回到 session 详情">← Back to session</a>
+      </div>
+    </section>
+
+    <section class="agents-export-section">
+      <textarea id="export-preview-area" rows="20" placeholder="点 👁️ Preview 在这里看 markdown 内容" readonly></textarea>
+    </section>
+
+    <section class="agents-help">
+      <h3>💡 CLI 等价命令</h3>
+      <p>在仓库根目录运行:</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --export-md --session {sessionId}</code></pre>
+      <p>或自定义路径:</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --export-md ./my-bundle.md --session {sessionId}</code></pre>
+      <p>或纯 JSON:</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --export-md --json --session {sessionId}</code></pre>
+    </section>
+
+    <section class="agents-help">
+      <h3>📚 这是什么?</h3>
+      <p>iter #57 引入 <code>--export-md</code> CLI 命令,把 1 个 session 的所有产物(meta / rounds /
+      syntheses / digest)打包成 1 份自包含 markdown。本页面(iter #58)提供浏览器版本:</p>
+      <ul>
+        <li>优先读 localStorage(<code>dpr_agents_rounds_{`<sid>`}</code> + <code>dpr_agents_meta_{`<sid>`}</code>)</li>
+        <li>fallback 到 server 端 archive/{`<sid>`}/(如果 SSR 时检测到 hasArchive)</li>
+        <li>用户点 "Download bundle.md" → 浏览器本地生成 + 触发 download,不调 API</li>
+      </ul>
+      <p class={hasArchive ? '' : 'agents-help-warn'}>
+        {hasArchive
+          ? '✓ 检测到 server 端 archive/' + sessionId + '/;如果 localStorage 有更新的 round,会用 localStorage 版本。'
+          : '⚠ Server 端无 archive/' + sessionId + '/;只读 localStorage(浏览器跑过的 round)。'}
+      </p>
+    </section>
+  </main>
+
+  <script id="session-id-data" type="application/json" set:html={JSON.stringify({ sessionId, hasArchive })}></script>
+
+  <script>
+    /* eslint-disable */
+    // -----------------------------------------------------------------------
+    // 客户端 export bundle — iter #58
+    // -----------------------------------------------------------------------
+    //
+    // buildExportBundle(input):聚合 meta + rounds + syntheses + digest 成 1 个对象。
+    //   输入来自 localStorage(浏览器侧 round)优先;若 localStorage 空,尝试 fetch SSR 数据。
+    //   与 CLI 端 buildExportBundle(formatExportMarkdown 同步) 字段对齐,保证 bundle 结构一致。
+    //
+    // formatExportMarkdown(bundle):纯渲染,无 IO,生成 markdown 字符串。
+    //   与 CLI formatExportMarkdown 同结构(便于 cross-check)。
+    //
+    // downloadBundle(filename, content):触发浏览器 <a download>。
+    // -----------------------------------------------------------------------
+
+    /** @typedef {{round:number, designer:{proposals:Array<{id:string,title:string,type?:string,rationale?:string,estimated_effort?:string,risk?:string,evidence?:any,target?:any,created_at?:number}>, model?:string}, feedback:{critiques:Array<{proposal_id:string,total?:number,elo?:number,matches?:number,wins?:number}>, judge_calls?:number, total_tokens?:number}, gate:{promoted?:string[],candidate?:string[],sketch?:string[],rejected?:string[]}, modifier:{applied:Array<{kind:string,proposal_id:string}>, skipped?:any[]}, started_at?:number, finished_at?:number, meta?:any}} RoundRecord */
+    /** @typedef {{session_id:string, goal?:string, created_at?:number, rounds_requested?:number, preset?:string, dry_run?:boolean}} SessionMeta */
+
+    const sessionIdMeta = JSON.parse(document.getElementById('session-id-data').textContent);
+    const sessionId = sessionIdMeta.sessionId;
+    const hasArchive = sessionIdMeta.hasArchive;
+
+    const ROUNDS_KEY = (sid) => `dpr_agents_rounds_${sid}`;
+    const META_KEY = (sid) => `dpr_agents_meta_${sid}`;
+
+    // -----------------------------------------------------------------------
+    // 纯函数:buildExportBundle + formatExportMarkdown
+    // -----------------------------------------------------------------------
+
+    function buildExportBundle(input) {
+      const { meta = null, rounds = [], syntheses = [], digest = null } = input ?? {};
+      let proposals = 0, applied = 0;
+      for (const r of rounds) {
+        proposals += r.designer?.proposals?.length ?? 0;
+        applied += r.modifier?.applied?.length ?? 0;
+      }
+      return {
+        sessionId: meta?.session_id ?? '(unknown)',
+        generatedAt: new Date().toISOString(),
+        meta,
+        rounds: rounds.map((r) => ({
+          round: r.round,
+          started_at: r.started_at,
+          finished_at: r.finished_at,
+          designer: r.designer,
+          feedback: r.feedback,
+          gate: r.gate,
+          modifier: r.modifier,
+        })),
+        syntheses,
+        digest,
+        stats: {
+          rounds: rounds.length,
+          proposals,
+          applied,
+          syntheses: syntheses.length,
+          hasDigest: typeof digest === 'string' && digest.length > 0,
+        },
+      };
+    }
+
+    function formatExportMarkdown(bundle) {
+      if (!bundle) return '# Export bundle\n\n(bundle is empty)\n';
+      const lines = [];
+      const sid = bundle.sessionId ?? '(unknown)';
+      const meta = bundle.meta;
+      const stats = bundle.stats ?? {};
+      const generatedAt = bundle.generatedAt ?? new Date().toISOString();
+      lines.push(`# Agents Session Export — ${sid}`);
+      lines.push('');
+      lines.push(`> Generated ${generatedAt}`);
+      lines.push('');
+      lines.push(`## 📊 Stats`);
+      lines.push(`- rounds: **${stats.rounds ?? 0}**`);
+      lines.push(`- proposals: **${stats.proposals ?? 0}**`);
+      lines.push(`- modifier applied: **${stats.applied ?? 0}**`);
+      lines.push(`- syntheses: **${stats.syntheses ?? 0}**`);
+      lines.push(`- has digest: **${stats.hasDigest ? 'yes' : 'no'}**`);
+      lines.push('');
+      if (meta) {
+        lines.push(`## 🎯 Meta`);
+        lines.push(`- session_id: \`${meta.session_id ?? sid}\``);
+        lines.push(`- goal: ${meta.goal ?? '(none)'}`);
+        if (meta.created_at) lines.push(`- created_at: ${new Date(meta.created_at).toISOString()}`);
+        if (meta.rounds_requested != null) lines.push(`- rounds_requested: ${meta.rounds_requested}`);
+        if (meta.preset) lines.push(`- preset: ${meta.preset}`);
+        if (meta.dry_run != null) lines.push(`- dry_run: ${meta.dry_run}`);
+        lines.push('');
+      }
+      const rounds = bundle.rounds ?? [];
+      if (rounds.length) {
+        lines.push(`## 🔄 Rounds (${rounds.length})`);
+        for (const r of rounds) {
+          lines.push('');
+          lines.push(`### Round ${r.round}`);
+          if (r.started_at) lines.push(`- started: ${new Date(r.started_at).toISOString()}`);
+          if (r.finished_at) lines.push(`- finished: ${new Date(r.finished_at).toISOString()}`);
+          const d = r.designer ?? {};
+          lines.push(`- designer: ${(d.proposals ?? []).length} proposals (model: ${d.model ?? '?'})`);
+          const f = r.feedback ?? {};
+          lines.push(`- feedback: ${(f.critiques ?? []).length} critiques, judge_calls=${f.judge_calls ?? '?'}, tokens=${f.total_tokens ?? '?'}`);
+          const g = r.gate ?? {};
+          lines.push(`- gate: promoted=${(g.promoted ?? []).length} candidate=${(g.candidate ?? []).length} sketch=${(g.sketch ?? []).length} rejected=${(g.rejected ?? []).length}`);
+          const proposals = d.proposals ?? [];
+          if (proposals.length) {
+            lines.push('');
+            lines.push('#### Proposals');
+            for (const p of proposals) {
+              lines.push(`- **${p.title ?? '(untitled)'}** [${p.type ?? '?'}]`);
+              if (p.rationale) lines.push(`  - rationale: ${p.rationale}`);
+              if (p.estimated_effort) lines.push(`  - effort: ${p.estimated_effort}`);
+              if (p.risk) lines.push(`  - risk: ${p.risk}`);
+            }
+          }
+          const critiques = f.critiques ?? [];
+          if (critiques.length) {
+            lines.push('');
+            lines.push('#### Critiques');
+            for (const c of critiques) {
+              const total = c.total != null ? c.total.toFixed(1) : '?';
+              const elo = c.elo != null ? Math.round(c.elo) : '?';
+              lines.push(`- \`${c.proposal_id}\`: total=${total}, elo=${elo}, matches=${c.matches ?? 0}, wins=${c.wins ?? 0}`);
+            }
+          }
+          const promoted = g.promoted ?? [];
+          const candidate = g.candidate ?? [];
+          if (promoted.length || candidate.length) {
+            lines.push('');
+            lines.push('#### Gate');
+            if (promoted.length) lines.push(`- promoted: ${promoted.join(', ')}`);
+            if (candidate.length) lines.push(`- candidate: ${candidate.join(', ')}`);
+          }
+          const applied = r.modifier?.applied ?? [];
+          if (applied.length) {
+            lines.push('');
+            lines.push('#### Modifier applied');
+            for (const a of applied) {
+              lines.push(`- ${a.kind ?? '?'} ← \`${a.proposal_id}\``);
+            }
+          }
+        }
+        lines.push('');
+      }
+      const syntheses = bundle.syntheses ?? [];
+      if (syntheses.length) {
+        lines.push(`## 📝 Syntheses (${syntheses.length})`);
+        for (const s of syntheses) {
+          lines.push('');
+          lines.push(`### Synthesis #${s.idx ?? '?'}`);
+          lines.push('');
+          lines.push(s.raw ?? '');
+        }
+        lines.push('');
+      }
+      if (bundle.digest) {
+        lines.push(`## 📋 Digest`);
+        lines.push('');
+        lines.push(bundle.digest);
+        lines.push('');
+      }
+      lines.push('---');
+      lines.push(`*Exported by DPR agents-run.mjs --export-md (browser export page, iter #58)*`);
+      return lines.join('\n');
+    }
+
+    // -----------------------------------------------------------------------
+    // 数据源:优先 localStorage,fallback 到 SSR 内联 / fetch archive
+    // -----------------------------------------------------------------------
+
+    function readLocalMeta() {
+      try {
+        const raw = localStorage.getItem(META_KEY(sessionId));
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch { return null; }
+    }
+    function readLocalRounds() {
+      try {
+        const raw = localStorage.getItem(ROUNDS_KEY(sessionId));
+        if (!raw) return [];
+        return JSON.parse(raw);
+      } catch { return []; }
+    }
+
+    async function fetchArchiveBundle() {
+      // Browser cannot directly read /archive/<sid>/ files (filesystem).
+      // Fallback: fetch a tiny static manifest if the user has deployed one.
+      // 当前 SSR 不提供 archive JSON endpoint,所以这里返回空(用户应先用 CLI)。
+      return null;
+    }
+
+    async function buildCurrentBundle() {
+      const meta = readLocalMeta();
+      const rounds = readLocalRounds();
+      let sourceTag = 'localStorage';
+      let syntheses = [];
+      let digest = null;
+
+      // localStorage 有 round 就用 localStorage
+      if (rounds.length > 0) {
+        // syntheses / digest 在 localStorage 不存,提示用户 CLI 才有完整版本
+        return { bundle: buildExportBundle({ meta, rounds, syntheses, digest }), source: sourceTag };
+      }
+
+      // 否则尝试 fetch archive fallback
+      const archive = await fetchArchiveBundle();
+      if (archive) {
+        sourceTag = 'archive';
+        return { bundle: archive, source: sourceTag };
+      }
+
+      // 都没:返回只有 meta 的空 bundle
+      return { bundle: buildExportBundle({ meta, rounds: [], syntheses: [], digest: null }), source: 'empty' };
+    }
+
+    function renderStats(bundle, source) {
+      document.getElementById('export-rounds').textContent = String(bundle.stats.rounds);
+      document.getElementById('export-proposals').textContent = String(bundle.stats.proposals);
+      document.getElementById('export-applied').textContent = String(bundle.stats.applied);
+      document.getElementById('export-syntheses').textContent = String(bundle.stats.syntheses);
+      const tag = document.getElementById('export-source-tag');
+      tag.textContent = `source: ${source}${hasArchive ? ' (server has archive)' : ' (no server archive)'}`;
+    }
+
+    function downloadBundle(filename, content) {
+      const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    async function copyToClipboard(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) {
+        console.warn('clipboard write failed:', err);
+        return false;
+      }
+    }
+
+    // -----------------------------------------------------------------------
+    // Wire UI
+    // -----------------------------------------------------------------------
+
+    let lastBundle = null;
+    let lastMd = '';
+
+    document.getElementById('export-download-btn').addEventListener('click', async () => {
+      if (!lastBundle) return;
+      downloadBundle(`${sessionId}-export.md`, lastMd);
+    });
+
+    document.getElementById('export-copy-btn').addEventListener('click', async () => {
+      if (!lastMd) return;
+      const ok = await copyToClipboard(lastMd);
+      const btn = document.getElementById('export-copy-btn');
+      const original = btn.textContent;
+      btn.textContent = ok ? '✓ Copied!' : '✗ Copy failed';
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    });
+
+    document.getElementById('export-preview-btn').addEventListener('click', () => {
+      const ta = document.getElementById('export-preview-area');
+      ta.value = lastMd;
+    });
+
+    // Boot: build bundle once, render stats
+    (async () => {
+      const { bundle, source } = await buildCurrentBundle();
+      lastBundle = bundle;
+      lastMd = formatExportMarkdown(bundle);
+      renderStats(bundle, source);
+      // Auto-preview on load (no flicker since SSR has no data)
+      document.getElementById('export-preview-area').value = lastMd;
+    })();
+  </script>
+</BaseLayout>
