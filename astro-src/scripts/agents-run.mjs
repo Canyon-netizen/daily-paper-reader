@@ -73,6 +73,12 @@ function parseArgs(argv) {
     else if (a === '--write-deliverable') out.writeDeliverable = true;
     else if (a === '--few-shot-from') out.fewShotFrom = Number(argv[++i]);
     else if (a === '--search-arxiv') out.searchArxiv = argv[++i];
+    else if (a === '--export-md') {
+      // --export-md 可无参数(默认 archive/<sid>/export.md),也可 --export-md path/to/x.md
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.exportMd = next; i++; }
+      else { out.exportMd = ''; } // 空字符串 = 默认路径
+    }
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -112,6 +118,14 @@ if (args.help) {
                      Goal: zero-friction first run (no LLM key required,
                      Modifier writes deliverables so archive/ is non-empty).
                      Combine with --no-dry-run to use real LLM.
+  --export-md [PATH] Write a single self-contained markdown bundle of one
+                     session to PATH (default: ./archive/<sid>/export.md).
+                     Iter #57: lets users share / archive / post-process a
+                     whole session as 1 file (no archive/ folder needed).
+                     Bundle contains: meta + per-round proposals + critiques
+                     + gate verdicts + modifier actions + latest synthesis.
+                     Use --json to dump the bundle object to stdout instead
+                     of writing to disk.
   --diff             Compare two rounds of a session (use with --session ID
                      and two positional round numbers). Outputs proposals
                      added/removed/changed + score delta + gate decision
@@ -1268,6 +1282,249 @@ export function formatDiffText(diff) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// --export-md 模式(iter #57):把整 session 打包成 1 个自包含 markdown
+//
+// bundle = { meta, rounds[], syntheses[], digest }
+//   meta: 原始 meta.json 对象
+//   rounds: 每 round 1 段: proposals + critiques + gate verdicts + modifier actions
+//   syntheses: 每份 synthesis markdown 原文嵌入
+//   digest: 最新 1 份 digest 原文
+//
+// formatExportMarkdown(bundle) 纯函数 → markdown 文本
+// loadExportBundle(sessionId)  IO:读 archive/<sid>/{meta,rounds,digest,synthesis}
+// writeExportMarkdown(sessionId, opts)  IO:load + format + writeFile
+// ---------------------------------------------------------------------------
+
+/**
+ * buildExportBundle(input) — 把 1 个 session 的所有产物聚成 1 个 bundle 对象。
+ * input: { meta, rounds, syntheses, digest }
+ *   meta:      parsed meta.json object (or null)
+ *   rounds:    parsed RoundRecord[] (sorted ascending by round)
+ *   syntheses: [{ idx, raw }]            (sorted by idx)
+ *   digest:    string  (or null)
+ * 返回:{ sessionId, generatedAt, meta, rounds, syntheses, digest, stats }
+ *   stats = { rounds: N, proposals: N, applied: N, syntheses: N, hasDigest: bool }
+ */
+export function buildExportBundle(input) {
+  const { meta, rounds = [], syntheses = [], digest = null } = input ?? {};
+  let proposals = 0, applied = 0;
+  for (const r of rounds) {
+    proposals += r.designer?.proposals?.length ?? 0;
+    applied += r.modifier?.applied?.length ?? 0;
+  }
+  return {
+    sessionId: meta?.session_id ?? '(unknown)',
+    generatedAt: new Date().toISOString(),
+    meta,
+    rounds: rounds.map((r) => ({
+      round: r.round,
+      started_at: r.started_at,
+      finished_at: r.finished_at,
+      designer: r.designer,
+      feedback: r.feedback,
+      gate: r.gate,
+      modifier: r.modifier,
+    })),
+    syntheses,
+    digest,
+    stats: {
+      rounds: rounds.length,
+      proposals,
+      applied,
+      syntheses: syntheses.length,
+      hasDigest: typeof digest === 'string' && digest.length > 0,
+    },
+  };
+}
+
+/**
+ * formatExportMarkdown(bundle) — 把 bundle 渲染成 1 份自包含 markdown。
+ * 纯函数,无 IO;输入 null/empty 时返回 fallback string。
+ */
+export function formatExportMarkdown(bundle) {
+  if (!bundle) return '# Export bundle\n\n(bundle is empty)\n';
+  const lines = [];
+  const sid = bundle.sessionId ?? '(unknown)';
+  const meta = bundle.meta;
+  const stats = bundle.stats ?? {};
+  const generatedAt = bundle.generatedAt ?? new Date().toISOString();
+
+  lines.push(`# Agents Session Export — ${sid}`);
+  lines.push('');
+  lines.push(`> Generated ${generatedAt}`);
+  lines.push('');
+  lines.push(`## 📊 Stats`);
+  lines.push(`- rounds: **${stats.rounds ?? 0}**`);
+  lines.push(`- proposals: **${stats.proposals ?? 0}**`);
+  lines.push(`- modifier applied: **${stats.applied ?? 0}**`);
+  lines.push(`- syntheses: **${stats.syntheses ?? 0}**`);
+  lines.push(`- has digest: **${stats.hasDigest ? 'yes' : 'no'}**`);
+  lines.push('');
+
+  if (meta) {
+    lines.push(`## 🎯 Meta`);
+    lines.push(`- session_id: \`${meta.session_id ?? sid}\``);
+    lines.push(`- goal: ${meta.goal ?? '(none)'}`);
+    if (meta.created_at) lines.push(`- created_at: ${new Date(meta.created_at).toISOString()}`);
+    if (meta.rounds_requested != null) lines.push(`- rounds_requested: ${meta.rounds_requested}`);
+    if (meta.preset) lines.push(`- preset: ${meta.preset}`);
+    if (meta.dry_run != null) lines.push(`- dry_run: ${meta.dry_run}`);
+    lines.push('');
+  }
+
+  const rounds = bundle.rounds ?? [];
+  if (rounds.length) {
+    lines.push(`## 🔄 Rounds (${rounds.length})`);
+    for (const r of rounds) {
+      lines.push('');
+      lines.push(`### Round ${r.round}`);
+      if (r.started_at) lines.push(`- started: ${new Date(r.started_at).toISOString()}`);
+      if (r.finished_at) lines.push(`- finished: ${new Date(r.finished_at).toISOString()}`);
+      const d = r.designer ?? {};
+      lines.push(`- designer: ${(d.proposals ?? []).length} proposals (model: ${d.model ?? '?'})`);
+      const f = r.feedback ?? {};
+      lines.push(`- feedback: ${(f.critiques ?? []).length} critiques, judge_calls=${f.judge_calls ?? '?'}, tokens=${f.total_tokens ?? '?'}`);
+      const g = r.gate ?? {};
+      lines.push(`- gate: promoted=${(g.promoted ?? []).length} candidate=${(g.candidate ?? []).length} sketch=${(g.sketch ?? []).length} rejected=${(g.rejected ?? []).length}`);
+
+      // Proposal 列表
+      const proposals = d.proposals ?? [];
+      if (proposals.length) {
+        lines.push('');
+        lines.push('#### Proposals');
+        for (const p of proposals) {
+          lines.push(`- **${p.title ?? '(untitled)'}** [${p.type ?? '?'}]`);
+          if (p.rationale) lines.push(`  - rationale: ${p.rationale}`);
+          if (p.estimated_effort) lines.push(`  - effort: ${p.estimated_effort}`);
+          if (p.risk) lines.push(`  - risk: ${p.risk}`);
+        }
+      }
+
+      // Critique 摘要(每条 proposal 的 total + Elo)
+      const critiques = f.critiques ?? [];
+      if (critiques.length) {
+        lines.push('');
+        lines.push('#### Critiques');
+        for (const c of critiques) {
+          const total = c.total != null ? c.total.toFixed(1) : '?';
+          const elo = c.elo != null ? Math.round(c.elo) : '?';
+          lines.push(`- \`${c.proposal_id}\`: total=${total}, elo=${elo}, matches=${c.matches ?? 0}, wins=${c.wins ?? 0}`);
+        }
+      }
+
+      // Gate verdicts(promoted/candidate 单独列)
+      const promoted = g.promoted ?? [];
+      const candidate = g.candidate ?? [];
+      if (promoted.length || candidate.length) {
+        lines.push('');
+        lines.push('#### Gate');
+        if (promoted.length) lines.push(`- promoted: ${promoted.join(', ')}`);
+        if (candidate.length) lines.push(`- candidate: ${candidate.join(', ')}`);
+      }
+
+      // Modifier applied actions
+      const applied = r.modifier?.applied ?? [];
+      if (applied.length) {
+        lines.push('');
+        lines.push('#### Modifier applied');
+        for (const a of applied) {
+          lines.push(`- ${a.kind ?? '?'} ← \`${a.proposal_id}\``);
+        }
+      }
+    }
+    lines.push('');
+  }
+
+  // Syntheses:每份内嵌
+  const syntheses = bundle.syntheses ?? [];
+  if (syntheses.length) {
+    lines.push(`## 📝 Syntheses (${syntheses.length})`);
+    for (const s of syntheses) {
+      lines.push('');
+      lines.push(`### Synthesis #${s.idx ?? '?'}`);
+      lines.push('');
+      lines.push(s.raw ?? '');
+    }
+    lines.push('');
+  }
+
+  // Digest:整段嵌入
+  if (bundle.digest) {
+    lines.push(`## 📋 Digest`);
+    lines.push('');
+    lines.push(bundle.digest);
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push(`*Exported by DPR agents-run.mjs --export-md (iter #57)*`);
+  return lines.join('\n');
+}
+
+/**
+ * loadExportBundle(sessionId) — IO:从 archive/<sid>/ 读 meta + rounds + syntheses + digest。
+ * 找不到 meta.json → 抛清晰错误。
+ */
+export async function loadExportBundle(sessionId) {
+  const root = join('archive', sessionId);
+  if (!existsSync(root)) {
+    throw new Error(`session ${sessionId} not found (no archive/${sessionId}/ dir)`);
+  }
+  let meta = null;
+  try {
+    meta = JSON.parse(await readFile(join(root, 'meta.json'), 'utf8'));
+  } catch (err) {
+    throw new Error(`failed to read meta.json: ${err.message}`);
+  }
+
+  let rounds = [];
+  try {
+    const files = (await readdir(join(root, 'rounds')))
+      .filter((f) => /^round_\d+\.json$/.test(f))
+      .sort();
+    rounds = await Promise.all(
+      files.map((f) => readFile(join(root, 'rounds', f), 'utf8').then((s) => JSON.parse(s))),
+    );
+    rounds.sort((a, b) => (a.round ?? 0) - (b.round ?? 0));
+  } catch (err) {
+    console.warn(`[export-md] failed to read rounds: ${err.message}`);
+  }
+
+  let syntheses = [];
+  try {
+    const sfiles = (await readdir(join(root, 'synthesis')))
+      .filter((f) => /^synthesis_\d+\.md$/.test(f))
+      .sort();
+    syntheses = await Promise.all(
+      sfiles.map(async (f) => {
+        const m = f.match(/^synthesis_(\d+)\.md$/);
+        const idx = m ? Number(m[1]) : 0;
+        const raw = await readFile(join(root, 'synthesis', f), 'utf8');
+        return { idx, raw };
+      }),
+    );
+    syntheses.sort((a, b) => a.idx - b.idx);
+  } catch (err) {
+    // synthesis/ 可能不存在(无 rounds 时);静默
+  }
+
+  // digest:取最新 1 份 (lex 排序最末 = 同一天的最后一份)
+  let digest = null;
+  try {
+    const dfiles = (await readdir(root))
+      .filter((f) => /^digest_\d+\.md$/.test(f))
+      .sort();
+    if (dfiles.length) {
+      digest = await readFile(join(root, dfiles[dfiles.length - 1]), 'utf8');
+    }
+  } catch (err) {
+    // digest/ 可能不存在;静默
+  }
+
+  return buildExportBundle({ meta, rounds, syntheses, digest });
+}
+
 /**
  * loadDiff(sessionId, roundA, roundB) — IO wrapper,读 archive/<sid>/rounds/round_<A|B>.json。
  * 找不到 roundA / roundB → throws with descriptive error。
@@ -2274,6 +2531,37 @@ async function main() {
         console.log(JSON.stringify({ sessionId, ...diff }, null, 2));
       } else {
         console.log(formatDiffText(diff));
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.6: --export-md (整 session 打包成 1 个 markdown,iter #57)
+  if (args.exportMd !== undefined) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --export-md requires --session ID');
+      process.exit(2);
+    }
+    try {
+      const bundle = await loadExportBundle(sessionId);
+      if (args.json) {
+        console.log(JSON.stringify(bundle, null, 2));
+      } else {
+        const outPath = args.exportMd.length > 0
+          ? args.exportMd
+          : join('archive', sessionId, 'export.md');
+        const md = formatExportMarkdown(bundle);
+        const outDir = dirname(outPath);
+        if (outDir && outDir !== '.' && !existsSync(outDir)) {
+          await mkdir(outDir, { recursive: true });
+        }
+        await writeFile(outPath, md, 'utf8');
+        console.log(`📦 Exported session ${sessionId} → ${outPath}`);
+        console.log(`   ${bundle.stats.rounds} rounds, ${bundle.stats.proposals} proposals, ${bundle.stats.applied} applied, ${bundle.stats.syntheses} syntheses, hasDigest=${bundle.stats.hasDigest}`);
       }
     } catch (err) {
       console.error(`[error] ${err.message}`);
