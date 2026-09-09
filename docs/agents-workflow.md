@@ -158,6 +158,7 @@ LLM_BASE_URL=... LLM_API_KEY=... LLM_MODEL=... \
 - 历史存 `localStorage:dpr_agents_rounds_<sid>`，刷新可续
 - `/agents/auto/` 是 auto loop 的可视化 dashboard
 - `/agents/new-session/` 是模板式引导（literature_review / experiment_plan / rebuttal / free_form）
+- `/agents/<sid>/compile/` 是 iter #62 —— iter #61 `--compile-paper` 的浏览器版（实时切换 LaTeX/markdown/.bib 预览 + 3 文件下载）
 
 ### 5.5 看全局战况
 
@@ -205,5 +206,6 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 | **#59** | **lib/agents/export-bundle.mjs** | **CLI + 浏览器双 surface 共享同一份 buildExportBundle / formatExportMarkdown,字节级一致** |
 | **#60** | **lib/agents/export-bundle.ts** | **typed mirror,TS caller 也能用同一份实现** |
 | **#61** | **--compile-paper** | **3 智能体循环碎片 → 一篇可编译 LaTeX + markdown + .bib,关闭 §6 #1 差距 "Modifier 不写 LaTeX";新 lib/agents/paper-compiler.{mjs,ts} 纯函数,跟 export-bundle 同双 surface 共享模式** |
+| **#62** | **/agents/<sid>/compile/** | **iter #61 的浏览器版 —— 实时切换 LaTeX/markdown/.bib 预览 + 3 文件下载套件,document class 切换 (article / acmart / ieeeconf / iclr2026);同 paper-compiler.mjs 双 surface 字节级一致;localStorage 合成 pseudo-deliverable 应对浏览器无 filesystem 限制** |
 | **#59** | **lib/agents/export-bundle.mjs** | **CLI + 浏览器双 surface 共享同一份 buildExportBundle / formatExportMarkdown,字节级一致** |
 | **#60** | **lib/agents/export-bundle.ts** | **typed 镜像 — 6 个 type contract + re-export .mjs 运行时,TS caller 可 typed import** |
