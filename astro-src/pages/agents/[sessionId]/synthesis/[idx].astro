@@ -1,0 +1,258 @@
+---
+// astro-src/pages/agents/[sessionId]/synthesis/[idx].astro
+//
+// iter #44 — Single synthesis detail page.
+//
+// Renders the raw markdown body + extracted frontmatter. Sections are split
+// at `## ` headers and rendered with simple HTML (no shiki / no MDX —
+// synthesis files contain only chinese prose + bullet lists + checkboxes).
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import Navbar from '../../../../components/Navbar.astro';
+import '../../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  let sessions: string[] = [];
+  try { sessions = await readdir(root); } catch { return []; }
+  const out: { params: { sessionId: string; idx: string } }[] = [];
+  for (const sid of sessions) {
+    const synthDir = join(root, sid, 'synthesis');
+    if (!existsSync(synthDir)) continue;
+    let files: string[] = [];
+    try { files = await readdir(synthDir); } catch { continue; }
+    for (const f of files) {
+      const m = f.match(/^synthesis_(\d+)\.md$/);
+      if (m) out.push({ params: { sessionId: sid, idx: m[1] } });
+    }
+  }
+  return out;
+}
+
+const { sessionId, idx } = Astro.params;
+
+// ---------------------------------------------------------------------------
+// Parse frontmatter
+// ---------------------------------------------------------------------------
+
+function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
+  const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!m) return { meta: {}, body: raw };
+  const meta: Record<string, string> = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const mm = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+    if (!mm) continue;
+    let v = mm[2].trim();
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    meta[mm[1]] = v;
+  }
+  return { meta, body: m[2] };
+}
+
+// ---------------------------------------------------------------------------
+// Tiny markdown → HTML for our synthesis shape only.
+//   - Lines starting with `## ` become <h2>
+//   - Lines starting with `# ` become <h1>
+//   - Lines starting with `- [ ] ` or `- [x] ` become <li class="checkbox">
+//   - Lines starting with `- ` or `* ` become <li>
+//   - Lines starting with `> ` become <blockquote>
+//   - Blank line ends a list
+//   - Other lines become <p>
+// ---------------------------------------------------------------------------
+
+interface Block { kind: 'h1' | 'h2' | 'blockquote' | 'ul' | 'checklist' | 'p' | 'hr'; lines: string[]; }
+function markdownToBlocks(body: string): Block[] {
+  const lines = body.split(/\r?\n/);
+  const blocks: Block[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    if (line.startsWith('# ')) { blocks.push({ kind: 'h1', lines: [line.slice(2).trim()] }); i++; continue; }
+    if (line.startsWith('## ')) { blocks.push({ kind: 'h2', lines: [line.slice(3).trim()] }); i++; continue; }
+    if (line.startsWith('---')) { blocks.push({ kind: 'hr', lines: [] }); i++; continue; }
+    if (line.startsWith('> ')) {
+      const ls: string[] = [];
+      while (i < lines.length && lines[i].startsWith('> ')) { ls.push(lines[i].slice(2).trim()); i++; }
+      blocks.push({ kind: 'blockquote', lines: ls });
+      continue;
+    }
+    if (/^\s*[-*]\s+\[[ x]\]\s+/.test(line)) {
+      const ls: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+\[[ x]\]\s+/.test(lines[i])) {
+        ls.push(lines[i].replace(/^\s*[-*]\s+\[[ x]\]\s+/, ''));
+        i++;
+      }
+      blocks.push({ kind: 'checklist', lines: ls });
+      continue;
+    }
+    if (/^\s*[-*]\s+/.test(line)) {
+      const ls: string[] = [];
+      while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) {
+        ls.push(lines[i].replace(/^\s*[-*]\s+/, ''));
+        i++;
+      }
+      blocks.push({ kind: 'ul', lines: ls });
+      continue;
+    }
+    // 普通段落:连续非空行
+    const ls: string[] = [];
+    while (i < lines.length && lines[i].trim() && !lines[i].startsWith('#') && !lines[i].startsWith('>') && !/^\s*[-*]\s+/.test(lines[i])) {
+      ls.push(lines[i]);
+      i++;
+    }
+    blocks.push({ kind: 'p', lines: ls });
+  }
+  return blocks;
+}
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+// Inline markdown: **bold**, `code`, [text](url). Don't go full CommonMark —
+// the synthesis body uses these lightly.
+function renderInline(s: string): string {
+  let out = escapeHtml(s);
+  // [text](url)
+  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  // **bold**
+  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // `code`
+  out = out.replace(/`([^`]+)`/g, '<code>$1</code>');
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Load + render
+// ---------------------------------------------------------------------------
+
+const paddedIdx = String(idx).padStart(3, '0');
+const filePath = join(process.cwd(), 'archive', sessionId, 'synthesis', `synthesis_${paddedIdx}.md`);
+
+let loadError: string | null = null;
+let meta: Record<string, string> = {};
+let body = '';
+let blocks: Block[] = [];
+let directiveCount = 0;
+
+try {
+  const raw = await readFile(filePath, 'utf8');
+  ({ meta, body } = parseFrontmatter(raw));
+  blocks = markdownToBlocks(body);
+  // count directives: bullets + checkbox bullets in Gap & Next-Steps sections
+  const sections = body.split(/^##\s+/m);
+  for (const sec of sections) {
+    if (sec.startsWith('下一步建议') || sec.startsWith('Gap &') || sec.startsWith('Gaps &')) {
+      const m = sec.match(/^[-*\s]\s+(?:\[[ x]\]\s+)?.+$/gm);
+      if (m) directiveCount += m.filter((l) => !/^\s*[-*]\s+\(/.test(l) && !/^\s*[-*]\s+\(无\)/.test(l) && !/^\s*[-*]\s+\(stub/.test(l)).length;
+    }
+  }
+} catch (e) {
+  loadError = String((e as Error)?.message ?? e);
+}
+
+// 兄弟文件(sibling syntheses)的索引,用于 prev/next 导航
+let siblingIdxs: number[] = [];
+try {
+  const files = (await readdir(join(process.cwd(), 'archive', sessionId, 'synthesis')))
+    .filter((f) => /^synthesis_\d+\.md$/.test(f));
+  siblingIdxs = files.map((f) => Number(f.match(/^synthesis_(\d+)\.md$/)?.[1] ?? 0))
+    .filter((n) => n > 0).sort((a, b) => a - b);
+} catch { siblingIdxs = []; }
+
+const myIdx = Number(idx);
+const prevIdx = siblingIdxs.filter((n) => n < myIdx).pop();
+const nextIdx = siblingIdxs.find((n) => n > myIdx);
+---
+
+<BaseLayout title={meta.title ? `${meta.title} · Synthesis #${myIdx}` : `Synthesis #${myIdx}`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / </span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="muted"> / </span>
+      <a href={`${base}/agents/${sessionId}/synthesis/`>synthesis</a>
+      <span class="muted"> / #{myIdx}</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>📜 {escapeHtml(meta.title ?? `Synthesis #${myIdx}`)}</h1>
+      <p class="muted">
+        session <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+        · synthesis <code>#{myIdx}</code>
+        {meta.generated_at && <span> · 生成于 {escapeHtml(meta.generated_at)}</span>}
+        {meta.model && <span> · model <code>{escapeHtml(meta.model)}</code></span>}
+        {meta.dry_run === 'true' && <span class="badge badge-low" style="margin-left:0.5rem">DRY-RUN</span>}
+        <span> · directives: <strong>{directiveCount}</strong></span>
+      </p>
+    </header>
+
+    {loadError ? (
+      <section class="agents-status">
+        <p class="agents-status-text">⚠️ 未找到 synthesis 文件:{escapeHtml(loadError)}</p>
+      </section>
+    ) : (
+      <>
+        {Object.keys(meta).length > 0 && (
+          <section class="agents-session-section">
+            <h2>🗂 Frontmatter</h2>
+            <table class="agents-session-table">
+              <tbody>
+                {Object.entries(meta).map(([k, v]) => (
+                  <tr><td><code>{escapeHtml(k)}</code></td><td>{escapeHtml(v)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
+
+        <section class="agents-session-section agents-synthesis-body">
+          <h2>📝 Body</h2>
+          {blocks.map((b) => {
+            if (b.kind === 'h1') return <h2 set:html={renderInline(b.lines[0])} />;
+            if (b.kind === 'h2') return <h3 set:html={renderInline(b.lines[0])} />;
+            if (b.kind === 'hr') return <hr />;
+            if (b.kind === 'blockquote') return <blockquote>{b.lines.map((l) => <p set:html={renderInline(l)} />)}</blockquote>;
+            if (b.kind === 'ul') return <ul>{b.lines.map((l) => <li set:html={renderInline(l)} />)}</ul>;
+            if (b.kind === 'checklist') return <ul class="agents-checklist">{b.lines.map((l) => <li set:html={renderInline(l)} />)}</ul>;
+            if (b.kind === 'p') return b.lines.map((l) => <p set:html={renderInline(l)} />);
+            return null;
+          })}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🔁 继续 / resume</h2>
+          <p class="muted">从该 session 当前状态继续,沿用 synthesis #${myIdx} 的 directive。</p>
+          <pre class="agents-auto-cmd" tabindex="0">node astro-src/scripts/agents-run.mjs --auto "{escapeHtml(sessionId)}" \
+  --auto-resume --session {sessionId} \
+  --max-cycles 1</pre>
+        </section>
+
+        <nav class="agents-breadcrumb" style="margin-top:1rem;">
+          {prevIdx ? (
+            <a href={`${base}/agents/${sessionId}/synthesis/${String(prevIdx).padStart(3, '0')}/`}>← synthesis #{prevIdx}</a>
+          ) : <span class="muted">← (older)</span>}
+          <span class="muted" style="margin: 0 0.5rem">·</span>
+          {nextIdx ? (
+            <a href={`${base}/agents/${sessionId}/synthesis/${String(nextIdx).padStart(3, '0')}/`}>synthesis #{nextIdx} →</a>
+          ) : <span class="muted">(newer) →</span>}
+        </nav>
+      </>
+    )}
+  </main>
+</BaseLayout>

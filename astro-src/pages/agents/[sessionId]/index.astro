@@ -419,6 +419,13 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
         </section>
 
         <section class="agents-session-section">
+          <h2>📜 Synthesis 历史</h2>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/synthesis/`}>查看全部 {syntheses.length} 份 synthesis →</a>
+          </p>
+        </section>
+
+        <section class="agents-session-section">
           <h2>🔁 继续 / resume</h2>
           <p class="muted">基于当前 session 继续跑下一个 cycle,沿用 gaps 作为下轮 Designer 的 directive。</p>
           <pre class="agents-auto-cmd" tabindex="0">node astro-src/scripts/agents-run.mjs --auto "{escapeHtml(meta.goal)}" \

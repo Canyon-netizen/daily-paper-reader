@@ -1,0 +1,230 @@
+---
+// astro-src/pages/agents/[sessionId]/synthesis/index.astro
+//
+// iter #44 — Synthesis history listing for one session.
+//
+// Lists all synthesis_NNN.md under archive/<sid>/synthesis/, with frontmatter
+// metadata + a short preview (摘要 + 关键发现) + a directive-count badge
+// (number of items in Gap & Next-Steps sections).
+//
+// Links to detail page /agents/<sid>/synthesis/<idx>/.
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import Navbar from '../../../../components/Navbar.astro';
+import '../../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths — one entry per session that has ≥1 synthesis file.
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  let sessions: string[] = [];
+  try { sessions = await readdir(root); } catch { return []; }
+  const out: { params: { sessionId: string } }[] = [];
+  for (const sid of sessions) {
+    const synthDir = join(root, sid, 'synthesis');
+    if (!existsSync(synthDir)) continue;
+    let files: string[] = [];
+    try { files = await readdir(synthDir); } catch { continue; }
+    if (files.some((f) => /^synthesis_\d+\.md$/.test(f))) out.push({ params: { sessionId: sid } });
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+
+// ---------------------------------------------------------------------------
+// Tiny frontmatter parser (YAML subset: only flat key: value strings).
+// We don't need full YAML — synthesis frontmatter is flat scalars + a couple
+// of "quoted strings" (model = "stub", dry_run = true). Treat each top-level
+// key after `---` as plain `key: value`; strip optional surrounding quotes.
+// ---------------------------------------------------------------------------
+
+function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
+  const m = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  if (!m) return { meta: {}, body: raw };
+  const meta: Record<string, string> = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const mm = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+    if (!mm) continue;
+    let v = mm[2].trim();
+    // strip surrounding quotes
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    meta[mm[1]] = v;
+  }
+  return { meta, body: m[2] };
+}
+
+function countDirectives(body: string): number {
+  let count = 0;
+  const sections = body.split(/^##\s+/m);
+  for (const sec of sections) {
+    if (sec.startsWith('下一步建议') || sec.startsWith('Gap &') || sec.startsWith('Gaps &')) {
+      const m = sec.match(/^[-*\s]\s+(?:\[[ x]\]\s+)?.+$/gm);
+      if (m) count += m.filter((l) => !/^\s*[-*]\s+\(/.test(l) && !/^\s*[-*]\s+\(无\)/.test(l) && !/^\s*[-*]\s+\(stub/.test(l)).length;
+    }
+  }
+  return count;
+}
+
+function extractSectionPreview(body: string, headerStartsWith: string, maxBullets = 4): string[] {
+  const sections = body.split(/^##\s+/m);
+  for (const sec of sections) {
+    if (sec.startsWith(headerStartsWith)) {
+      const bullets = sec.split(/\r?\n/)
+        .map((l) => l.match(/^[-*\s]\s+(?:\[[ x]\]\s+)?(.+)$/)?.[1]?.trim())
+        .filter((l): l is string => !!l && !/^\(无\)/.test(l) && !/^\(stub/.test(l))
+        .slice(0, maxBullets);
+      return bullets;
+    }
+  }
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// Load all syntheses
+// ---------------------------------------------------------------------------
+
+let syntheses: {
+  idx: number;
+  filename: string;
+  meta: Record<string, string>;
+  bodyPreview: string;
+  findings: string[];
+  directiveCount: number;
+}[] = [];
+
+const synthDir = join(process.cwd(), 'archive', sessionId, 'synthesis');
+let loadError: string | null = null;
+try {
+  const files = (await readdir(synthDir)).filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+  syntheses = await Promise.all(files.map(async (f) => {
+    const mm = f.match(/^synthesis_(\d+)\.md$/);
+    const idx = mm ? Number(mm[1]) : 0;
+    const raw = await readFile(join(synthDir, f), 'utf8');
+    const { meta, body } = parseFrontmatter(raw);
+    // 第一段(摘要)的纯文本预览,前 2 行
+    const lines = body.split(/\r?\n/).map((l) => l.replace(/^#+\s*/, '').trim()).filter(Boolean);
+    const bodyPreview = lines.slice(0, 3).join(' · ').slice(0, 200);
+    const findings = extractSectionPreview(body, '关键发现');
+    return { idx, filename: f, meta, bodyPreview, findings, directiveCount: countDirectives(body) };
+  }));
+  syntheses.sort((a, b) => a.idx - b.idx);
+} catch (e) {
+  loadError = String((e as Error)?.message ?? e);
+}
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title={`Synthesis 历史 · ${sessionId}`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / </span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="muted"> / synthesis</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>📜 Synthesis 历史 · {sessionId}</h1>
+      <p class="muted">
+        全部 <strong>{syntheses.length}</strong> 份 synthesis。
+        每份 synthesis 是 Designer + Feedback + Gate + Modifier 跑完后对当前状态的总结。
+      </p>
+    </header>
+
+    {loadError && (
+      <section class="agents-status">
+        <p class="agents-status-text">⚠️ 加载失败:{escapeHtml(loadError)}</p>
+      </section>
+    )}
+
+    {syntheses.length === 0 && !loadError && (
+      <section class="agents-status">
+        <p class="agents-status-text">尚无 synthesis。可能 session 还在 bootstrap 或尚未跑完第一个 cycle。</p>
+      </section>
+    )}
+
+    {syntheses.length > 0 && (
+      <section class="agents-session-section">
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Title</th>
+              <th>Generated</th>
+              <th>Model</th>
+              <th>Rounds / Deliv</th>
+              <th>Papers</th>
+              <th>Directives</th>
+              <th>Findings</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {syntheses.map((s) => (
+              <tr>
+                <td>
+                  <a href={`${base}/agents/${sessionId}/synthesis/${String(s.idx).padStart(3, '0')}/`}>
+                    #{s.idx}
+                  </a>
+                </td>
+                <td>
+                  <strong>{escapeHtml(s.meta.title ?? `(synthesis #${s.idx})`)}</strong>
+                  <br />
+                  <small class="muted">{escapeHtml(s.bodyPreview)}</small>
+                </td>
+                <td><small>{escapeHtml(s.meta.generated_at ?? '?')}</small></td>
+                <td><code>{escapeHtml(s.meta.model ?? '?')}</code></td>
+                <td>{escapeHtml(s.meta.rounds_synthesized ?? '?')} / {escapeHtml(s.meta.deliverables_referenced ?? '?')}</td>
+                <td>{escapeHtml(s.meta.unique_papers ?? '?')}</td>
+                <td>
+                  <span class={`agents-verdict-badge ${s.directiveCount === 0 ? 'agents-verdict-high' : s.directiveCount <= 2 ? 'agents-verdict-mid' : 'agents-verdict-low'}`}>
+                    {s.directiveCount}
+                  </span>
+                </td>
+                <td>
+                  {s.findings.length === 0 ? (
+                    <span class="muted">—</span>
+                  ) : (
+                    <ul style="margin:0; padding-left:1rem;">
+                      {s.findings.map((f) => (
+                        <li><small>{escapeHtml(f.slice(0, 80))}{f.length > 80 ? '…' : ''}</small></li>
+                      ))}
+                    </ul>
+                  )}
+                </td>
+                <td>
+                  <a class="button small" href={`${base}/agents/${sessionId}/synthesis/${String(s.idx).padStart(3, '0')}/`}>
+                    打开
+                  </a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔁 继续 / resume</h2>
+      <p class="muted">基于该 session 继续跑下一轮。</p>
+      <pre class="agents-auto-cmd" tabindex="0">node astro-src/scripts/agents-run.mjs --auto "{escapeHtml(sessionId)}" \
+  --auto-resume --session {sessionId} \
+  --max-cycles 1</pre>
+    </section>
+  </main>
+</BaseLayout>
