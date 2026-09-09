@@ -1,0 +1,206 @@
+---
+// astro-src/pages/agents/coverage.astro
+//
+// iter #47 — Paper coverage map.
+//
+// Walks all archive/<sid>/rounds/round_*.json, extracts paper IDs from
+// designer.proposals[].evidence.paperIds[], and aggregates into a per-paper
+// stats map. Then renders a sortable + searchable table.
+//
+// Columns: paper_id, sessions (n), rounds (n), avg_score, last_seen,
+// proposal titles sample.
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// Aggregate
+// ---------------------------------------------------------------------------
+
+interface PaperAgg {
+  paper_id: string;
+  sessions: Set<string>;
+  rounds: number;
+  scores: number[];
+  lastSeen: number;
+  proposalTitles: string[];
+}
+
+const agg = new Map<string, PaperAgg>();
+
+const archiveRoot = join(process.cwd(), 'archive');
+let sessionCount = 0;
+let roundCount = 0;
+
+if (existsSync(archiveRoot)) {
+  const sids = await readdir(archiveRoot);
+  for (const sid of sids) {
+    const roundsDir = join(archiveRoot, sid, 'rounds');
+    if (!existsSync(roundsDir)) continue;
+    let files: string[];
+    try {
+      files = (await readdir(roundsDir)).filter((f) => /^round_\d+\.json$/.test(f)).sort();
+    } catch { continue; }
+    if (files.length === 0) continue;
+    sessionCount += 1;
+
+    for (const f of files) {
+      roundCount += 1;
+      let rec: any;
+      try {
+        rec = JSON.parse(await readFile(join(roundsDir, f), 'utf8'));
+      } catch { continue; }
+      const proposals = rec.designer?.proposals ?? [];
+      const critiques = rec.feedback?.critiques ?? [];
+      const finishedAt = rec.finished_at ?? 0;
+
+      for (const p of proposals) {
+        const ids: string[] = p.evidence?.paperIds ?? [];
+        if (!Array.isArray(ids) || ids.length === 0) continue;
+        // 该 proposal 在本 round 的 critique 平均分
+        const cs = critiques.filter((c: any) => c.proposal_id === p.id);
+        const score = cs.length ? cs.reduce((a: number, c: any) => a + (c.total ?? 0), 0) / cs.length : null;
+
+        for (const id of ids) {
+          const pid = String(id).trim();
+          if (!pid) continue;
+          let entry = agg.get(pid);
+          if (!entry) {
+            entry = { paper_id: pid, sessions: new Set(), rounds: 0, scores: [], lastSeen: 0, proposalTitles: [] };
+            agg.set(pid, entry);
+          }
+          entry.sessions.add(sid);
+          entry.rounds += 1;
+          if (score !== null) entry.scores.push(score);
+          if (finishedAt > entry.lastSeen) entry.lastSeen = finishedAt;
+          if (entry.proposalTitles.length < 3 && p.title && !entry.proposalTitles.includes(p.title)) {
+            entry.proposalTitles.push(p.title);
+          }
+        }
+      }
+    }
+  }
+}
+
+// 排序:按 sessions DESC, 然后 rounds DESC, 然后 paper_id ASC
+const rows = [...agg.values()]
+  .map((r) => ({
+    paper_id: r.paper_id,
+    sessions: r.sessions.size,
+    sessionList: [...r.sessions],
+    rounds: r.rounds,
+    avgScore: r.scores.length ? r.scores.reduce((a, b) => a + b, 0) / r.scores.length : null,
+    lastSeen: r.lastSeen,
+    proposalTitles: r.proposalTitles,
+  }))
+  .sort((a, b) => {
+    if (b.sessions !== a.sessions) return b.sessions - a.sessions;
+    if (b.rounds !== a.rounds) return b.rounds - a.rounds;
+    return a.paper_id.localeCompare(b.paper_id);
+  });
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Paper 覆盖率地图">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / coverage</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>🗺️ Paper 覆盖率地图</h1>
+      <p class="muted">
+        跨 <strong>{sessionCount}</strong> 个 session / <strong>{roundCount}</strong> 个 round,
+        共出现 <strong>{rows.length}</strong> 个唯一 paper_id。
+        行默认按 session 数倒序(被最多 session 引用的 paper 排最前)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🔍 筛选</h2>
+      <input type="search" id="agents-cov-filter" placeholder="按 paper_id 前缀过滤 (例: 2401.)" class="agents-cov-filter" />
+      <small class="muted" id="agents-cov-count"></small>
+    </section>
+
+    {rows.length === 0 ? (
+      <section class="agents-status">
+        <p class="agents-status-text">⚠️ 还没有 session 引用过任何 paper。先跑一轮 --new-session 模板。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <table class="agents-session-table agents-cov-table">
+          <thead>
+            <tr>
+              <th>Paper ID</th>
+              <th title="session 数">#S</th>
+              <th title="round 数">#R</th>
+              <th>Avg score</th>
+              <th>Last seen</th>
+              <th>Sample titles</th>
+              <th>Sessions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr data-paper-id={r.paper_id}>
+                <td>
+                  <a href={`${base}/papers/${encodeURIComponent(r.paper_id)}/`}>
+                    <code>{escapeHtml(r.paper_id)}</code>
+                  </a>
+                </td>
+                <td><strong>{r.sessions}</strong></td>
+                <td>{r.rounds}</td>
+                <td>{r.avgScore !== null ? r.avgScore.toFixed(2) : <span class="muted">—</span>}</td>
+                <td><small>{r.lastSeen ? new Date(r.lastSeen).toLocaleString() : '—'}</small></td>
+                <td>
+                  {r.proposalTitles.length === 0 ? <span class="muted">—</span> : (
+                    <ul style="margin:0; padding-left:1rem;">
+                      {r.proposalTitles.map((t) => <li><small>{escapeHtml(t.slice(0, 80))}{t.length > 80 ? '…' : ''}</small></li>)}
+                    </ul>
+                  )}
+                </td>
+                <td>
+                  {r.sessionList.map((s) => (
+                    <a class="agents-cov-session-chip" href={`${base}/agents/${encodeURIComponent(s)}/`}>{escapeHtml(s)}</a>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+  </main>
+</BaseLayout>
+
+<script type="module">
+  const filter = document.getElementById('agents-cov-filter');
+  const count = document.getElementById('agents-cov-count');
+  const rows = document.querySelectorAll('.agents-cov-table tbody tr');
+  function refresh() {
+    const q = (filter?.value ?? '').toLowerCase().trim();
+    let visible = 0;
+    rows.forEach((tr) => {
+      const pid = (tr.getAttribute('data-paper-id') ?? '').toLowerCase();
+      const show = !q || pid.includes(q);
+      tr.hidden = !show;
+      if (show) visible++;
+    });
+    if (count) count.textContent = q ? `${visible} / ${rows.length} 行匹配` : `${rows.length} 行`;
+  }
+  filter?.addEventListener('input', refresh);
+  refresh();
+</script>
