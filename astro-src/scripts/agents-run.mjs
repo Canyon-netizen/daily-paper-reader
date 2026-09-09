@@ -64,6 +64,10 @@ function parseArgs(argv) {
     else if (a === '--promote') out.promote = true;
     else if (a === '--synthesize') out.synthesize = true;
     else if (a === '--no-synthesize') out.noSynthesize = true;
+    else if (a === '--auto') out.auto = argv[++i];
+    else if (a === '--max-cycles') out.maxCycles = Number(argv[++i]);
+    else if (a === '--auto-directive-mode') out.autoDirectiveMode = argv[++i];
+    else if (a === '--auto-stop-threshold') out.autoStopThreshold = Number(argv[++i]);
     else if (a === '--write-deliverable') out.writeDeliverable = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
@@ -128,6 +132,25 @@ if (args.help) {
                      Auto-runs after --session round generation unless
                      --no-synthesize is also set.
   --no-synthesize    Skip the auto-synthesis step after running rounds.
+  --auto GOAL        End-to-end autonomous research loop. Takes a goal,
+                     bootstraps a session, then runs cycles of
+                     (1 round + 1 synthesis). Each cycle's synthesis
+                     directives (gaps_contradictions + next_steps) are
+                     fed back as the next round's Designer context.
+                     Stops when directives converge (≤ auto-stop-threshold)
+                     or max cycles hit. Use --auto-directive-mode +
+                     --max-cycles + --auto-stop-threshold to tune.
+                     (Designed for the "give it a goal and let it run"
+                     use case; not idempotent — each invocation creates
+                     a new session unless --session is also passed.)
+  --max-cycles N     With --auto, cap the number of cycles (default 5).
+  --auto-directive-mode MODE
+                     With --auto, which synthesis fields to feed back:
+                     gaps | next_steps | both (default gaps).
+  --auto-stop-threshold N
+                     With --auto, stop when directive count ≤ N (default 2).
+                     Set 0 to disable convergence detection and always run
+                     --max-cycles.
   --help             Show this help`);
   process.exit(0);
 }
@@ -1874,7 +1897,35 @@ async function main() {
   const caller = makeLLMCaller({});
   const dryRun = !!args.dryRun;
 
-  // 模式 -1: --new-session (bootstrap,优先于所有其他模式)
+  // 模式 -1: --auto (autonomous research loop,优先于所有其他模式)
+  if (typeof args.auto === 'string' && args.auto.trim()) {
+    const goal = args.auto.trim();
+    const sid = args.project ?? args.session ?? null; // 不强制 sid,让 generateSessionId 派生
+    try {
+      const result = await runAutoLoop(goal, {
+        caller,
+        dryRun,
+        preset,
+        maxCycles: args.maxCycles ?? 5,
+        directiveMode: args.autoDirectiveMode ?? 'gaps',
+        stopThreshold: args.autoStopThreshold ?? 2,
+        sessionId: sid ?? undefined,
+        noCandidates: !!args.noCandidates,
+        resume: args.resume ?? true,
+      });
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatAutoSummary(result));
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0: --new-session (bootstrap,优先于所有其他模式)
   if (args.newSession !== undefined) {
     const goal = args.newSession;
     if (typeof goal !== 'string' || goal.trim().length === 0) {
@@ -2693,6 +2744,288 @@ export function formatSynthesisText(result) {
   if (s.key_findings?.length) {
     lines.push(`   key findings (${s.key_findings.length}):`);
     for (const f of s.key_findings.slice(0, 5)) lines.push(`     - ${f}`);
+  }
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// --auto 模式:端到端 autonomous research loop
+//
+// 给一个 goal,系统自动:
+//   1. bootstrap 一个 session(用 createSession + generateSessionId)
+//   2. 跑 1 cycle = 1 round(designer/feedback/modifier)+ 1 synthesis
+//   3. 从 synthesis 抽 directives(gaps_contradictions + next_steps)喂给下一轮 Designer
+//   4. 直到 directives 收敛或到达 max_cycles
+//
+// 设计原则:
+//   - **复用,不重写**:每个 cycle 复用 runOneRoundCLI + runSynthesis,只额外
+//     注入 auto_directives 到 Designer prompt。
+//   - **可中断**:每 cycle 之间检查 opts.signal?。给 watcher / 用户 abort 留口。
+//   - **append-only**:不写 round_000.json;若已有 rounds,从现有数 + 1 开始。
+//
+// 纯函数:extractAutoDirectives / shouldAutoStop / formatAutoProgress
+// IO:runAutoLoop
+// ---------------------------------------------------------------------------
+
+/**
+ * extractAutoDirectives(synthesisResult, opts) — 从 synthesis 抽出 directive 列表。
+ *
+ * opts.mode: 'gaps' | 'next_steps' | 'both'(默认 'gaps')
+ *   - 'gaps':只取 gaps_contradictions,前缀 'gap:'
+ *   - 'next_steps':只取 next_steps,前缀 'next:'
+ *   - 'both':两种都取,gaps 在前(更紧急的优先级高)
+ * opts.maxItems: 最多取多少条 directive(默认 8,避免 prompt 过长)
+ *
+ * Dedup:case-insensitive + 前 80 字 prefix 比较;避免重复 directive。
+ *
+ * 纯函数。
+ */
+export function extractAutoDirectives(synthesisResult, opts = {}) {
+  const mode = opts.mode ?? 'gaps';
+  const maxItems = opts.maxItems ?? 8;
+  const s = synthesisResult ?? {};
+  const raw = [];
+  if ((mode === 'gaps' || mode === 'both') && Array.isArray(s.gaps_contradictions)) {
+    for (const g of s.gaps_contradictions) {
+      if (typeof g === 'string' && g.trim()) raw.push(`gap:${g.trim()}`);
+    }
+  }
+  if ((mode === 'next_steps' || mode === 'both') && Array.isArray(s.next_steps)) {
+    for (const n of s.next_steps) {
+      if (typeof n === 'string' && n.trim()) raw.push(`next:${n.trim()}`);
+    }
+  }
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    const key = item.toLowerCase().slice(0, 80);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+    if (out.length >= maxItems) break;
+  }
+  return out;
+}
+
+/**
+ * shouldAutoStop(opts) — 判断 autonomous loop 是否该停。
+ *
+ * opts: { cycle, maxCycles, directiveCount, stopThreshold, plateau? }
+ *   cycle: 当前 cycle 数(从 1 开始)
+ *   maxCycles: 用户指定上限(默认 5)
+ *   directiveCount: 本轮 synthesis 抽出的 directive 数
+ *   stopThreshold: 当 directive 数 ≤ 此值认为收敛(默认 2)
+ *   plateau: 可选,plateau detector 命中时直接停
+ *
+ * 返回:{ stop: bool, reason: 'max_cycles' | 'converged' | 'plateau' | null }
+ *
+ * 纯函数。
+ */
+export function shouldAutoStop(opts = {}) {
+  const cycle = Number(opts.cycle ?? 0);
+  const maxCycles = Number(opts.maxCycles ?? 5);
+  const directiveCount = Number(opts.directiveCount ?? 0);
+  const stopThreshold = Number(opts.stopThreshold ?? 2);
+  if (opts.plateau) return { stop: true, reason: 'plateau' };
+  if (cycle >= maxCycles) return { stop: true, reason: 'max_cycles' };
+  // strict < so stopThreshold=0 disables convergence (only max_cycles stops the loop)
+  if (directiveCount < stopThreshold) return { stop: true, reason: 'converged' };
+  return { stop: false, reason: null };
+}
+
+/**
+ * formatAutoProgress(cycle, synthesisResult, opts) — 每次 cycle 完打印一行进度。
+ *
+ * 纯函数。
+ */
+export function formatAutoProgress(cycle, synthesisResult, opts = {}) {
+  const lines = [];
+  const maxCycles = opts.maxCycles ?? '?';
+  const r = synthesisResult ?? {};
+  const s = r.synthesis ?? {};
+  lines.push(`🔄 Auto cycle ${cycle}/${maxCycles}  → ${r.path ?? '(no path)'}`);
+  lines.push(`   synthesis #${r.synthesisIndex ?? '?'} · rounds=${r.usedRounds ?? 0} · deliverables=${r.usedDeliverables ?? 0} · unique_papers=${r.uniquePapers ?? 0}`);
+  if (s.ok === false) {
+    lines.push(`   ⚠️  LLM parse failed: ${s.error ?? 'unknown'}`);
+  }
+  if (s.answer) {
+    const preview = String(s.answer).slice(0, 200).replace(/\n+/g, ' ');
+    lines.push(`   answer: ${preview}${s.answer.length > 200 ? '...' : ''}`);
+  }
+  if (Array.isArray(s.key_findings) && s.key_findings.length) {
+    lines.push(`   key findings (${s.key_findings.length}):`);
+    for (const f of s.key_findings.slice(0, 3)) lines.push(`     - ${f}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * runAutoLoop(goal, opts) — autonomous research loop 主入口。
+ *
+ * opts: {
+ *   caller: LLMCaller,
+ *   dryRun?: bool,
+ *   preset?: string,
+ *   maxCycles?: number (default 5),
+ *   directiveMode?: 'gaps' | 'next_steps' | 'both' (default 'gaps'),
+ *   stopThreshold?: number (default 2),
+ *   sessionId?: string (override sid; default = generateSessionId(goal)),
+ *   noCandidates?: bool,
+ *   resume?: bool (default true if session exists),
+ * }
+ *
+ * 每个 cycle:
+ *   1. runOneRoundCLI(roundN, input, caller, opts) → write round_NNN.json + 可能 deliverable
+ *   2. runSynthesis(sessionId) → write synthesis_NNN.md
+ *   3. extract directives from synthesis → inject as 'auto_directives' into next cycle's input
+ *   4. shouldAutoStop 检查 → break 或 continue
+ *
+ * 返回:{
+ *   sessionId, goal,
+ *   cycles: [{ cycle, roundFile, synthesisPath, directiveCount, stoppedReason? }],
+ *   finalSynthesisPath, stoppedReason,
+ * }
+ */
+export async function runAutoLoop(goal, opts = {}) {
+  if (typeof goal !== 'string' || !goal.trim()) {
+    throw new Error('runAutoLoop requires non-empty goal string');
+  }
+  const dryRun = !!opts.dryRun;
+  const preset = opts.preset ?? 'balanced';
+  const maxCycles = Number(opts.maxCycles ?? 5);
+  const directiveMode = opts.directiveMode ?? 'gaps';
+  const stopThreshold = Number(opts.stopThreshold ?? 2);
+  const model = opts.model ?? process.env.LLM_MODEL ?? 'stub';
+  const caller = opts.caller;
+
+  // Bootstrap session
+  const sid = opts.sessionId ?? generateSessionId(goal);
+  await createSession(sid, {
+    goal,
+    rounds: maxCycles,
+    dryRun,
+    preset,
+  });
+
+  const cycleResults = [];
+  let autoDirectives = []; // 累积到下个 cycle 的 directive
+  let stoppedReason = 'completed';
+  let finalSynthesisPath = null;
+
+  for (let cycle = 1; cycle <= maxCycles; cycle++) {
+    // 计算 round number
+    const existing = await listExistingRounds(sid);
+    const roundN = existing.length + 1;
+
+    // candidates 自动从 recommend/ 加载(除非显式关掉)
+    let candidates = [];
+    if (!opts.noCandidates) {
+      candidates = await loadCandidatesFromArchive(sid, 30);
+    }
+
+    // 上一轮摘要供 Designer 参考(--resume 等价)
+    const previousRounds = [];
+    if (opts.resume !== false && existing.length > 0) {
+      previousRounds.push(...await loadPreviousRounds(sid));
+    }
+
+    const input = {
+      project: { id: sid, name: sid, statement: goal },
+      candidates,
+      user_goal: buildAutoUserGoal(goal, autoDirectives),
+      round: roundN,
+      session_id: sid,
+      previous_rounds: previousRounds,
+    };
+
+    // 跑 1 round
+    const rec = await runOneRoundCLI(roundN, input, caller, preset, dryRun);
+    const roundFile = await writeRound(rec, sid);
+
+    // resume 模式:更新 previous_rounds 摘要供下一轮(若需要)
+    if (opts.resume !== false) {
+      previousRounds.push(summarizeRec(rec));
+    }
+
+    // 跑 1 synthesis
+    const synthesisResult = await runSynthesis(sid, {
+      caller,
+      dryRun,
+      model,
+    });
+
+    console.log(formatAutoProgress(cycle, synthesisResult, { maxCycles }));
+
+    // 抽 directives
+    const directives = extractAutoDirectives(synthesisResult.synthesis, {
+      mode: directiveMode,
+    });
+
+    finalSynthesisPath = synthesisResult.path;
+
+    cycleResults.push({
+      cycle,
+      roundFile,
+      synthesisPath: synthesisResult.path,
+      directiveCount: directives.length,
+      directives,
+      synthesisResult,
+    });
+
+    // 下一轮把这些 directives 注入 Designer user_goal
+    autoDirectives = directives;
+
+    // 停? 已完成的 cycle 数 = cycle,与 for 循环 (cycle <= maxCycles) 同语义,
+    // 避免提前 break 后丢一个 cycle。
+    const stop = shouldAutoStop({
+      cycle,
+      maxCycles,
+      directiveCount: directives.length,
+      stopThreshold,
+    });
+    if (stop.stop) {
+      stoppedReason = stop.reason ?? 'completed';
+      break;
+    }
+  }
+
+  return {
+    sessionId: sid,
+    goal,
+    cycles: cycleResults.map(({ cycle, roundFile, synthesisPath, directiveCount }) => ({
+      cycle, roundFile, synthesisPath, directiveCount,
+    })),
+    finalSynthesisPath,
+    stoppedReason,
+  };
+}
+
+/**
+ * buildAutoUserGoal(goal, directives) — 把 goal + 累积 directives 拼成 Designer 的 user_goal。
+ * directive 列表显示成 markdown bullet 列表;若空只返回 goal。
+ *
+ * 纯函数。
+ */
+export function buildAutoUserGoal(goal, directives = []) {
+  const base = String(goal ?? '').trim() || '(no goal)';
+  if (!directives.length) return base;
+  const lines = [base, '', '## Auto directives (from previous synthesis)'];
+  for (const d of directives) lines.push(`- ${d}`);
+  return lines.join('\n');
+}
+
+/**
+ * formatAutoSummary(result) — runAutoLoop 完成时给 stdout 总结。
+ */
+export function formatAutoSummary(result) {
+  const lines = [];
+  lines.push(`✅ Auto loop finished for [${result.sessionId}]`);
+  lines.push(`   goal: ${String(result.goal).slice(0, 100)}`);
+  lines.push(`   cycles: ${result.cycles.length}`);
+  lines.push(`   stopped: ${result.stoppedReason}`);
+  lines.push(`   final synthesis: ${result.finalSynthesisPath ?? '(none)'}`);
+  for (const c of result.cycles) {
+    lines.push(`     cycle ${c.cycle}: ${c.roundFile} → ${c.synthesisPath} (directives=${c.directiveCount})`);
   }
   return lines.join('\n');
 }
