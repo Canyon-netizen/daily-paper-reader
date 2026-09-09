@@ -1,0 +1,331 @@
+---
+// astro-src/pages/agents/new-session.astro
+//
+// iter #46 — Session templates / goal presets.
+//
+// A picker page that lets the user choose a research goal template
+// (literature_review, experiment_plan, rebuttal, free_form), fills in
+// the goal textarea with a structured template + 5 metadata fields, then
+// generates a copy-paste-ready --new-session CLI command.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// Template catalog (server-side, encoded as data attribute for client JS).
+// ---------------------------------------------------------------------------
+
+interface Template {
+  id: string;
+  emoji: string;
+  title: string;
+  blurb: string;
+  goal: string;
+  suggestedMaxCycles: number;
+  suggestedRounds: number;
+  suggestedDirectiveMode: 'gaps' | 'next_steps' | 'both';
+  tags: string[];
+}
+
+const TEMPLATES: Template[] = [
+  {
+    id: 'literature_review',
+    emoji: '📚',
+    title: 'Literature Review',
+    blurb: '整理最近 X 个月 arxiv 上 Y 主题的代表性论文,提炼共识与开放问题',
+    goal: `对 {{TOPIC}} 主题,整理最近 {{MONTHS}} 个月 arxiv 上发表的代表性论文。
+
+需要完成:
+1. 列出 10-15 篇代表性论文,按方法/数据/任务分类
+2. 提炼 3-5 个核心共识 (业内公认有效的方法/结论)
+3. 提炼 3-5 个开放问题 (尚未解决或结论不一致)
+4. 给每篇论文写 1 段中文摘要 + 1 句"为什么相关"
+5. 输出 markdown 综述大纲 + paper_id 引用列表`,
+    suggestedMaxCycles: 3,
+    suggestedRounds: 2,
+    suggestedDirectiveMode: 'both',
+    tags: ['arxiv', 'survey', 'literature'],
+  },
+  {
+    id: 'experiment_plan',
+    emoji: '🔬',
+    title: 'Experiment Plan',
+    blurb: '基于 idea 设计可执行的实验方案,含数据、baseline、metric、ablation',
+    goal: `为 idea "{{IDEA}}" 设计完整实验方案。
+
+需要完成:
+1. 数据集选择 (≥2 个公开 benchmark + 1 个 in-house 数据说明)
+2. Baseline 选择 (≥3 个 SOTA,说明选型理由)
+3. Metric 设计 (主指标 + ≥2 个辅助指标)
+4. 训练 / 推理流程伪代码
+5. Ablation 矩阵 (≥4 个消融维度)
+6. 预期结果区间 + 失败模式 (3 类)`,
+    suggestedMaxCycles: 2,
+    suggestedRounds: 2,
+    suggestedDirectiveMode: 'gaps',
+    tags: ['experiment', 'protocol', 'ml'],
+  },
+  {
+    id: 'rebuttal',
+    emoji: '📝',
+    title: 'Rebuttal 准备',
+    blurb: '针对 reviewer 提出的 N 个弱点,生成反驳段落 + 实验补充建议',
+    goal: `为待投/在投论文 "{{PAPER_TITLE}}" 准备 rebuttal。
+
+需要完成:
+1. 列出 reviewer 的 ≥3 个核心弱点 (按严重程度排序)
+2. 对每个弱点:写 1 段反驳 (引用我们的实验/论证) + 1 段补充实验建议
+3. 列出 reviewer 可能的 follow-up 问题 + 我们的预案
+4. 控制总字数 < 1000 字`,
+    suggestedMaxCycles: 2,
+    suggestedRounds: 1,
+    suggestedDirectiveMode: 'next_steps',
+    tags: ['rebuttal', 'writing', 'review'],
+  },
+  {
+    id: 'paper_additions',
+    emoji: '➕',
+    title: 'Paper 加库',
+    blurb: '把 N 篇新发现的论文加到 project 的相关阶段',
+    goal: `为 project "{{PROJECT_NAME}}" 加 N 篇新论文。
+
+需要完成:
+1. 列每篇论文:arxiv_id / title / 一句话摘要 / 适合的 stage
+2. 为每篇论文写 1 句"为什么对当前 project 有用"
+3. 标注与已有 paper 的关系 (支持 / 反对 / 扩展 / baseline)`,
+    suggestedMaxCycles: 1,
+    suggestedRounds: 1,
+    suggestedDirectiveMode: 'next_steps',
+    tags: ['intake', 'curation'],
+  },
+  {
+    id: 'free_form',
+    emoji: '✍️',
+    title: '自由目标',
+    blurb: '从零写一个自定义目标,适合探索性研究 / 头脑风暴',
+    goal: '',
+    suggestedMaxCycles: 2,
+    suggestedRounds: 1,
+    suggestedDirectiveMode: 'both',
+    tags: ['custom'],
+  },
+];
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="新建 session · 模板">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / 新建 session</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>➕ 新建 Session</h1>
+      <p class="muted">
+        选一个研究目标模板,系统会预填 goal 文本 + 推荐 cycle 数,然后给你一条
+        可直接复制粘贴运行的 <code>--new-session</code> CLI 命令。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🧩 选模板</h2>
+      <div class="agents-template-grid">
+        {TEMPLATES.map((t) => (
+          <button
+            type="button"
+            class="agents-template-card"
+            data-template-id={t.id}
+            data-template={JSON.stringify(t)}
+          >
+            <span class="agents-template-emoji">{t.emoji}</span>
+            <strong>{t.title}</strong>
+            <p class="muted">{t.blurb}</p>
+            <p>
+              {t.tags.map((tag) => <code class="agents-template-tag">{tag}</code>)}
+            </p>
+          </button>
+        ))}
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 填表</h2>
+      <form id="agents-ns-form" class="agents-ns-form">
+        <label>
+          <span>模板</span>
+          <select id="agents-ns-template" name="template" required>
+            {TEMPLATES.map((t) => <option value={t.id}>{t.emoji} {t.title}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>Goal (可编辑,留 {{占位符}} 也行)</span>
+          <textarea id="agents-ns-goal" name="goal" rows="14" placeholder="选择上方模板以预填"></textarea>
+        </label>
+        <div class="agents-ns-row">
+          <label>
+            <span>建议 max-cycles</span>
+            <input type="number" id="agents-ns-max-cycles" min="1" max="20" value="2" />
+          </label>
+          <label>
+            <span>建议 rounds_requested</span>
+            <input type="number" id="agents-ns-rounds" min="1" max="10" value="1" />
+          </label>
+          <label>
+            <span>Directive mode</span>
+            <select id="agents-ns-directive-mode">
+              <option value="both">both (gap + next steps)</option>
+              <option value="gaps">gaps only</option>
+              <option value="next_steps">next steps only</option>
+            </select>
+          </label>
+          <label>
+            <span>Preset</span>
+            <select id="agents-ns-preset">
+              <option value="balanced">balanced</option>
+              <option value="conservative">conservative</option>
+              <option value="aggressive">aggressive</option>
+            </select>
+          </label>
+        </div>
+        <label class="agents-ns-checkbox">
+          <input type="checkbox" id="agents-ns-dry-run" />
+          <span>DRY-RUN (不写 deliverables,只跑一轮验证)</span>
+        </label>
+        <label class="agents-ns-checkbox">
+          <input type="checkbox" id="agents-ns-immediate" checked />
+          <span>--rounds {rounds_requested}: 新 session 建好立刻跑 N 轮</span>
+        </label>
+      </form>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 生成的 CLI 命令</h2>
+      <p class="muted">复制下面这条命令到终端运行,即可创建 session 并(可选)立即跑 N 轮。</p>
+      <pre id="agents-ns-cmd" class="agents-auto-cmd" tabindex="0">node astro-src/scripts/agents-run.mjs --new-session "(请先选模板)"</pre>
+      <p>
+        <button type="button" class="button" id="agents-ns-copy">📋 复制到剪贴板</button>
+        <a class="button" href={`${base}/agents/auto/`}>切换到 --auto 自治模式 →</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<script type="module">
+  const base = (document.querySelector('base')?.href || '/').replace(/\/$/, '');
+  const $ = (id) => document.getElementById(id);
+
+  // 服务端把 TEMPLATES 序列化到每张 card 的 data-template,JS 读出来填充表单
+  const cards = document.querySelectorAll('.agents-template-card');
+  const tplSelect = $('agents-ns-template');
+  const goalEl = $('agents-ns-goal');
+  const maxCyclesEl = $('agents-ns-max-cycles');
+  const roundsEl = $('agents-ns-rounds');
+  const dirModeEl = $('agents-ns-directive-mode');
+  const presetEl = $('agents-ns-preset');
+  const dryRunEl = $('agents-ns-dry-run');
+  const immediateEl = $('agents-ns-immediate');
+  const cmdEl = $('agents-ns-cmd');
+
+  function escapeForShell(s) {
+    // 单引号包裹,内部 ' 用 '\'' 转义
+    return `'${String(s ?? '').replace(/'/g, "'\\''")}'`;
+  }
+
+  function buildCmd() {
+    const goal = goalEl.value.trim();
+    if (!goal) {
+      return `node astro-src/scripts/agents-run.mjs --new-session "(请先填 goal)"`;
+    }
+    const parts = [
+      'node astro-src/scripts/agents-run.mjs',
+      `--new-session ${escapeForShell(goal)}`,
+      `--max-cycles ${maxCyclesEl.value || 2}`,
+      `--auto-directive-mode ${dirModeEl.value}`,
+      `--preset ${presetEl.value}`,
+    ];
+    if (immediateEl.checked) parts.push(`--rounds ${roundsEl.value || 1}`);
+    if (dryRunEl.checked) parts.push('--dry-run');
+    return parts.join(' \\\n  ');
+  }
+
+  function applyTemplate(tpl) {
+    if (!tpl) return;
+    goalEl.value = tpl.goal ?? '';
+    maxCyclesEl.value = String(tpl.suggestedMaxCycles ?? 2);
+    roundsEl.value = String(tpl.suggestedRounds ?? 1);
+    dirModeEl.value = tpl.suggestedDirectiveMode ?? 'both';
+    refreshCmd();
+  }
+
+  function refreshCmd() {
+    cmdEl.textContent = buildCmd();
+  }
+
+  // card click → 填表
+  cards.forEach((card) => {
+    card.addEventListener('click', () => {
+      const id = card.getAttribute('data-template-id');
+      const raw = card.getAttribute('data-template');
+      if (!raw) return;
+      try {
+        const tpl = JSON.parse(raw);
+        tplSelect.value = id;
+        applyTemplate(tpl);
+        goalEl.focus();
+      } catch {}
+    });
+  });
+
+  // select change → 也填表(覆盖现有 goal)
+  tplSelect?.addEventListener('change', () => {
+    const id = tplSelect.value;
+    const card = document.querySelector(`[data-template-id="${id}"]`);
+    if (!card) return;
+    try {
+      const tpl = JSON.parse(card.getAttribute('data-template'));
+      applyTemplate(tpl);
+    } catch {}
+  });
+
+  // 任何表单字段变化 → 重生成 cmd
+  [goalEl, maxCyclesEl, roundsEl, dirModeEl, presetEl, dryRunEl, immediateEl].forEach((el) => {
+    el?.addEventListener('input', refreshCmd);
+    el?.addEventListener('change', refreshCmd);
+  });
+
+  // 复制按钮
+  $('agents-ns-copy')?.addEventListener('click', async () => {
+    const text = cmdEl.textContent ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+      $('agents-ns-copy').textContent = '✓ 已复制';
+      setTimeout(() => { $('agents-ns-copy').textContent = '📋 复制到剪贴板'; }, 2000);
+    } catch {
+      // 退化: 选中文本
+      const range = document.createRange();
+      range.selectNodeContents(cmdEl);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+  });
+
+  // 默认填充第一个模板
+  const firstCard = cards[0];
+  if (firstCard) {
+    try {
+      const tpl = JSON.parse(firstCard.getAttribute('data-template'));
+      applyTemplate(tpl);
+    } catch {}
+  }
+</script>

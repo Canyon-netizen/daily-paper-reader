@@ -1663,3 +1663,72 @@ mark {
   .agents-cs-card { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.1); }
   .agents-cs-winner { background: rgba(59,130,246,0.2); }
 }
+
+/* iter #46 — Session templates / new-session form */
+.agents-template-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+.agents-template-card {
+  display: block;
+  text-align: left;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: border-color 0.15s, transform 0.05s;
+}
+.agents-template-card:hover {
+  border-color: var(--link, #3b82f6);
+  transform: translateY(-1px);
+}
+.agents-template-card:active { transform: translateY(0); }
+.agents-template-emoji { display: block; font-size: 1.5rem; margin-bottom: 0.25rem; }
+.agents-template-card strong { font-size: 1rem; }
+.agents-template-card p { margin: 0.25rem 0; font-size: 0.8rem; }
+.agents-template-tag {
+  display: inline-block;
+  background: var(--surface-muted, #f3f4f6);
+  color: var(--text-muted, #555);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  margin-right: 0.25rem;
+}
+
+.agents-ns-form { display: flex; flex-direction: column; gap: 0.75rem; }
+.agents-ns-form label { display: flex; flex-direction: column; font-size: 0.85rem; color: var(--text-muted, #555); }
+.agents-ns-form textarea,
+.agents-ns-form input[type="number"],
+.agents-ns-form select {
+  margin-top: 0.25rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+.agents-ns-form textarea { font-family: ui-monospace, monospace; font-size: 0.85rem; min-height: 200px; }
+.agents-ns-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+.agents-ns-checkbox {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem;
+}
+.agents-ns-checkbox input { margin: 0; }
+
+@media (prefers-color-scheme: dark) {
+  .agents-template-card { background: rgba(255,255,255,0.03); border-color: rgba(255,255,255,0.1); }
+  .agents-template-tag { background: rgba(255,255,255,0.06); color: #cbd5e1; }
+  .agents-ns-form textarea,
+  .agents-ns-form input[type="number"],
+  .agents-ns-form select { background: rgba(255,255,255,0.03); color: inherit; border-color: rgba(255,255,255,0.15); }
+}
