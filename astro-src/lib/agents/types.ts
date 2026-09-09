@@ -223,3 +223,34 @@ export function makeEmptyCritique(proposal_id: string): Critique {
     persona_attribution: { methodologist: '', engineer: '', skeptic: '' },
   };
 }
+
+export interface MakeRoundRecordInput {
+  round: number;
+  project_id: string;
+  session_id?: string;
+  dry_run?: boolean;
+}
+
+export function makeRoundRecord(input: MakeRoundRecordInput): RoundRecord {
+  return {
+    schema_version: 1,
+    round: input.round,
+    project_id: input.project_id,
+    started_at: Date.now(),
+    finished_at: 0,
+    designer: { proposals: [], prompt_summary: '', model: '' },
+    feedback: { critiques: [], judge_calls: 0, total_tokens: 0 },
+    gate: {
+      verdicts: [],
+      promoted: [],
+      candidate: [],
+      sketch: [],
+      rejected: [],
+    },
+    modifier: { applied: [], skipped: [] },
+    meta: {
+      session_id: input.session_id || input.project_id,
+      dry_run: !!input.dry_run,
+    },
+  };
+}
