@@ -61,6 +61,8 @@ function parseArgs(argv) {
     else if (a === '--leaderboard') out.leaderboard = true;
     else if (a === '--top') out.top = Number(argv[++i]);
     else if (a === '--type') out.type = argv[++i];
+    else if (a === '--promote') out.promote = true;
+    else if (a === '--write-deliverable') out.writeDeliverable = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -102,6 +104,16 @@ if (args.help) {
                      + top Elo proposals + most-active sessions. Filter
                      by --type X, limit --top N (default 10), --json.
   --top N            With --leaderboard, limit each ranking to top N (default 10).
+  --promote          Manual promotion: bump a sketch/candidate proposal
+                     to promoted. Use with --session ID + two positional
+                     args (roundN proposalId). Writes archive/<sid>/
+                     promotions.json (append-only audit log); with
+                     --write-deliverable, also triggers writeDeliverable
+                     for create_draft / literature_review / experiment_plan
+                     (does NOT mutate round_NNN.json — append-only preserved).
+  --write-deliverable With --promote, also write the deliverable .md file
+                     via writeDeliverable. By default --promote is dry
+                     (records the promotion but does not write files).
   --help             Show this help`);
   process.exit(0);
 }
@@ -429,6 +441,151 @@ function parseScoreCritique(raw) {
 function clampScore(s) {
   if (!Number.isFinite(s)) return 5;
   return Math.max(0, Math.min(10, Math.round(s)));
+}
+
+// ---------------------------------------------------------------------------
+// --promote 模式:手动把 sketch / candidate 升到 promoted,append-only audit log
+// ---------------------------------------------------------------------------
+
+/**
+ * readPromotionLog(sessionId) — 读 archive/<sid>/promotions.json。
+ * 不存在或损坏 → 返回空 log:{ schema_version: 1, entries: [] }。
+ */
+export async function readPromotionLog(sessionId) {
+  const file = join('archive', sessionId, 'promotions.json');
+  if (!existsSync(file)) return { schema_version: 1, session_id: sessionId, entries: [] };
+  try {
+    const raw = await readFile(file, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed.entries)) parsed.entries = [];
+    return parsed;
+  } catch {
+    return { schema_version: 1, session_id: sessionId, entries: [] };
+  }
+}
+
+/**
+ * appendPromotion(sessionId, entry) — atomic append 到 promotions.json。
+ * 每次重读整个 log → push → 写回(单用户 CLI,无并发风险)。
+ */
+async function appendPromotion(sessionId, entry) {
+  const log = await readPromotionLog(sessionId);
+  log.entries.push(entry);
+  const file = join('archive', sessionId, 'promotions.json');
+  await mkdir(join('archive', sessionId), { recursive: true });
+  await writeFile(file, JSON.stringify(log, null, 2));
+  return { log, entry };
+}
+
+/**
+ * promoteProposal(sessionId, roundN, proposalId, opts) — 主入口。
+ *
+ * opts: { writeDeliverable?: boolean }
+ *
+ * 流程:
+ *   1. 读 round_<NNN>.json
+ *   2. 找 proposal id;find verdict 决策
+ *   3. 如果已经是 promoted/rejected → returns { ok: false, reason }
+ *   4. 写 promotion audit log entry
+ *   5. (可选) 触发 writeDeliverable(创建 draft / review / experiment .md)
+ *   6. 返回 { ok: true, entry, deliverable? }
+ *
+ * 不修改 round_NNN.json(append-only)。改 promotion 的 audit 在 promotions.json。
+ */
+export async function promoteProposal(sessionId, roundN, proposalId, opts = {}) {
+  const writeDeliverableFlag = !!opts.writeDeliverable;
+
+  const files = await listExistingRounds(sessionId);
+  const roundFile = files.find((f) => f.endsWith(`round_${String(roundN).padStart(3, '0')}.json`));
+  if (!roundFile) throw new Error(`round ${roundN} not found in archive/${sessionId}/rounds/`);
+
+  const roundRecord = JSON.parse(await readFile(roundFile, 'utf8'));
+  const proposal = (roundRecord.designer?.proposals ?? []).find((p) => p.id === proposalId);
+  if (!proposal) throw new Error(`proposal ${proposalId} not found in round ${roundN}`);
+
+  const verdict = (roundRecord.gate?.verdicts ?? []).find((v) => v.proposal_id === proposalId);
+  const previousDecision = verdict?.decision ?? '(no verdict recorded)';
+  if (previousDecision === 'promoted') {
+    return { ok: false, reason: 'already promoted', previousDecision };
+  }
+  if (previousDecision === 'rejected') {
+    return { ok: false, reason: 'gate=rejected; cannot promote a rejected proposal', previousDecision };
+  }
+
+  const entry = {
+    schema_version: 1,
+    promoted_at: Date.now(),
+    session_id: sessionId,
+    round: roundN,
+    proposal_id: proposalId,
+    proposal_title: proposal.title,
+    proposal_type: proposal.type,
+    previous_decision: previousDecision,
+    new_decision: 'promoted',
+    rationale: opts.rationale ?? null,
+    actor: opts.actor ?? 'cli',
+    wrote_deliverable: false,
+    deliverable_path: null,
+    deliverable_kind: null,
+  };
+
+  // 可选触发 deliverable(用 next available idx 在该 type 的归档里)
+  if (writeDeliverableFlag) {
+    const existingDeliverables = [];
+    const { readdir: rd } = await import('node:fs/promises');
+    const subdirs = {
+      create_draft: 'drafts',
+      literature_review: 'reviews',
+      experiment_plan: 'experiments',
+    };
+    const subdir = subdirs[proposal.type];
+    if (subdir) {
+      try {
+        const files2 = await rd(join('archive', sessionId, subdir));
+        for (const f of files2) {
+          const m = f.match(/^.+_r(\d+)_(\d+)\.md$/);
+          if (m && Number(m[1]) === roundN) existingDeliverables.push(Number(m[2]));
+        }
+      } catch { /* no dir yet */ }
+      const idx = existingDeliverables.length;
+      const result = await writeDeliverable(proposal, {
+        session_id: sessionId,
+        round: roundN,
+        idx,
+        decision: 'promoted',
+        dryRun: false,
+      });
+      entry.wrote_deliverable = result.written;
+      entry.deliverable_path = result.written ? result.path : null;
+      entry.deliverable_kind = result.written ? result.kind : null;
+    }
+    // add_paper / rebuttal 等不支持的 type:不写文件,deliverable_* 保持 null
+  }
+
+  await appendPromotion(sessionId, entry);
+  return { ok: true, entry, previousDecision };
+}
+
+/**
+ * formatPromoteText(result) — stdout 输出。
+ */
+export function formatPromoteText(result) {
+  if (!result.ok) {
+    return `❌ Cannot promote: ${result.reason} (previous_decision: ${result.previousDecision})`;
+  }
+  const e = result.entry;
+  const lines = [];
+  lines.push(`✨ Promoted [${e.session_id}] round ${e.round} → proposal ${e.proposal_id}`);
+  lines.push(`   title: ${e.proposal_title}`);
+  lines.push(`   type: ${e.proposal_type}`);
+  lines.push(`   previous_decision: ${e.previous_decision} → promoted`);
+  if (e.wrote_deliverable) {
+    lines.push(`   📝 deliverable: ${e.deliverable_path}`);
+  } else {
+    lines.push(`   (no deliverable written; rerun with --write-deliverable)`);
+  }
+  lines.push(`   audit: archive/${e.session_id}/promotions.json`);
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -1524,6 +1681,42 @@ async function main() {
       console.log(JSON.stringify({ typeFilter, topN, ...report }, null, 2));
     } else {
       console.log(formatLeaderboardText(report, { typeFilter }));
+    }
+    return;
+  }
+
+  // 模式 0.8: --promote (手动升级,无 LLM 调用,可选写 deliverable)
+  if (args.promote) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --promote requires --session ID');
+      process.exit(2);
+    }
+    const positions = args._.map((x) => String(x));
+    if (positions.length < 2) {
+      console.error('[error] --promote requires two positional args: roundN proposalId');
+      process.exit(2);
+    }
+    const roundN = Number(positions[0]);
+    const proposalId = positions[1];
+    if (!Number.isFinite(roundN)) {
+      console.error(`[error] first positional must be a numeric round number, got: ${positions[0]}`);
+      process.exit(2);
+    }
+    try {
+      const result = await promoteProposal(sessionId, roundN, proposalId, {
+        writeDeliverable: !!args.writeDeliverable,
+        actor: 'cli',
+      });
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatPromoteText(result));
+      }
+      if (!result.ok) process.exit(3);
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
     }
     return;
   }
