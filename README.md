@@ -35,6 +35,7 @@
 
 ## 🆕 最近更新
 
+- **2026-09-09** 🚀 多智能体 `--quickstart` 零摩擦 first-run（iter #54）+ `docs/agents-workflow.md` 完整参考：CLI 新增 `--quickstart "<GOAL>"` — 等价于 `--new-session GOAL --rounds 1 --preset aggressive --dry-run`，自动跑完 + 打印 4 条 follow-up 命令，新用户 0 配置起步（无 API key 也能跑出 archive/ 实物）；新增 [`docs/agents-workflow.md`](docs/agents-workflow.md) — 3 智能体设计哲学 + 与 Sakana AI Scientist v2 / STORM / AutoGen / OpenAI Deep Research 的 9 维度对比表（目标 / 输入 / agent 架构 / 反馈 / 输出 / 多 session 学习 / 自动停 / tool use / 部署）+ 上手指南 + 已知限制与下个 milestone 候选。详见 `## 🤖 多智能体科研自动化`。
 - **2026-09-09** ✅ Modifier 完成 5 种 ProposalType 全覆盖（iter #38）：writeDeliverable 加 add_paper + rebuttal 两种 routing,`add_paper` → `archive/<sid>/paper_additions/paper_r<NNN>_<idx>.md`(📄 title + 加入理由 / 候选论文 IDs / 风险 / 下一步),`rebuttal` → `archive/<sid>/rebuttals/rebuttal_r<NNN>_<idx>.md`(✉️ title + 摘要 / 目标论文 / Reviewer Comments / Responses / 论文修改 / 风险);ModifierAction.kind 加 `write_paper_addition_md` / `write_rebuttal_md`;统一文件前缀表(prefixByType)消除 3-branch if-else 链;`tests/test_agents_modifier_full_types.mjs` 18 个 case 全过 + iter #32 / iter #35 的 "unsupported type" 测试改用 made-up type。**Modifier 现在 100% 覆盖 ProposalType,5/5 全部走 writeDeliverable**,不再有 "暂时仍走 archive_round_summary" 的死角。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner` → `Modifier 真写 deliverables`。
 - **2026-09-09** 🔍 `--diff` 加 title-fuzzy 匹配 fallback（iter #37）：diffRounds 在 id 严格匹配后,对 unmatched proposals 跑 title-Jaccard 匹配(英文按词、CJK 按字拆 token,Jaccard >= 0.5 视为同一个);`normalizeTitle` / `titleJaccard` / `findTitleFuzzyMatches` 都是 export 纯函数(便于复用);`stats.idMatched` + `stats.fuzzyMatched` 独立计数,`formatDiffText` 在 Stats 行加 `[matched: N by-id, M fuzzy]`,Changed 行 fuzzy 配的标 `[fuzzy=0.85, p1≡q2]`;`--fuzzy-threshold` 可调阈值(默认 0.5);`tests/test_agents_diff_fuzzy_cli.mjs` 26 个 case 全过,iter #33 测试用完全不重叠的词兼容 fuzzy。**解决了 stub LLM diff 看起来永远全是 add+remove 的问题**:现在同 title 不同 id 的 proposals 会 fuzzy 配上 → 显示 unchanged / changed 而不是 added+removed。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
 - **2026-09-09** 🧪 Modifier 扩展到 `experiment_plan` 类型（iter #35）：writeDeliverable 新增第 3 种 routing,`experiment_plan` → `archive/<sid>/experiments/exp_r<NNN>_<idx>.md`,含 🧪 title + 假设 / 方法 / 数据集 / 评估指标 / 算力 / 相关论文 / 风险 / 下一步 sections;`formatExperimentMarkdown` 纯函数,`ctx.body.{hypothesis, method, dataset, metrics, compute}` 可覆盖默认占位符,rationale 默认填入 hypothesis;`tests/test_agents_modifier_experiment.mjs` 16 个 case 全过。Modifier 现已覆盖 create_draft + literature_review + experiment_plan 三种 output type(add_paper / rebuttal 仍走 archive_round_summary 留待后续)。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner` → `Modifier 真写 deliverables`。
@@ -811,7 +812,9 @@ round 历史存 `localStorage:dpr_agents_rounds_<sid>`,刷新可续;无 LLM key 
 
 ### 设计文档
 
-详见 [.claude/plans/multi-agent-research-loop.md](.claude/plans/multi-agent-research-loop.md)。
+完整的多智能体设计哲学、与 Sakana AI Scientist v2 / STORM / AutoGen / OpenAI Deep Research 的对比表、上手指南 → [`docs/agents-workflow.md`](docs/agents-workflow.md)。
+
+内部规划历史见 [.claude/plans/multi-agent-research-loop.md](.claude/plans/multi-agent-research-loop.md)。
 
 ---
 

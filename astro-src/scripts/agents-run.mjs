@@ -57,6 +57,7 @@ function parseArgs(argv) {
     else if (a === '--last') out.last = Number(argv[++i]);
     else if (a === '--new-session') out.newSession = argv[++i];
     else if (a === '--no-run') out.noRun = true;
+    else if (a === '--quickstart') out.quickstart = argv[++i];
     else if (a === '--diff') out.diff = true;
     else if (a === '--leaderboard') out.leaderboard = true;
     else if (a === '--top') out.top = Number(argv[++i]);
@@ -103,6 +104,13 @@ if (args.help) {
                      --rounds N to immediately run N rounds on the new session.
                      Use --no-run to skip the round run.
   --no-run           With --new-session, only create the dir + meta (skip rounds)
+  --quickstart GOAL  One-command bootstrap for new users. Equivalent to
+                     --new-session GOAL --rounds 1 --preset aggressive
+                     --dry-run, then prints a friendly summary listing
+                     what was produced + 4 next-step commands.
+                     Goal: zero-friction first run (no LLM key required,
+                     Modifier writes deliverables so archive/ is non-empty).
+                     Combine with --no-dry-run to use real LLM.
   --diff             Compare two rounds of a session (use with --session ID
                      and two positional round numbers). Outputs proposals
                      added/removed/changed + score delta + gate decision
@@ -1994,6 +2002,25 @@ export async function createSession(sessionId, opts = {}) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // 模式 -1: --quickstart (新用户零摩擦入口,iter #54)
+  // 等价于 --new-session GOAL --rounds 1 --preset aggressive --dry-run,
+  // 然后打印 1 段友好 summary,列出产生了哪些文件 + 4 条下一步建议。
+  // 注:--quickstart 始终 dry-run(无 API key 也能跑),真跑请用 --new-session。
+  // 必须放在 preset/dryRun const 之前,否则会被默认值盖住。
+  if (args.quickstart !== undefined) {
+    const goal = args.quickstart;
+    if (typeof goal !== 'string' || goal.trim().length === 0) {
+      console.error('[error] --quickstart requires a non-empty GOAL string');
+      process.exit(2);
+    }
+    // opinionated defaults: 1 round + dry-run + aggressive(让 Modifier 写 deliverables)
+    args.newSession = goal;
+    if (args.maxRounds === undefined) args.maxRounds = 1;
+    if (args.preset === undefined) args.preset = 'aggressive';
+    args.dryRun = true;
+    args._quickstartMode = true;
+  }
+
   const preset = args.preset ?? 'balanced';
   if (!['conservative', 'balanced', 'aggressive'].includes(preset)) {
     console.error(`[error] --preset must be conservative|balanced|aggressive, got: ${preset}`);
@@ -2242,6 +2269,7 @@ async function main() {
         noCandidates: !!args.noCandidates,
         noSynthesize: !!args.noSynthesize,
         fewShotExamples: args._fewShotExamples ?? [],
+        _quickstartMode: !!args._quickstartMode,
       });
     }
     return;
@@ -2261,6 +2289,7 @@ async function main() {
     noCandidates: !!args.noCandidates,
     noSynthesize: !!args.noSynthesize,
     fewShotExamples: args._fewShotExamples ?? [],
+    _quickstartMode: !!args._quickstartMode,
   });
 }
 
@@ -2330,6 +2359,49 @@ async function runOneSession(sessionId, caller, opts) {
       console.warn(`[session ${sessionId}] synthesis failed: ${err.message}`);
     }
   }
+
+  // --quickstart 模式:跑完后打印友好 summary(iter #54)
+  if (opts._quickstartMode) {
+    printQuickstartSummary(sessionId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// --quickstart 友好 summary(iter #54):列出本轮产出 + 4 条下一步命令
+// ---------------------------------------------------------------------------
+
+function printQuickstartSummary(sessionId) {
+  const sid = sessionId;
+  const files = [
+    `archive/${sid}/meta.json`,
+    `archive/${sid}/rounds/round_001.json`,
+    `archive/${sid}/digest_<YYYYMMDD>.md`,
+    `archive/${sid}/synthesis/synthesis_001.md`,
+  ];
+  console.log(`
+🎉 Quickstart 完成 — 你的第一个 3 智能体 session 已落地:
+
+   session id: ${sid}
+
+📂 产出文件:
+   - archive/${sid}/meta.json               (session 元数据)
+   - archive/${sid}/rounds/round_001.json   (Designer + Feedback + Gate + Modifier 完整轮)
+   - archive/${sid}/drafts/ / reviews/ /    (Modifier 真写的 deliverables)
+     experiments/ / paper_additions/ /
+     rebuttals/   (按 proposal type 路由)
+   - archive/${sid}/digest_<YYYYMMDD>.md    (1 段中文摘要)
+   - archive/${sid}/synthesis/synthesis_001.md  (Deep-Research 综合报告)
+
+🚀 下一步:
+   1. 浏览器看结果:    /agents/${sid}/  (localStorage 已写一份副本)
+   2. 继续跑 3 轮:     node astro-src/scripts/agents-run.mjs --session ${sid} --rounds 3
+   3. 看全局战况:       node astro-src/scripts/agents-run.mjs --leaderboard
+   4. 接真 LLM 再跑:    LLM_BASE_URL=... LLM_API_KEY=... LLM_MODEL=... \\
+                        node astro-src/scripts/agents-run.mjs --new-session "<新目标>" --rounds 3
+
+🔬 这是 3 智能体闭环的一次跑通版本 — Designer 提议 → Feedback 多 persona 评分 →
+   Gate 过滤 → Modifier 真写 deliverables。详见 docs/agents-workflow.md。
+`);
 }
 
 // ---------------------------------------------------------------------------
