@@ -1,0 +1,316 @@
+---
+// astro-src/pages/agents/auto.astro
+//
+// iter #41 — Autonomous research loop control panel.
+//
+// Cloudflare Pages is static-only, so we can't run runAutoLoop directly from
+// the browser. The honest UX is:
+//   1. Goal + parameter form → previews the exact `node agents-run.mjs --auto
+//      ...` command users should run locally (with a copy button).
+//   2. "Recent auto sessions" list — read from /data/agents-archive-manifest.json
+//      (built by astro-src/scripts/build-archive-manifest.mjs). Each entry links
+//      to /agents/<sid>/ so the user can drill into cycles + syntheses.
+//   3. Quick reference: what --auto does, when it stops, what the synthesis
+//      output looks like.
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="自治研究 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / 自治模式</span>
+    </nav>
+
+    <header class="agents-auto-header">
+      <h1>🤖→🧠 自治研究循环</h1>
+      <p class="muted">
+        给一个研究目标,让 <code>runAutoLoop</code> 自动跑多个 (round + synthesis) 周期,
+        把每轮 synthesis 的 gaps + next_steps 作为下一轮 Designer 的 directive,
+        直到收敛或达到 max cycles。
+      </p>
+      <p class="muted">
+        <small>
+          由于 Cloudflare Pages 是纯静态部署,运行在本地的 CLI:
+          <code>node astro-src/scripts/agents-run.mjs --auto "..."</code>。
+          下方的表单会生成完整命令,一键复制即可。
+        </small>
+      </p>
+    </header>
+
+    <section class="agents-auto-form-section">
+      <h2>1. 配置</h2>
+      <form id="agents-auto-form" class="agents-auto-form">
+        <label class="agents-auto-field agents-auto-field-wide">
+          <span>研究目标 / Goal <span class="muted">(必填)</span></span>
+          <textarea id="agents-auto-goal" rows="3" required
+            placeholder="例如:如何在多智能体系统中实现长期记忆并避免 context 爆炸?"></textarea>
+        </label>
+
+        <div class="agents-auto-grid">
+          <label class="agents-auto-field">
+            <span>Session ID <span class="muted">(可选,留空则自动生成)</span></span>
+            <input id="agents-auto-sid" type="text" placeholder="例如:rag-memory-2026" />
+          </label>
+
+          <label class="agents-auto-field">
+            <span>Max Cycles</span>
+            <input id="agents-auto-max-cycles" type="number" min="1" max="20" value="5" />
+          </label>
+
+          <label class="agents-auto-field">
+            <span>Directive Mode</span>
+            <select id="agents-auto-directive-mode">
+              <option value="gaps" selected>gaps (只读 gaps_contradictions)</option>
+              <option value="next_steps">next_steps (只读 next_steps)</option>
+              <option value="both">both (两种都读)</option>
+            </select>
+          </label>
+
+          <label class="agents-auto-field">
+            <span>Stop Threshold</span>
+            <input id="agents-auto-stop-threshold" type="number" min="0" max="20" value="2" />
+            <small class="muted">cycle directives < 此值时停止;设 0 = 禁用收敛检测,只跑满 max-cycles</small>
+          </label>
+
+          <label class="agents-auto-field">
+            <span>Preset</span>
+            <select id="agents-auto-preset">
+              <option value="conservative">conservative (低产出,严格评分)</option>
+              <option value="balanced" selected>balanced (默认)</option>
+              <option value="aggressive">aggressive (高产出,宽松评分)</option>
+            </select>
+          </label>
+
+          <label class="agents-auto-field agents-auto-field-check">
+            <input id="agents-auto-dry-run" type="checkbox" />
+            <span>Dry run <span class="muted">(用 stub LLM,不消耗 API 配额)</span></span>
+          </label>
+        </div>
+
+        <div class="agents-auto-actions">
+          <button type="button" class="button primary" id="agents-auto-generate-btn">
+            📋 生成 CLI 命令
+          </button>
+          <button type="reset" class="button">重置</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="agents-auto-output-section" id="agents-auto-output-section" hidden>
+      <h2>2. 命令预览</h2>
+      <p class="muted">
+        复制后在项目根目录运行。每跑完一次 cycle 会打印进度,跑完会给出最终 synthesis 路径。
+      </p>
+      <pre id="agents-auto-cmd" class="agents-auto-cmd" tabindex="0"></pre>
+      <div class="agents-auto-actions">
+        <button type="button" class="button" id="agents-auto-copy-btn">📎 复制到剪贴板</button>
+        <a id="agents-auto-docs-link" href={`${base}/agents/`} class="button">查看所有 sessions</a>
+      </div>
+      <p id="agents-auto-copy-hint" class="muted" aria-live="polite"></p>
+    </section>
+
+    <section class="agents-auto-recent-section">
+      <h2>3. 最近 sessions</h2>
+      <p class="muted">
+        以下 session 来自 <code>archive/<sid>/</code>(本机 CLI 跑出来的);点进去看 rounds + syntheses。
+      </p>
+      <div id="agents-auto-recent-list" class="agents-auto-recent-list">
+        <p class="muted">载入中...</p>
+      </div>
+    </section>
+
+    <section class="agents-auto-help-section">
+      <h2>参考</h2>
+      <details open>
+        <summary>--auto 怎么工作</summary>
+        <pre class="agents-auto-cmd">node astro-src/scripts/agents-run.mjs --auto "你的研究问题" \\
+  --max-cycles 5 \\
+  --auto-directive-mode gaps \\
+  --auto-stop-threshold 2 \\
+  [--session 已有sid] \\
+  [--dry-run]</pre>
+        <ol>
+          <li>bootstrap 一个新 session(或 resume 已有 sid),goal 写进 meta.json</li>
+          <li>每个 cycle 跑一次完整的 (round = Designer → Feedback → Modifier)</li>
+          <li>每个 cycle 跑一次 synthesis(读所有 rounds + deliverables + papers,输出 markdown 总结)</li>
+          <li>从 synthesis 抽 gaps_contradictions / next_steps → 下个 cycle 的 Designer directive</li>
+          <li>停止条件:directives < stopThreshold (converged) / cycle ≥ maxCycles (max_cycles) / plateau 标志</li>
+          <li>最终输出:每个 cycle 的 round_NNN.json + synthesis_NNN.md(永不覆盖,history 保留)</li>
+        </ol>
+      </details>
+      <details>
+        <summary>停止条件详解</summary>
+        <ul>
+          <li><strong>max_cycles</strong>:cycle 数达到 --max-cycles(默认 5)</li>
+          <li><strong>converged</strong>:本轮 directive 数 < --auto-stop-threshold(默认 2),意味着「已经没什么可补的了」</li>
+          <li><strong>plateau</strong>:某轮设置 plateau=true 手动停</li>
+        </ul>
+      </details>
+      <details>
+        <summary>产物结构</summary>
+        <pre class="agents-auto-cmd">archive/<sid>/
+├── meta.json                 ← 初始 goal + 配置
+├── rounds/
+│   ├── round_001.json        ← cycle 1: Designer + Feedback + Modifier
+│   ├── round_002.json        ← cycle 2 (with cycle 1 directives in user_goal)
+│   └── ...
+├── synthesis/
+│   ├── synthesis_001.md      ← cycle 1 unified answer + gaps + next steps
+│   ├── synthesis_002.md      ← cycle 2 (引用了 cycle 1)
+│   └── ...
+├── drafts/                   ← create_draft 类型 proposal 落盘
+├── reviews/                  ← literature_review 落盘
+├── experiments/              ← experiment_plan 落盘
+├── paper_additions/          ← add_paper 落盘
+└── rebuttals/                ← rebuttal 落盘</pre>
+      </details>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`#${id} not found`);
+    return el as T;
+  };
+
+  function escapeHtml(s: string): string {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+      '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+    }[c] ?? c));
+  }
+
+  // CLI path:从 import.meta.url 解析出 astro-src/scripts/agents-run.mjs 的项目根相对路径。
+  // /agents/auto/ 页面在 build 时已经移到 dist/agents/auto/index.html,
+  // 所以回溯深度由运行位置决定。这里用相对部署根目录的路径:
+  const CLI_RELPATH = 'astro-src/scripts/agents-run.mjs';
+
+  function buildCommand(): string | null {
+    const goal = $<HTMLTextAreaElement>('agents-auto-goal').value.trim();
+    if (!goal) return null;
+    const sid = $<HTMLInputElement>('agents-auto-sid').value.trim();
+    const maxCycles = $<HTMLInputElement>('agents-auto-max-cycles').value;
+    const directiveMode = $<HTMLSelectElement>('agents-auto-directive-mode').value;
+    const stopThreshold = $<HTMLInputElement>('agents-auto-stop-threshold').value;
+    const preset = $<HTMLSelectElement>('agents-auto-preset').value;
+    const dryRun = $<HTMLInputElement>('agents-auto-dry-run').checked;
+
+    // goal 含空格/引号时,wrap in double quotes;already escaped by shell since it's wrapped.
+    const parts = [
+      `node ${CLI_RELPATH}`,
+      `--auto "${goal.replace(/"/g, '\\"')}"`,
+    ];
+    if (sid) parts.push(`--session ${sid}`);
+    if (maxCycles && maxCycles !== '5') parts.push(`--max-cycles ${maxCycles}`);
+    if (directiveMode && directiveMode !== 'gaps') parts.push(`--auto-directive-mode ${directiveMode}`);
+    if (stopThreshold && stopThreshold !== '2') parts.push(`--auto-stop-threshold ${stopThreshold}`);
+    if (preset && preset !== 'balanced') parts.push(`--preset ${preset}`);
+    if (dryRun) parts.push('--dry-run');
+    return parts.join(' \\\n  ');
+  }
+
+  function wireForm() {
+    const form = $<HTMLFormElement>('agents-auto-form');
+    const generateBtn = $<HTMLButtonElement>('agents-auto-generate-btn');
+    const outputSection = $<HTMLElement>('agents-auto-output-section');
+    const cmdEl = $<HTMLPreElement>('agents-auto-cmd');
+    const copyBtn = $<HTMLButtonElement>('agents-auto-copy-btn');
+    const hintEl = $<HTMLElement>('agents-auto-copy-hint');
+
+    generateBtn.addEventListener('click', () => {
+      const cmd = buildCommand();
+      if (!cmd) {
+        hintEl.textContent = '⚠️ 请先填写研究目标';
+        hintEl.style.color = '#c00';
+        outputSection.hidden = true;
+        return;
+      }
+      cmdEl.textContent = cmd;
+      outputSection.hidden = false;
+      hintEl.textContent = '';
+      hintEl.style.color = '';
+    });
+
+    copyBtn.addEventListener('click', async () => {
+      const cmd = cmdEl.textContent ?? '';
+      try {
+        await navigator.clipboard.writeText(cmd);
+        hintEl.textContent = '✓ 已复制到剪贴板';
+        hintEl.style.color = '#080';
+      } catch (err) {
+        // Fallback: select text + show command
+        const range = document.createRange();
+        range.selectNodeContents(cmdEl);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+        hintEl.textContent = '⚠️ 无法自动复制,已选中文本,请按 Cmd/Ctrl+C';
+        hintEl.style.color = '#c00';
+      }
+    });
+
+    form.addEventListener('reset', () => {
+      outputSection.hidden = true;
+      hintEl.textContent = '';
+    });
+  }
+
+  interface ManifestSession {
+    sid: string;
+    rounds: number;
+    proposals: number;
+    applied: number;
+    avgScore: number;
+    lastAt: number;
+  }
+
+  async function loadRecentSessions(): Promise<ManifestSession[]> {
+    try {
+      const res = await fetch('/data/agents-archive-manifest.json');
+      if (!res.ok) return [];
+      const data = await res.json();
+      const sessions: ManifestSession[] = data.sessions ?? [];
+      // 按 lastAt 倒序,只取最近 10 个
+      return sessions
+        .slice()
+        .sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0))
+        .slice(0, 10);
+    } catch {
+      return [];
+    }
+  }
+
+  function renderRecent(list: ManifestSession[]) {
+    const wrap = $('agents-auto-recent-list');
+    if (list.length === 0) {
+      wrap.innerHTML = '<p class="muted">还没有 session。先用上方表单生成命令跑一次。</p>';
+      return;
+    }
+    const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+    wrap.innerHTML = list.map((s) => `
+      <a class="agents-auto-recent-item" href="${base}/agents/${encodeURIComponent(s.sid)}/" target="_blank">
+        <div class="agents-auto-recent-sid">${escapeHtml(s.sid)}</div>
+        <div class="agents-auto-recent-stats">
+          <span>${s.rounds} rounds</span>
+          <span>${s.proposals} proposals</span>
+          <span>${s.applied} applied</span>
+          <span>avg score ${s.avgScore.toFixed(2)}</span>
+          <span class="muted">${new Date(s.lastAt).toLocaleString()}</span>
+        </div>
+      </a>
+    `).join('');
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    wireForm();
+    loadRecentSessions().then(renderRecent);
+  });
+</script>

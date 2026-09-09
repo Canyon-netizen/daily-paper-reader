@@ -18,7 +18,7 @@
  *   node astro-src/scripts/agents-run.mjs --project my-proj --digest-only
  */
 
-import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -68,6 +68,7 @@ function parseArgs(argv) {
     else if (a === '--max-cycles') out.maxCycles = Number(argv[++i]);
     else if (a === '--auto-directive-mode') out.autoDirectiveMode = argv[++i];
     else if (a === '--auto-stop-threshold') out.autoStopThreshold = Number(argv[++i]);
+    else if (a === '--auto-resume') out.autoResume = true;
     else if (a === '--write-deliverable') out.writeDeliverable = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
@@ -151,6 +152,10 @@ if (args.help) {
                      With --auto, stop when directive count ≤ N (default 2).
                      Set 0 to disable convergence detection and always run
                      --max-cycles.
+  --auto-resume       With --auto, require --session SID and refuse to
+                     create a new session. Refuses with exit 2 if the
+                     session's archive/<sid>/meta.json doesn't exist.
+                     Use to pick up a previously-stopped session.
   --help             Show this help`);
   process.exit(0);
 }
@@ -1900,7 +1905,25 @@ async function main() {
   // 模式 -1: --auto (autonomous research loop,优先于所有其他模式)
   if (typeof args.auto === 'string' && args.auto.trim()) {
     const goal = args.auto.trim();
-    const sid = args.project ?? args.session ?? null; // 不强制 sid,让 generateSessionId 派生
+    let sid = args.project ?? args.session ?? null; // 不强制 sid,让 generateSessionId 派生
+
+    // --auto-resume: 强制要求 --session,refuse 创建新 session
+    if (args.autoResume) {
+      if (!sid) {
+        console.error('[error] --auto-resume requires --session SID (refuses to create a new session)');
+        process.exit(2);
+      }
+      const metaPath = join(process.cwd(), 'archive', sid, 'meta.json');
+      try {
+        const st = await stat(metaPath);
+        if (!st.isFile()) throw new Error('not a file');
+      } catch {
+        console.error(`[error] --auto-resume: no meta.json found at ${metaPath}`);
+        console.error('        session must exist on disk; use plain --auto to bootstrap a new session.');
+        process.exit(2);
+      }
+    }
+
     try {
       const result = await runAutoLoop(goal, {
         caller,
