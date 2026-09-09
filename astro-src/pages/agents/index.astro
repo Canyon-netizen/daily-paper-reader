@@ -116,6 +116,14 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </div>
     </section>
 
+    <section class="agents-filter" id="agents-filter" hidden>
+      <div class="agents-filter-header">
+        <span class="agents-meta-label">🏷️ 按 tag 过滤 session</span>
+        <button class="button small" id="agents-filter-clear" type="button">清除过滤</button>
+      </div>
+      <div class="agents-filter-chips" id="agents-filter-chips"></div>
+    </section>
+
     <section class="agents-trash" id="agents-trash" hidden>
       <div class="agents-trash-header">
         <h3>🗑️ 回收站 <span class="muted">(30 天后自动永久删除)</span></h3>
@@ -138,6 +146,13 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <span class="agents-meta-notes-cell">
           <span class="agents-meta-label">Notes(自由记录)</span>
           <textarea id="agents-meta-notes" rows="3" placeholder="想记住的事:目标 / 上下文 / 已尝试的方法 / 下一步计划…"></textarea>
+        </span>
+      </div>
+      <div class="agents-meta-row">
+        <span class="agents-meta-tags-cell">
+          <span class="agents-meta-label">🏷️ Tags(逗号分隔,Enter 保存)</span>
+          <input id="agents-meta-tags" type="text" placeholder="methodology, write-up, acl2026" />
+          <span class="agents-meta-tags-chips" id="agents-meta-tags-chips"></span>
         </span>
       </div>
       <p class="muted agents-meta-hint">数据存在浏览器 localStorage 里,跨刷新保留,不会上传。</p>
@@ -385,7 +400,9 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       refreshStats();
       refreshTokenPanel();
       refreshMetaPanel();
+      refreshTagPanel();
       refreshTrashPanel();
+      refreshFilterPanel();
       if (!sid) {
         empty.hidden = false;
         $('agents-rounds').hidden = true;
@@ -557,6 +574,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           notes: typeof obj.notes === 'string' ? obj.notes : '',
           createdAt: typeof obj.createdAt === 'number' ? obj.createdAt : now,
           updatedAt: typeof obj.updatedAt === 'number' ? obj.updatedAt : now,
+          tags: normalizeTags(obj.tags),
         };
       } catch {
         return emptyMeta(sid, now);
@@ -1094,6 +1112,153 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         `📋 已复制 "${oldSid}" → "${result.newSid}" (${result.roundCount} rounds)`;
     }
 
+    // iter #20 — session 标签 (multi-label)
+    //
+    // meta.tags: string[] 自动 trim/lowercase/dedupe/上限 8 个
+    // UI: meta 面板加 tags 输入框 + picker 上方加多选过滤
+    const MAX_TAGS = 8;
+    const MAX_TAG_LEN = 24;
+
+    function normalizeTags(raw: unknown): string[] {
+      if (!Array.isArray(raw)) return [];
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const t of raw) {
+        if (typeof t !== 'string') continue;
+        const trimmed = t.trim().toLowerCase();
+        if (!trimmed) continue;
+        if (trimmed.length > MAX_TAG_LEN) continue;
+        if (seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        out.push(trimmed);
+        if (out.length >= MAX_TAGS) break;
+      }
+      return out;
+    }
+
+    function parseTagInput(input: string): string[] {
+      if (typeof input !== 'string') return [];
+      return input.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    }
+
+    function filterSessionsByTags<T extends { tags: string[] }>(sessions: T[], selectedTags: string[]): T[] {
+      if (!Array.isArray(selectedTags) || selectedTags.length === 0) return sessions;
+      const want = new Set(selectedTags.map((t) => String(t).toLowerCase()));
+      return sessions.filter((s) => {
+        const have = new Set((s.tags ?? []).map((t) => String(t).toLowerCase()));
+        for (const w of want) if (have.has(w)) return true;
+        return false;
+      });
+    }
+
+    function saveMetaTags(sid: string, tags: string[], now = Date.now()) {
+      const prev = loadMeta(sid);
+      const next = { ...prev, tags: normalizeTags(tags), updatedAt: now };
+      localStorage.setItem(META_KEY(sid), JSON.stringify(next));
+      return next;
+    }
+
+    function getSelectedFilterTags(): string[] {
+      const raw = localStorage.getItem('dpr_agents_filter_tags_v1');
+      if (!raw) return [];
+      try {
+        const arr = JSON.parse(raw);
+        return Array.isArray(arr) ? arr.map((t: unknown) => String(t).toLowerCase()).filter(Boolean) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function setSelectedFilterTags(tags: string[]) {
+      localStorage.setItem('dpr_agents_filter_tags_v1', JSON.stringify(normalizeTags(tags)));
+    }
+
+    function refreshTagPanel() {
+      const input = $<HTMLInputElement>('agents-meta-tags');
+      const chips = $('agents-meta-tags-chips');
+      if (!currentSessionId) {
+        chips.innerHTML = '';
+        return;
+      }
+      const m = loadMeta(currentSessionId);
+      if (document.activeElement !== input) {
+        input.value = '';
+      }
+      chips.innerHTML = (m.tags ?? [])
+        .map((t) => `<span class="agents-tag-chip">${escapeHtml(t)}</span>`)
+        .join(' ');
+    }
+
+    function wireTagPanel() {
+      const input = $<HTMLInputElement>('agents-meta-tags');
+      const commit = () => {
+        if (!currentSessionId) return;
+        const arr = parseTagInput(input.value);
+        const m = saveMetaTags(currentSessionId, arr);
+        input.value = '';
+        refreshTagPanel();
+        refreshSessionPicker();
+        refreshFilterPanel();
+        $('agents-status-text').textContent = `🏷️ 已保存 ${m.tags.length} 个标签`;
+      };
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      });
+    }
+
+    function refreshFilterPanel() {
+      const panel = $('agents-filter');
+      const chips = $('agents-filter-chips');
+      const selected = new Set(getSelectedFilterTags());
+      // 收集所有 sessions 的 tag union
+      const allTags = new Set<string>();
+      for (const sid of listKnownSessions()) {
+        const m = loadMeta(sid);
+        for (const t of (m.tags ?? [])) allTags.add(t);
+      }
+      // 加上 trash 里的
+      for (const e of listTrash()) {
+        const raw = localStorage.getItem(e.key);
+        if (!raw) continue;
+        try {
+          const rec = JSON.parse(raw);
+          if (rec.metaRaw) {
+            const m = JSON.parse(rec.metaRaw);
+            for (const t of normalizeTags(m.tags)) allTags.add(t);
+          }
+        } catch { /* ignore */ }
+      }
+      if (allTags.size === 0) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      const sorted = [...allTags].sort();
+      chips.innerHTML = sorted.map((t) => {
+        const isOn = selected.has(t);
+        return `<button class="agents-tag-chip agents-tag-toggleable ${isOn ? 'is-on' : ''}" data-tag="${escapeHtml(t)}" type="button">${isOn ? '✓ ' : ''}${escapeHtml(t)}</button>`;
+      }).join('');
+      chips.querySelectorAll<HTMLButtonElement>('.agents-tag-toggleable').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const tag = btn.dataset.tag!;
+          const cur = new Set(getSelectedFilterTags());
+          if (cur.has(tag)) cur.delete(tag); else cur.add(tag);
+          setSelectedFilterTags([...cur]);
+          refreshFilterPanel();
+          refreshSessionPicker();
+        });
+      });
+    }
+
+    function wireFilterClear() {
+      $('agents-filter-clear').addEventListener('click', () => {
+        setSelectedFilterTags([]);
+        refreshFilterPanel();
+        refreshSessionPicker();
+      });
+    }
+
     function wireMetaPanel() {
       const titleInput = $<HTMLInputElement>('agents-meta-title');
       const notesInput = $<HTMLTextAreaElement>('agents-meta-notes');
@@ -1303,18 +1468,31 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     }
 
     function refreshSessionPicker() {
-      const sessions = listKnownSessions();
+      const allSessions = listKnownSessions();
       const cur = loadSessionId();
+      const selected = getSelectedFilterTags();
+      // 构造 [{sid, tags}] 后过滤
+      const annotated = allSessions.map((s) => ({ sid: s, tags: loadMeta(s).tags ?? [] }));
+      const filtered = filterSessionsByTags(annotated, selected).map((x) => x.sid);
       sessionPicker.innerHTML = '<option value="">— 新建 / 输入 —</option>' +
-        sessions.map((s) => {
+        filtered.map((s) => {
           const recs = loadRounds(s);
           const roundCount = recs.length;
           const appliedCount = recs.reduce((acc, r) => acc + r.modifier.applied.length, 0);
           const meta = loadMeta(s);
           const label = formatSessionLabel(s, meta, roundCount, appliedCount);
+          const tagSuffix = meta.tags?.length ? ` · ${meta.tags.map((t) => `#${t}`).join(' ')}` : '';
           const sel = s === cur ? ' selected' : '';
-          return `<option value="${escapeHtml(s)}"${sel}>${escapeHtml(label)}</option>`;
+          return `<option value="${escapeHtml(s)}"${sel}>${escapeHtml(label)}${escapeHtml(tagSuffix)}</option>`;
         }).join('');
+      // 标记当前 session 即使被过滤掉也保留(用户可能在 filter 下还在编辑)
+      if (cur && !filtered.includes(cur)) {
+        const opt = document.createElement('option');
+        opt.value = cur;
+        opt.textContent = `${cur} (当前,被过滤掉)`;
+        opt.selected = true;
+        sessionPicker.appendChild(opt);
+      }
     }
 
     sessionInput.value = loadSessionId();
@@ -1345,10 +1523,13 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     });
     wireTokenRate();
     wireMetaPanel();
+    wireTagPanel();
     $('agents-duplicate-btn').addEventListener('click', duplicateCurrentSession);
     wireExportImport();
     wireTrash();
+    wireFilterClear();
     refreshTrashPanel();
+    refreshFilterPanel();
     refresh();
 
     // ---------------------------------------------------------------------
