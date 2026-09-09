@@ -79,6 +79,31 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       </div>
     </section>
 
+    <section class="agents-tokens" id="agents-tokens" hidden>
+      <div class="agents-tokens-row">
+        <span class="agents-token-cell">
+          <span class="agents-token-label">本次 run 总 token</span>
+          <strong id="agents-token-total">0</strong>
+        </span>
+        <span class="agents-token-cell">
+          <span class="agents-token-label">估算费用</span>
+          <strong id="agents-token-cost">$0.0000</strong>
+          <span class="agents-token-aside">
+            (<input id="agents-token-rate" type="number" min="0" step="0.05" value="0.50"
+                   title="每 1M tokens 的美元单价,留空=不显示费用" /> $/M tok)
+          </span>
+        </span>
+        <span class="agents-token-cell">
+          <span class="agents-token-label">本轮已用</span>
+          <strong id="agents-token-last">0</strong>
+        </span>
+        <span class="agents-token-cell agents-token-chart-cell">
+          <span class="agents-token-label">每轮分布</span>
+          <span class="agents-token-chart" id="agents-token-chart" aria-hidden="true"></span>
+        </span>
+      </div>
+    </section>
+
     <section class="agents-status" id="agents-status" hidden>
       <p class="agents-status-text" id="agents-status-text">就绪</p>
       <p class="agents-status-candidates muted" id="agents-status-candidates" hidden></p>
@@ -319,6 +344,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       const empty = $('agents-empty');
       list.innerHTML = '';
       refreshStats();
+      refreshTokenPanel();
       if (!sid) {
         empty.hidden = false;
         $('agents-rounds').hidden = true;
@@ -334,6 +360,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         for (const rec of records) list.appendChild(renderRound(rec));
         wireExportButtons(records);
       }
+      refreshTokenPanel(records);
     }
 
     function refreshStats() {
@@ -380,6 +407,91 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       if (h < 24) return `${h}h 前`;
       const d = Math.floor(h / 24);
       return `${d}d 前`;
+    }
+
+    // iter #13 — token 用量面板
+    //
+    // 把 rec 列表聚合成 {total, perRound},然后按 $/M rate 算费用。
+    // 纯函数,测试在 tests/test_agents_tokens.mjs。
+    const TOKEN_RATE_KEY = 'dpr_agents_token_rate_v1';
+
+    function aggregateTokens(records: RoundRecord[]) {
+      const perRound = records.map((r, i) => ({
+        round: r.round ?? i + 1,
+        tokens: Number(r.feedback?.total_tokens) || 0,
+      }));
+      const total = perRound.reduce((a, b) => a + b.tokens, 0);
+      return { total, perRound };
+    }
+
+    function estimateCost(totalTokens: number, ratePerMTok: number) {
+      if (!isFinite(ratePerMTok) || ratePerMTok < 0) return 0;
+      return (totalTokens / 1_000_000) * ratePerMTok;
+    }
+
+    function formatTokens2(n: number): string {
+      if (n < 1000) return String(n);
+      if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
+      return `${(n / 1_000_000).toFixed(2)}M`;
+    }
+
+    function getTokenRate(): number {
+      const raw = localStorage.getItem(TOKEN_RATE_KEY);
+      const n = raw === null ? 0.5 : Number(raw);
+      return isFinite(n) && n >= 0 ? n : 0;
+    }
+
+    function setTokenRate(n: number) {
+      if (!isFinite(n) || n < 0) return;
+      localStorage.setItem(TOKEN_RATE_KEY, String(n));
+    }
+
+    function refreshTokenPanel(records?: RoundRecord[]) {
+      const panel = $('agents-tokens');
+      if (!records) records = currentSessionId ? loadRounds(currentSessionId) : [];
+      if (records.length === 0) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+
+      const { total, perRound } = aggregateTokens(records);
+      const rate = getTokenRate();
+      const cost = estimateCost(total, rate);
+
+      $('agents-token-total').textContent = formatTokens2(total);
+      $('agents-token-cost').textContent = `$${cost.toFixed(4)}`;
+      $('agents-token-last').textContent = formatTokens2(perRound[perRound.length - 1]?.tokens ?? 0);
+
+      // 把 rate 输入框同步到当前值(初始化时被 wireTokenRate 设置一次,这里保持)
+      const rateInput = $<HTMLInputElement>('agents-token-rate');
+      if (document.activeElement !== rateInput) {
+        rateInput.value = String(rate);
+      }
+
+      // 每轮条形图:每根柱子高度 ∝ tokens;最近 8 轮
+      const tail = perRound.slice(-8);
+      const max = Math.max(1, ...tail.map((p) => p.tokens));
+      const chart = $('agents-token-chart');
+      chart.innerHTML = tail
+        .map((p) => {
+          const h = Math.max(2, Math.round((p.tokens / max) * 28));
+          const label = p.tokens === 0 ? '0' : formatTokens2(p.tokens);
+          return `<span class="agents-token-bar" style="height:${h}px" title="R${p.round}: ${p.tokens} tok">${label}</span>`;
+        })
+        .join('');
+    }
+
+    function wireTokenRate() {
+      const input = $<HTMLInputElement>('agents-token-rate');
+      input.value = String(getTokenRate());
+      input.addEventListener('input', () => {
+        const v = Number(input.value);
+        if (isFinite(v) && v >= 0) {
+          setTokenRate(v);
+          refreshTokenPanel();
+        }
+      });
     }
 
     function wireExportButtons(records: RoundRecord[]) {
@@ -517,6 +629,8 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
             onRoundComplete: async (rec) => {
               await sink.write(rec);
               saveRounds(sid, [...existing, ...sink.records]);
+              // iter #13 — live token panel update as each round finishes
+              refreshTokenPanel(loadRounds(sid));
             },
           },
           activeAbort.signal,
@@ -599,6 +713,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         $('agents-status-text').textContent = '🛑 已请求停止(本轮完成后退出)...';
       }
     });
+    wireTokenRate();
     refresh();
 
     // ---------------------------------------------------------------------
