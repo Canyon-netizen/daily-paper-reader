@@ -25,6 +25,12 @@ logs/
 archive/arxiv_seen.json
 archive/crawl_state.json
 
+# Agent session 落盘产物(由 astro-src/scripts/agents-run.mjs 每次跑 round 写)
+# 每个 session 的 rounds/*.json + digest_*.md 是单次本地运行的中间产物,
+# 不像 recommend/arxiv_papers_*.json 那种共享 seed,不入库
+archive/*/rounds/
+archive/*/digest_*.md
+
 # 本地环境配置与密钥
 .env
 secret.private
