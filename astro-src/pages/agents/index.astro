@@ -76,6 +76,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         <button class="button primary" id="agents-run-btn">▶️ 跑一轮</button>
         <button class="button" id="agents-abort-btn" hidden title="中断当前 round 循环(已完成本轮后立即退出)">🛑 停止</button>
         <button class="button" id="agents-duplicate-btn" title="把当前 session 的所有 rounds 复制到新 sid,方便换个 preset/maxRounds 重跑同一基线">📋 复制</button>
+        <button class="button" id="agents-delete-btn" title="把当前 session 移到回收站(30 天后自动永久删除,可提前恢复)">🗑️ 删除</button>
         <button class="button" id="agents-export-btn" title="把当前 session + meta 导出为单个 JSON 文件">📦 导出</button>
         <button class="button" id="agents-report-btn" title="生成单份 markdown 实验报告">📑 报告</button>
         <label class="button" for="agents-import-file" title="从 JSON 文件恢复 session 到 localStorage">
@@ -113,6 +114,14 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           <span class="agents-token-chart" id="agents-token-chart" aria-hidden="true"></span>
         </span>
       </div>
+    </section>
+
+    <section class="agents-trash" id="agents-trash" hidden>
+      <div class="agents-trash-header">
+        <h3>🗑️ 回收站 <span class="muted">(30 天后自动永久删除)</span></h3>
+        <button class="button small" id="agents-trash-purge-all" title="删除所有已过期的 trash 记录">清空过期</button>
+      </div>
+      <ul id="agents-trash-list"></ul>
     </section>
 
     <section class="agents-meta" id="agents-meta" hidden>
@@ -376,6 +385,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       refreshStats();
       refreshTokenPanel();
       refreshMetaPanel();
+      refreshTrashPanel();
       if (!sid) {
         empty.hidden = false;
         $('agents-rounds').hidden = true;
@@ -873,6 +883,188 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       }
     }
 
+    // iter #19 — session 删除 / 回收站(30 天软删)
+    //
+    // localStorage key:
+    //   dpr_agents_trash_<sid>_<deletedAt> = JSON { sid, deletedAt, roundsRaw, metaRaw }
+    //   dpr_agents_trash_index = JSON [{ sid, deletedAt, key }]
+    const TRASH_INDEX_KEY = 'dpr_agents_trash_index';
+    const TRASH_RECORD_KEY = (sid: string, deletedAt: number) => `dpr_agents_trash_${sid}_${deletedAt}`;
+    const TRASH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+    function listTrash(): { sid: string; deletedAt: number; key: string }[] {
+      const raw = localStorage.getItem(TRASH_INDEX_KEY);
+      if (!raw) return [];
+      try { return JSON.parse(raw); } catch { return []; }
+    }
+    function writeTrash(items: { sid: string; deletedAt: number; key: string }[]) {
+      localStorage.setItem(TRASH_INDEX_KEY, JSON.stringify(items));
+    }
+
+    function softDelete(sid: string, now = Date.now()): { sid: string; deletedAt: number } {
+      if (!sid) throw new Error('sid required');
+      const roundsRaw = localStorage.getItem(ROUNDS_KEY(sid));
+      const metaRaw = localStorage.getItem(META_KEY(sid));
+      if (roundsRaw === null && metaRaw === null) {
+        throw new Error(`session "${sid}" not found`);
+      }
+      const key = TRASH_RECORD_KEY(sid, now);
+      localStorage.setItem(key, JSON.stringify({ sid, deletedAt: now, roundsRaw, metaRaw }));
+      localStorage.removeItem(ROUNDS_KEY(sid));
+      localStorage.removeItem(META_KEY(sid));
+      const index = listTrash();
+      index.push({ sid, deletedAt: now, key });
+      writeTrash(index);
+      return { sid, deletedAt: now };
+    }
+
+    function restoreFromTrash(sid: string, deletedAt: number): { sid: string } {
+      const index = listTrash();
+      const entry = index.find((e) => e.sid === sid && e.deletedAt === deletedAt);
+      if (!entry) throw new Error(`trash entry for "${sid}" @ ${deletedAt} not found`);
+      if (localStorage.getItem(ROUNDS_KEY(sid)) !== null || localStorage.getItem(META_KEY(sid)) !== null) {
+        throw new Error(`active session "${sid}" already exists; cannot restore`);
+      }
+      const raw = localStorage.getItem(entry.key);
+      if (!raw) throw new Error('trash record payload missing');
+      const rec = JSON.parse(raw);
+      if (rec.roundsRaw !== null) localStorage.setItem(ROUNDS_KEY(sid), rec.roundsRaw);
+      if (rec.metaRaw !== null) localStorage.setItem(META_KEY(sid), rec.metaRaw);
+      localStorage.removeItem(entry.key);
+      writeTrash(index.filter((e) => !(e.sid === sid && e.deletedAt === deletedAt)));
+      return { sid };
+    }
+
+    function permanentlyDelete(sid: string, deletedAt: number): { sid: string } {
+      const index = listTrash();
+      const entry = index.find((e) => e.sid === sid && e.deletedAt === deletedAt);
+      if (!entry) throw new Error(`trash entry for "${sid}" @ ${deletedAt} not found`);
+      localStorage.removeItem(entry.key);
+      writeTrash(index.filter((e) => !(e.sid === sid && e.deletedAt === deletedAt)));
+      return { sid };
+    }
+
+    function purgeExpired(now = Date.now()): { purged: number; remaining: number } {
+      const index = listTrash();
+      const expired = index.filter((e) => now - e.deletedAt > TRASH_TTL_MS);
+      for (const e of expired) localStorage.removeItem(e.key);
+      const remaining = index.filter((e) => now - e.deletedAt <= TRASH_TTL_MS);
+      writeTrash(remaining);
+      return { purged: expired.length, remaining: remaining.length };
+    }
+
+    function daysUntilExpiry(deletedAt: number, now = Date.now()): number {
+      const remaining = TRASH_TTL_MS - (now - deletedAt);
+      return Math.max(0, Math.ceil(remaining / (24 * 60 * 60 * 1000)));
+    }
+
+    function confirmAndSoftDelete() {
+      if (!currentSessionId) {
+        alert('先选一个 session');
+        return;
+      }
+      const sid = currentSessionId;
+      if (!confirm(`把 "${sid}" 移到回收站?30 天后自动永久删除(可手动提前恢复)。`)) return;
+      try {
+        const r = softDelete(sid);
+        currentSessionId = '';
+        sessionInput.value = '';
+        saveSessionId('');
+        refreshSessionPicker();
+        refresh();
+        refreshTrashPanel();
+        $('agents-status-text').textContent = `🗑️ 已移到回收站 "${r.sid}" (${daysUntilExpiry(r.deletedAt)} 天后过期)`;
+      } catch (err) {
+        alert(`删除失败: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    function refreshTrashPanel() {
+      const panel = $('agents-trash');
+      const list = $('agents-trash-list');
+      const trash = listTrash();
+      if (trash.length === 0) {
+        panel.hidden = true;
+        return;
+      }
+      panel.hidden = false;
+      list.innerHTML = trash
+        .slice()
+        .sort((a, b) => b.deletedAt - a.deletedAt)
+        .map((e) => {
+          const days = daysUntilExpiry(e.deletedAt);
+          const expired = days === 0;
+          const cls = expired ? 'badge-none' : 'badge-mid';
+          const meta = loadMeta(e.sid) ?? {};
+          void meta;
+          // 还原标题(从 trash record 的 metaRaw 读,因为 active storage 已被删)
+          const raw = localStorage.getItem(e.key);
+          let title = '';
+          if (raw) {
+            try {
+              const rec = JSON.parse(raw);
+              if (rec.metaRaw) {
+                const m = JSON.parse(rec.metaRaw);
+                title = (m.title ?? '').trim();
+              }
+            } catch { /* ignore */ }
+          }
+          const tag = title ? `📝 ${escapeHtml(title)}` : `<code>${escapeHtml(e.sid)}</code>`;
+          const dt = new Date(e.deletedAt).toLocaleDateString();
+          return `
+            <li class="agents-trash-item">
+              <span class="agents-trash-sid">${tag}</span>
+              <span class="agents-trash-meta">
+                删除于 ${dt} ·
+                <span class="badge ${cls}">${expired ? '已过期' : `${days} 天后清空`}</span>
+              </span>
+              <span class="agents-trash-actions">
+                <button class="button small agents-trash-restore" data-sid="${escapeHtml(e.sid)}" data-deleted-at="${e.deletedAt}">♻️ 恢复</button>
+                <button class="button small agents-trash-purge" data-sid="${escapeHtml(e.sid)}" data-deleted-at="${e.deletedAt}">永久删除</button>
+              </span>
+            </li>
+          `;
+        })
+        .join('');
+      // wire 按钮
+      list.querySelectorAll<HTMLButtonElement>('.agents-trash-restore').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const sid = btn.dataset.sid!;
+          const at = Number(btn.dataset.deletedAt);
+          try {
+            restoreFromTrash(sid, at);
+            currentSessionId = sid;
+            sessionInput.value = sid;
+            saveSessionId(sid);
+            refreshSessionPicker();
+            refresh();
+            refreshTrashPanel();
+            $('agents-status-text').textContent = `♻️ 已恢复 "${sid}"`;
+          } catch (err) {
+            alert(`恢复失败: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        });
+      });
+      list.querySelectorAll<HTMLButtonElement>('.agents-trash-purge').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const sid = btn.dataset.sid!;
+          const at = Number(btn.dataset.deletedAt);
+          if (!confirm(`永久删除 "${sid}"?此操作不可撤销。`)) return;
+          permanentlyDelete(sid, at);
+          refreshTrashPanel();
+        });
+      });
+    }
+
+    function wireTrash() {
+      $('agents-delete-btn').addEventListener('click', confirmAndSoftDelete);
+      $('agents-trash-purge-all').addEventListener('click', () => {
+        const r = purgeExpired();
+        refreshTrashPanel();
+        alert(`清空过期:删除 ${r.purged} 个,剩余 ${r.remaining} 个未过期`);
+      });
+    }
+
     function wireExportImport() {
       $('agents-export-btn').addEventListener('click', downloadCurrentSession);
       $('agents-report-btn').addEventListener('click', downloadExperimentReport);
@@ -1155,6 +1347,8 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     wireMetaPanel();
     $('agents-duplicate-btn').addEventListener('click', duplicateCurrentSession);
     wireExportImport();
+    wireTrash();
+    refreshTrashPanel();
     refresh();
 
     // ---------------------------------------------------------------------
