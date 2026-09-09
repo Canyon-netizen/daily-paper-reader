@@ -78,6 +78,9 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     <section class="agents-status" id="agents-status" hidden>
       <p class="agents-status-text" id="agents-status-text">就绪</p>
       <p class="agents-status-candidates muted" id="agents-status-candidates" hidden></p>
+      <p class="muted" style="margin-top:0.25rem; font-size:0.85rem">
+        提示:<kbd>⌘/Ctrl + Enter</kbd> 跑一轮 · <kbd>⌘/Ctrl + .</kbd> 停止 · <kbd>?</kbd> 看帮助
+      </p>
     </section>
 
     <section class="agents-rounds" id="agents-rounds">
@@ -586,6 +589,72 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       }
     });
     refresh();
+
+    // ---------------------------------------------------------------------
+    // 键盘快捷键
+    //   Cmd/Ctrl + Enter → 跑一轮
+    //   Cmd/Ctrl + .     → 停止(与 abort 按钮等价)
+    //   ?                → 显示快捷键帮助
+    // 注:在 input/textarea 里按下时不要拦截,避免抢用户的输入
+    // ---------------------------------------------------------------------
+    document.addEventListener('keydown', (e) => {
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || t?.isContentEditable) return;
+      const mod = e.metaKey || e.ctrlKey;
+
+      if (mod && e.key === 'Enter') {
+        e.preventDefault();
+        $<HTMLButtonElement>('agents-run-btn').click();
+        return;
+      }
+      if (mod && e.key === '.') {
+        e.preventDefault();
+        const btn = $<HTMLButtonElement>('agents-abort-btn');
+        if (!btn.hidden) btn.click();
+        return;
+      }
+      if (e.key === '?' && !mod) {
+        e.preventDefault();
+        toggleShortcutHelp();
+        return;
+      }
+    });
+
+    function toggleShortcutHelp() {
+      let dialog = document.getElementById('agents-shortcut-help');
+      if (dialog) {
+        dialog.remove();
+        return;
+      }
+      dialog = document.createElement('div');
+      dialog.id = 'agents-shortcut-help';
+      dialog.className = 'agents-shortcut-help';
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-label', '键盘快捷键');
+      dialog.innerHTML = `
+        <h3>键盘快捷键</h3>
+        <table>
+          <tr><th>${isMac() ? '⌘' : 'Ctrl'} + Enter</th><td>跑一轮(同 ▶️ 跑一轮 按钮)</td></tr>
+          <tr><th>${isMac() ? '⌘' : 'Ctrl'} + .</th><td>停止(同 🛑 停止)</td></tr>
+          <tr><th>?</th><td>显示 / 隐藏这个帮助</td></tr>
+        </table>
+        <p class="muted"><small>在 input/textarea 里按不会触发。</small></p>
+      `;
+      document.body.appendChild(dialog);
+      // 再次按 ? 或 Esc 关闭
+      const closer = (ev: KeyboardEvent) => {
+        if (ev.key === 'Escape' || ev.key === '?') {
+          dialog!.remove();
+          document.removeEventListener('keydown', closer);
+        }
+      };
+      document.addEventListener('keydown', closer);
+    }
+
+    function isMac(): boolean {
+      return /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+    }
 
     // ---------------------------------------------------------------------
     // 项目选择 + 载入论文(UserLibrary → candidates)
