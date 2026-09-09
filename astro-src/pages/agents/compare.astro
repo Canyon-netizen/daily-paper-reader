@@ -261,14 +261,117 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     `).join('');
   }
 
+  // ---------- archive manifest (build-time generated) ----------
+  interface ArchiveSession {
+    sid: string;
+    rounds: number;
+    proposals: number;
+    applied: number;
+    avgScore: number;
+    avgElo: number;
+    lastAt: number;
+    topAppliedTitles: string[];
+  }
+
+  async function fetchArchiveManifest(): Promise<ArchiveSession[]> {
+    try {
+      const res = await fetch('/data/agents-archive-manifest.json');
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.sessions ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  function archiveToStats(a: ArchiveSession): SessionStats {
+    return {
+      sid: a.sid,
+      rounds: a.rounds,
+      proposals: a.proposals,
+      avgScore: a.avgScore,
+      avgElo: a.avgElo,
+      applied: a.applied,
+      appliedRate: a.proposals ? a.applied / a.proposals : 0,
+      lastActivity: a.lastAt,
+      trend: [],
+      topAppliedTitles: a.topAppliedTitles,
+    };
+  }
+
+  // ---------- render session list with both sources ----------
+  async function renderAllSessions() {
+    const list = $('agents-compare-session-list');
+    const localSids = listKnownSessions();
+    const archive = await fetchArchiveManifest();
+    const archiveSids = new Set(archive.map((a) => a.sid));
+    const allSids = [...new Set([...localSids, ...archive.map((a) => a.sid)])];
+
+    if (allSids.length === 0) {
+      list.innerHTML = '<p class="muted">还没有 session。先去 <a href="/agents/">/agents/</a> 跑一轮,或 CLI 跑一些 round。</p>';
+      return;
+    }
+
+    list.innerHTML = allSids.map((sid) => {
+      const isLocal = localSids.includes(sid);
+      const isArchive = archiveSids.has(sid);
+      const tag = isLocal && isArchive ? '本地 + archive'
+                : isLocal ? '本地'
+                : 'archive';
+      const recs = isLocal ? loadRounds(sid) : [];
+      const a = archive.find((x) => x.sid === sid);
+      const rounds = isLocal ? recs.length : a?.rounds ?? 0;
+      const applied = isLocal
+        ? recs.reduce((acc, r) => acc + r.modifier.applied.length, 0)
+        : a?.applied ?? 0;
+      const last = isLocal
+        ? (recs.length ? new Date(Math.max(...recs.map((r) => r.finished_at))).toLocaleString() : '-')
+        : (a?.lastAt ? new Date(a.lastAt).toLocaleString() : '-');
+      return `
+        <label class="agents-compare-session">
+          <input type="checkbox" value="${escapeHtml(sid)}" class="agents-compare-checkbox" />
+          <div class="agents-compare-session-info">
+            <strong>${escapeHtml(sid)} <span class="muted">[${tag}]</span></strong>
+            <span class="muted">${rounds} rounds · ${applied} applied · last: ${last}</span>
+          </div>
+        </label>
+      `;
+    }).join('');
+
+    const hint = $('agents-compare-hint');
+    const btn = $<HTMLButtonElement>('agents-compare-btn');
+    const updateHint = () => {
+      const n = list.querySelectorAll<HTMLInputElement>('.agents-compare-checkbox:checked').length;
+      if (n === 0) { btn.disabled = true; hint.textContent = '请勾选 2-3 个会话'; }
+      else if (n === 1) { btn.disabled = true; hint.textContent = '已选 1 个,再勾一个'; }
+      else if (n <= 3) { btn.disabled = false; hint.textContent = `已选 ${n} 个`; }
+      else { btn.disabled = true; hint.textContent = '最多选 3 个(取消勾选多余的)'; }
+    };
+    list.querySelectorAll<HTMLInputElement>('.agents-compare-checkbox').forEach((cb) => {
+      cb.addEventListener('change', updateHint);
+    });
+    updateHint();
+  }
+
   // ---------- wire up ----------
   document.addEventListener('DOMContentLoaded', () => {
-    renderSessionList();
-    $<HTMLButtonElement>('agents-compare-btn').addEventListener('click', () => {
+    renderAllSessions();
+    $<HTMLButtonElement>('agents-compare-btn').addEventListener('click', async () => {
       const selected = [...document.querySelectorAll<HTMLInputElement>('.agents-compare-checkbox:checked')]
         .map((cb) => cb.value);
       if (selected.length < 2 || selected.length > 3) return;
-      const stats = selected.map(computeStats).filter(Boolean) as SessionStats[];
+      const localSids = new Set(listKnownSessions());
+      const archive = await fetchArchiveManifest();
+      const archiveMap = new Map(archive.map((a) => [a.sid, a]));
+      const stats: SessionStats[] = [];
+      for (const sid of selected) {
+        if (localSids.has(sid)) {
+          const s = computeStats(sid);
+          if (s) stats.push(s);
+        } else if (archiveMap.has(sid)) {
+          stats.push(archiveToStats(archiveMap.get(sid)!));
+        }
+      }
       if (stats.length < 2) return;
       $('agents-compare-results').hidden = false;
       renderTable(stats);

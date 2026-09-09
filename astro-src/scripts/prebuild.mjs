@@ -23,6 +23,7 @@ const SCRIPTS = [
   { name: 'search-corpus', cmd: 'node', args: [join(HERE, 'build-search-corpus.mjs')] },
   { name: 'generate-paths', cmd: 'node', args: [join(HERE, 'generate-paths.mjs')] },
   { name: 'search-index', cmd: 'node', args: [join(HERE, 'build-search-index.mjs')] },
+  { name: 'archive-manifest', cmd: 'node', args: [join(HERE, 'build-archive-manifest.mjs')] },
 ];
 
 const children = [];
