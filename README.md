@@ -35,7 +35,7 @@
 
 ## 🆕 最近更新
 
-- **2026-09-01** 🧪 自动化实验思路发掘 (topic-v2) 主循环打通：`astro-src/lib/elo-debate.{ts,mjs}` 抽出纯 Elo + Swiss 配对(浏览器 + Node 共用算法);`scripts/topic-v2-run.mjs` 提供离线 CLI runner(支持 `--dry-run` 让 cron 无 key 也能跑通 smoke);idea 状态机 sketch → candidate → under_review → promoted 接入门控;`scripts/elo-debate-mirror.test.mjs` 守护 TS/JS 镜像不漂移;`.github/workflows/topic-v2.yml` 周日 04:00 UTC 自动跑,默认 dry-run + 手动 workflow_dispatch 可选真跑。详见 `## 🧬 自动化实验思路发掘`。
+- **2026-09-09** 🔍 多智能体 `--status` 模式 + 跨平台 main guard 修复：`astro-src/scripts/agents-run.mjs` 新增 `--status [--session ID] [--json] [--last N]` inspect-only 模式,纯读已有 `archive/<sid>/rounds/*.json` 输出 rounds 数 / avg score / apply rate / proposal type mix / gate histogram / top Elo proposals / recent rounds 表,无 LLM 调用、无文件写入;`buildStatusReport` / `formatStatusReportText` 拆为 export 纯函数,`tests/test_agents_status_cli.mjs` 18 个 case 全过;顺手修一个 Windows 下 main 永远不跑的 pre-existing bug(`import.meta.url === file://${argv[1]}` 在 Windows 上字符串永远不等,改 `realpathSync` 双端归一化跨平台比较)。详见 `## 🤖 多智能体科研自动化` → `### CLI Runner`。
 - **2026-07-19** 📅 首页浏览体验升级：新增按发布日期浏览的论文日历，联动年 / 月下拉一次切换一个月份；主题分类统一按 `task` 标签归类，兼容旧版 `query:` tags 并展示每个主题下的全部论文。
 - **2026-07-19** 📚 论文库回归检索与整理：移除 cytoscape 相似度网络，改为居中的全量论文列表，保留搜索、标签筛选、详情抽屉、用户标签编辑与隐藏管理。
 - **2026-07-19** ☁️ paper-analyzer 新增自动同步：可在 `/settings/` 开启「论文分析 — 自动同步」，arXiv 分析完成后自动触发 `save-paper.yml`，把笔记写入 `docs/papers/<id>-<slug>.md`；默认关闭，手动保存入口继续保留。
@@ -733,7 +733,13 @@ node astro-src/scripts/agents-run.mjs --session my-research --rounds 3 --preset 
 
 # 仅基于已有 JSONs 重生成 digest(不调 LLM)
 node astro-src/scripts/agents-run.mjs --session my-research --digest-only
+
+# Inspect-only: 不跑轮,只看历史(stdout,不写文件)
+node astro-src/scripts/agents-run.mjs --status --session my-research
+node astro-src/scripts/agents-run.mjs --status --session my-research --json --last 10
 ```
+
+`--status` 输出 rounds 数、first/last activity、avg score、apply rate、proposal type mix、gate histogram、top Elo proposals、recent rounds 表;`--json` 给机器读,`--last N` 限制 top-elo/recent 数量(默认 5)。`buildStatusReport` / `formatStatusReportText` 是 export 的纯函数,便于测试。
 
 每 round 落 `archive/<session>/rounds/round_<NNN>.json`(RoundRecord 含 designer/feedback/gate/modifier 4 段),session 结束写 `digest_<YYYYMMDD>.md`(git-trackable,人类可读)。
 

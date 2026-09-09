@@ -51,6 +51,9 @@ function parseArgs(argv) {
     else if (a === '--digest-only') out.digestOnly = true;
     else if (a === '--resume') out.resume = true;
     else if (a === '--no-candidates') out.noCandidates = true;
+    else if (a === '--status') out.status = true;
+    else if (a === '--json') out.json = true;
+    else if (a === '--last') out.last = Number(argv[++i]);
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -74,6 +77,10 @@ if (args.help) {
                      (so it doesn't repeat the same proposals)
   --no-candidates    Skip auto-loading papers from archive/<session>/recommend/
   --preset NAME      conservative | balanced | aggressive
+  --status           Inspect mode: print session summary to stdout
+                     (use with --session ID; no LLM, no writes)
+  --json             With --status, emit machine-readable JSON instead of text
+  --last N           With --status, limit recent-rounds + top-elo to last N (default 5)
   --help             Show this help`);
   process.exit(0);
 }
@@ -535,6 +542,190 @@ export async function loadCandidatesFromArchive(sessionId, maxPapers = 30) {
 }
 
 // ---------------------------------------------------------------------------
+// --status 模式:从已有 round JSONs 生成 session 摘要(纯函数,无 LLM)
+// ---------------------------------------------------------------------------
+
+/**
+ * buildStatusReport(records, opts) — 把 RoundRecord[] 压缩成一个 status report。
+ * 与 CLI / 文件 IO 解耦,便于 tests/ 直接单测。
+ *
+ * 输入:records = RoundRecord[](已经 parse 好的 JSON 对象数组)
+ * 输出:{
+ *   rounds: number,
+ *   summary: { firstActivity, lastActivity, avgScore, proposalTypeMix,
+ *              gateHistogram, totalProposals, totalApplied, totalSkipped, applyRate } | null,
+ *   recent: [{ round, proposals, avgScore, applied, skipped, gate, duration_ms, started_at }],
+ *   topElo: [{ round, proposal_id, title, type, total, elo }],
+ *   message?: string  // 空 records 时返回
+ * }
+ */
+export function buildStatusReport(records, opts = {}) {
+  const lastN = opts.lastN ?? 5;
+  if (!Array.isArray(records) || records.length === 0) {
+    return { rounds: 0, summary: null, recent: [], topElo: [], message: 'no rounds yet' };
+  }
+
+  const sorted = [...records].sort((a, b) => (a.round ?? 0) - (b.round ?? 0));
+
+  // avg score(NaN-safe:把所有 non-number total 兜底为 0)
+  const allScores = sorted.flatMap((r) => (r.feedback?.critiques ?? []).map((c) => Number(c.total) || 0));
+  const avgScore = allScores.length ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+
+  // proposal type mix
+  const typeMix = {};
+  for (const r of sorted) {
+    for (const p of r.designer?.proposals ?? []) {
+      const t = p.type ?? '(unknown)';
+      typeMix[t] = (typeMix[t] ?? 0) + 1;
+    }
+  }
+
+  // gate histogram
+  const gateHist = { promoted: 0, candidate: 0, sketch: 0, rejected: 0 };
+  for (const r of sorted) {
+    gateHist.promoted += r.gate?.promoted?.length ?? 0;
+    gateHist.candidate += r.gate?.candidate?.length ?? 0;
+    gateHist.sketch += r.gate?.sketch?.length ?? 0;
+    gateHist.rejected += r.gate?.rejected?.length ?? 0;
+  }
+
+  // applied / skipped + applyRate
+  let totalApplied = 0;
+  let totalSkipped = 0;
+  for (const r of sorted) {
+    totalApplied += r.modifier?.applied?.length ?? 0;
+    totalSkipped += r.modifier?.skipped?.length ?? 0;
+  }
+  const applyRate = totalApplied + totalSkipped > 0
+    ? totalApplied / (totalApplied + totalSkipped)
+    : 0;
+
+  // top Elo(过滤初始 elo=1200 的未 judge critique,避免噪音)
+  const allCritiques = [];
+  for (const r of sorted) {
+    const byId = new Map();
+    for (const p of r.designer?.proposals ?? []) byId.set(p.id, p);
+    for (const c of r.feedback?.critiques ?? []) {
+      const proposal = byId.get(c.proposal_id);
+      allCritiques.push({
+        round: r.round,
+        proposal_id: c.proposal_id,
+        title: proposal?.title ?? '(?)',
+        type: proposal?.type ?? '?',
+        total: Number(c.total) || 0,
+        elo: Number(c.elo) || 0,
+        matches: Number(c.matches) || 0,
+      });
+    }
+  }
+  const topElo = allCritiques
+    .filter((c) => c.matches > 0 || c.elo !== 1200)
+    .sort((a, b) => b.elo - a.elo)
+    .slice(0, lastN);
+
+  // recent rounds
+  const recent = sorted.slice(-lastN).map((r) => {
+    const cs = r.feedback?.critiques ?? [];
+    const rAvg = cs.length ? cs.reduce((a, c) => a + (Number(c.total) || 0), 0) / cs.length : 0;
+    return {
+      round: r.round,
+      proposals: r.designer?.proposals?.length ?? 0,
+      avgScore: Math.round(rAvg * 100) / 100,
+      applied: r.modifier?.applied?.length ?? 0,
+      skipped: r.modifier?.skipped?.length ?? 0,
+      gate: {
+        promoted: r.gate?.promoted?.length ?? 0,
+        candidate: r.gate?.candidate?.length ?? 0,
+        sketch: r.gate?.sketch?.length ?? 0,
+        rejected: r.gate?.rejected?.length ?? 0,
+      },
+      duration_ms: (r.finished_at ?? 0) - (r.started_at ?? 0),
+      started_at: r.started_at,
+    };
+  });
+
+  return {
+    rounds: sorted.length,
+    summary: {
+      firstActivity: sorted[0]?.started_at ? new Date(sorted[0].started_at).toISOString() : null,
+      lastActivity: sorted[sorted.length - 1]?.finished_at
+        ? new Date(sorted[sorted.length - 1].finished_at).toISOString()
+        : sorted[sorted.length - 1]?.started_at
+          ? new Date(sorted[sorted.length - 1].started_at).toISOString()
+          : null,
+      avgScore: Math.round(avgScore * 100) / 100,
+      proposalTypeMix: typeMix,
+      gateHistogram: gateHist,
+      totalProposals: Object.values(typeMix).reduce((a, b) => a + b, 0),
+      totalApplied,
+      totalSkipped,
+      applyRate: Math.round(applyRate * 1000) / 1000,
+    },
+    recent,
+    topElo,
+  };
+}
+
+/**
+ * formatStatusReportText(sessionId, report) — 把 buildStatusReport 输出渲染成 stdout-friendly 文本。
+ * 给 --status(默认 text 模式)用;--json 走 JSON.stringify(report) + sessionId 包装。
+ */
+export function formatStatusReportText(sessionId, report) {
+  const lines = [];
+  lines.push(`📊 Session: ${sessionId}`);
+  if (report.rounds === 0) {
+    lines.push(`  ${report.message ?? 'no rounds yet'}`);
+    return lines.join('\n');
+  }
+  const s = report.summary;
+  lines.push(`Rounds: ${report.rounds}    First: ${s.firstActivity}    Last: ${s.lastActivity}`);
+  lines.push(`Avg score: ${s.avgScore}    Apply rate: ${(s.applyRate * 100).toFixed(1)}%  (${s.totalApplied} applied / ${s.totalSkipped} skipped)`);
+  lines.push('');
+  lines.push('Proposal type mix:');
+  const typeEntries = Object.entries(s.proposalTypeMix).sort((a, b) => b[1] - a[1]);
+  if (typeEntries.length === 0) lines.push('  (none)');
+  for (const [t, n] of typeEntries) lines.push(`  ${t}: ${n}`);
+  lines.push('');
+  lines.push(`Gate histogram:  promoted=${s.gateHistogram.promoted}  candidate=${s.gateHistogram.candidate}  sketch=${s.gateHistogram.sketch}  rejected=${s.gateHistogram.rejected}`);
+  lines.push('');
+  if (report.topElo.length) {
+    lines.push(`Top Elo (${report.topElo.length}):`);
+    for (let i = 0; i < report.topElo.length; i++) {
+      const p = report.topElo[i];
+      lines.push(`  ${i + 1}. [round ${p.round}] ${p.title}  (elo=${p.elo}, score=${p.total}, type=${p.type})`);
+    }
+    lines.push('');
+  }
+  lines.push(`Recent rounds (last ${report.recent.length}):`);
+  for (const r of report.recent) {
+    lines.push(
+      `  Round ${r.round}: ${r.proposals} proposals, avg=${r.avgScore.toFixed(1)}, applied=${r.applied}/skipped=${r.skipped}, gate(p=${r.gate.promoted}/c=${r.gate.candidate}/s=${r.gate.sketch}/r=${r.gate.rejected}), ${Math.round(r.duration_ms / 1000)}s`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 加载 archive/<sessionId>/rounds/*.json + 跑 buildStatusReport。
+ * CLI --status 模式的 IO wrapper;tests 不应该调它(只测 pure buildStatusReport)。
+ */
+async function loadStatusReport(sessionId, opts = {}) {
+  const files = await listExistingRounds(sessionId);
+  const records = [];
+  let corruptCount = 0;
+  for (const f of files) {
+    try {
+      records.push(JSON.parse(await readFile(f, 'utf8')));
+    } catch (err) {
+      corruptCount++;
+      console.warn(`[status] skip ${f}: ${err.message}`);
+    }
+  }
+  const report = buildStatusReport(records, opts);
+  return { sessionId, corruptCount, ...report };
+}
+
+// ---------------------------------------------------------------------------
 // 主流程
 // ---------------------------------------------------------------------------
 
@@ -547,6 +738,26 @@ async function main() {
 
   const caller = makeLLMCaller({});
   const dryRun = !!args.dryRun;
+
+  // 模式 0: --status (inspect only, 无 LLM 调用)
+  if (args.status) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --status requires --session ID');
+      process.exit(2);
+    }
+    const lastN = args.last ?? 5;
+    const { sessionId: sid, ...report } = await loadStatusReport(sessionId, { lastN });
+    if (args.json) {
+      console.log(JSON.stringify({ sessionId: sid, ...report }, null, 2));
+    } else {
+      console.log(formatStatusReportText(sid, report));
+      if (report.rounds === 0) {
+        // exit 0 表示"跑成功了但无内容";调用方可用 --json + parse 区分
+      }
+    }
+    return;
+  }
 
   // 模式 1: --digest-only
   if (args.digestOnly) {
@@ -639,11 +850,24 @@ async function runOneSession(sessionId, caller, opts) {
   console.log(`[session ${sessionId}] digest → ${digest}`);
 }
 
-// 仅当作为主入口运行时才跑 main();被 import 时不触发(便于测试)
+// 仅当作为主入口运行时才跑 main();被 import 时不触发(便于测试)。
+// 注意:Windows 下 `import.meta.url` 是 file:///E:/... 用正斜杠,而 `process.argv[1]`
+// 是 E:\\... 用反斜杠,直接字符串比较永远不等。用 realpathSync 双端归一化后比较,
+// 跨平台通吃(Linux:argv[1] 也常是相对路径,realpath 后一致)。
+import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { argv } from 'node:process';
 
-if (import.meta.url === `file://${argv[1]}`) {
+const isMainEntry = (() => {
+  const entry = process.argv[1];
+  if (!entry || !existsSync(entry)) return false;
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isMainEntry) {
   main().catch((err) => {
     console.error('[fatal]', err);
     process.exit(1);
