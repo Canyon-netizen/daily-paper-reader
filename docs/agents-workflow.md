@@ -119,6 +119,10 @@ node astro-src/scripts/agents-run.mjs --quickstart "探索 LLM 智能体如何�
 ls archive/<sid>/                 # meta + rounds + digest + synthesis
 cat archive/<sid>/rounds/round_001.json   # Designer/Feedback/Gate/Modifier 完整轮
 ls archive/<sid>/reviews/         # Modifier 真写的 deliverable
+
+# iter #61: 把碎片装配成论文(markdown + LaTeX + .bib)
+node astro-src/scripts/agents-run.mjs --session <sid> --compile-paper
+ls archive/<sid>/paper/           # paper.md / paper.tex / refs.bib
 ```
 
 ### 5.2 接真 LLM 跑 3 轮
@@ -171,7 +175,7 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 ## 6. 已知限制与未来工作
 
 - ❌ ~~**Designer 不能调外部工具**~~ — **iter #56 已修复 `--search-arxiv`**:可调 arXiv API 实时拉论文作为 candidates,关闭了最大短板
-- ❌ **Modifier 不写 LaTeX**：目前只写 markdown（synthesis / drafts / reviews / experiments / paper_additions / rebuttals）
+- ❌ ~~**Modifier 不写 LaTeX**~~ — **iter #61 已修复 `--compile-paper`**:session 碎片装配成可编译 LaTeX + markdown + .bib,论文章节由 deliverable kind 路由(Intro / Related Work / Method / Results / Limitations)
 - ❌ **archive/ 不入版本控制**：每次 git status 容易"看上去大"，但 archive 在 .gitignore 顶层通常没问题；可手动 cp 出 demo
 - ⚠️ **3 个智能体都共用 1 个 LLM endpoint**：persona 视角差异主要靠 prompt 实现，不是真不同模型；要"真多视角"可在 feedback.ts 加 model 数组
 - ⚠️ **`--search-arxiv` 只搜 arXiv**：不像 STORM / Deep Research 那样能搜维基 / 联网；要"真 web research"需要加 web fetch 工具
@@ -181,6 +185,8 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 - 把 synthesis 输出为 PDF（pandoc / wkhtmltopdf）
 - 加 evaluator 智能体：4 agent 版本（设计 → 反馈 → 修改 → **评估**）
 - 跨平台 npm 包发布：让 DPR Agents 不只跑在仓库内
+- `--compile-paper` 浏览器版本:在 `/agents/<sid>/compile/` 页面实时预览 + 调格式,与 export 页同模式
+- `--paper-format` 扩到支持 ACL / NeurIPS / IEEE 模板
 
 最近重要迭代：
 
@@ -196,5 +202,8 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 | **#56** | **--search-arxiv** | **Designer 真 tool use;关闭最大短板** |
 | **#57** | **--export-md** | **整 session 一键打包成 1 个 markdown,便于分享 / 归档 / 二次处理** |
 | **#58** | **/agents/<sid>/export/** | **浏览器版本 export 页面 — Download .md / Copy to clipboard / Preview** |
+| **#59** | **lib/agents/export-bundle.mjs** | **CLI + 浏览器双 surface 共享同一份 buildExportBundle / formatExportMarkdown,字节级一致** |
+| **#60** | **lib/agents/export-bundle.ts** | **typed mirror,TS caller 也能用同一份实现** |
+| **#61** | **--compile-paper** | **3 智能体循环碎片 → 一篇可编译 LaTeX + markdown + .bib,关闭 §6 #1 差距 "Modifier 不写 LaTeX";新 lib/agents/paper-compiler.{mjs,ts} 纯函数,跟 export-bundle 同双 surface 共享模式** |
 | **#59** | **lib/agents/export-bundle.mjs** | **CLI + 浏览器双 surface 共享同一份 buildExportBundle / formatExportMarkdown,字节级一致** |
 | **#60** | **lib/agents/export-bundle.ts** | **typed 镜像 — 6 个 type contract + re-export .mjs 运行时,TS caller 可 typed import** |

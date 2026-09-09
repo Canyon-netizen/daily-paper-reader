@@ -38,7 +38,7 @@ function listTsFiles(dir) {
 
 // 提取 .ts 文件里的 export function / export const / export interface / export type
 function extractTsExports(src) {
-  const out = { functions: [], interfaces: [], types: [], constants: [] };
+  const out = { functions: [], interfaces: [], types: [], constants: [], reExports: [] };
   const lines = src.split('\n');
   for (const line of lines) {
     const m = line.match(/^\s*export\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/);
@@ -50,7 +50,38 @@ function extractTsExports(src) {
     const t = line.match(/^\s*export\s+type\s+([A-Za-z_$][\w$]*)/);
     if (t) out.types.push(t[1]);
   }
+
+  // iter #61: 认 re-export 形式 `export { a, b } from './x.mjs'`。
+  // 这是 Phase A shim 策略的正确形态(iter #60 起用于 export-bundle.ts):
+  // .ts 只做类型层,运行时值直接从 .mjs 镜像 re-export —— 单一真相源,
+  // 结构上不可能 drift。旧版 detector 只认 `export function`,把这种最强保证
+  // 误报成 "MJS-only" 漂移。
+  //
+  // 注意:re-export 语法不区分函数还是常量,所以单独收进 reExports 桶,
+  // 由下游对照 .mjs 的声明方式归类(见 tsSideNames)。
+  const reExportRe = /export\s*\{([^}]*)\}\s*from\s*['"][^'"]+['"]/g;
+  let re;
+  while ((re = reExportRe.exec(src)) !== null) {
+    for (const raw of re[1].split(',')) {
+      const spec = raw.trim();
+      if (!spec) continue;
+      if (/^type\s/.test(spec)) continue; // `type Foo` 是纯类型,不算运行时��出
+      // 支持 `a as b` —— 记录对外可见的名字
+      const name = spec.split(/\s+as\s+/).pop().trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) out.reExports.push(name);
+    }
+  }
   return out;
+}
+
+/**
+ * .ts 侧某一类(函数 / 常量)的对外名字集合。
+ * 直接声明的名字全算;re-export 的名字只在 .mjs 把它声明为这一类时才算 ——
+ * 这样同一个 re-export 既不会在函数检查里漏报,也不会在常量检查里误报。
+ */
+function tsSideNames(tsOwn, reExports, mjsSide) {
+  const mjsSet = new Set(mjsSide);
+  return [...tsOwn, ...reExports.filter((n) => mjsSet.has(n))];
 }
 
 // 提取 .mjs 文件里的 export function / export const;interface 通过 JSDoc typedef
@@ -115,7 +146,7 @@ describe('TS/.mjs drift detector', () => {
         const mjsExp = extractMjsExports(mjsSrc);
 
         // TS-only 函数(`function foo()` 不带 export)不算
-        const tsFns = tsExp.functions.sort();
+        const tsFns = tsSideNames(tsExp.functions, tsExp.reExports, mjsExp.functions).sort();
         const mjsFns = mjsExp.functions.sort();
         const d = diff(tsFns, mjsFns);
 

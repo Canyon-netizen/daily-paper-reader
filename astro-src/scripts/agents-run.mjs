@@ -45,6 +45,17 @@ import { makeRoundRecord } from '../lib/agents/types.mjs';
 import { buildExportBundle, formatExportMarkdown } from '../lib/agents/export-bundle.mjs';
 export { buildExportBundle, formatExportMarkdown };
 
+// 论文装配器(iter #61):同样是 lib/agents/ 里的纯函数,CLI 只负责 IO。
+// 把 3 智能体循环撒下的碎片 markdown 装配成 markdown + LaTeX + .bib 一整篇论文。
+import {
+  DELIVERABLE_DIRS,
+  buildPaperDraft,
+  formatPaperMarkdown,
+  formatPaperLatex,
+  formatBibtex,
+} from '../lib/agents/paper-compiler.mjs';
+export { buildPaperDraft, formatPaperMarkdown, formatPaperLatex, formatBibtex };
+
 // ---------------------------------------------------------------------------
 // CLI 参数解析
 // ---------------------------------------------------------------------------
@@ -87,6 +98,13 @@ function parseArgs(argv) {
       if (next && !next.startsWith('--')) { out.exportMd = next; i++; }
       else { out.exportMd = ''; } // 空字符串 = 默认路径
     }
+    else if (a === '--compile-paper') {
+      // --compile-paper 可无参数(默认 archive/<sid>/paper/),也可指定输出目录
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.compilePaper = next; i++; }
+      else { out.compilePaper = ''; } // 空字符串 = 默认目录
+    }
+    else if (a === '--paper-format') out.paperFormat = argv[++i];
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -134,6 +152,23 @@ if (args.help) {
                      + gate verdicts + modifier actions + latest synthesis.
                      Use --json to dump the bundle object to stdout instead
                      of writing to disk.
+  --compile-paper [DIR]
+                     Assemble the whole session into ONE submittable paper
+                     (iter #61). Reads archive/<sid>/{drafts,reviews,
+                     experiments,paper_additions,rebuttals}/*.md + synthesis/
+                     and routes each deliverable into a real paper section
+                     (Introduction / Related Work / Method / Results /
+                     Limitations), then emits:
+                       paper.md   markdown 版
+                       paper.tex  可编译 LaTeX(pdflatex 一次过)
+                       refs.bib   从 proposal evidence 抽的 arXiv 引文
+                     Default DIR: archive/<sid>/paper/. Use --paper-format
+                     to emit only one of latex / markdown. --json dumps the
+                     structured PaperDraft instead of writing files.
+                     This closes the "Modifier 不写 LaTeX" gap: the 3-agent
+                     loop now ends in a paper, not just scattered fragments.
+  --paper-format F   With --compile-paper: latex | markdown | both
+                     (default both).
   --diff             Compare two rounds of a session (use with --session ID
                      and two positional round numbers). Outputs proposals
                      added/removed/changed + score delta + gate decision
@@ -1365,6 +1400,61 @@ export async function loadExportBundle(sessionId) {
 }
 
 /**
+ * loadDeliverables(sessionId) — IO:读 archive/<sid>/{drafts,reviews,experiments,
+ * paper_additions,rebuttals}/*.md,返回 paper-compiler 要的 DeliverableInput[]。
+ *
+ * 目录不存在(该 session 没产出这类 deliverable)是正常情况,静默跳过。
+ * 文件名里的 round / idx 用来做稳定排序:<prefix>_r<NNN>_<idx>.md。
+ */
+export async function loadDeliverables(sessionId) {
+  const root = join('archive', sessionId);
+  const out = [];
+  for (const [kind, subdir] of Object.entries(DELIVERABLE_DIRS)) {
+    const dir = join(root, subdir);
+    if (!existsSync(dir)) continue;
+    let files;
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
+    } catch {
+      continue; // 目录读不了就跳过,不让整次编译失败
+    }
+    for (const f of files) {
+      const m = f.match(/_r(\d+)_(\d+)\.md$/);
+      try {
+        out.push({
+          kind,
+          path: join(dir, f),
+          round: m ? Number(m[1]) : null,
+          idx: m ? Number(m[2]) : 0,
+          raw: await readFile(join(dir, f), 'utf8'),
+        });
+      } catch (err) {
+        console.warn(`[compile-paper] skipped ${join(dir, f)}: ${err.message}`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * loadPaperDraft(sessionId) — IO wrapper:凑齐 meta + rounds + syntheses + deliverables,
+ * 交给纯函数 buildPaperDraft 装配。
+ *
+ * 复用 loadExportBundle 已经读好的 meta / rounds / syntheses(避免重复读盘逻辑),
+ * 再补上它不需要而论文需要的 deliverables。
+ */
+export async function loadPaperDraft(sessionId) {
+  const bundle = await loadExportBundle(sessionId);
+  const deliverables = await loadDeliverables(sessionId);
+  return buildPaperDraft({
+    meta: bundle.meta,
+    rounds: bundle.rounds,
+    syntheses: bundle.syntheses,
+    deliverables,
+  });
+}
+
+/**
  * loadDiff(sessionId, roundA, roundB) — IO wrapper,读 archive/<sid>/rounds/round_<A|B>.json。
  * 找不到 roundA / roundB → throws with descriptive error。
  */
@@ -2401,6 +2491,63 @@ async function main() {
         await writeFile(outPath, md, 'utf8');
         console.log(`📦 Exported session ${sessionId} → ${outPath}`);
         console.log(`   ${bundle.stats.rounds} rounds, ${bundle.stats.proposals} proposals, ${bundle.stats.applied} applied, ${bundle.stats.syntheses} syntheses, hasDigest=${bundle.stats.hasDigest}`);
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.65: --compile-paper (session 碎片 → 一篇论文,iter #61)
+  if (args.compilePaper !== undefined) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --compile-paper requires --session ID');
+      process.exit(2);
+    }
+    const format = args.paperFormat ?? 'both';
+    if (!['latex', 'markdown', 'both'].includes(format)) {
+      console.error(`[error] --paper-format must be latex | markdown | both (got "${format}")`);
+      process.exit(2);
+    }
+    try {
+      const draft = await loadPaperDraft(sessionId);
+      if (args.json) {
+        console.log(JSON.stringify(draft, null, 2));
+        return;
+      }
+      const outDir = args.compilePaper.length > 0
+        ? args.compilePaper
+        : join('archive', sessionId, 'paper');
+      if (!existsSync(outDir)) await mkdir(outDir, { recursive: true });
+
+      const written = [];
+      if (format === 'markdown' || format === 'both') {
+        const p = join(outDir, 'paper.md');
+        await writeFile(p, formatPaperMarkdown(draft), 'utf8');
+        written.push(p);
+      }
+      if (format === 'latex' || format === 'both') {
+        const tex = join(outDir, 'paper.tex');
+        await writeFile(tex, formatPaperLatex(draft), 'utf8');
+        written.push(tex);
+        const bib = join(outDir, 'refs.bib');
+        await writeFile(bib, formatBibtex(draft.bibliography), 'utf8');
+        written.push(bib);
+      }
+
+      const s = draft.stats;
+      console.log(`📄 Compiled paper for session ${sessionId} → ${outDir}/`);
+      for (const p of written) console.log(`   ✍️  ${p}`);
+      console.log(`   ${s.rounds} rounds · ${s.deliverables} deliverables · ${s.sectionsWithContent}/${draft.sections.length} sections filled · ${s.references} references`);
+      const emptySections = draft.sections.filter((x) => x.empty).map((x) => x.title);
+      if (emptySections.length) {
+        console.log(`   ⚠️  empty sections: ${emptySections.join(', ')}`);
+        console.log('      (跑更多轮让 Modifier 产出对应 deliverable,或用 --promote --write-deliverable 手动补)');
+      }
+      if (format !== 'markdown') {
+        console.log(`   编译:cd ${outDir} && pdflatex paper.tex   (正文含中文时改用 xelatex + 取消 ctex 注释)`);
       }
     } catch (err) {
       console.error(`[error] ${err.message}`);
