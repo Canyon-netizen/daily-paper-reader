@@ -62,6 +62,8 @@ function parseArgs(argv) {
     else if (a === '--top') out.top = Number(argv[++i]);
     else if (a === '--type') out.type = argv[++i];
     else if (a === '--promote') out.promote = true;
+    else if (a === '--synthesize') out.synthesize = true;
+    else if (a === '--no-synthesize') out.noSynthesize = true;
     else if (a === '--write-deliverable') out.writeDeliverable = true;
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
@@ -114,6 +116,18 @@ if (args.help) {
   --write-deliverable With --promote, also write the deliverable .md file
                      via writeDeliverable. By default --promote is dry
                      (records the promotion but does not write files).
+  --synthesize       After running rounds, synthesize the session into a
+                     unified answer markdown at
+                     archive/<sid>/synthesis/synthesis_NNN.md
+                     (Deep-Research-style: aggregates all rounds +
+                     deliverables + bibliography; requires LLM_BASE_URL
+                     + LLM_API_KEY for real synthesis; stub mode otherwise).
+                     Each run writes a NEW numbered file (synthesis_001,
+                     synthesis_002, ...); history is preserved so you can
+                     watch the synthesis evolve as the session grows.
+                     Auto-runs after --session round generation unless
+                     --no-synthesize is also set.
+  --no-synthesize    Skip the auto-synthesis step after running rounds.
   --help             Show this help`);
   process.exit(0);
 }
@@ -2005,6 +2019,32 @@ async function main() {
     return;
   }
 
+  // 模式 0.9: --synthesize (跨 round 综合 session 答案)
+  if (args.synthesize) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --synthesize requires --session ID');
+      process.exit(2);
+    }
+    try {
+      const result = await runSynthesis(sessionId, {
+        caller,
+        dryRun,
+        model: process.env.LLM_MODEL ?? 'stub',
+      });
+      if (args.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatSynthesisText(result));
+      }
+      if (!result.written) process.exit(3);
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
   // 模式 2: --all (遍历所有 sessions)
   if (args.all) {
     const sessions = await listSessions();
@@ -2014,6 +2054,7 @@ async function main() {
         maxRounds, dryRun, preset,
         resume: !!args.resume,
         noCandidates: !!args.noCandidates,
+        noSynthesize: !!args.noSynthesize,
       });
     }
     return;
@@ -2031,6 +2072,7 @@ async function main() {
     preset,
     resume: !!args.resume,
     noCandidates: !!args.noCandidates,
+    noSynthesize: !!args.noSynthesize,
   });
 }
 
@@ -2085,6 +2127,574 @@ async function runOneSession(sessionId, caller, opts) {
 
   const digest = await buildDigest(sessionId);
   console.log(`[session ${sessionId}] digest → ${digest}`);
+
+  // 自动综合(除非 --no-synthesize 显式关掉)
+  if (!opts.noSynthesize) {
+    try {
+      const synth = await runSynthesis(sessionId, {
+        caller,
+        dryRun: opts.dryRun,
+        model: process.env.LLM_MODEL ?? 'stub',
+      });
+      console.log(`[session ${sessionId}] synthesis → ${synth.path} (#${synth.synthesisIndex}, prior=${synth.priorCount})`);
+    } catch (err) {
+      console.warn(`[session ${sessionId}] synthesis failed: ${err.message}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// --synthesize 模式:跨 round 综合 session 答案(Deep-Research-style)
+//
+// 把整段 session 跑过的 rounds + 已写的 deliverables + promotions 喂给 LLM,
+// 产出 1 份统一的"对研究问题的回答 + 论据 + gap + 下一步" markdown,落盘到
+// archive/<sid>/synthesis/synthesis_<NNN>.md。
+//
+// 输入:sessionId + opts { llmCaller? }。
+// 输出:{ sessionId, synthesis_index, path, written, used_rounds, used_deliverables,
+//        unique_papers, model, synthesis: { answer, key_findings, evidence,
+//        gaps_contradictions, next_steps } }
+//
+// 纯函数:collectSynthesisInputs / buildSynthesisPrompt / formatSynthesisMarkdown
+// IO 边界:runSynthesis / writeSynthesis
+// ---------------------------------------------------------------------------
+
+/**
+ * extractRoundProposalContexts(records) — 从 RoundRecord[] 抽出 (round, type,
+ * title, rationale, paperIds, decision, score, gate_reason) 列表,供 prompt 用。
+ * 纯函数;不读文件。
+ */
+export function extractRoundProposalContexts(records) {
+  const out = [];
+  for (const rec of records ?? []) {
+    const verdicts = new Map((rec.gate?.verdicts ?? []).map((v) => [v.proposal_id, v]));
+    const critiques = new Map((rec.feedback?.critiques ?? []).map((c) => [c.proposal_id, c]));
+    for (const p of rec.designer?.proposals ?? []) {
+      const v = verdicts.get(p.id);
+      const c = critiques.get(p.id);
+      out.push({
+        round: rec.round ?? 0,
+        proposal_id: p.id,
+        type: p.type ?? '(?)',
+        title: p.title ?? '(untitled)',
+        rationale: p.rationale ?? '',
+        paperIds: Array.isArray(p.evidence?.paperIds) ? p.evidence.paperIds.map(String) : [],
+        decision: v?.decision ?? '(no verdict)',
+        gate_reasons: Array.isArray(v?.reasons) ? v.reasons : [],
+        score: Number(c?.total) || 0,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * collectDeliverables(sessionId, opts) — 扫 archive/<sid>/{drafts,reviews,
+ * experiments,paper_additions,rebuttals}/*.md,返回 [{ subdir, file, type,
+ * title, round, decision, paperIds, frontmatter }]。
+ *
+ * 纯函数:不直接读盘,接受 caller 提供的 file contents (path → text)。
+ *   loadDeliverablesFromDisk(sessionId) 是 IO wrapper。
+ */
+export function collectDeliverables(fileMap, opts = {}) {
+  const out = [];
+  const paperIdsByFile = opts.paperIdsByFile ?? {};
+  for (const [path, content] of Object.entries(fileMap ?? {})) {
+    if (typeof content !== 'string') continue;
+    const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    if (!fmMatch) continue;
+    const frontmatter = parseFrontmatter(fmMatch[1]);
+    // path: archive/<sid>/<subdir>/<file>.md → subdir
+    const parts = path.replace(/\\/g, '/').split('/');
+    // expect [..., 'archive', '<sid>', '<subdir>', '<file>']
+    const subdir = parts[parts.length - 2];
+    // 标题 = 第一行 H1 行(去掉 # / emoji / 空白)
+    const titleMatch = content.match(/^#\s+(?:📄|📚|🧪|✉️)?\s*(.+)$/m);
+    out.push({
+      subdir,
+      file: parts[parts.length - 1],
+      path,
+      type: frontmatter.type ?? '(unknown)',
+      title: titleMatch ? titleMatch[1].trim() : frontmatter.title ?? '(untitled)',
+      round: Number(frontmatter.round) || 0,
+      decision: frontmatter.decision ?? 'candidate',
+      paperIds: paperIdsByFile[path] ?? extractPaperIdsFromBody(content),
+      frontmatter,
+    });
+  }
+  return out;
+}
+
+function parseFrontmatter(raw) {
+  const out = {};
+  for (const line of String(raw).split('\n')) {
+    const m = line.match(/^([\w-]+):\s*(.*)$/);
+    if (!m) continue;
+    const key = m[1];
+    let val = m[2].trim();
+    if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+    if (val.startsWith('[') && val.endsWith(']')) {
+      val = val.slice(1, -1).split(',').map((s) => s.trim().replace(/^"|"$/g, '')).filter(Boolean);
+    }
+    out[key] = val;
+  }
+  return out;
+}
+
+function extractPaperIdsFromBody(content) {
+  const ids = new Set();
+  // arxiv id 形如 YYMM.NNNNN(v# 可选) — 4 位 + 点 + 5 位
+  const re = /\b\d{4}\.\d{4,5}(?:v\d+)?\b/g;
+  let m;
+  while ((m = re.exec(content)) !== null) ids.add(m[0]);
+  return [...ids];
+}
+
+/**
+ * collectBibliography(proposals, deliverables) — 合并 round proposals 的
+ * paperIds + deliverable body 抽出的 paperIds,返回按出现次数倒序的 unique 列表。
+ *
+ * 纯函数。
+ */
+export function collectBibliography(proposalContexts, deliverables, opts = {}) {
+  const limit = opts.limit ?? 50;
+  const counts = new Map();
+  for (const ctx of proposalContexts ?? []) {
+    for (const id of ctx.paperIds ?? []) counts.set(String(id), (counts.get(String(id)) ?? 0) + 1);
+  }
+  for (const d of deliverables ?? []) {
+    for (const id of d.paperIds ?? []) counts.set(String(id), (counts.get(String(id)) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([arxivId, count]) => ({ arxivId, count }));
+}
+
+/**
+ * buildSynthesisPrompt(input) — 把 collected inputs 喂给 LLM,产出一个 JSON。
+ *
+ * input: { sessionId, goal, proposalContexts, deliverables, bibliography,
+ *          priorSynthesisCount }
+ *
+ * 输出纯字符串 prompt(system + user)。
+ */
+export function buildSynthesisPrompt(input) {
+  const ctx = input ?? {};
+  const goal = String(ctx.goal ?? '(未提供研究目标)');
+  const sessionId = String(ctx.sessionId ?? 'unknown');
+  const proposalContexts = Array.isArray(ctx.proposalContexts) ? ctx.proposalContexts : [];
+  const deliverables = Array.isArray(ctx.deliverables) ? ctx.deliverables : [];
+  const bibliography = Array.isArray(ctx.bibliography) ? ctx.bibliography : [];
+  const priorSynthesisCount = Number(ctx.priorSynthesisCount ?? 0) || 0;
+
+  const system = SYNTHESIS_SYSTEM_PROMPT;
+  const userLines = [];
+  userLines.push(`# 研究问题 / Goal`);
+  userLines.push(goal);
+  userLines.push('');
+  userLines.push(`# Session: ${sessionId}`);
+  userLines.push(`Proposal 上下文: ${proposalContexts.length} 条`);
+  userLines.push(`已写 deliverables: ${deliverables.length} 份`);
+  userLines.push(`唯一引用论文(去重): ${bibliography.length} 篇`);
+  userLines.push(`之前 synthesis 次数: ${priorSynthesisCount}`);
+  userLines.push('');
+
+  if (proposalContexts.length) {
+    userLines.push('## Proposal 上下文(按 round 升序)');
+    for (const p of proposalContexts.slice(0, 60)) {
+      userLines.push(
+        `- [round ${p.round}] ${p.title} [${p.type}] decision=${p.decision} score=${p.score} papers=[${p.paperIds.join(', ') || '(none)'}]`,
+      );
+      if (p.rationale) userLines.push(`    rationale: ${String(p.rationale).slice(0, 200)}`);
+    }
+    userLines.push('');
+  }
+
+  if (deliverables.length) {
+    userLines.push('## 已写 Deliverables(archive/)');
+    for (const d of deliverables.slice(0, 30)) {
+      userLines.push(
+        `- [${d.subdir}] ${d.file} — ${d.title} [${d.type}] round=${d.round} decision=${d.decision} papers=[${d.paperIds.join(', ') || '(none)'}]`,
+      );
+    }
+    userLines.push('');
+  }
+
+  if (bibliography.length) {
+    userLines.push('## Bibliography(unique paperIds,按出现次数倒序,前 30)');
+    for (const b of bibliography.slice(0, 30)) {
+      userLines.push(`- ${b.arxivId} (×${b.count})`);
+    }
+    userLines.push('');
+  }
+
+  userLines.push('## 请输出 JSON(无 markdown fence)');
+  userLines.push('{');
+  userLines.push('  "answer": "<直接给用户的研究问题答案,中文,3-8 段>",');
+  userLines.push('  "key_findings": ["<发现 1>", "<发现 2>", ...],');
+  userLines.push('  "evidence": ["<论据,引用 paperId>" , ...],');
+  userLines.push('  "gaps_contradictions": ["<gap/矛盾,简述>" , ...],');
+  userLines.push('  "next_steps": ["<可执行的下一步,中文>" , ...]');
+  userLines.push('}');
+  return { system, user: userLines.join('\n') };
+}
+
+const SYNTHESIS_SYSTEM_PROMPT = `你是资深科研综述作者,根据一段研究 session 跑过的 proposal 上下文 + 已写 deliverables + bibliography,
+产出对用户原始研究问题的**统一回答**(Deep-Research-style)。
+
+# 严格要求
+- answer 必须**直面研究问题**,不是描述"做了什么" — 用户要的是答案,不是流水账。
+- key_findings 是 3-6 条**最有价值的洞察**,按重要性倒序,中文,每条 1-2 句。
+- evidence 是支撑 answer 的**关键引文/论据**,每条带 paperId(arxivId) 引用。
+- gaps_contradictions 是**未回答的子问题**或**多 proposal 间冲突**,诚实标注。
+- next_steps 是**用户接下来 3-6 步能立刻执行的动作**(跑实验 / 写论文 / 进一步读 paper),可执行,不空泛。
+
+# 输出
+JSON,无 markdown fence。字段:
+  answer, key_findings[], evidence[], gaps_contradictions[], next_steps[]
+
+# 约束
+- 不要复述"rounds N proposals M"这种元信息 — 用户不关心你的流程。
+- 必须用中文(用户语言是中文);只在引用 paperId 时保留英文 id。
+- 如果 session 数据很薄(0-2 proposals,无 deliverables),answer 退化为"研究尚未充分,优先做 X"建议,不要硬编内容。`;
+
+/**
+ * parseSynthesisLLMResponse(raw) — 从 LLM 字符串抽 JSON。
+ * 沿用 method-debate 的 4 策略:direct → fence → [...] slice → {object} wrap。
+ * 返回:{ answer, key_findings, evidence, gaps_contradictions, next_steps } 或
+ *      { ok: false, raw, error }。
+ */
+export function parseSynthesisLLMResponse(raw) {
+  const tryParse = (s) => {
+    try { return JSON.parse(s); } catch { /* */ }
+    return null;
+  };
+  let parsed = tryParse(String(raw ?? ''));
+  if (!parsed) {
+    const m = String(raw ?? '').match(/```(?:json)?\s*([\s\S]+?)\s*```/);
+    if (m) parsed = tryParse(m[1]);
+  }
+  if (!parsed) {
+    const i = String(raw ?? '').indexOf('{');
+    const j = String(raw ?? '').lastIndexOf('}');
+    if (i >= 0 && j > i) parsed = tryParse(String(raw).slice(i, j + 1));
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return { ok: false, raw: String(raw ?? ''), error: 'parse failed' };
+  }
+  const o = parsed;
+  const asArr = (x) => (Array.isArray(x) ? x.map((v) => String(v)).filter(Boolean) : []);
+  return {
+    ok: true,
+    answer: String(o.answer ?? '').slice(0, 4000),
+    key_findings: asArr(o.key_findings).slice(0, 10),
+    evidence: asArr(o.evidence).slice(0, 20),
+    gaps_contradictions: asArr(o.gaps_contradictions).slice(0, 10),
+    next_steps: asArr(o.next_steps).slice(0, 10),
+  };
+}
+
+/**
+ * formatSynthesisMarkdown(synthesis, ctx) — 把 LLM 输出的 JSON + 元数据
+ * 渲染成最终 synthesis .md。
+ *
+ * ctx: { sessionId, goal, synthesisIndex, usedRounds, usedDeliverables,
+ *        uniquePaperCount, generatedAt, model, dryRun }
+ *
+ * 纯函数。
+ */
+export function formatSynthesisMarkdown(synthesis, ctx = {}) {
+  const s = synthesis ?? {};
+  const safeTitle = String(ctx.goal ?? `Synthesis for ${ctx.sessionId ?? 'session'}`).replace(/"/g, '\\"');
+  const fm = [
+    '---',
+    `title: "${safeTitle}"`,
+    `session_id: "${ctx.sessionId ?? 'unknown'}"`,
+    `schema_version: 1`,
+    `synthesis_index: ${ctx.synthesisIndex ?? 0}`,
+    `generated_at: "${ctx.generatedAt ?? new Date().toISOString()}"`,
+    `model: "${ctx.model ?? 'stub'}"`,
+    `dry_run: ${ctx.dryRun ? 'true' : 'false'}`,
+    `rounds_synthesized: ${ctx.usedRounds ?? 0}`,
+    `deliverables_referenced: ${ctx.usedDeliverables ?? 0}`,
+    `unique_papers: ${ctx.uniquePaperCount ?? 0}`,
+    '---',
+  ].join('\n');
+
+  const sections = [
+    fm,
+    '',
+    `# 🧠 ${ctx.goal ?? 'Synthesis'}`,
+    '',
+    `> Session \`${ctx.sessionId ?? 'unknown'}\` · synthesis #${ctx.synthesisIndex ?? 0} · rounds=${ctx.usedRounds ?? 0} · deliverables=${ctx.usedDeliverables ?? 0} · papers=${ctx.uniquePaperCount ?? 0}`,
+    '',
+    '## 摘要 / Answer',
+    '',
+    s.ok === false
+      ? `> ⚠️ LLM 解析失败:${s.error ?? 'unknown'}\n\n\`\`\`\n${(s.raw ?? '').slice(0, 1000)}\n\`\`\``
+      : (s.answer && s.answer.trim()) || '_(未生成)_',
+    '',
+    '## 关键发现 / Key Findings',
+    ...(s.key_findings?.length
+      ? s.key_findings.map((f) => `- ${f}`)
+      : ['- (无)']),
+    '',
+    '## 论据 / Evidence(带 paperId 引用)',
+    ...(s.evidence?.length
+      ? s.evidence.map((e) => `- ${e}`)
+      : ['- (无)']),
+    '',
+    '## Gap & 矛盾 / Gaps & Contradictions',
+    ...(s.gaps_contradictions?.length
+      ? s.gaps_contradictions.map((g) => `- ${g}`)
+      : ['- (无明显 gap / contradiction)']),
+    '',
+    '## 下一步建议 / Recommended Next Steps',
+    ...(s.next_steps?.length
+      ? s.next_steps.map((n) => `- [ ] ${n}`)
+      : ['- [ ] (LLM 未给出建议;补一轮 Designer 跑更细的 next-step proposal)']),
+    '',
+    '## 元数据',
+    '',
+    `- 生成时间: ${ctx.generatedAt ?? new Date().toISOString()}`,
+    `- Model: \`${ctx.model ?? 'stub'}\``,
+    `- Dry-run: ${ctx.dryRun ? 'yes' : 'no'}`,
+    `- Rounds synthesized: ${ctx.usedRounds ?? 0}`,
+    `- Deliverables referenced: ${ctx.usedDeliverables ?? 0}`,
+    `- Unique papers: ${ctx.uniquePaperCount ?? 0}`,
+    `- 路径: \`archive/${ctx.sessionId ?? 'unknown'}/synthesis/synthesis_${String(ctx.synthesisIndex ?? 0).padStart(3, '0')}.md\``,
+    '',
+  ];
+  return sections.join('\n');
+}
+
+/**
+ * listExistingSyntheses(sessionId) — 扫 archive/<sid>/synthesis/synthesis_<NNN>.md,
+ * 返回 [{ path, index }] 按 index 升序。纯函数:接受 caller 提供的目录 listing。
+ */
+export function listExistingSynthesesFromListing(files, sessionId) {
+  const out = [];
+  const re = /synthesis_(\d{3})\.md$/;
+  for (const f of files ?? []) {
+    const m = String(f).match(re);
+    if (m) out.push({ path: f, index: Number(m[1]) });
+  }
+  return out.sort((a, b) => a.index - b.index);
+}
+
+/**
+ * loadSynthesisInputs(sessionId) — IO wrapper,读 session 的 rounds +
+ * meta + 所有 deliverable .md + promotions,返回给 buildSynthesisPrompt。
+ */
+async function loadSynthesisInputs(sessionId) {
+  // 1. 读 meta.json
+  let meta = null;
+  try {
+    meta = JSON.parse(await readFile(join('archive', sessionId, 'meta.json'), 'utf8'));
+  } catch { /* 没有 meta 也继续 */ }
+
+  // 2. 读 rounds
+  const roundFiles = await listExistingRounds(sessionId);
+  const records = [];
+  for (const f of roundFiles) {
+    try {
+      records.push(JSON.parse(await readFile(f, 'utf8')));
+    } catch (err) {
+      console.warn(`[synthesize] skip ${f}: ${err.message}`);
+    }
+  }
+
+  // 3. 读 deliverables(5 个 subdir)
+  const subdirs = ['drafts', 'reviews', 'experiments', 'paper_additions', 'rebuttals'];
+  const deliverableFiles = [];
+  for (const sub of subdirs) {
+    try {
+      const files = await readdir(join('archive', sessionId, sub));
+      for (const f of files) {
+        if (f.endsWith('.md')) deliverableFiles.push(join('archive', sessionId, sub, f));
+      }
+    } catch { /* 没有这个 subdir 跳过 */ }
+  }
+  const fileMap = {};
+  for (const p of deliverableFiles) {
+    try { fileMap[p] = await readFile(p, 'utf8'); } catch { /* skip */ }
+  }
+  const deliverables = collectDeliverables(fileMap);
+
+  // 4. 算 prior synthesis count
+  let priorSyntheses = [];
+  try {
+    const sdir = await readdir(join('archive', sessionId, 'synthesis'));
+    priorSyntheses = listExistingSynthesesFromListing(sdir, sessionId);
+  } catch { /* 没有 synthesis/ 目录就是 0 */ }
+
+  return {
+    meta,
+    records,
+    deliverables,
+    priorSyntheses,
+    roundCount: records.length,
+    deliverableCount: deliverables.length,
+  };
+}
+
+/**
+ * isStubLlmMode() — 检测 LLM 是否处于 stub 模式(没配 key / baseUrl)。
+ * 调用方即使注入了 caller,只要没有真 key,合成走 stub 分支。
+ */
+function isStubLlmMode() {
+  return !process.env.LLM_BASE_URL || !process.env.LLM_API_KEY;
+}
+
+/**
+ * runSynthesis(sessionId, opts) — 主入口。
+ *
+ * opts: { caller?: LLMCaller, dryRun?: bool, model?: string }
+ *
+ * 永远写一份**新的** synthesis_<nextIndex>.md(N = 当前已有数 + 1),
+ * 保留历史版本;不覆盖既有 synthesis。这给"再跑一次看到综合如何随 session 演化"留痕。
+ *
+ * 返回:{ sessionId, path, written, synthesisIndex, usedRounds, usedDeliverables,
+ *        uniquePapers, model, synthesis, priorCount }
+ *
+ * 不写 LLM key 时 stub 模式:answer = "stub",其它字段填空,保证 round 跑通骨架。
+ */
+export async function runSynthesis(sessionId, opts = {}) {
+  const dryRun = !!opts.dryRun;
+  const model = opts.model ?? process.env.LLM_MODEL ?? 'stub';
+
+  const inputs = await loadSynthesisInputs(sessionId);
+
+  // 已有 synthesis 数(决定本份编号 — 永远 +1,保留历史)
+  const nextIndex = (inputs.priorSyntheses?.length ?? 0) + 1;
+
+  const proposalContexts = extractRoundProposalContexts(inputs.records);
+  const bibliography = collectBibliography(proposalContexts, inputs.deliverables);
+
+  // 0 round / 0 deliverable → 警告但仍写(skeleton + "research insufficient" 提示)
+  const isThin = inputs.roundCount === 0 && inputs.deliverableCount === 0;
+  // stub 模式条件:数据太薄 / dryRun / 无 caller / 环境无 LLM key
+  const useStub = isThin || dryRun || !opts.caller || isStubLlmMode();
+
+  let synthesisResult;
+  if (useStub) {
+    // stub 模式(stub LLM caller / 无 caller / 数据太薄)
+    synthesisResult = {
+      ok: true,
+      answer: isThin
+        ? '⚠️ Session 数据不足(无 rounds 也无 deliverables);建议先跑若干轮 Designer 让 session 累积 proposals 后再 synthesize。'
+        : `(stub synthesis;配置 LLM_BASE_URL + LLM_API_KEY 后重跑可获真实回答)
+研究目标:${inputs.meta?.goal ?? '(未提供)'}
+当前 session 跑了 ${inputs.roundCount} rounds、写了 ${inputs.deliverableCount} deliverables、覆盖 ${bibliography.length} 篇唯一论文。
+下一步:见 deliverables 文件夹 + round 摘要。`,
+      key_findings: stubFindings(proposalContexts),
+      evidence: bibliography.slice(0, 10).map((b) => `${b.arxivId} (引用 ×${b.count})`),
+      gaps_contradictions: ['(stub 模式未识别 gap;LLM 模式会分析矛盾)'],
+      next_steps: [
+        '重跑 `--synthesize` with LLM key 获取真实综合',
+        '如果 session 太薄,先 `--rounds 3` 跑更多 proposal',
+        '审阅 archive/<sid>/drafts/reviews/experiments/ 下的 deliverables',
+      ],
+    };
+  } else {
+    const goal = inputs.meta?.goal ?? `${sessionId} 综合`;
+    const { system, user } = buildSynthesisPrompt({
+      sessionId,
+      goal,
+      proposalContexts,
+      deliverables: inputs.deliverables,
+      bibliography,
+      priorSynthesisCount: inputs.priorSyntheses?.length ?? 0,
+    });
+    let raw = '';
+    try {
+      raw = await opts.caller.callLLM({
+        system,
+        user,
+        temperature: 0.5,
+        max_tokens: 2048,
+      });
+    } catch (err) {
+      console.warn('[synthesize] LLM call failed, falling back to stub:', err.message);
+      raw = JSON.stringify({ answer: `(LLM call failed: ${err.message})` });
+    }
+    synthesisResult = parseSynthesisLLMResponse(raw);
+    if (!synthesisResult.ok) {
+      synthesisResult.answer = synthesisResult.answer || '(LLM 输出无法解析)';
+      synthesisResult.key_findings = synthesisResult.key_findings?.length ? synthesisResult.key_findings : ['(parse failed)'];
+    }
+  }
+
+  // 写盘(永远 +1,保留历史)
+  const dir = join('archive', sessionId, 'synthesis');
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `synthesis_${String(nextIndex).padStart(3, '0')}.md`);
+  const content = formatSynthesisMarkdown(synthesisResult, {
+    sessionId,
+    goal: inputs.meta?.goal ?? `${sessionId} synthesis`,
+    synthesisIndex: nextIndex,
+    usedRounds: inputs.roundCount,
+    usedDeliverables: inputs.deliverableCount,
+    uniquePaperCount: bibliography.length,
+    generatedAt: new Date().toISOString(),
+    model,
+    dryRun,
+  });
+  await writeFile(file, content);
+  return {
+    sessionId,
+    path: file,
+    written: true,
+    synthesisIndex: nextIndex,
+    usedRounds: inputs.roundCount,
+    usedDeliverables: inputs.deliverableCount,
+    uniquePapers: bibliography.length,
+    model,
+    priorCount: inputs.priorSyntheses?.length ?? 0,
+    synthesis: synthesisResult,
+  };
+}
+
+function stubFindings(proposalContexts) {
+  if (!proposalContexts?.length) return ['(无 rounds;research not started)'];
+  const byType = new Map();
+  for (const p of proposalContexts) {
+    const key = `${p.type}:${p.title}`;
+    if (!byType.has(key)) byType.set(key, p);
+  }
+  const deduped = [...byType.values()].slice(0, 5);
+  return deduped.map((p) => `[round ${p.round}] ${p.title} — ${p.decision} (score ${p.score})`);
+}
+
+/**
+ * formatSynthesisText(result) — stdout 输出。
+ */
+export function formatSynthesisText(result) {
+  const lines = [];
+  if (!result.written) {
+    lines.push(`❌ Synthesis failed (no path)`);
+    return lines.join('\n');
+  }
+  lines.push(`🧠 Synthesized [${result.sessionId}] → ${result.path}`);
+  lines.push(`   synthesis #${result.synthesisIndex}  · rounds=${result.usedRounds} · deliverables=${result.usedDeliverables} · unique_papers=${result.uniquePapers}`);
+  if (result.priorCount != null) {
+    lines.push(`   (prior syntheses: ${result.priorCount}; history preserved)`);
+  }
+  lines.push(`   model: ${result.model}`);
+  const s = result.synthesis ?? {};
+  if (s.ok === false) {
+    lines.push(`   ⚠️  LLM parse failed: ${s.error}`);
+  }
+  if (s.answer) {
+    const preview = String(s.answer).slice(0, 300);
+    lines.push(`   answer preview: ${preview}${s.answer.length > 300 ? '...' : ''}`);
+  }
+  if (s.key_findings?.length) {
+    lines.push(`   key findings (${s.key_findings.length}):`);
+    for (const f of s.key_findings.slice(0, 5)) lines.push(`     - ${f}`);
+  }
+  return lines.join('\n');
 }
 
 // 仅当作为主入口运行时才跑 main();被 import 时不触发(便于测试)。
