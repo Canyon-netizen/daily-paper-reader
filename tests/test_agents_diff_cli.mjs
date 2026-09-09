@@ -116,8 +116,9 @@ describe('diffRounds', () => {
   });
 
   it('proposals only in B → added; only in A → removed', () => {
-    const A = makeRec(1, [{ id: 'a1', title: 'only in A' }]);
-    const B = makeRec(2, [{ id: 'b1', title: 'only in B' }]);
+    // 用完全不重叠的词,避免 fuzzy fallback (iter #37) 把它们配成 changed
+    const A = makeRec(1, [{ id: 'a1', title: 'apple banana cherry' }]);
+    const B = makeRec(2, [{ id: 'b1', title: 'dog elephant fox' }]);
     const d = diffRounds(A, B);
     assert.equal(d.added.length, 1);
     assert.equal(d.added[0].id, 'b1');

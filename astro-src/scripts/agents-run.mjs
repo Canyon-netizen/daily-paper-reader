@@ -790,21 +790,121 @@ async function loadLeaderboard(opts = {}) {
 // ---------------------------------------------------------------------------
 
 /**
+ * normalizeTitle(title) — 给 title 做 fuzzy match 前的归一化:
+ *   - lowercase
+ *   - 去掉所有非字母数字 / 非 CJK 字符(punctuation 统一空白)
+ *   - 多个空白压成单个
+ *   - 去掉首尾空白
+ * 返回标准化字符串 + word set(给 Jaccard 用)。
+ *
+ * 纯函数;tests 直接 import。
+ */
+export function normalizeTitle(title) {
+  if (typeof title !== 'string') return { str: '', words: new Set() };
+  // 把 CJK 字符按字拆成"单词"(英文则按 \w+ 拆),统一去标点
+  const lowered = title.toLowerCase();
+  // 把非 \w、非 CJK 字符替换成空格
+  const cleaned = lowered
+    .replace(/[^\w一-鿿]+/gu, ' ')
+    .trim();
+  // 英文按空白拆;CJK 字符每个算一个 token
+  const tokens = [];
+  const enMatches = cleaned.match(/[a-z0-9]+/g);
+  if (enMatches) tokens.push(...enMatches);
+  // CJK 字符逐一
+  const cjkChars = cleaned.match(/[一-鿿]/gu);
+  if (cjkChars) tokens.push(...cjkChars);
+  return { str: cleaned, words: new Set(tokens) };
+}
+
+/**
+ * titleJaccard(a, b) — Jaccard 相似度 = |A ∩ B| / |A ∪ B|。
+ * 0 = 完全不同,1 = 完全相同。
+ * 空集合处理:a 或 b 任一空 → 0。
+ */
+export function titleJaccard(a, b) {
+  if (!a.words.size || !b.words.size) return 0;
+  let inter = 0;
+  for (const w of a.words) if (b.words.has(w)) inter++;
+  const union = a.words.size + b.words.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+/**
+ * findTitleFuzzyMatches(proposalsA, proposalsB, opts) — 在 proposalsA 和
+ * proposalsB 中找 title-Jaccard 相似度 >= threshold 的配对。
+ *
+ * 输入:proposalsA/B = array of proposals(都有 id 和 title)
+ * opts.threshold = 0.5(Jaccard >= 0.5 算"同一个 proposal 的不同 id")
+ * opts.excludeMatchedIds = Set<string> 已经按 id 配上的,跳过
+ *
+ * 返回:[{ idA, idB, titleA, titleB, similarity }] 按 similarity 倒序。
+ */
+export function findTitleFuzzyMatches(proposalsA, proposalsB, opts = {}) {
+  const threshold = opts.threshold ?? 0.5;
+  const excludeA = opts.excludeMatchedIdsA ?? new Set();
+  const excludeB = opts.excludeMatchedIdsB ?? new Set();
+  const matches = [];
+
+  const normB = new Map();
+  for (const pB of proposalsB) {
+    if (excludeB.has(pB.id)) continue;
+    normB.set(pB.id, { proposal: pB, norm: normalizeTitle(pB.title) });
+  }
+
+  for (const pA of proposalsA) {
+    if (excludeA.has(pA.id)) continue;
+    const normA = normalizeTitle(pA.title);
+    if (!normA.words.size) continue;
+    for (const [idB, { proposal: pB, norm: nB }] of normB) {
+      if (!nB.words.size) continue;
+      const sim = titleJaccard(normA, nB);
+      if (sim >= threshold) {
+        matches.push({
+          idA: pA.id,
+          idB,
+          titleA: pA.title,
+          titleB: pB.title,
+          similarity: Math.round(sim * 1000) / 1000,
+        });
+      }
+    }
+  }
+
+  matches.sort((a, b) => b.similarity - a.similarity);
+  // Greedy 去重:每个 proposal id 只配一次(最高相似度的优先)
+  const usedA = new Set();
+  const usedB = new Set();
+  const final = [];
+  for (const m of matches) {
+    if (usedA.has(m.idA) || usedB.has(m.idB)) continue;
+    usedA.add(m.idA);
+    usedB.add(m.idB);
+    final.push(m);
+  }
+  return final;
+}
+
+/**
  * diffRounds(roundA, roundB) — 纯函数,比较两个 RoundRecord。
- * 匹配维度:proposal.id(LLM 可能在重生成时给不同 id,所以 id 不匹配即视为 added/removed)。
+ * 匹配维度:
+ *   1. proposal.id(原有)— LLM 保持 id 稳定时用这个
+ *   2. title-fuzzy(Jaccard >= 0.5)— stub LLM 或 LLM 重生 id 时 fallback
  * 输出:
  *   {
  *     roundA, roundB,
- *     added:     [{ id, title, type, score, decision }]   // 只在 B 里
- *     removed:   [{ id, title, type, score, decision }]   // 只在 A 里
- *     changed:   [{ id, title, type, scoreA, scoreB, scoreDelta,
- *                   decisionA, decisionB, decisionChange }]
- *     unchanged: [...]                                     // 在两边 + score/decision 都相同
+ *     added:     [{ id, title, type, score, decision, matchedBy? }]   // 只在 B 里
+ *     removed:   [{ id, title, type, score, decision }]                // 只在 A 里
+ *     changed:   [{ idA, idB?, title, type, scoreA, scoreB, scoreDelta,
+ *                   decisionA, decisionB, decisionChange, matchedBy }]
+ *     unchanged: [...]
  *     stats: { proposalsA, proposalsB, avgScoreA, avgScoreB,
- *              avgScoreDelta, promotedA, promotedB }
+ *              avgScoreDelta, promotedA, promotedB,
+ *              idMatched, fuzzyMatched }
  *   }
  */
-export function diffRounds(roundA, roundB) {
+export function diffRounds(roundA, roundB, opts = {}) {
+  const threshold = opts.fuzzyThreshold ?? 0.5;
   const proposalsA = new Map((roundA?.designer?.proposals ?? []).map((p) => [p.id, p]));
   const proposalsB = new Map((roundB?.designer?.proposals ?? []).map((p) => [p.id, p]));
 
@@ -817,33 +917,28 @@ export function diffRounds(roundA, roundB) {
   const removed = [];
   const changed = [];
   const unchanged = [];
+  let idMatched = 0;
+  let fuzzyMatched = 0;
 
+  // 阶段 1:严格 id 匹配(原有逻辑)
   for (const [id, pB] of proposalsB) {
-    if (!proposalsA.has(id)) {
-      added.push({
-        id,
-        title: pB.title,
-        type: pB.type,
-        score: scoreB.get(id)?.total ?? null,
-        decision: gateB.get(id)?.decision ?? null,
-      });
-      continue;
-    }
+    if (!proposalsA.has(id)) continue; // id 不匹配 → 留给 fuzzy fallback
+    idMatched++;
     const sA = scoreA.get(id);
     const sB = scoreB.get(id);
     const gA = gateA.get(id)?.decision ?? null;
     const gB = gateB.get(id)?.decision ?? null;
-    // NaN-safe: non-number total → null(而非 'bad' / NaN)
     const numA = sA ? Number(sA.total) : NaN;
     const numB = sB ? Number(sB.total) : NaN;
     const validA = Number.isFinite(numA) ? numA : null;
     const validB = Number.isFinite(numB) ? numB : null;
     const scoreDelta = validA != null && validB != null ? Math.round((validB - validA) * 100) / 100 : null;
-    // scoreChanged:两侧都存在且数值不同(invalid → valid 也算 changed)
     const scoreChanged = sA && sB && validA !== validB;
     const gateChanged = gA !== gB;
     const entry = {
       id,
+      idA: id,
+      idB: id,
       title: pB.title ?? proposalsA.get(id)?.title,
       type: pB.type ?? proposalsA.get(id)?.type,
       scoreA: validA,
@@ -852,24 +947,93 @@ export function diffRounds(roundA, roundB) {
       decisionA: gA,
       decisionB: gB,
       decisionChange: gateChanged ? { from: gA, to: gB } : null,
+      matchedBy: 'id',
     };
     if (scoreChanged || gateChanged) changed.push(entry);
     else unchanged.push(entry);
   }
 
-  for (const [id, pA] of proposalsA) {
-    if (!proposalsB.has(id)) {
-      removed.push({
-        id,
-        title: pA.title,
-        type: pA.type,
-        score: scoreA.get(id)?.total ?? null,
-        decision: gateA.get(id)?.decision ?? null,
-      });
+  // 阶段 2:title-fuzzy 匹配(只对 id 没配上的)
+  const idMatchedA = new Set(); // A 中已配上的 id
+  const idMatchedB = new Set(); // B 中已配上的 id
+  for (const [id, pB] of proposalsB) {
+    if (proposalsA.has(id)) {
+      idMatchedA.add(id);
+      idMatchedB.add(id);
     }
   }
+  const unmatchedA = [...proposalsA.values()].filter((p) => !idMatchedA.has(p.id));
+  const unmatchedB = [...proposalsB.values()].filter((p) => !idMatchedB.has(p.id));
+  const fuzzy = findTitleFuzzyMatches(unmatchedA, unmatchedB, { threshold });
+  const fuzzyByA = new Map(fuzzy.map((m) => [m.idA, m]));
+  const fuzzyByB = new Map(fuzzy.map((m) => [m.idB, m]));
+  const consumedA = new Set();
+  const consumedB = new Set();
 
-  // 排序:scoreDelta 绝对值大的优先,便于用户看到"波动最大的 proposal"
+  for (const { idA, idB, titleA, titleB, similarity } of fuzzy) {
+    fuzzyMatched++;
+    consumedA.add(idA);
+    consumedB.add(idB);
+    const pA = proposalsA.get(idA);
+    const pB = proposalsB.get(idB);
+    const sA = scoreA.get(idA);
+    const sB = scoreB.get(idB);
+    const gA = gateA.get(idA)?.decision ?? null;
+    const gB = gateB.get(idB)?.decision ?? null;
+    const numA = sA ? Number(sA.total) : NaN;
+    const numB = sB ? Number(sB.total) : NaN;
+    const validA = Number.isFinite(numA) ? numA : null;
+    const validB = Number.isFinite(numB) ? numB : null;
+    const scoreDelta = validA != null && validB != null ? Math.round((validB - validA) * 100) / 100 : null;
+    const scoreChanged = sA && sB && validA !== validB;
+    const gateChanged = gA !== gB;
+    const entry = {
+      id: `${idA}≡${idB}`, // 显示用,表示"通过 fuzzy 配对"
+      idA,
+      idB,
+      title: pB.title ?? pA.title,
+      type: pB.type ?? pA.type,
+      scoreA: validA,
+      scoreB: validB,
+      scoreDelta,
+      decisionA: gA,
+      decisionB: gB,
+      decisionChange: gateChanged ? { from: gA, to: gB } : null,
+      matchedBy: 'fuzzy',
+      similarity,
+      titleA,
+      titleB,
+    };
+    if (scoreChanged || gateChanged) changed.push(entry);
+    else unchanged.push(entry);
+  }
+  // 静默避免 lint 警告
+  void fuzzyByA; void fuzzyByB;
+
+  // 阶段 3:剩下的都是真正 added / removed
+  for (const [id, pB] of proposalsB) {
+    if (idMatchedB.has(id) || consumedB.has(id)) continue;
+    added.push({
+      id,
+      title: pB.title,
+      type: pB.type,
+      score: scoreB.get(id)?.total ?? null,
+      decision: gateB.get(id)?.decision ?? null,
+      matchedBy: 'none',
+    });
+  }
+  for (const [id, pA] of proposalsA) {
+    if (idMatchedA.has(id) || consumedA.has(id)) continue;
+    removed.push({
+      id,
+      title: pA.title,
+      type: pA.type,
+      score: scoreA.get(id)?.total ?? null,
+      decision: gateA.get(id)?.decision ?? null,
+    });
+  }
+
+  // 排序:scoreDelta 绝对值大的优先
   changed.sort((a, b) => Math.abs(b.scoreDelta ?? 0) - Math.abs(a.scoreDelta ?? 0));
 
   const avgOf = (m) => (m.size ? [...m.values()].reduce((s, c) => s + (Number(c.total) || 0), 0) / m.size : 0);
@@ -891,6 +1055,8 @@ export function diffRounds(roundA, roundB) {
       avgScoreDelta: Math.round((avgB - avgA) * 100) / 100,
       promotedA: roundA?.gate?.promoted?.length ?? 0,
       promotedB: roundB?.gate?.promoted?.length ?? 0,
+      idMatched,
+      fuzzyMatched,
     },
   };
 }
@@ -902,8 +1068,12 @@ export function formatDiffText(diff) {
   const lines = [];
   lines.push(`🔄 Round ${diff.roundA} → Round ${diff.roundB}`);
   const sign = diff.stats.avgScoreDelta >= 0 ? '+' : '';
+  const matchInfo = [];
+  if (diff.stats.idMatched != null) matchInfo.push(`${diff.stats.idMatched} by-id`);
+  if (diff.stats.fuzzyMatched != null) matchInfo.push(`${diff.stats.fuzzyMatched} fuzzy`);
+  const matchSuffix = matchInfo.length ? `  [matched: ${matchInfo.join(', ')}]` : '';
   lines.push(
-    `Stats: avg score ${diff.stats.avgScoreA} → ${diff.stats.avgScoreB} (Δ ${sign}${diff.stats.avgScoreDelta}); promoted ${diff.stats.promotedA} → ${diff.stats.promotedB}; proposals ${diff.stats.proposalsA} → ${diff.stats.proposalsB}`,
+    `Stats: avg score ${diff.stats.avgScoreA} → ${diff.stats.avgScoreB} (Δ ${sign}${diff.stats.avgScoreDelta}); promoted ${diff.stats.promotedA} → ${diff.stats.promotedB}; proposals ${diff.stats.proposalsA} → ${diff.stats.proposalsB}${matchSuffix}`,
   );
   if (diff.added.length) {
     lines.push('');
@@ -925,7 +1095,8 @@ export function formatDiffText(diff) {
     for (const p of diff.changed) {
       const sDelta = p.scoreDelta != null ? `Δscore=${p.scoreDelta >= 0 ? '+' : ''}${p.scoreDelta}` : 'Δscore=?';
       const gChange = p.decisionChange ? `decision ${p.decisionChange.from} → ${p.decisionChange.to}` : '';
-      lines.push(`  ~ ${p.title}  [${p.type}]  ${sDelta}${gChange ? ', ' + gChange : ''}`);
+      const matchTag = p.matchedBy === 'fuzzy' ? `  [fuzzy=${p.similarity}, ${p.idA}≡${p.idB}]` : '';
+      lines.push(`  ~ ${p.title}  [${p.type}]  ${sDelta}${gChange ? ', ' + gChange : ''}${matchTag}`);
     }
   }
   if (diff.unchanged.length) {
