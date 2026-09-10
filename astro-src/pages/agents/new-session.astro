@@ -2,17 +2,85 @@
 // astro-src/pages/agents/new-session.astro
 //
 // iter #46 — Session templates / goal presets.
+// iter #74 — Smart goal recommender (cross-session "下一步建议" 聚合)。
 //
 // A picker page that lets the user choose a research goal template
 // (literature_review, experiment_plan, rebuttal, free_form), fills in
 // the goal textarea with a structured template + 5 metadata fields, then
 // generates a copy-paste-ready --new-session CLI command.
 
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import '../../styles/agents.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// iter #74 — Smart goal recommender
+//
+// 读 archive/*/synthesis/*.md 的"## 下一步建议"小节,把每条 bullet 收集起来
+// 去重 / 排序 / 拼接成可点选的 goal 候选。
+// 这一步纯文件读取(SSR),不调 LLM — 零延迟,本地立即可用。
+// ---------------------------------------------------------------------------
+
+interface RecommendedGoal {
+  id: string;
+  emoji: string;
+  title: string;
+  goal: string;
+  sourceSession: string;
+  sourceSynthesis: string;
+}
+
+async function loadRecommendations(): Promise<RecommendedGoal[]> {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const seen = new Set<string>();
+  const out: RecommendedGoal[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    const sdir = join(root, sid, 'synthesis');
+    if (!existsSync(sdir)) continue;
+    let files: string[] = [];
+    try { files = (await readdir(sdir)).filter((f) => /^synthesis_\d+\.md$/.test(f)).sort(); } catch { continue; }
+    for (const f of files) {
+      let raw = '';
+      try { raw = await readFile(join(sdir, f), 'utf8'); } catch { continue; }
+      // 抓 ## 下一步建议 section 下的 bullet
+      const section = raw.split(/^##\s+下一步建议/m)[1] ?? '';
+      if (!section) continue;
+      const nextH2 = section.indexOf('\n## ');
+      const body = nextH2 === -1 ? section : section.slice(0, nextH2);
+      // 抓 [ ] 项 + - 项 + * 项;过滤太短 / 包含 (stub) / (LLM 未配置) 的占位内容
+      const bullets = body.match(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)(.+)$/gm) ?? [];
+      for (const b of bullets) {
+        const text = b.replace(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)/, '').trim();
+        if (!text) continue;
+        if (text.length < 6 || text.length > 280) continue;
+        if (/\(stub\)|LLM 未配置|占位|stub proposal/i.test(text)) continue;
+        const key = text.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          id: `${sid}/${f}#${out.length}`,
+          emoji: '💡',
+          title: text.length > 50 ? text.slice(0, 47) + '…' : text,
+          goal: `继续推进: ${text}\n\n上下文: 来自 session ${sid} 的 synthesis 建议。\n\n需要完成:\n1. 拆解该建议为可执行的 proposal 列表\n2. 为每个 proposal 评估可行性与所需数据\n3. 输出 markdown 推进计划 + 引用相关 arxiv 论文`,
+          sourceSession: sid,
+          sourceSynthesis: f,
+        });
+        if (out.length >= 8) return out;
+      }
+    }
+  }
+  return out;
+}
+
+const recommendations = await loadRecommendations();
 
 // ---------------------------------------------------------------------------
 // Template catalog (server-side, encoded as data attribute for client JS).
@@ -137,6 +205,33 @@ function escapeHtml(s: string): string {
       </p>
     </header>
 
+    {recommendations.length > 0 && (
+      <section class="agents-session-section">
+        <h2>💡 基于历史 session 的建议目标 <span class="muted">(iter #74)</span></h2>
+        <p class="muted">
+          来自 archive/<code>&lt;sid&gt;</code>/synthesis/ 里 "下一步建议" 的 bullet。
+          点下方任一条,自动填到下方的 goal 文本框。
+        </p>
+        <div class="agents-template-grid">
+          {recommendations.map((r) => (
+            <button
+              type="button"
+              class="agents-template-card agents-recommend-card"
+              data-recommend-id={r.id}
+              data-recommend={JSON.stringify(r)}
+              title={`来自 ${r.sourceSession}/${r.sourceSynthesis}`}
+            >
+              <span class="agents-template-emoji">{r.emoji}</span>
+              <strong>{r.title}</strong>
+              <p class="muted">
+                <small>📂 {r.sourceSession}</small>
+              </p>
+            </button>
+          ))}
+        </div>
+      </section>
+    )}
+
     <section class="agents-session-section">
       <h2>🧩 选模板</h2>
       <div class="agents-template-grid">
@@ -168,7 +263,7 @@ function escapeHtml(s: string): string {
           </select>
         </label>
         <label>
-          <span>Goal (可编辑,留 {{占位符}} 也行)</span>
+          <span>Goal (可编辑,留 <code>{'{{占位符}}'}</code> 也行)</span>
           <textarea id="agents-ns-goal" name="goal" rows="14" placeholder="选择上方模板以预填"></textarea>
         </label>
         <div class="agents-ns-row">
@@ -203,7 +298,7 @@ function escapeHtml(s: string): string {
         </label>
         <label class="agents-ns-checkbox">
           <input type="checkbox" id="agents-ns-immediate" checked />
-          <span>--rounds {rounds_requested}: 新 session 建好立刻跑 N 轮</span>
+          <span>--rounds {'{rounds_requested}'}: 新 session 建好立刻跑 N 轮</span>
         </label>
       </form>
     </section>
@@ -282,6 +377,25 @@ function escapeHtml(s: string): string {
         tplSelect.value = id;
         applyTemplate(tpl);
         goalEl.focus();
+      } catch {}
+    });
+  });
+
+  // iter #74 — recommend card click → 填表(但不切换模板 select,保留用户当前选择)
+  document.querySelectorAll('.agents-recommend-card').forEach((card) => {
+    card.addEventListener('click', () => {
+      const raw = card.getAttribute('data-recommend');
+      if (!raw) return;
+      try {
+        const rec = JSON.parse(raw);
+        goalEl.value = rec.goal ?? '';
+        // 推荐目标通常对应较深的探索 → max-cycles=2, rounds=2
+        maxCyclesEl.value = '2';
+        roundsEl.value = '2';
+        dirModeEl.value = 'both';
+        refreshCmd();
+        goalEl.focus();
+        goalEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } catch {}
     });
   });
