@@ -1,0 +1,341 @@
+---
+// /agents/[sessionId]/score.astro — iter #75:session quality score UI
+//
+// 直接复用 iter #69 evaluator.mjs 的 buildEvaluationReport() 生成 4 子分 +
+// overall,渲染成可读 dashboard(进度条 + 雷达/甜甜圈 + 详情 + 建议)。
+// SSR 时从 archive/<sid>/{meta.json, rounds/*.json, synthesis/*.md} 读数据,
+// 浏览器侧只是展示 — 不调 LLM,不写文件。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildEvaluationReport } from '../../../lib/agents/evaluator.mjs';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths:enumerate sessions under archive/ that have meta.json
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (existsSync(metaPath)) out.push({ params: { sessionId: sid } });
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+
+// ---------------------------------------------------------------------------
+// 读取 meta + rounds + synthesis + deliverables
+// ---------------------------------------------------------------------------
+
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+
+let meta: any = null;
+try { meta = JSON.parse(await readFile(join(sessionDir, 'meta.json'), 'utf8')); } catch { /* */ }
+
+let rounds: any[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds')))
+    .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = await Promise.all(files.map(async (f) => {
+    try { return JSON.parse(await readFile(join(sessionDir, 'rounds', f), 'utf8')); }
+    catch { return null; }
+  })).then((arr) => arr.filter(Boolean));
+} catch { /* */ }
+
+// evaluator.mjs 的 collectArxivIds() 期望每 round 有 r.proposal.evidence.paperIds
+// (单 proposal 结构) + r.actions[].target.arxivIds。我们手上的 round JSON 用的是
+// r.designer.proposals[] + r.modifier.applied[] 这种结构,所以这里把数据展平
+// 给 evaluator 认识,而不动原始 round 格式(其他地方仍按 designer/modifier
+// 渲染)。
+const evaluatorRounds = rounds.flatMap((r) => {
+  const out: any[] = [];
+  for (const p of (r?.designer?.proposals ?? [])) {
+    out.push({
+      proposal: { evidence: { paperIds: p?.evidence?.paperIds ?? [] } },
+      actions: [],
+    });
+  }
+  for (const a of (r?.modifier?.applied ?? [])) {
+    out.push({
+      proposal: { evidence: { paperIds: a?.payload?.paperIds ?? [] } },
+      actions: [{ target: { arxivIds: a?.payload?.arxivIds ?? [] }, paperIds: a?.payload?.paperIds ?? [] }],
+    });
+  }
+  return out;
+});
+
+// deliverables:从 modifier.applied 中收集(kind + proposal_id + payload)
+interface Deliverable {
+  kind: string;
+  proposal_id: string;
+  round?: number;
+  payload?: Record<string, unknown>;
+  arxivIds?: string[];
+}
+const deliverables: Deliverable[] = [];
+for (const r of rounds) {
+  if (!r?.modifier?.applied) continue;
+  for (const a of r.modifier.applied) {
+    deliverables.push({
+      kind: a.kind ?? 'unknown',
+      proposal_id: a.proposal_id ?? '',
+      round: r.round,
+      payload: a.payload ?? {},
+      arxivIds: [],
+    });
+  }
+}
+
+// syntheses:从 synthesis/*.md 读 frontmatter (title + generatedAt + raw text)
+interface SynthesisFile {
+  idx: number;
+  path: string;
+  raw: string;
+}
+const syntheses: SynthesisFile[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'synthesis')))
+    .filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+  for (const f of files) {
+    const m = f.match(/^synthesis_(\d+)\.md$/);
+    const idx = m ? Number(m[1]) : 0;
+    const path = join(sessionDir, 'synthesis', f);
+    const raw = await readFile(path, 'utf8');
+    syntheses.push({ idx, path, raw });
+  }
+} catch { /* */ }
+
+// ---------------------------------------------------------------------------
+// 调 evaluator 生成 report
+// ---------------------------------------------------------------------------
+
+const report = buildEvaluationReport({
+  meta,
+  rounds: evaluatorRounds,
+  deliverables,
+  syntheses,
+  generatedAt: new Date().toISOString(),
+});
+
+// ---------------------------------------------------------------------------
+// 根据各子分生成建议
+// ---------------------------------------------------------------------------
+
+function pct(n: number): string { return `${(n * 100).toFixed(0)}%`; }
+
+interface Recommendation { emoji: string; text: string; }
+const recommendations: Recommendation[] = [];
+const s = report.scores;
+const d = report.details;
+const c = report.counts;
+
+if (s.coverage < 0.5) {
+  recommendations.push({
+    emoji: '📚',
+    text: `覆盖度 ${pct(s.coverage)}:引用了 ${c.arxivIds} 篇唯一论文 / ${c.proposalTypes} 种 proposal 类型。`
+      + '建议多跑几轮让 Designer 接触更多 arxiv 来源,或用 --search-arxiv 显式拉新论文。',
+  });
+}
+if (s.alignment < 0.5 && meta?.goal) {
+  const goalPreview = String(meta.goal).slice(0, 60);
+  recommendations.push({
+    emoji: '🎯',
+    text: `与 goal 对齐度 ${pct(s.alignment)}:goal "${goalPreview}…" 部分 proposal 可能偏离主题。`
+      + '考虑收紧 gate preset 到 conservative,或下轮 Designer directive 时显式重申 goal 关键词。',
+  });
+}
+if (s.consistency < 0.5) {
+  recommendations.push({
+    emoji: '🔁',
+    text: `一致性 ${pct(s.consistency)}:round 间 proposal 漂移较大。`
+      + '可开启 /agents/coverage/ 看 design drift,或在 directive 里指定 "延续上一轮高 avg score 方向"。',
+  });
+}
+if (s.synthesisCoverage < 0.5) {
+  recommendations.push({
+    emoji: '🧠',
+    text: `synthesis 覆盖率 ${pct(s.synthesisCoverage)}:${c.deliverables} 个 deliverables 中只有部分被 synthesis 引用。`
+      + '检查 synthesis prompt 是否被 truncate,或增加 max_tokens 让 synthesis 能完整列出 deliverables。',
+  });
+}
+if (s.overall >= 0.8) {
+  recommendations.push({
+    emoji: '✨',
+    text: `综合 ${pct(s.overall)}:研究目标已基本饱和。可以 --export-md / --compile-paper 收尾。`,
+  });
+}
+if (recommendations.length === 0) {
+  recommendations.push({
+    emoji: '📈',
+    text: `综合 ${pct(s.overall)}:中等质量,继续迭代会更稳。建议在 /agents/${sessionId}/ 看 directive 历史。`,
+  });
+}
+
+function scoreClass(n: number): string {
+  if (n >= 0.7) return 'high';
+  if (n >= 0.4) return 'mid';
+  return 'low';
+}
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+const goalText = meta?.goal ? String(meta.goal) : '(未提供 goal)';
+---
+
+<BaseLayout title={`Score · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>score</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Session 质量评分 · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #69 evaluator.mjs 生成的 4 子分 + overall。当前 dashboard 显示基于
+        {c.rounds} rounds · {c.deliverables} deliverables · {c.syntheses} syntheses · {c.arxivIds} 篇唯一论文。
+        {meta?.created_at && (<> · 创建于 {new Date(meta.created_at).toLocaleString()}</>)}
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 综合分</h2>
+      <div class="agents-score-overall">
+        <div class={`agents-score-big agents-score-${scoreClass(s.overall)}`}>
+          {(s.overall * 100).toFixed(0)}
+          <span class="agents-score-pct">%</span>
+        </div>
+        <div class="agents-score-overall-meta">
+          <p class="muted"><strong>Goal:</strong> {escapeHtml(goalText.slice(0, 200))}{goalText.length > 200 ? '…' : ''}</p>
+          <p class="muted"><small>生成于 {new Date(report.generatedAt).toLocaleString()}</small></p>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 4 子分(各占 25%)</h2>
+      <div class="agents-score-grid">
+        <div class="agents-score-card">
+          <h3>📚 coverage</h3>
+          <div class="agents-score-bar-wrap">
+            <div class={`agents-score-bar agents-score-bar-${scoreClass(s.coverage)}`} style={`width:${(s.coverage * 100).toFixed(1)}%`}></div>
+          </div>
+          <p class="agents-score-value">{(s.coverage * 100).toFixed(1)}%</p>
+          <p class="muted">
+            arxiv: {d.coverage?.distinct_arxiv ?? 0} 篇 / 类型: {d.coverage?.distinct_proposal_types ?? 0} 种
+          </p>
+          <details>
+            <summary>详情</summary>
+            <ul class="agents-score-detail-list">
+              {(d.coverage?.arxiv_ids ?? []).slice(0, 12).map((id: string) => (
+                <li><code>{id}</code></li>
+              ))}
+              {(d.coverage?.arxiv_ids ?? []).length > 12 && (
+                <li class="muted">… 还有 {(d.coverage.arxiv_ids.length - 12)} 篇</li>
+              )}
+              {(d.coverage?.proposal_types ?? []).map((t: string) => (
+                <li>📋 <code>{t}</code></li>
+              ))}
+            </ul>
+          </details>
+        </div>
+
+        <div class="agents-score-card">
+          <h3>🎯 alignment</h3>
+          <div class="agents-score-bar-wrap">
+            <div class={`agents-score-bar agents-score-bar-${scoreClass(s.alignment)}`} style={`width:${(s.alignment * 100).toFixed(1)}%`}></div>
+          </div>
+          <p class="agents-score-value">{(s.alignment * 100).toFixed(1)}%</p>
+          <p class="muted">
+            模式: <code>{d.alignment?.mode ?? 'no-goal'}</code>
+            {d.alignment?.matched_keywords && (
+              <> · 命中 {d.alignment.matched_keywords.length} 关键词</>
+            )}
+          </p>
+          {d.alignment?.matched_keywords && d.alignment.matched_keywords.length > 0 && (
+            <p class="muted"><small>命中: {d.alignment.matched_keywords.slice(0, 8).map((k: string) => <code>{k}</code>).reduce((a: any, b: any, i: number) => i === 0 ? [b] : [...a, ' ', b], [])}</small></p>
+          )}
+        </div>
+
+        <div class="agents-score-card">
+          <h3>🔁 consistency</h3>
+          <div class="agents-score-bar-wrap">
+            <div class={`agents-score-bar agents-score-bar-${scoreClass(s.consistency)}`} style={`width:${(s.consistency * 100).toFixed(1)}%`}></div>
+          </div>
+          <p class="agents-score-value">{(s.consistency * 100).toFixed(1)}%</p>
+          <p class="muted">
+            score stdDev: {(d.consistency?.score_stddev ?? 0).toFixed(3)}
+            {' · '} 类型漂移: {(d.consistency?.type_entropy ?? 0).toFixed(2)}
+          </p>
+          <p class="muted"><small>{c.rounds} 个 round 的 score / type 分布稳定度</small></p>
+        </div>
+
+        <div class="agents-score-card">
+          <h3>🧠 synthesisCoverage</h3>
+          <div class="agents-score-bar-wrap">
+            <div class={`agents-score-bar agents-score-bar-${scoreClass(s.synthesisCoverage)}`} style={`width:${(s.synthesisCoverage * 100).toFixed(1)}%`}></div>
+          </div>
+          <p class="agents-score-value">{(s.synthesisCoverage * 100).toFixed(1)}%</p>
+          <p class="muted">
+            {d.synthesisCoverage?.cited_deliverables ?? 0}/{c.deliverables} deliverables 在 synthesis 中被引用
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 改进建议</h2>
+      <ul class="agents-rec-list">
+        {recommendations.map((r) => (
+          <li>
+            <span class="agents-rec-emoji">{r.emoji}</span>
+            <span>{r.text}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🛠 操作</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>← Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/pipeline/`}>🔬 Pipeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/export/`}>📦 导出</a>
+        <button class="button" id="agents-score-copy-btn">📋 复制 JSON report</button>
+      </p>
+      <pre id="agents-score-json" class="agents-auto-cmd" hidden>{JSON.stringify(report, null, 2)}</pre>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  document.getElementById('agents-score-copy-btn')?.addEventListener('click', () => {
+    const pre = document.getElementById('agents-score-json');
+    if (!pre) return;
+    const text = pre.textContent ?? '';
+    navigator.clipboard?.writeText(text).then(
+      () => console.info('[score] copied JSON report'),
+      (e) => console.warn('[score] copy failed:', e),
+    );
+  });
+</script>

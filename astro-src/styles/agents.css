@@ -2175,3 +2175,114 @@ mark {
   color: #b88c00;
   font-style: italic;
 }
+
+/* ---------------------------------------------------------------------------
+ * iter #75 — Session 质量评分页专用样式
+ *
+ * /agents/<sid>/score/ 用到的 5 个组件:
+ *   - agents-score-overall (综合分 + meta 横向 flex)
+ *   - agents-score-big / -mid / -low (大圆角数字块)
+ *   - agents-score-grid (4 子分卡片 2×2)
+ *   - agents-score-bar-wrap / -bar / -bar-{high,mid,low} (横向进度条)
+ *   - agents-rec-list / -emoji (建议清单)
+ * --------------------------------------------------------------------------- */
+
+.agents-score-overall {
+  display: flex;
+  gap: 1.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.agents-score-big {
+  font-size: 4.5rem;
+  font-weight: 800;
+  line-height: 1;
+  padding: 1rem 1.5rem;
+  border-radius: 12px;
+  min-width: 140px;
+  text-align: center;
+  letter-spacing: -0.02em;
+}
+.agents-score-big .agents-score-pct {
+  font-size: 1.5rem;
+  font-weight: 500;
+  margin-left: 0.25rem;
+  opacity: 0.7;
+}
+.agents-score-high {
+  background: linear-gradient(135deg, #10b981 0%, #34d399 100%);
+  color: #fff;
+}
+.agents-score-mid {
+  background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
+  color: #fff;
+}
+.agents-score-low {
+  background: linear-gradient(135deg, #ef4444 0%, #f87171 100%);
+  color: #fff;
+}
+.agents-score-overall-meta { flex: 1 1 300px; min-width: 0; }
+
+.agents-score-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+}
+.agents-score-card {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+}
+.agents-score-card h3 { margin: 0 0 0.5rem 0; font-size: 1rem; }
+.agents-score-bar-wrap {
+  height: 14px;
+  background: rgba(0,0,0,0.08);
+  border-radius: 7px;
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+.agents-score-bar { height: 100%; border-radius: 7px; transition: width 0.4s ease; }
+.agents-score-bar-high { background: linear-gradient(90deg, #10b981, #34d399); }
+.agents-score-bar-mid  { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+.agents-score-bar-low  { background: linear-gradient(90deg, #ef4444, #f87171); }
+.agents-score-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 0.25rem 0;
+}
+.agents-score-detail-list {
+  margin: 0.5rem 0 0 1rem;
+  font-size: 0.85rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.agents-score-detail-list code {
+  font-size: 0.8rem;
+  padding: 0.05rem 0.3rem;
+  background: rgba(0,0,0,0.06);
+  border-radius: 3px;
+}
+
+.agents-rec-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.agents-rec-list li {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin: 0.4rem 0;
+  background: rgba(255,255,255,0.04);
+  border-left: 3px solid #6366f1;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+.agents-rec-emoji { font-size: 1.1rem; flex-shrink: 0; }
+
+/* iter #74 — smart recommender 卡片视觉差异(让它在模板网格里更显眼) */
+.agents-recommend-card {
+  border-left: 3px solid #f59e0b;
+}
+.agents-recommend-card:hover { border-left-color: #d97706; }

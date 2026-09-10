@@ -320,7 +320,9 @@ interface PaperAgg {
 const paperAggMap = new Map<string, PaperAgg>();
 for (const r of rounds) {
   for (const p of r.designer.proposals) {
-    for (const pid of p.evidence.paperIds) {
+    // 防御:rebuttal / paper_draft 等 proposal 可能没 evidence 字段
+    const paperIds = Array.isArray(p.evidence?.paperIds) ? p.evidence.paperIds : [];
+    for (const pid of paperIds) {
       let agg = paperAggMap.get(pid);
       if (!agg) {
         agg = { paperId: pid, rounds: new Set(), proposalIds: new Set(), critiqueIds: new Set() };
@@ -329,7 +331,7 @@ for (const r of rounds) {
       agg.rounds.add(r.round);
       agg.proposalIds.add(p.id);
       const cr = r.feedback.critiques.find((c) => c.proposal_id === p.id);
-      if (cr) agg.critiqueIds.add(c.proposal_id);
+      if (cr) agg.critiqueIds.add(cr.proposal_id);
     }
   }
 }
@@ -796,6 +798,9 @@ function joinJsxLinks(els: any[]): any[] {
           </p>
           <p class="muted">
             <a href={`${base}/agents/${sessionId}/pipeline/`}>🔬 7-stage pipeline 进度( iter #73) →</a>
+          </p>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/score/`}>📊 Session 质量评分 (iter #75) →</a>
           </p>
           <p class="muted">
             CLI 等价:<code>node astro-src/scripts/agents-run.mjs --export-md --session {sessionId}</code>
