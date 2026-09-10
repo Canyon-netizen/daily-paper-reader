@@ -404,6 +404,12 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
   if (a.kind === 'add_paper_to_stage' && p.paper_id) return `${base}/papers/${p.paper_id}/`;
   return null;
 }
+
+// 在 JSX 模板里不能用 `.reduce<any>(...)`(泛型 <any> 会被 JSX 解析器当自定义标签),
+// 抽到 helper 里避免 Astro 编译器误判。返回 any[],在 JSX 里用 {...arr} 展开渲染。
+function joinJsxLinks(els: any[]): any[] {
+  return els.reduce((acc: any[], el: any, i: number) => acc.concat(i > 0 ? [', '] : [], el), []);
+}
 ---
 
 <BaseLayout title={meta ? `${sessionId} · Session Dashboard` : 'Session Dashboard'}>
@@ -698,17 +704,17 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
                   {topPicked.length > 0 && (
                     <p>
                       <span class="agents-drift-low">👍 最看好 (total ≥ 7):</span>{' '}
-                      {topPicked.map((r) => (
+                      {joinJsxLinks(topPicked.map((r) => (
                         <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener" class="agents-paper-link">{r.paperId}</a>
-                      )).reduce<any>((acc, el, i) => acc.concat(i > 0 ? [', '] : [], el), [])}
+                      )))}
                     </p>
                   )}
                   {topSkeptical.length > 0 && (
                     <p>
                       <span class="agents-drift-high">👎 最看空 (total &lt; 5):</span>{' '}
-                      {topSkeptical.map((r) => (
+                      {joinJsxLinks(topSkeptical.map((r) => (
                         <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener" class="agents-paper-link">{r.paperId}</a>
-                      )).reduce<any>((acc, el, i) => acc.concat(i > 0 ? [', '] : [], el), [])}
+                      )))}
                     </p>
                   )}
                 </div>
@@ -767,6 +773,7 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
           <p class="muted">
             <a href={`${base}/agents/${sessionId}/synthesis/`}>查看全部 {syntheses.length} 份 synthesis →</a>
           </p>
+        </section>
 
         <section class="agents-session-section">
           <h2>🔁 继续 / resume</h2>

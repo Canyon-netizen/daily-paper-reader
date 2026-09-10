@@ -22,7 +22,7 @@ import {
   ELO_K,
   ELO_INITIAL,
   PERSONAS_DEFAULT,
-  DEBATE_ROUNDS,
+  DEBATE_ROUNDS_DEFAULT,
   swissPairs,
   updateElo,
 } from '../lib/elo-debate';
@@ -416,7 +416,7 @@ export async function renderDebateStage(sessionId: string, ideas: DebateIdea[]):
   if (!cfg.enabled) return ideas;
 
   const personas = (cfg.personas && cfg.personas.length >= 3) ? cfg.personas : PERSONAS_DEFAULT;
-  const rounds = cfg.debate_rounds ?? DEBATE_ROUNDS;
+  const rounds = cfg.debate_rounds ?? DEBATE_ROUNDS_DEFAULT;
   const maxIdeas = cfg.debate_max_ideas ?? DEBATE_MAX_IDEAS;
 
   const collected: MatchResult[] = [];
@@ -445,7 +445,7 @@ export const __testing__ = {
   runDebateStage,
   PERSONAS_DEFAULT,
   DEBATE_MAX_IDEAS,
-  DEBATE_ROUNDS,
+  DEBATE_ROUNDS_DEFAULT,
   ELO_K,
   ELO_INITIAL,
   TOKENS_PER_MATCH_CALL,
