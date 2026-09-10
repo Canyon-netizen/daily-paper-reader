@@ -543,13 +543,18 @@ function buildLatexBibItem(e) {
 }
 
 /**
- * PAPER_LATEX_TEMPLATES — 4 个 LaTeX 模板。每个返回对象结构:
+ * PAPER_LATEX_TEMPLATES — 9 个 LaTeX 模板。每个返回对象结构:
  *   { preamble: string[], titleBlock: string[], compileHint: string, bibStyle: 'thebibliography' }
  *
  * article       标准 LaTeX article class (iter #61 默认)
  * acmart        ACM Master Article Templates (sigconf 单栏会议)
  * ieeeconf      IEEE conference proceedings (IEEEtran)
  * iclr2026      ICLR 2026 conference (占位模板 — iclr_conference.sty)
+ * neurips       NeurIPS 2024 (iter #65 占位模板 — neurips_2024.sty)
+ * acl           ACL (iter #65 占位模板 — acl.sty + acl_natbib.sty)
+ * llncs         Springer LNCS (iter #67 占位模板 — llncs.cls)
+ * aaai          AAAI (iter #67 占位模板 — aaai24.sty 或当前年)
+ * ijcai         IJCAI (iter #67 占位模板 — ijcai24.sty 或当前年)
  */
 export const PAPER_LATEX_TEMPLATES = {
   article: {
@@ -695,6 +700,89 @@ export const PAPER_LATEX_TEMPLATES = {
     ],
     bibStyle: 'thebibliography',
     compileHint: '⚠️ 需先下载 ACL 模板(acl.sty + acl_natbib.sty);否则退回 --paper-format article',
+  },
+
+  // iter #67: 加 3 个会议/期刊模板(Springer LnCS / AAAI / IJCAI)。
+  // 同 neurips/acl 的占位模式 — 需要用户先下载官方 sty/class。
+
+  llncs: {
+    // Springer Lecture Notes in Computer Science (LNCS) — llncs.cls
+    // 来源:https://www.springer.com/gp/computer-science/lncs/conference-proceedings-guidelines
+    preamble: [
+      '% Springer LNCS 官方模板(llncs.cls)需从 Springer 作者指南下载',
+      '% https://www.springer.com/gp/computer-science/lncs/conference-proceedings-guidelines',
+      '% 下载后取消下一行注释,并把下面 \\documentclass{article} 注释掉',
+      '% \\documentclass{llncs}',
+      '\\documentclass{article}',  // 占位 fallback
+      '\\usepackage[utf8]{inputenc}',
+      '\\usepackage{amsmath,amssymb}',
+      '\\usepackage{graphicx}',
+      '% LnCS bibliography 通常配 splncs04.bst,但为单 pass pdflatex 走 thebibliography',
+      '% 如果 \\documentclass{llncs} 报"File not found",',
+      '% 按上方链接下载 cls 文件,或退回 --paper-format article',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop \\and DPR Lab}',
+      '\\institute{DPR Lab \\email{dpr@example.org}}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: '⚠️ 需先下载 Springer LNCS 模板(llncs.cls);否则退回 --paper-format article',
+  },
+
+  aaai: {
+    // AAAI conference — aaai24.sty (year-specific sty,这里用占位 aaai24)
+    // 来源:https://aaai.org/conference/aaai-26/aaai-26-call-for-papers/ (各年)
+    preamble: [
+      '% AAAI 官方模板(aaai24.sty 或当前年份的 .sty)需从 AAAI Author Kit 下载',
+      '% https://aaai.org/conference/aaai-26/aaai-26-call-for-papers/',
+      '% 下载后取消下一行注释,并把下面 \\documentclass{article} 注释掉',
+      '% \\documentclass[letterpaper]{article}',
+      '\\documentclass{article}',  // 占位 fallback
+      '\\usepackage{aaai24}',  // 占位 — 年份会变,真用时改成当前年
+      '\\usepackage[utf8]{inputenc}',
+      '\\usepackage{amsmath,amssymb}',
+      '\\usepackage{graphicx}',
+      '% AAAI 推荐 natbib,这里为单 pass pdflatex 走 thebibliography',
+      '% 如果 \\usepackage{aaai24} 报"File not found",',
+      '% 按上方链接下载 sty 文件,或退回 --paper-format article',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop}',
+      '\\affiliation{DPR Lab}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: '⚠️ 需先下载 AAAI 模板(aaai24.sty 或当前年);否则退回 --paper-format article',
+  },
+
+  ijcai: {
+    // IJCAI conference — ijcai24.sty (year-specific sty)
+    // 来源:https://www.ijcai.org/authors (各年)
+    preamble: [
+      '% IJCAI 官方模板(ijcai24.sty 或当前年份的 .sty)需从 IJCAI Author Kit 下载',
+      '% https://www.ijcai.org/authors',
+      '% 下载后取消下一行注释,并把下面 \\documentclass{article} 注释掉',
+      '% \\documentclass{article}',
+      '\\documentclass{article}',  // 占位 fallback
+      '\\usepackage{ijcai24}',  // 占位 — 年份会变,真用时改成当前年
+      '\\usepackage[utf8]{inputenc}',
+      '\\usepackage{amsmath,amssymb}',
+      '\\usepackage{graphicx}',
+      '% IJCAI 推荐 natbib,这里为单 pass pdflatex 走 thebibliography',
+      '% 如果 \\usepackage{ijcai24} 报"File not found",',
+      '% 按上方链接下载 sty 文件,或退回 --paper-format article',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop}',
+      '\\affiliation{DPR Lab}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: '⚠️ 需先下载 IJCAI 模板(ijcai24.sty 或当前年);否则退回 --paper-format article',
   },
 };
 

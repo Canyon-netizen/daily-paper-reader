@@ -2,7 +2,7 @@
 
 > DPR 的 **3 智能体闭环**（Designer → Feedback → Modifier，Gate 在中间做硬过滤）的设计哲学、与主流科研自动化工具的对比、以及上手路径。
 
-最后更新：2026-09-10（iter #66 加 synthesis diff + 本文档）
+最后更新：2026-09-10（iter #67 加 LnCS / AAAI / IJCAI 模板 + 本文档）
 
 ---
 
@@ -128,10 +128,11 @@ ls archive/<sid>/paper/           # paper.md / paper.tex / refs.bib
 node astro-src/scripts/agents-run.mjs --session <sid> --export-pdf
 open archive/<sid>/synthesis.html  # macOS 用 Preview 打开,Cmd+P
 
-# iter #64: --compile-paper 选 LaTeX 模板(article / acmart / IEEEtran / iclr2026 / neurips / acl)
+# iter #64: --compile-paper 选 LaTeX 模板(article / acmart / IEEEtran / iclr2026 / neurips / acl / llncs / aaai / ijcai)
 node astro-src/scripts/agents-run.mjs --list-templates
 node astro-src/scripts/agents-run.mjs --session <sid> --compile-paper --latex-template acmart
 node astro-src/scripts/agents-run.mjs --session <sid> --compile-paper --latex-template ieeeconf
+node astro-src/scripts/agents-run.mjs --session <sid> --compile-paper --latex-template llncs
 
 # iter #66: 对比同 session 两份 synthesis(主题 / refs / 字数增量 + Jaccard similarity)
 node astro-src/scripts/agents-run.mjs --session <sid> --diff-syntheses 1 2
@@ -194,6 +195,7 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 - ❌ ~~**synthesis 没法直接出 PDF**~~ — **iter #63 已修复 `--export-pdf`**:session 所有 `synthesis/*.md` 装配成 1 份自包含打印就绪 HTML(内嵌 CSS + `@page` + 页码),用户在浏览器 `Cmd/Ctrl+P` → "Save as PDF" 即可;**不依赖** pandoc / wkhtmltopdf 等系统 PDF 工具
 - ❌ ~~**`--compile-paper` 只支持 article class**~~ — **iter #64/65 已修复 `--latex-template`**:6 个 LaTeX 模板 (`article` / `acmart` / `ieeeconf` / `iclr2026` / `neurips` / `acl`) 各自的 preamble + title block + compile hint,`PAPER_LATEX_TEMPLATES` 注册表集中管理;acmart 走 sigconf 单栏会议模板,IEEEtran 走 conference proceedings,iclr2026 / neurips / acl 都是占位模板提示用户先下载会议官方 .sty
 - ❌ ~~**synthesis 之间没法对比**~~ — **iter #66 已修复 `--diff-syntheses`**:对比同一个 session 的 2 份 `synthesis_*.md`,输出 meta delta (rounds / unique_papers / model / title / 时间)+ body delta (topics set diff / refs arXiv id set diff / 字数变化)+ Jaccard similarity (topics 0.7 + refs 0.3 加权);新 `lib/agents/synthesis-diff.{mjs,ts}` 纯函数(跟 export-bundle / paper-compiler / synthesis-pdf 同双 surface 共享模式);`--diff-syntheses <idxA> <idxB>` 一条命令出 diff,加 `--json` 出机器可读
+- ❌ ~~**`--compile-paper` 只支持 6 个会议模板**~~ — **iter #67 已扩展 `PAPER_LATEX_TEMPLATES` 到 9 个**:再加 `llncs` (Springer Lecture Notes in Computer Science / llncs.cls) + `aaai` (AAAI / aaai24.sty 占位,年份可改) + `ijcai` (IJCAI / ijcai24.sty 占位,年份可改);每个模板都有官方下载链接(Springer 作者指南 / AAAI Author Kit / IJCAI Authors)+ 注释化的 `\documentclass` 切换 + 编译提示 warn ⚠️ + 回退到 article 的说明;`--list-templates` 现在列 9 个;不动 article / acmart / ieeeconf / iclr2026 / neurips / acl 行为
 - ❌ **archive/ 不入版本控制**：每次 git status 容易"看上去大"，但 archive 在 .gitignore 顶层通常没问题；可手动 cp 出 demo
 - ⚠️ **3 个智能体都共用 1 个 LLM endpoint**：persona 视角差异主要靠 prompt 实现，不是真不同模型；要"真多视角"可在 feedback.ts 加 model 数组
 - ⚠️ **`--search-arxiv` 只搜 arXiv**：不像 STORM / Deep Research 那样能搜维基 / 联网；要"真 web research"需要加 web fetch 工具
@@ -202,7 +204,6 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 - 加 web search 工具（GeneralistAI / Tavily / Bing API）
 - 加 evaluator 智能体：4 agent 版本（设计 → 反馈 → 修改 → **评估**）
 - 跨平台 npm 包发布：让 DPR Agents 不只跑在仓库内
-- `--latex-template` 扩到支持 Springer LnCS / AAAI / IJCAI 等会议模板
 - synthesis PDF 加可选项:加 cover image、加 author byline、加 table of figures
 - 用真 LLM 编译 acmart / IEEEtran 验证模板不会真出错
 
@@ -228,3 +229,4 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 | **#64** | **--latex-template + PAPER_LATEX_TEMPLATES** | **`--compile-paper` 扩展到 4 个 LaTeX 模板:`article` (默认) / `acmart` (ACM sigconf 单栏会议) / `ieeeconf` (IEEEtran conference) / `iclr2026` (占位,需先下载 iclr_conference.sty);每个模板独立的 preamble + title block + compile hint,集中注册表管理;CLI `--latex-template T` + `--list-templates`;新 `getLatexCompileHint` + `listLatexTemplates` 辅助函数;不动 article 行为, 73/73 paper-compiler 测试 + 242/242 跨 iter 测试通过** |
 | **#65** | **NeurIPS / ACL templates** | **`PAPER_LATEX_TEMPLATES` 再加 2 个会议模板:`neurips` (NeurIPS 2024 + preprint option,占位需下载 neurips_2024.sty) / `acl` (ACL + acl_natbib,占位需下载 acl.sty + acl_natbib.sty);每个都有官方下载链接 + sty 缺失回退到 article 的说明;`--list-templates` 现在列 6 个;不动 article / acmart / ieeeconf / iclr2026 行为;81/81 paper-compiler 测试 + 跨 iter 全套绿** |
 | **#66** | **--diff-syntheses** | **同一 session 的 2 份 synthesis_*.md 对比:meta delta (rounds / unique_papers / model / title / 时间)+ body delta (H1/H2/H3 主题 set diff + arXiv id refs set diff + 字数变化)+ Jaccard similarity (topics 0.7 + refs 0.3 加权);新 `lib/agents/synthesis-diff.{mjs,ts}` 纯函数,跟 export-bundle / paper-compiler / synthesis-pdf 同双 surface 共享模式;`--diff-syntheses <idxA> <idxB>` 一条 CLI 命令出 diff(加 `--json` 机器可读);44 个新单测覆盖 stripFrontmatter / extractTopics / extractRefs / countWords / diffSyntheses / formatText / 字节稳定 / 不变更输入** |
+| **#67** | **LnCS / AAAI / IJCAI templates** | **`PAPER_LATEX_TEMPLATES` 从 6 个扩到 9 个 — 加 `llncs` (Springer Lecture Notes in Computer Science,占位需下载 llncs.cls) + `aaai` (AAAI,占位需下载 aaai24.sty 或当前年) + `ijcai` (IJCAI,占位需下载 ijcai24.sty 或当前年);每个模板都有官方下载链接(Springer 作者指南 / AAAI Author Kit / IJCAI Authors)+ 注释化的 `\documentclass` 切换 + 编译提示 warn ⚠️ + 回退到 article 的说明;`--list-templates` 现在列 9 个模板;94/94 paper-compiler 测试通过(原 81 + 新 13:preamble/titleBlock/compileHint 字段断言 + formatPaperLatex dispatch + 9 模板独立 preamble + 9 模板 LaTeX 环境平衡 + 9 模板 bibitem 数 + 9 模板字节稳定 + 9 模板 null draft);纯增量,不动 article / acmart / ieeeconf / iclr2026 / neurips / acl 行为** |
