@@ -1,0 +1,393 @@
+---
+// /agents/standup.astro — iter #77:daily standup dashboard
+//
+// 入口式页面,用户每次打开 /agents/standup/ 就能看到:
+//   1. 最近 7 天活跃的 sessions(按 createdAt / 最新 round 时间排序)
+//   2. 推荐的 next actions — 基于 evaluator 的 score + insights 数据,
+//      自动列出"该补 round 了" / "改收敛了" / "可以收尾了" 3 类建议
+//   3. 最近 synthesis 的"下一步建议"摘要 — 一键跳到 new-session 复用
+//   4. 全局快捷入口 — 新建 / 自治 / coverage / insights / 等
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildEvaluationReport } from '../../lib/agents/evaluator.mjs';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionData {
+  sessionId: string;
+  meta: any;
+  roundCount: number;
+  lastRoundAt: number;
+  synthesisCount: number;
+  totalTokens: number;
+  appliedCount: number;
+  promotedCount: number;
+  proposalCount: number;
+  recentSynthesisNextSteps: string[];
+  evalReport: ReturnType<typeof buildEvaluationReport> | null;
+}
+
+async function loadSession(sid: string): Promise<SessionData | null> {
+  const dir = join(process.cwd(), 'archive', sid);
+  const metaPath = join(dir, 'meta.json');
+  if (!existsSync(metaPath)) return null;
+  let meta: any = null;
+  try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { return null; }
+
+  let rounds: any[] = [];
+  let lastRoundAt = 0;
+  let totalTokens = 0;
+  let promotedCount = 0;
+  let appliedCount = 0;
+  let proposalCount = 0;
+  try {
+    const files = (await readdir(join(dir, 'rounds')))
+      .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+    for (const f of files) {
+      try {
+        const r = JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8'));
+        rounds.push(r);
+        const fa = Number(r?.finished_at ?? 0);
+        if (fa > lastRoundAt) lastRoundAt = fa;
+        totalTokens += Number(r?.feedback?.total_tokens ?? 0);
+        promotedCount += Array.isArray(r?.gate?.promoted) ? r.gate.promoted.length : 0;
+        appliedCount += Array.isArray(r?.modifier?.applied) ? r.modifier.applied.length : 0;
+        proposalCount += Array.isArray(r?.designer?.proposals) ? r.designer.proposals.length : 0;
+      } catch { /* skip */ }
+    }
+  } catch { /* */ }
+
+  let synthesisCount = 0;
+  const recentSynthesisNextSteps: string[] = [];
+  try {
+    const sdir = join(dir, 'synthesis');
+    const sfiles = (await readdir(sdir)).filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+    synthesisCount = sfiles.length;
+    // 取最新一份的"下一步建议"
+    if (sfiles.length > 0) {
+      const last = sfiles[sfiles.length - 1];
+      const raw = await readFile(join(sdir, last), 'utf8');
+      const section = raw.split(/^##\s+下一步建议/m)[1] ?? '';
+      const nextH2 = section.indexOf('\n## ');
+      const body = nextH2 === -1 ? section : section.slice(0, nextH2);
+      const bullets = body.match(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)(.+)$/gm) ?? [];
+      for (const b of bullets.slice(0, 3)) {
+        const text = b.replace(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)/, '').trim();
+        if (text && text.length < 200 && !/\(stub\)|LLM 未配置/i.test(text)) {
+          recentSynthesisNextSteps.push(text);
+        }
+      }
+    }
+  } catch { /* */ }
+
+  // 展平 round 给 evaluator
+  const evaluatorRounds = rounds.flatMap((r) => {
+    const out: any[] = [];
+    for (const p of (r?.designer?.proposals ?? [])) {
+      out.push({
+        proposal: { evidence: { paperIds: p?.evidence?.paperIds ?? [] } },
+        actions: [],
+      });
+    }
+    for (const a of (r?.modifier?.applied ?? [])) {
+      out.push({
+        proposal: { evidence: { paperIds: a?.payload?.paperIds ?? [] } },
+        actions: [{ target: { arxivIds: a?.payload?.arxivIds ?? [] }, paperIds: a?.payload?.paperIds ?? [] }],
+      });
+    }
+    return out;
+  });
+
+  const deliverables = rounds.flatMap((r) =>
+    (r?.modifier?.applied ?? []).map((a: any) => ({ kind: a.kind, proposal_id: a.proposal_id })),
+  );
+
+  let evalReport: SessionData['evalReport'] = null;
+  try {
+    evalReport = buildEvaluationReport({
+      meta,
+      rounds: evaluatorRounds,
+      deliverables,
+      syntheses: [],
+      generatedAt: new Date().toISOString(),
+    });
+  } catch { /* */ }
+
+  return {
+    sessionId: sid,
+    meta,
+    roundCount: rounds.length,
+    lastRoundAt,
+    synthesisCount,
+    totalTokens,
+    appliedCount,
+    promotedCount,
+    proposalCount,
+    recentSynthesisNextSteps,
+    evalReport,
+  };
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionData[] = [];
+if (existsSync(root)) {
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { /* */ }
+  for (const sid of entries) {
+    const sd = await loadSession(sid);
+    if (sd) sessions.push(sd);
+  }
+}
+
+// 按 lastRoundAt + createdAt 综合活跃度排序
+sessions.sort((a, b) => {
+  const aTime = Math.max(a.lastRoundAt, Number(a.meta?.created_at ?? 0));
+  const bTime = Math.max(b.lastRoundAt, Number(b.meta?.created_at ?? 0));
+  return bTime - aTime;
+});
+
+const recentSessions = sessions.slice(0, 6);
+
+// 生成 next-action 建议
+interface NextAction {
+  emoji: string;
+  severity: 'urgent' | 'normal' | 'info';
+  sessionId: string;
+  text: string;
+  cta: { label: string; href: string }[];
+}
+const nextActions: NextAction[] = [];
+
+const now = Date.now();
+const DAY = 86_400_000;
+for (const s of sessions) {
+  const lastActivity = Math.max(s.lastRoundAt, Number(s.meta?.created_at ?? 0));
+  const daysSince = (now - lastActivity) / DAY;
+
+  // 1. 长期未活动(>3 天)
+  if (lastActivity > 0 && daysSince > 3 && s.roundCount > 0) {
+    nextActions.push({
+      emoji: '⏸️',
+      severity: 'urgent',
+      sessionId: s.sessionId,
+      text: `<code>${s.sessionId}</code> 已经 ${daysSince.toFixed(0)} 天没活动了(共 ${s.roundCount} round)`
+        + (s.recentSynthesisNextSteps[0] ? `,最新 synthesis 还在等 "${s.recentSynthesisNextSteps[0].slice(0, 50)}…"` : ''),
+      cta: [
+        { label: '▶ 继续 round', href: `${base}/agents/` },
+        { label: '📊 看 score', href: `${base}/agents/${s.sessionId}/score/` },
+      ],
+    });
+  }
+
+  // 2. score 高 → 建议收尾
+  if (s.evalReport && s.evalReport.scores.overall >= 0.7) {
+    nextActions.push({
+      emoji: '✨',
+      severity: 'info',
+      sessionId: s.sessionId,
+      text: `<code>${s.sessionId}</code> 综合分 ${(s.evalReport.scores.overall * 100).toFixed(0)}% — 接近饱和,可以收尾导出。`,
+      cta: [
+        { label: '📦 导出', href: `${base}/agents/${s.sessionId}/export/` },
+        { label: '📄 装配 paper', href: `${base}/agents/${s.sessionId}/compile/` },
+      ],
+    });
+  }
+
+  // 3. coverage 低 → 建议多拉论文
+  if (s.evalReport && s.evalReport.scores.coverage < 0.3 && s.roundCount >= 2) {
+    nextActions.push({
+      emoji: '📚',
+      severity: 'normal',
+      sessionId: s.sessionId,
+      text: `<code>${s.sessionId}</code> coverage ${(s.evalReport.scores.coverage * 100).toFixed(0)}% — 引用论文少,跑 --search-arxiv 或多几轮。`,
+      cta: [
+        { label: '➕ 加库', href: `${base}/agents/new-session/` },
+      ],
+    });
+  }
+}
+
+// limit + 排序(urgent 先)
+nextActions.sort((a, b) => {
+  const sev = { urgent: 0, normal: 1, info: 2 };
+  return sev[a.severity] - sev[b.severity];
+});
+const topActions = nextActions.slice(0, 8);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function ago(ts: number): string {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleString();
+}
+function shortGoal(g: string, n = 50): string {
+  if (!g) return '(无 goal)';
+  return g.length > n ? g.slice(0, n - 1) + '…' : g;
+}
+---
+
+<BaseLayout title="Standup · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / standup</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 每日 Standup <span class="muted" style="font-size:0.6em">(iter #77)</span></h1>
+      <p class="agents-sub">
+        聚合最近 7 天 session 活动 + 自动推荐 next actions。打开这一个页面,
+        就知道"哪个 session 该续"、"哪个该收尾"、"哪个该补论文"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 Next Actions</h2>
+      {topActions.length === 0 ? (
+        <p class="muted">没有特别推荐 — 一切进展顺利,或还没创建 session。</p>
+      ) : (
+        <ul class="agents-rec-list">
+          {topActions.map((a) => (
+            <li class={`agents-action-${a.severity}`}>
+              <span class="agents-rec-emoji">{a.emoji}</span>
+              <span>
+                <span set:html={a.text}></span>
+                {' '}
+                {a.cta.map((c) => (
+                  <a class="button small" href={c.href}>{c.label}</a>
+                ))}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📚 最近 session (前 {recentSessions.length})</h2>
+      {recentSessions.length === 0 ? (
+        <p class="muted">还没有任何 session(需要 archive/<code>&lt;sid&gt;</code>/meta.json)。<a href={`${base}/agents/new-session/`}>➕ 新建</a></p>
+      ) : (
+        <div class="agents-standup-grid">
+          {recentSessions.map((s) => (
+            <article class="agents-standup-card">
+              <h3>
+                <a href={`${base}/agents/${s.sessionId}/`}><code>{s.sessionId}</code></a>
+              </h3>
+              <p class="muted agents-standup-goal">{escapeHtml(shortGoal(s.meta?.goal ?? '', 80))}</p>
+              <div class="agents-standup-stats">
+                <span><strong>{s.roundCount}</strong> rounds</span>
+                <span><strong>{s.proposalCount}</strong> proposals</span>
+                <span><strong>{s.promotedCount}</strong> promoted</span>
+                <span><strong>{s.appliedCount}</strong> applied</span>
+                {s.evalReport && (
+                  <span class={`agents-standup-score-${s.evalReport.scores.overall >= 0.7 ? 'high' : s.evalReport.scores.overall >= 0.4 ? 'mid' : 'low'}`}>
+                    <strong>{(s.evalReport.scores.overall * 100).toFixed(0)}</strong>% overall
+                  </span>
+                )}
+              </div>
+              <p class="muted agents-standup-time">
+                <small>最后活动: {ago(s.lastRoundAt || Number(s.meta?.created_at ?? 0))}</small>
+              </p>
+              {s.recentSynthesisNextSteps.length > 0 && (
+                <details>
+                  <summary>💡 synthesis 下一步 ({s.recentSynthesisNextSteps.length})</summary>
+                  <ul>
+                    {s.recentSynthesisNextSteps.map((step) => (
+                      <li>{escapeHtml(step)}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              <div class="agents-standup-actions">
+                <a class="button small" href={`${base}/agents/${s.sessionId}/`}>查看</a>
+                <a class="button small" href={`${base}/agents/${s.sessionId}/score/`}>📊 score</a>
+                <a class="button small" href={`${base}/agents/${s.sessionId}/pipeline/`}>🔬 pipeline</a>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/new-session/`}>➕ 新建 session</a>
+        <a class="button" href={`${base}/agents/auto/`}>🤖 自治模式</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/coverage/`}>🗺️ Coverage</a>
+        <a class="button" href={`${base}/agents/pipelines/`}>🔬 Pipelines</a>
+        <a class="button" href={`${base}/agents/search/`}>🔎 Search</a>
+        <a class="button" href={`${base}/agents/bulk/`}>📦 Bulk</a>
+        <a class="button" href={`${base}/agents/compare/`}>📊 Compare</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-action-urgent {
+    border-left-color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.06);
+  }
+  .agents-action-normal {
+    border-left-color: #f59e0b !important;
+  }
+  .agents-action-info {
+    border-left-color: #10b981 !important;
+  }
+
+  .agents-standup-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 1rem;
+  }
+  .agents-standup-card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 1rem 1.1rem;
+    line-height: 1.5;
+  }
+  .agents-standup-card h3 { margin: 0 0 0.4rem 0; font-size: 1rem; }
+  .agents-standup-card h3 code { font-size: 0.9rem; }
+  .agents-standup-goal { font-size: 0.85rem; min-height: 2.5em; margin: 0.25rem 0 0.6rem; }
+  .agents-standup-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1rem;
+    font-size: 0.85rem;
+    margin: 0.5rem 0;
+  }
+  .agents-standup-stats span strong { color: #4f46e5; }
+  .agents-standup-score-high strong { color: #10b981; }
+  .agents-standup-score-mid strong { color: #f59e0b; }
+  .agents-standup-score-low strong { color: #ef4444; }
+  .agents-standup-time { margin: 0.4rem 0; }
+  .agents-standup-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .agents-standup-card details {
+    margin: 0.4rem 0;
+    font-size: 0.85rem;
+  }
+  .agents-standup-card details ul {
+    margin: 0.4rem 0 0 1rem;
+    padding: 0;
+  }
+</style>
