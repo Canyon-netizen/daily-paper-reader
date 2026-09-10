@@ -79,6 +79,28 @@ export { buildPdfBundle, formatPdfHtml, buildPdfFileName };
 import { diffSyntheses, formatSynthesisDiffText } from '../lib/agents/synthesis-diff.mjs';
 export { diffSyntheses, formatSynthesisDiffText };
 
+// Web search (iter #68):Designer/Future 用 general web search 工具,关闭与
+// Sakana/STORM/OpenAI Deep Research "tool use" 的第二大短板(第一是 --search-arxiv)。
+// 默认 stub mode(零依赖,零网络);有 WEB_SEARCH_API_KEY 时走 Tavily backend。
+// 浏览器页面也直接 import 同一份 lib,跟 export-bundle / paper-compiler /
+// synthesis-pdf / synthesis-diff 同双 surface 共享模式。
+import {
+  normalizeWebSearchUrl,
+  buildTavilyRequest,
+  parseTavilyResponse,
+  dedupeWebSearchResults,
+  filterWebSearchResults,
+  formatWebSearchText,
+} from '../lib/agents/web-search.mjs';
+export {
+  normalizeWebSearchUrl,
+  buildTavilyRequest,
+  parseTavilyResponse,
+  dedupeWebSearchResults,
+  filterWebSearchResults,
+  formatWebSearchText,
+};
+
 // ---------------------------------------------------------------------------
 // CLI 参数解析
 // ---------------------------------------------------------------------------
@@ -112,6 +134,18 @@ function parseArgs(argv) {
         i += positions.length;
       }
     }
+    else if (a === '--web-search') out.webSearch = argv[++i];
+    else if (a === '--web-max') out.webMax = Number(argv[++i]);
+    else if (a === '--include-domain') {
+      out.includeDomain = out.includeDomain ?? [];
+      out.includeDomain.push(argv[++i]);
+    }
+    else if (a === '--exclude-domain') {
+      out.excludeDomain = out.excludeDomain ?? [];
+      out.excludeDomain.push(argv[++i]);
+    }
+    else if (a === '--min-score') out.minScore = Number(argv[++i]);
+    else if (a === '--web-backend') out.webBackend = argv[++i];
     else if (a === '--leaderboard') out.leaderboard = true;
     else if (a === '--top') out.top = Number(argv[++i]);
     else if (a === '--type') out.type = argv[++i];
@@ -248,6 +282,17 @@ if (args.help) {
                      arXiv refs added/removed/shared, word count delta,
                      model/title changes, similarity score (Jaccard on
                      topics 0.7 + refs 0.3). JSON via --json.
+  --web-search "<QUERY>"
+                     General web search via Tavily (iter #68). Closes the
+                     second tool-use gap with Sakana/STORM/Deep Research.
+                     Requires WEB_SEARCH_API_KEY env var; without it,
+                     runs in stub mode (returns 0 results, no network).
+                     Filter with --include-domain D / --exclude-domain D
+                     (repeatable). Cap at --web-max N (default 5).
+                     Drop low-quality hits with --min-score N (0-1).
+                     Backend override: --web-backend stub|tavily.
+                     --json emits the raw { results, query, backend, stub }
+                     object instead of formatted text.
   --leaderboard      Cross-session aggregate: scan all archive/*/rounds/
                      and rank top proposal types by avg score / apply rate
                      + top Elo proposals + most-active sessions. Filter
@@ -2637,6 +2682,76 @@ async function main() {
     } catch (err) {
       console.error(`[error] ${err.message}`);
       process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.67: --web-search "<QUERY>" (iter #68)
+  if (args.webSearch != null) {
+    const query = String(args.webSearch ?? '').trim();
+    if (!query) {
+      console.error('[error] --web-search requires a non-empty query string');
+      process.exit(2);
+    }
+    const requestedBackend = args.webBackend ?? 'tavily';
+    const apiKey = process.env.WEB_SEARCH_API_KEY ?? '';
+    const useTavily = requestedBackend === 'tavily' && apiKey.length > 0;
+
+    const searchOpts = {
+      maxResults: args.webMax ?? 5,
+      includeDomains: Array.isArray(args.includeDomain) ? args.includeDomain : undefined,
+      excludeDomains: Array.isArray(args.excludeDomain) ? args.excludeDomain : undefined,
+      minScore: typeof args.minScore === 'number' ? args.minScore : 0,
+    };
+
+    /** @type {{ results: any[], query: string, backend: 'stub'|'tavily', stub: boolean, error: string|null }} */
+    let response;
+    if (useTavily) {
+      try {
+        const req = buildTavilyRequest(query, { ...searchOpts, apiKey });
+        const fetchResp = await fetch(req.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req.body),
+        });
+        if (!fetchResp.ok) {
+          response = {
+            query, backend: 'tavily', stub: false,
+            results: [],
+            error: `Tavily HTTP ${fetchResp.status}: ${fetchResp.statusText}`,
+          };
+        } else {
+          const json = await fetchResp.json();
+          const parsed = parseTavilyResponse(json);
+          const deduped = dedupeWebSearchResults(parsed);
+          const filtered = filterWebSearchResults(deduped, searchOpts);
+          response = { query, backend: 'tavily', stub: false, results: filtered, error: null };
+        }
+      } catch (err) {
+        response = {
+          query, backend: 'tavily', stub: false,
+          results: [],
+          error: `Tavily fetch failed: ${err?.message ?? err}`,
+        };
+      }
+    } else {
+      // stub mode — 没设 WEB_SEARCH_API_KEY 或显式 --web-backend stub
+      response = {
+        query, backend: 'stub', stub: true, results: [], error: null,
+      };
+      if (requestedBackend === 'tavily' && !apiKey) {
+        response.error = 'WEB_SEARCH_API_KEY not set — falling back to stub mode';
+      }
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(response, null, 2));
+    } else {
+      console.log(formatWebSearchText(response));
+      if (!useTavily && requestedBackend === 'tavily' && !apiKey) {
+        // 友好提示怎么启用真 backend
+        console.error('\nℹ  Set WEB_SEARCH_API_KEY (e.g. Tavily tvly-...) to enable real search.');
+      }
     }
     return;
   }
