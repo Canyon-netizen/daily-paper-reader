@@ -47,14 +47,26 @@ export { buildExportBundle, formatExportMarkdown };
 
 // 论文装配器(iter #61):同样是 lib/agents/ 里的纯函数,CLI 只负责 IO。
 // 把 3 智能体循环撒下的碎片 markdown 装配成 markdown + LaTeX + .bib 一整篇论文。
+// iter #64 扩展:支持 4 个 LaTeX 模板(article / acmart / IEEEtran / iclr2026)。
 import {
   DELIVERABLE_DIRS,
+  PAPER_LATEX_TEMPLATES,
   buildPaperDraft,
   formatPaperMarkdown,
   formatPaperLatex,
   formatBibtex,
+  listLatexTemplates,
+  getLatexCompileHint,
 } from '../lib/agents/paper-compiler.mjs';
-export { buildPaperDraft, formatPaperMarkdown, formatPaperLatex, formatBibtex };
+export {
+  buildPaperDraft,
+  formatPaperMarkdown,
+  formatPaperLatex,
+  formatBibtex,
+  PAPER_LATEX_TEMPLATES,
+  listLatexTemplates,
+  getLatexCompileHint,
+};
 
 // Synthesis → 打印就绪 HTML (iter #63)。生成自包含 HTML,
 // 用户在浏览器里 Cmd/Ctrl+P → "Save as PDF" 即得到 PDF。
@@ -111,6 +123,8 @@ function parseArgs(argv) {
       else { out.compilePaper = ''; } // 空字符串 = 默认目录
     }
     else if (a === '--paper-format') out.paperFormat = argv[++i];
+    else if (a === '--latex-template' || a === '--documentclass') out.latexTemplate = argv[++i];
+    else if (a === '--list-templates') out.listTemplates = true;
     else if (a === '--export-pdf') {
       // --export-pdf 可无参数(默认 archive/<sid>/synthesis.html),也可指定输出文件路径
       // 无参数 = 默认路径(单个 HTML 包含所有 synthesis)
@@ -185,6 +199,14 @@ if (args.help) {
                      loop now ends in a paper, not just scattered fragments.
   --paper-format F   With --compile-paper: latex | markdown | both
                      (default both).
+  --latex-template T | --documentclass T
+                     With --compile-paper: pick a LaTeX document class
+                     (iter #64 templates): article (default) | acmart |
+                     ieeeconf | iclr2026. Each emits a distinct preamble
+                     + title block tuned for that venue.
+  --list-templates  Print the list of supported LaTeX templates with
+                     their compile hints and exit. Useful for picking
+                     --latex-template when scripting.
   --export-pdf [PATH]
                      Assemble all synthesis/*.md of one session into 1
                      self-contained print-ready HTML file (iter #63). Open
@@ -2544,6 +2566,17 @@ async function main() {
     return;
   }
 
+  // 模式 0.64: --list-templates (打印可用 LaTeX 模板,iter #64)
+  if (args.listTemplates) {
+    const list = listLatexTemplates();
+    console.log('📐 Available LaTeX templates (iter #64):');
+    for (const t of list) {
+      console.log(`  ${t.id.padEnd(12)}  ${t.preambleHead}`);
+      console.log(`  ${''.padEnd(12)}  compile: ${t.compileHint}`);
+    }
+    return;
+  }
+
   // 模式 0.65: --compile-paper (session 碎片 → 一篇论文,iter #61)
   if (args.compilePaper !== undefined) {
     const sessionId = args.project ?? args.session;
@@ -2573,9 +2606,16 @@ async function main() {
         await writeFile(p, formatPaperMarkdown(draft), 'utf8');
         written.push(p);
       }
+      // iter #64: --latex-template 选择具体模板
+      const tmplName = args.latexTemplate ?? 'article';
+      if (!PAPER_LATEX_TEMPLATES[tmplName]) {
+        console.error(`[error] unknown --latex-template "${tmplName}". Available: ${Object.keys(PAPER_LATEX_TEMPLATES).join(', ')}`);
+        process.exit(2);
+      }
+      const compileHint = getLatexCompileHint(tmplName);
       if (format === 'latex' || format === 'both') {
         const tex = join(outDir, 'paper.tex');
-        await writeFile(tex, formatPaperLatex(draft), 'utf8');
+        await writeFile(tex, formatPaperLatex(draft, { documentclass: tmplName }), 'utf8');
         written.push(tex);
         const bib = join(outDir, 'refs.bib');
         await writeFile(bib, formatBibtex(draft.bibliography), 'utf8');
@@ -2585,6 +2625,7 @@ async function main() {
       const s = draft.stats;
       console.log(`📄 Compiled paper for session ${sessionId} → ${outDir}/`);
       for (const p of written) console.log(`   ✍️  ${p}`);
+      console.log(`   template: ${tmplName}`);
       console.log(`   ${s.rounds} rounds · ${s.deliverables} deliverables · ${s.sectionsWithContent}/${draft.sections.length} sections filled · ${s.references} references`);
       const emptySections = draft.sections.filter((x) => x.empty).map((x) => x.title);
       if (emptySections.length) {
@@ -2592,7 +2633,7 @@ async function main() {
         console.log('      (跑更多轮让 Modifier 产出对应 deliverable,或用 --promote --write-deliverable 手动补)');
       }
       if (format !== 'markdown') {
-        console.log(`   编译:cd ${outDir} && pdflatex paper.tex   (正文含中文时改用 xelatex + 取消 ctex 注释)`);
+        console.log(`   编译:${compileHint}`);
       }
     } catch (err) {
       console.error(`[error] ${err.message}`);

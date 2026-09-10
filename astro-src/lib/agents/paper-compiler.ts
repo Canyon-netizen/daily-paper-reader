@@ -137,6 +137,13 @@ export interface StripFrontmatterResult {
   body: string;
 }
 
+/** LaTeX 模板信息(id / 编译提示 / preamble 首行) */
+export interface LatexTemplateInfo {
+  id: string;
+  compileHint: string;
+  preambleHead: string;
+}
+
 // ---------------------------------------------------------------------------
 // 运行时:从 .mjs 镜像 re-export(单一真相源,无 drift 风险)
 // ---------------------------------------------------------------------------
@@ -144,6 +151,7 @@ export interface StripFrontmatterResult {
 export {
   PAPER_SECTIONS,
   DELIVERABLE_DIRS,
+  PAPER_LATEX_TEMPLATES,
   stripFrontmatter,
   extractMarkdownSection,
   collectBibliography,
@@ -152,4 +160,6 @@ export {
   formatPaperMarkdown,
   escapeLatex,
   formatPaperLatex,
+  getLatexCompileHint,
+  listLatexTemplates,
 } from './paper-compiler.mjs';

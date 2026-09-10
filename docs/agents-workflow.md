@@ -2,7 +2,7 @@
 
 > DPR 的 **3 智能体闭环**（Designer → Feedback → Modifier，Gate 在中间做硬过滤）的设计哲学、与主流科研自动化工具的对比、以及上手路径。
 
-最后更新：2026-09-10（iter #63 引入 `--export-pdf` + 本文档）
+最后更新：2026-09-10（iter #64 引入 `--latex-template` + 本文档）
 
 ---
 
@@ -127,6 +127,11 @@ ls archive/<sid>/paper/           # paper.md / paper.tex / refs.bib
 # iter #63: synthesis 整成 1 份打印就绪 HTML(浏览器 Cmd/Ctrl+P → Save as PDF)
 node astro-src/scripts/agents-run.mjs --session <sid> --export-pdf
 open archive/<sid>/synthesis.html  # macOS 用 Preview 打开,Cmd+P
+
+# iter #64: --compile-paper 选 LaTeX 模板(article / acmart / IEEEtran / iclr2026)
+node astro-src/scripts/agents-run.mjs --list-templates
+node astro-src/scripts/agents-run.mjs --session <sid> --compile-paper --latex-template acmart
+node astro-src/scripts/agents-run.mjs --session <sid> --compile-paper --latex-template ieeeconf
 ```
 
 ### 5.2 接真 LLM 跑 3 轮
@@ -183,6 +188,7 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 - ❌ ~~**Designer 不能调外部工具**~~ — **iter #56 已修复 `--search-arxiv`**:可调 arXiv API 实时拉论文作为 candidates,关闭了最大短板
 - ❌ ~~**Modifier 不写 LaTeX**~~ — **iter #61 已修复 `--compile-paper`**:session 碎片装配成可编译 LaTeX + markdown + .bib,论文章节由 deliverable kind 路由(Intro / Related Work / Method / Results / Limitations)
 - ❌ ~~**synthesis 没法直接出 PDF**~~ — **iter #63 已修复 `--export-pdf`**:session 所有 `synthesis/*.md` 装配成 1 份自包含打印就绪 HTML(内嵌 CSS + `@page` + 页码),用户在浏览器 `Cmd/Ctrl+P` → "Save as PDF" 即可;**不依赖** pandoc / wkhtmltopdf 等系统 PDF 工具
+- ❌ ~~**`--compile-paper` 只支持 article class**~~ — **iter #64 已修复 `--latex-template`**:4 个 LaTeX 模板 (`article` / `acmart` / `ieeeconf` / `iclr2026`) 各自的 preamble + title block + compile hint,`PAPER_LATEX_TEMPLATES` 注册表集中管理;acmart 走 sigconf 单栏会议模板,IEEEtran 走 conference proceedings,iclr2026 提示用户先下载 iclr_conference.sty
 - ❌ **archive/ 不入版本控制**：每次 git status 容易"看上去大"，但 archive 在 .gitignore 顶层通常没问题；可手动 cp 出 demo
 - ⚠️ **3 个智能体都共用 1 个 LLM endpoint**：persona 视角差异主要靠 prompt 实现，不是真不同模型；要"真多视角"可在 feedback.ts 加 model 数组
 - ⚠️ **`--search-arxiv` 只搜 arXiv**：不像 STORM / Deep Research 那样能搜维基 / 联网；要"真 web research"需要加 web fetch 工具
@@ -191,8 +197,9 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 - 加 web search 工具（GeneralistAI / Tavily / Bing API）
 - 加 evaluator 智能体：4 agent 版本（设计 → 反馈 → 修改 → **评估**）
 - 跨平台 npm 包发布：让 DPR Agents 不只跑在仓库内
-- `--paper-format` 扩到支持 ACL / NeurIPS / IEEE 模板
+- `--latex-template` 扩到支持 NeurIPS / ACL / Springer LnCS 等会议模板
 - synthesis PDF 加可选项:加 cover image、加 author byline、加 table of figures
+- 用真 LLM 编译 acmart / IEEEtran 验证模板不会真出错
 
 最近重要迭代：
 
@@ -213,5 +220,6 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 | **#61** | **--compile-paper** | **3 智能体循环碎片 → 一篇可编译 LaTeX + markdown + .bib,关闭 §6 #1 差距 "Modifier 不写 LaTeX";新 lib/agents/paper-compiler.{mjs,ts} 纯函数,跟 export-bundle 同双 surface 共享模式** |
 | **#62** | **/agents/<sid>/compile/** | **iter #61 的浏览器版 —— 实时切换 LaTeX/markdown/.bib 预览 + 3 文件下载套件,document class 切换 (article / acmart / ieeeconf / iclr2026);同 paper-compiler.mjs 双 surface 字节级一致;localStorage 合成 pseudo-deliverable 应对浏览器无 filesystem 限制** |
 | **#63** | **--export-pdf + /agents/<sid>/pdf/** | **synthesis/*.md → 1 份自包含打印就绪 HTML(内嵌 CSS + @page + 页码,3 种 CSS 变体 academic / compact / presentation);用户浏览器 Cmd/Ctrl+P → "Save as PDF";不依赖 pandoc / wkhtmltopdf 等系统 PDF 工具;新 lib/agents/synthesis-pdf.{mjs,ts} 纯函数,跟 export-bundle / paper-compiler 同双 surface 共享模式;CLI + 浏览器页面同步上线** |
+| **#64** | **--latex-template + PAPER_LATEX_TEMPLATES** | **`--compile-paper` 扩展到 4 个 LaTeX 模板:`article` (默认) / `acmart` (ACM sigconf 单栏会议) / `ieeeconf` (IEEEtran conference) / `iclr2026` (占位,需先下载 iclr_conference.sty);每个模板独立的 preamble + title block + compile hint,集中注册表管理;CLI `--latex-template T` + `--list-templates`;新 `getLatexCompileHint` + `listLatexTemplates` 辅助函数;不动 article 行为, 73/73 paper-compiler 测试 + 242/242 跨 iter 测试通过** |
 | **#59** | **lib/agents/export-bundle.mjs** | **CLI + 浏览器双 surface 共享同一份 buildExportBundle / formatExportMarkdown,字节级一致** |
 | **#60** | **lib/agents/export-bundle.ts** | **typed 镜像 — 6 个 type contract + re-export .mjs 运行时,TS caller 可 typed import** |

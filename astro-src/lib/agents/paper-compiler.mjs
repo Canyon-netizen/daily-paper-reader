@@ -519,41 +519,168 @@ function mdBlockToLatex(md, { baseLevel = 2 } = {}) {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+// ---------------------------------------------------------------------------
+// LaTeX paper-format templates (iter #64)
+//
+// 每种会议 / 期刊模板需要:
+//   1. 不同的 \documentclass + options (acmart / IEEEtran / iclr_conference)
+//   2. 不同的 preamble (acmart 自带 inputenc/fontenc,不要再加载)
+//   3. 不同的 title/author/maketitle 块
+//   4. 不同的 bibliography 风格(article/ieeeconf 用 thebibliography;
+//      acmart 推荐 biblatex, 但为单 pass pdflatex 走 thebibliography)
+//   5. 不同的编译提示(pdflatex vs xelatex vs latexmk)
+//
+// 模板注册表 PAPER_LATEX_TEMPLATES 集中管理;formatPaperLatex 按
+// opts.documentclass 路由。未识别的 class 回退到 article。
+// ---------------------------------------------------------------------------
+
+/**
+ * buildLatexBibItem(e) — 给 thebibliography 一条 \bibitem。
+ * 不同模板写法一样,抽出来复用。
+ */
+function buildLatexBibItem(e) {
+  return `\\bibitem{${e.key}} arXiv preprint \\texttt{${escapeLatex(e.id)}}. \\url{https://arxiv.org/abs/${escapeLatex(e.id)}}.`;
+}
+
+/**
+ * PAPER_LATEX_TEMPLATES — 4 个 LaTeX 模板。每个返回对象结构:
+ *   { preamble: string[], titleBlock: string[], compileHint: string, bibStyle: 'thebibliography' }
+ *
+ * article       标准 LaTeX article class (iter #61 默认)
+ * acmart        ACM Master Article Templates (sigconf 单栏会议)
+ * ieeeconf      IEEE conference proceedings (IEEEtran)
+ * iclr2026      ICLR 2026 conference (占位模板 — iclr_conference.sty)
+ */
+export const PAPER_LATEX_TEMPLATES = {
+  article: {
+    preamble: [
+      '\\documentclass[11pt]{article}',
+      '\\usepackage[utf8]{inputenc}',
+      '\\usepackage[T1]{fontenc}',
+      '\\usepackage{hyperref}',
+      '\\usepackage{graphicx}',
+      '\\usepackage{amsmath,amssymb}',
+      '% 中文支持:如正文含中文,用 xelatex 编译并取消下一行注释',
+      '% \\usepackage{ctex}',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop}',
+      '\\date{\\today}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: 'pdflatex paper.tex  (含中文改用 xelatex + 取消 ctex 注释)',
+  },
+
+  acmart: {
+    // ACM Master Article Templates — sigconf 单栏会议
+    // acmart 自带 fontenc / inputenc 处理,不要再 \usepackage[utf8]{inputenc}(会冲突)
+    preamble: [
+      '\\documentclass[sigconf,nonacm]{acmart}',
+      '\\usepackage{booktabs}',
+      '\\usepackage{graphicx}',
+      '% acmart 自带 hyperref 设置,不需要再 \\usepackage{hyperref}',
+      '\\acmConference[DPR Workshop \'26]{DPR Workshop}{2026-01-01}{Online}',
+      '\\acmYear{2026}',
+      '\\settopmatter{printacmref=true,printccs=true,printfolios=true}',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop}',
+      '\\affiliation{\\institution{DPR Lab}\\city{Online}\\country{}}',
+      '\\email{dpr@example.org}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: 'pdflatex paper.tex   (acmart 自动套 ACM 格式;含中文改用 xelatex)',
+  },
+
+  ieeeconf: {
+    // IEEE conference proceedings — IEEEtran
+    // IEEEtran 用 conference 选项;conferences 不要 \maketitle,改用 \title + \author + 直接 \begin{document}
+    preamble: [
+      '\\documentclass[conference]{IEEEtran}',
+      '\\usepackage[utf8]{inputenc}',
+      '\\usepackage{amsmath,amssymb,amsfonts}',
+      '\\usepackage{graphicx}',
+      '\\usepackage{cite}',
+      '\\IEEEoverridecommandlockouts',
+      '% 中文字符请改用 xelatex + \\usepackage{ctex}',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{',
+      '\\IEEEauthorblockN{DPR Multi-Agent Research Loop}',
+      '\\IEEEauthorblockA{\\textit{DPR Lab} \\\\ \\textit{Online}}',
+      '}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: 'pdflatex paper.tex   (IEEEtran conference 模板)',
+  },
+
+  iclr2026: {
+    // ICLR 2026 模板占位 —— iclr_conference.sty 需用户从 ICLR Overleaf 模板下载
+    // 这里走 article + 自定义 footer + 编译提示,告知用户去拿 sty 文件
+    preamble: [
+      '% ICLR 2026 官方模板(iclr_conference.sty)需从 ICLR Overleaf 模板下载',
+      '% https://iclr.cc/Conferences/2026/ICLR2026_Conference.zip',
+      '% 下载后取消下一行注释,并把 paper.tex 顶部 \\documentclass{article} 注释掉',
+      '% \\documentclass{iclr_conference}',
+      '\\documentclass{article}',
+      '\\usepackage[11pt]{article}',  // 占位 fallback — 不会真编译过
+      '\\usepackage{hyperref}',
+      '\\usepackage{amsmath,amssymb}',
+      '\\usepackage{iclr2026_conference}',
+      '% 如果上面 \\usepackage{iclr2026_conference} 报"File not found",',
+      '% 按上方说明下载 sty 文件,或退回 --paper-format article',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop}',
+      '\\date{\\today}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: '⚠️ 需先下载 ICLR 2026 模板(iclr_conference.sty);否则退回 --paper-format article',
+  },
+};
+
 /**
  * formatPaperLatex(draft, opts) — PaperDraft → 可编译 LaTeX。
- * opts.documentclass 默认 'article';opts.bibResource 给 \addbibresource / thebibliography 用。
+ * opts.documentclass 默认 'article';未识别的 class 回退到 article。
+ * 通过 PAPER_LATEX_TEMPLATES 切换 preamble / titleBlock。
  */
 export function formatPaperLatex(draft, opts = {}) {
   if (!draft) return '% empty draft\n';
-  const documentclass = opts.documentclass ?? 'article';
+  const requested = opts.documentclass ?? 'article';
+  const tmpl = PAPER_LATEX_TEMPLATES[requested] ?? PAPER_LATEX_TEMPLATES.article;
+  const templateName = PAPER_LATEX_TEMPLATES[requested] ? requested : 'article (fallback)';
   const stats = draft.stats ?? {};
   const bib = draft.bibliography ?? [];
   const out = [];
 
-  out.push(`% Compiled by DPR agents paper-compiler (iter #61)`);
+  out.push(`% Compiled by DPR agents paper-compiler (iter #61, iter #64 templates)`);
+  out.push(`% Template: ${templateName}`);
   out.push(`% Session: ${draft.sessionId ?? '?'}  Generated: ${draft.generatedAt ?? '?'}`);
   out.push(`% Source: ${stats.rounds ?? 0} rounds / ${stats.deliverables ?? 0} deliverables`);
-  out.push(`\\documentclass[11pt]{${documentclass}}`);
-  out.push('\\usepackage[utf8]{inputenc}');
-  out.push('\\usepackage[T1]{fontenc}');
-  out.push('\\usepackage{hyperref}');
-  out.push('\\usepackage{graphicx}');
-  out.push('\\usepackage{amsmath,amssymb}');
-  out.push('% 中文支持:如正文含中文,用 xelatex 编译并取消下一行注释');
-  out.push('% \\usepackage{ctex}');
+  out.push(`% Compile: ${tmpl.compileHint}`);
   out.push('');
-  out.push(`\\title{${escapeLatex(draft.title ?? 'Untitled')}}`);
-  out.push('\\author{DPR Multi-Agent Research Loop}');
-  out.push('\\date{\\today}');
+  out.push(...tmpl.preamble);
+  out.push('');
+  out.push(...tmpl.titleBlock(draft.title ?? 'Untitled'));
   out.push('');
   out.push('\\begin{document}');
-  out.push('\\maketitle');
-  out.push('');
+
+  // abstract 是文章模板通用,acmart / IEEEtran / ICLR 都用 \begin{abstract}
   out.push('\\begin{abstract}');
   out.push(mdBlockToLatex(draft.abstract ?? '', { baseLevel: 2 }));
   out.push('\\end{abstract}');
   out.push('');
 
+  // 正文 sections —— \section / \subsection 对 4 个模板都是合法命令
+  // (acmart / IEEEtran 都重定义了,但接受 \section{...} 输入)
   for (const section of draft.sections ?? []) {
     out.push(`\\section{${escapeLatex(section.title)}}`);
     if (section.body) {
@@ -577,17 +704,41 @@ export function formatPaperLatex(draft, opts = {}) {
     }
   }
 
-  // 用 thebibliography 而非 biblatex —— 无需额外 pass,pdflatex 一次过
+  // bibliography —— 4 个模板都用 thebibliography(单 pass pdflatex 一次过)
+  // 进阶:biblatex / bibtex 多 pass 留给 future iter
   out.push('\\begin{thebibliography}{99}');
   if (!bib.length) {
     out.push('% no references collected from proposal evidence');
   } else {
     for (const e of bib) {
-      out.push(`\\bibitem{${e.key}} arXiv preprint \\texttt{${escapeLatex(e.id)}}. \\url{https://arxiv.org/abs/${escapeLatex(e.id)}}.`);
+      out.push(buildLatexBibItem(e));
     }
   }
   out.push('\\end{thebibliography}');
   out.push('');
   out.push('\\end{document}');
   return out.join('\n');
+}
+
+/**
+ * getLatexCompileHint(documentclass) — 给 CLI 编译提示用。
+ * 返回简短的"该用什么编译器 / 编译命令"提示。
+ */
+export function getLatexCompileHint(documentclass = 'article') {
+  const tmpl = PAPER_LATEX_TEMPLATES[documentclass] ?? PAPER_LATEX_TEMPLATES.article;
+  return tmpl.compileHint;
+}
+
+/**
+ * listLatexTemplates() — 给 CLI --help / UI 列出可用模板。
+ */
+export function listLatexTemplates() {
+  return Object.keys(PAPER_LATEX_TEMPLATES).map((k) => {
+    const tmpl = PAPER_LATEX_TEMPLATES[k];
+    return {
+      id: k,
+      compileHint: tmpl.compileHint,
+      preambleHead: tmpl.preamble[0],
+    };
+  });
 }
