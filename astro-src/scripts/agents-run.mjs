@@ -79,6 +79,69 @@ export { buildPdfBundle, formatPdfHtml, buildPdfFileName };
 import { diffSyntheses, formatSynthesisDiffText } from '../lib/agents/synthesis-diff.mjs';
 export { diffSyntheses, formatSynthesisDiffText };
 
+// Evaluator (iter #69):4 agent 闭环的"评估"agent — 独立模式 --evaluate,
+// 读已有 archive/<sid>/ 产出 EvaluationReport(整体分 + 4 子分 + 各项明细)
+import {
+  buildEvaluationReport,
+  formatEvaluationReportText,
+  toJSON as toEvaluationJson,
+} from '../lib/agents/evaluator.mjs';
+export { buildEvaluationReport, formatEvaluationReportText, toEvaluationJson };
+
+// Pipeline (iter #70/71/72):研究全流程 7 stage 协调器 — ideation → lit review
+// → experiment → draft → review → revise → export。CLI 走 --full-pipeline,
+// 浏览器走 /agents/<sid>/pipeline/。两者 import 同一份 lib/agents/pipeline.mjs。
+import {
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_LABELS,
+  PIPELINE_GATES,
+  STAGE_TO_PROPOSAL_TYPE,
+  STAGE_DELIVERABLE_DIRS,
+  buildPipelinePlan,
+  evaluateStageGate,
+  advancePipeline,
+  runPipelineStage,
+  runPipeline,
+  formatPipelinePlanText,
+  summarizePipeline,
+  toJSON as toPipelineJson,
+} from '../lib/agents/pipeline.mjs';
+export {
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_LABELS,
+  PIPELINE_GATES,
+  STAGE_TO_PROPOSAL_TYPE,
+  STAGE_DELIVERABLE_DIRS,
+  buildPipelinePlan,
+  evaluateStageGate,
+  advancePipeline,
+  runPipelineStage,
+  runPipeline,
+  formatPipelinePlanText,
+  summarizePipeline,
+  toPipelineJson,
+};
+
+// Reviewer (iter #71):paper-reviewer agent — 对草稿做 simulated peer review。
+// Pipeline stage 5 (p_simulate_peer_review) 内部调用。CLI 独立模式 --review-draft。
+import {
+  REVIEW_PERSONAS,
+  REVIEW_RECOMMENDATIONS,
+  reviewDraft,
+  formatReviewText as formatReviewVerdictText,
+  toJSON as toReviewJson,
+} from '../lib/agents/reviewer.mjs';
+export { REVIEW_PERSONAS, REVIEW_RECOMMENDATIONS, reviewDraft, formatReviewVerdictText, toReviewJson };
+
+// Reviser (iter #71):paper-reviser agent — 应用 reviewer 的 concerns 修订草稿。
+// Pipeline stage 6 (p_revise_paper) 内部调用。CLI 独立模式 --revise-draft。
+import {
+  reviseDraft,
+  formatRevisionText as formatRevisionVerdictText,
+  toJSON as toRevisionJson,
+} from '../lib/agents/reviser.mjs';
+export { reviseDraft, formatRevisionVerdictText, toRevisionJson };
+
 // Web search (iter #68):Designer/Future 用 general web search 工具,关闭与
 // Sakana/STORM/OpenAI Deep Research "tool use" 的第二大短板(第一是 --search-arxiv)。
 // 默认 stub mode(零依赖,零网络);有 WEB_SEARCH_API_KEY 时走 Tavily backend。
@@ -135,7 +198,31 @@ function parseArgs(argv) {
       }
     }
     else if (a === '--web-search') out.webSearch = argv[++i];
+    else if (a === '--evaluate') out.evaluate = true;
     else if (a === '--web-max') out.webMax = Number(argv[++i]);
+    else if (a === '--full-pipeline') {
+      // --full-pipeline [GOAL] — 研究全流程 7 stage 串行;无 GOAL 时从已有 --session
+      // 读 archive/<sid>/meta.json 的 goal
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.fullPipeline = next; i++; }
+      else { out.fullPipeline = ''; } // 空字符串 = 用 session goal
+    }
+    else if (a === '--pipeline-status') out.pipelineStatus = true;
+    else if (a === '--review-draft') {
+      // --review-draft <draft.md path> — 单跑 reviewer agent
+      out.reviewDraft = argv[++i];
+    }
+    else if (a === '--revise-draft') {
+      // --revise-draft <draft.md path> --review-json <review.json>
+      out.reviseDraft = argv[++i];
+    }
+    else if (a === '--review-json') out.reviewJson = argv[++i];
+    else if (a === '--skip-stages') {
+      // --skip-stages p_ideate_research_question,p_review_literature
+      const next = argv[++i];
+      if (next) out.skipStages = next.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    else if (a === '--start-stage-idx') out.startStageIdx = Number(argv[++i]);
     else if (a === '--include-domain') {
       out.includeDomain = out.includeDomain ?? [];
       out.includeDomain.push(argv[++i]);
@@ -293,6 +380,54 @@ if (args.help) {
                      Backend override: --web-backend stub|tavily.
                      --json emits the raw { results, query, backend, stub }
                      object instead of formatted text.
+  --evaluate           Run the Evaluator 4th agent (iter #69) on an
+                     existing session. Use with --session ID. Reads
+                     archive/<sid>/{meta,rounds,synthesis,<deliverables>}/
+                     and outputs:
+                       - aggregate overall score (0-1) + 4 sub-scores
+                         (coverage / alignment / consistency /
+                         synthesisCoverage)
+                       - coverage by ProposalType (proposed vs applied)
+                       - goal alignment per deliverable (token overlap)
+                       - references: shared arXiv ids between deliverables
+                         and synthesis, plus what's unique to each
+                       - contradiction markers (heuristic count of
+                         however / 但是 / 反之 / although etc.)
+                       - gate decision histogram
+                     Writes archive/<sid>/evaluation_NNN.{json,md} and
+                     prints a formatted summary to stdout. --json dumps
+                     the EvaluationReport object instead of text. No LLM
+                     call — pure local computation.
+  --full-pipeline [GOAL]
+                     End-to-end research pipeline (iter #70/71/72). Runs
+                     7 stages in order:
+                       0. p_ideate_research_question  (Designer → Proposal[])
+                       1. p_review_literature         (3-agent loop → literature review)
+                       2. p_design_experiment_plan    (3-agent loop → experiment plan)
+                       3. p_write_paper_draft         (3-agent loop → draft md)
+                       4. p_simulate_peer_review      (Reviewer agent → review md)
+                       5. p_revise_paper              (Reviser agent → revised draft)
+                       6. p_export_final_paper        (Paper-compiler → paper.md + .tex)
+                     Each stage has its own gate (minDeliverables +
+                     minTotalScore + minArxivRefs + requireForAdvance);
+                     a gate failure stops the pipeline with stoppedReason
+                     = 'gate_failed' and you can resume with
+                     --start-stage-idx N. Use --session ID to attach to an
+                     existing session (goal read from meta.json), or pass
+                     GOAL directly. --skip-stages p_X,p_Y to skip stages.
+                     Writes archive/<sid>/pipeline_<NNN>.{json,md}.
+  --pipeline-status   With --session ID: print latest pipeline_*.json +
+                     formatted progress (no LLM call, no writes).
+  --review-draft PATH Simulated peer review of one draft (iter #71). Reads
+                     the .md, strips frontmatter, extracts arxiv ids,
+                     calls Reviewer agent. Writes <basename>.review.{json,md}.
+  --revise-draft PATH --review-json REVIEW_JSON
+                     Apply a previously-produced review to the draft
+                     (iter #71). Calls Reviser agent, writes
+                     <basename>.revised.md + <basename>.revision-log.json.
+  --skip-stages LIST  Comma-separated stage names to skip (e.g.
+                     "p_ideate_research_question,p_review_literature").
+  --start-stage-idx N Resume pipeline from stage index N (0-6).
   --leaderboard      Cross-session aggregate: scan all archive/*/rounds/
                      and rank top proposal types by avg score / apply rate
                      + top Elo proposals + most-active sessions. Filter
@@ -2752,6 +2887,361 @@ async function main() {
         // 友好提示怎么启用真 backend
         console.error('\nℹ  Set WEB_SEARCH_API_KEY (e.g. Tavily tvly-...) to enable real search.');
       }
+    }
+    return;
+  }
+
+  // 模式 0.70: --full-pipeline (iter #70/71/72):研究全流程 7 stage 串行
+  //   ideation → lit review → experiment → draft → review → revise → export
+  // 与 Sakana AI Scientist v2 / STORM 的多阶段 pipeline 对齐;每阶段有独立
+  // gate,gate_failed 就停;产物落 archive/<sid>/pipeline_<NNN>.json + .md
+  if (args.fullPipeline !== undefined) {
+    let sessionId = args.project ?? args.session;
+    let goal = typeof args.fullPipeline === 'string' ? args.fullPipeline : '';
+
+    if (!sessionId) {
+      // 允许不带 --session:自动 generateSessionId 并 bootstrap meta
+      const { generateSessionId } = await import('../lib/agents/export-bundle.mjs').catch(() => ({}));
+      if (generateSessionId && typeof generateSessionId === 'function') {
+        sessionId = generateSessionId();
+      } else {
+        sessionId = 's_' + Math.random().toString(36).slice(2, 10);
+      }
+      console.error(`[pipeline] auto-creating session: ${sessionId}`);
+    }
+
+    // 若 --full-pipeline 没给 goal,尝试从 meta.json 读
+    if (!goal) {
+      try {
+        const metaPath = join('archive', sessionId, 'meta.json');
+        const metaRaw = await readFile(metaPath, 'utf8');
+        const meta = JSON.parse(metaRaw);
+        if (typeof meta.goal === 'string' && meta.goal.length > 0) {
+          goal = meta.goal;
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (!goal || goal.trim().length === 0) {
+      console.error('[error] --full-pipeline requires a non-empty GOAL (or use --session ID with meta.json goal)');
+      process.exit(2);
+    }
+
+    // 确保 meta.json 存在(bootstrap if needed)
+    const root = join('archive', sessionId);
+    await mkdir(root, { recursive: true });
+    const metaPath = join(root, 'meta.json');
+    let meta;
+    try {
+      meta = JSON.parse(await readFile(metaPath, 'utf8'));
+    } catch {
+      meta = {
+        schema_version: 1,
+        session_id: sessionId,
+        goal,
+        created_at: new Date().toISOString(),
+        mode: 'full_pipeline',
+      };
+      await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+    }
+
+    // 加载 candidates 与 project(若可)
+    let candidates = [];
+    let project = { id: sessionId, name: goal, statement: goal };
+    try {
+      candidates = await loadCandidatesFromArchive(sessionId, 30);
+    } catch { /* ignore */ }
+
+    try {
+      const { runPipeline } = await import('../lib/agents/pipeline.mjs');
+      const result = await runPipeline({
+        sessionId,
+        goal,
+        project,
+        candidates,
+        caller,
+        model: args.model,
+        gatePreset: preset,
+        maxStages: args.maxRounds, // 复用 --rounds 表示最多跑几 stage
+        startStageIdx: args.startStageIdx,
+        skipStages: args.skipStages || [],
+        dryRun,
+      });
+
+      // 落盘 pipeline.json + pipeline.md
+      const stamp = String(Date.now()).slice(-6);
+      const planJsonPath = join(root, `pipeline_${stamp}.json`);
+      const planMdPath = join(root, `pipeline_${stamp}.md`);
+      await writeFile(planJsonPath, JSON.stringify(toPipelineJson(result), null, 2), 'utf8');
+
+      const summary = summarizePipeline(result);
+      let md = `# Full Pipeline · ${sessionId}\n\n`;
+      md += `**Goal**: ${goal}\n\n`;
+      md += `**Stopped at**: ${result.stoppedReason} · current stage: ${result.currentStage || '(done)'}\n\n`;
+      md += `**Summary**: ${summary.completedStages}/${summary.totalStages} stages completed, `;
+      md += `${summary.totalDeliverables} deliverables, `;
+      md += `skipped=${summary.skippedStages}, gate_failed=${summary.gateFailedStages}, errored=${summary.erroredStages}\n\n`;
+      md += `\`\`\`\n${formatPipelinePlanText(result.stages)}\n\`\`\`\n\n`;
+      // stage-by-stage 详细
+      for (const s of result.stages) {
+        if (s.status === 'skipped') continue;
+        md += `## ${s.stage}\n\n`;
+        md += `- status: ${s.status}\n`;
+        md += `- deliverables: ${s.deliverables.length}\n`;
+        if (s.gate && s.gate.reasons.length) md += `- gate reasons: ${s.gate.reasons.join('; ')}\n`;
+        md += `\n`;
+      }
+      await writeFile(planMdPath, md, 'utf8');
+
+      if (args.json) {
+        console.log(JSON.stringify(toPipelineJson(result), null, 2));
+      } else {
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`Full Pipeline · ${sessionId}`);
+        console.log('='.repeat(60));
+        console.log(`Goal: ${goal}`);
+        console.log(`Stopped at: ${result.stoppedReason} · current stage: ${result.currentStage || '(done)'}`);
+        console.log(`Summary: ${summary.completedStages}/${summary.totalStages} stages, ${summary.totalDeliverables} deliverables`);
+        console.log('');
+        console.log(formatPipelinePlanText(result.stages));
+        console.log('');
+        console.log(`Artifacts:`);
+        console.log(`  ${planJsonPath}`);
+        console.log(`  ${planMdPath}`);
+        if (summary.gateFailedStages > 0) {
+          console.log(`\n⚠  ${summary.gateFailedStages} stage(s) gate-failed. Inspect reasons above, then re-run with --start-stage-idx N to retry.`);
+          process.exit(1);
+        }
+      }
+    } catch (err) {
+      console.error(`[error] --full-pipeline failed: ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.70b: --pipeline-status (iter #70):只读不写,打印当前 session 的
+  // pipeline 进度(最近一份 pipeline_*.json + plan summary)
+  if (args.pipelineStatus) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --pipeline-status requires --session ID');
+      process.exit(2);
+    }
+    const root = join('archive', sessionId);
+    if (!existsSync(root)) {
+      console.error(`[error] archive/${sessionId} not found`);
+      process.exit(2);
+    }
+    const files = (await readdir(root)).filter((f) => /^pipeline_\d+\.json$/.test(f)).sort();
+    if (files.length === 0) {
+      console.log(`(no pipeline_*.json in archive/${sessionId}; run --full-pipeline first)`);
+      return;
+    }
+    const latest = files[files.length - 1];
+    const plan = JSON.parse(await readFile(join(root, latest), 'utf8'));
+    if (args.json) {
+      console.log(JSON.stringify(plan, null, 2));
+    } else {
+      console.log(`\nPipeline status · ${sessionId} · ${latest}`);
+      console.log(`Stopped at: ${plan.stoppedReason} · current stage: ${plan.currentStage || '(done)'}`);
+      console.log('');
+      const stagesBack = (plan.stages || []).map((s) => ({
+        stage: s.stage, stageIdx: s.stageIdx, status: s.status,
+        deliverables: (s.deliverables || []).length,
+      }));
+      console.log(formatPipelinePlanText(stagesBack));
+    }
+    return;
+  }
+
+  // 模式 0.71: --review-draft (iter #71):独立跑 reviewer agent
+  // 读 1 个 draft.md path,产出 review.json + review.md;常用于
+  // 用户已经手动写了一稿、想看 simulated peer review 的场景
+  if (args.reviewDraft) {
+    const draftPath = args.reviewDraft;
+    let draftText = '';
+    try {
+      draftText = await readFile(draftPath, 'utf8');
+    } catch (err) {
+      console.error(`[error] --review-draft: cannot read ${draftPath}: ${err.message}`);
+      process.exit(2);
+    }
+    // 浅 frontmatter 剥离(同 evaluator / paper-compiler)
+    let title = '';
+    let abstract = '';
+    let body = draftText;
+    const fmMatch = draftText.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (fmMatch) {
+      const fmLines = fmMatch[1].split(/\r?\n/);
+      for (const line of fmLines) {
+        const m = line.match(/^(title|abstract)\s*:\s*(.*)$/);
+        if (m) {
+          if (m[1] === 'title') title = m[2].trim().replace(/^["']|["']$/g, '');
+          if (m[1] === 'abstract') abstract = m[2].trim().replace(/^["']|["']$/g, '');
+        }
+      }
+      body = draftText.slice(fmMatch[0].length).trim();
+    }
+    // 抽 arxiv id
+    const arxivIds = (body.match(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g) || []).slice(0, 30);
+
+    try {
+      const verdict = await reviewDraft(
+        { title, abstract, body, arxivIds },
+        { caller, model: args.model, draftId: draftPath },
+      );
+      const outBase = draftPath.replace(/\.md$/i, '');
+      const jsonPath = `${outBase}.review.json`;
+      const mdPath = `${outBase}.review.md`;
+      await writeFile(jsonPath, JSON.stringify(toReviewJson(verdict), null, 2), 'utf8');
+      await writeFile(mdPath, formatReviewVerdictText(verdict), 'utf8');
+      if (args.json) {
+        console.log(JSON.stringify(toReviewJson(verdict), null, 2));
+      } else {
+        console.log(`\nReview verdict: ${verdict.recommendation} · overall ${verdict.scores.overall}/10 · ${verdict.concerns.length} concerns`);
+        console.log(`Artifacts:`);
+        console.log(`  ${jsonPath}`);
+        console.log(`  ${mdPath}`);
+        if (!verdict.stub) {
+          console.log(`\nSummary: ${verdict.summary}`);
+        }
+      }
+    } catch (err) {
+      console.error(`[error] --review-draft failed: ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.71b: --revise-draft <draft.md path> --review-json <review.json>
+  // (iter #71):跑 reviser agent,读 review.json + draft,产出 revised_draft.md
+  if (args.reviseDraft) {
+    const draftPath = args.reviseDraft;
+    const reviewJsonPath = args.reviewJson;
+    if (!reviewJsonPath) {
+      console.error('[error] --revise-draft requires --review-json <review.json>');
+      process.exit(2);
+    }
+    let draftText = '';
+    let reviewObj = null;
+    try {
+      draftText = await readFile(draftPath, 'utf8');
+      reviewObj = JSON.parse(await readFile(reviewJsonPath, 'utf8'));
+    } catch (err) {
+      console.error(`[error] --revise-draft: ${err.message}`);
+      process.exit(2);
+    }
+    let title = ''; let abstract = ''; let body = draftText;
+    const fmMatch = draftText.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (fmMatch) {
+      const fmLines = fmMatch[1].split(/\r?\n/);
+      for (const line of fmLines) {
+        const m = line.match(/^(title|abstract)\s*:\s*(.*)$/);
+        if (m) {
+          if (m[1] === 'title') title = m[2].trim().replace(/^["']|["']$/g, '');
+          if (m[1] === 'abstract') abstract = m[2].trim().replace(/^["']|["']$/g, '');
+        }
+      }
+      body = draftText.slice(fmMatch[0].length).trim();
+    }
+    const arxivIds = (body.match(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g) || []).slice(0, 30);
+
+    try {
+      const verdict = {
+        concerns: Array.isArray(reviewObj.concerns) ? reviewObj.concerns : [],
+        summary: reviewObj.summary || '',
+        scores: reviewObj.scores || {},
+        recommendation: reviewObj.recommendation || 'revise',
+      };
+      const rev = await reviseDraft(
+        { title, abstract, body, arxivIds },
+        verdict,
+        { caller, model: args.model, draftId: draftPath },
+      );
+      const outPath = draftPath.replace(/\.md$/i, '') + '.revised.md';
+      await writeFile(outPath, `# ${title || 'Revised Draft'}\n\n${rev.body}`, 'utf8');
+      const logPath = draftPath.replace(/\.md$/i, '') + '.revision-log.json';
+      await writeFile(logPath, JSON.stringify(toRevisionJson(rev), null, 2), 'utf8');
+      if (args.json) {
+        console.log(JSON.stringify(toRevisionJson(rev), null, 2));
+      } else {
+        console.log(`\nRevision:`);
+        console.log(formatRevisionVerdictText(rev));
+        console.log(`\nArtifacts:`);
+        console.log(`  ${outPath}`);
+        console.log(`  ${logPath}`);
+      }
+    } catch (err) {
+      console.error(`[error] --revise-draft failed: ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.68: --evaluate (iter #69):Evaluator 4th agent — 读已有 session
+  // 产出 EvaluationReport(overall + 4 子分 + 各项明细),落 json + md。
+  if (args.evaluate) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --evaluate requires --session ID');
+      process.exit(2);
+    }
+    try {
+      const bundle = await loadExportBundle(sessionId);
+      const deliverables = await loadDeliverables(sessionId);
+      const report = buildEvaluationReport({
+        meta: bundle.meta,
+        rounds: bundle.rounds,
+        deliverables,
+        syntheses: bundle.syntheses,
+        generatedAt: new Date().toISOString(),
+      });
+
+      // 落 json + md 到 archive/<sid>/(取下一个 NNN 序号)
+      const root = join('archive', sessionId);
+      await mkdir(root, { recursive: true });
+      let nextIdx = 1;
+      try {
+        const existing = (await readdir(root)).filter((f) => /^evaluation_\d+\.json$/.test(f));
+        const nums = existing.map((f) => Number(f.match(/^evaluation_(\d+)\.json$/)[1])).filter((n) => Number.isFinite(n));
+        nextIdx = (nums.length ? Math.max(...nums) : 0) + 1;
+      } catch { /* ignore */ }
+      const stamp = String(nextIdx).padStart(3, '0');
+      const jsonPath = join(root, `evaluation_${stamp}.json`);
+      const mdPath = join(root, `evaluation_${stamp}.md`);
+      const jsonStr = toEvaluationJson(report);
+      await writeFile(jsonPath, jsonStr, 'utf8');
+
+      // markdown 报告 = 文本 + 机器读 json 链接
+      const o = report.scores?.overall ?? 0;
+      const grade = o >= 0.7 ? '🟢' : o >= 0.4 ? '🟡' : '🔴';
+      let md = `# Evaluation Report · ${sessionId} · overall ${grade} ${o}\n\n`;
+      md += `Generated at ${report.generatedAt}\n\n`;
+      if (report.goal) md += `**Goal**: ${report.goal}\n\n`;
+      md += `\`\`\`\n${formatEvaluationReportText(report)}\n\`\`\`\n\n`;
+      md += `## Scores\n\n`;
+      md += `| Score | Value |\n|---|---|\n`;
+      md += `| coverage | ${report.scores.coverage} |\n`;
+      md += `| alignment | ${report.scores.alignment} |\n`;
+      md += `| consistency | ${report.scores.consistency} |\n`;
+      md += `| synthesisCoverage | ${report.scores.synthesisCoverage} |\n`;
+      md += `| **overall** | **${report.scores.overall}** |\n\n`;
+      md += `## Totals\n\n`;
+      md += `rounds=${report.totals.rounds} · proposals=${report.totals.proposals} · applied=${report.totals.applied} · deliverables=${report.totals.deliverables} · syntheses=${report.totals.syntheses} · references=${report.totals.references}\n\n`;
+      md += `## Files\n\n`;
+      md += `- machine-readable: \`${jsonPath}\`\n`;
+      await writeFile(mdPath, md, 'utf8');
+
+      if (args.json) {
+        console.log(jsonStr);
+      } else {
+        console.log(formatEvaluationReportText(report));
+        console.log(`\n📁 Wrote ${jsonPath} + ${mdPath}`);
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
     }
     return;
   }

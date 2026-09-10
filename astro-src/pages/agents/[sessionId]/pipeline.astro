@@ -1,0 +1,432 @@
+---
+// /agents/[sessionId]/pipeline.astro — iter #73:browser-side pipeline page.
+//
+// iter #70/71/72 给 CLI 加了 --full-pipeline(7 stage 串行:ideate → lit review →
+// experiment → draft → review → revise → export)与 lib/agents/pipeline.{mjs,ts}。
+// 本页是它的浏览器版本 —— 用户在 /agents/<sid>/pipeline/ 直接看 pipeline plan,
+// 实时显示每 stage 进度 / gate 状态 / deliverable 数量;支持 stage-by-stage
+// trigger(若 session 已有 archive 数据)。
+//
+// 设计:
+//   - 与 compile.astro (iter #62) / export.astro (iter #58) 同模式
+//     (SSR 列 sessions + 客户端 script)
+//   - 数据源:localStorage 优先(round 由浏览器跑过,合成 minimal pipeline record);
+//     fallback 到 SSR 读 archive/<sid>/pipeline_*.json(若 dev server 有 fs)
+//   - 显示 7-stage 进度条 + per-stage gate 结果 + deliverable 列表
+//   - 不调 LLM,纯 SSR + client-side script
+//
+// 注:浏览器侧不调 runPipeline()(那是 CLI 用的),仅展示 pipeline 状态。
+// 用户跑 pipeline 用 CLI:
+//   node astro-src/scripts/agents-run.mjs --full-pipeline --session <sid>
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths:enumerate sessions under archive/ that have meta.json
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string }; props: { hasArchive: boolean; latestPipelineJson: string | null } }[] = [];
+  let sessions: string[] = [];
+  try { sessions = await readdir(root); } catch { return []; }
+  for (const sid of sessions) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    // 找最新的 pipeline_*.json
+    let latestPipelineJson: string | null = null;
+    try {
+      const files = (await readdir(join(root, sid))).filter((f) => /^pipeline_\d+\.json$/.test(f)).sort();
+      if (files.length > 0) latestPipelineJson = files[files.length - 1];
+    } catch { /* */ }
+    out.push({
+      params: { sessionId: sid },
+      props: { hasArchive: true, latestPipelineJson },
+    });
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const { hasArchive, latestPipelineJson } = Astro.props;
+
+// SSR 时直接读 pipeline_*.json 内联到 page,避免浏览器 fetch 静态资源
+let pipelineData: any = null;
+if (hasArchive && latestPipelineJson) {
+  try {
+    const raw = await readFile(join(process.cwd(), 'archive', sessionId, latestPipelineJson), 'utf8');
+    pipelineData = JSON.parse(raw);
+  } catch { /* */ }
+}
+---
+
+<BaseLayout title={`Pipeline · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← Agents Console</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>pipeline</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔬 Full Pipeline · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        研究全流程 7 stage 协调器(<code>lib/agents/pipeline.mjs</code>,iter #70/71):
+        Ideate → Lit Review → Experiment Plan → Draft → Peer Review → Revise → Export。
+        每 stage 有独立 gate,gate_failed 就停,可从断点续跑。
+      </p>
+    </header>
+
+    <section class="agents-stats" id="pipeline-summary">
+      <div class="agents-stats-row">
+        <span class="agents-stat"><strong id="pipeline-completed">—</strong> / 7 stages completed</span>
+        <span class="agents-stat"><strong id="pipeline-deliverables">—</strong> deliverables</span>
+        <span class="agents-stat"><strong id="pipeline-stopped">—</strong> stopped reason</span>
+        <span class="agents-stat"><strong id="pipeline-current">—</strong> current stage</span>
+        <span class="agents-stat-aside" id="pipeline-source-tag"></span>
+      </div>
+    </section>
+
+    <section class="agents-controls">
+      <div class="agents-controls-row">
+        <button class="button primary" id="pipeline-refresh-btn" title="重新读取 localStorage / SSR 内联数据">
+          🔄 Refresh
+        </button>
+        <button class="button" id="pipeline-copy-cli-btn" title="复制 CLI 命令到剪贴板">
+          📋 Copy CLI command
+        </button>
+        <a class="button" href={`${base}/agents/${sessionId}/compile/`} title="切换到 compile 视图">📄 Compile</a>
+        <a class="button" href={`${base}/agents/${sessionId}/`} title="回到 session 详情">← Back</a>
+      </div>
+    </section>
+
+    <section id="pipeline-stages-container">
+      <h3>📊 7 stages</h3>
+      <ol id="pipeline-stages-list" class="pipeline-stages-list">
+        <li class="pipeline-stage-row" data-stage="p_ideate_research_question">
+          <span class="pipeline-stage-icon">·</span>
+          <span class="pipeline-stage-label-zh">研究问题</span>
+          <span class="pipeline-stage-label-en">Ideate</span>
+          <span class="pipeline-stage-status">pending</span>
+          <span class="pipeline-stage-deliv">0 deliverables</span>
+        </li>
+        <li class="pipeline-stage-row" data-stage="p_review_literature">
+          <span class="pipeline-stage-icon">·</span>
+          <span class="pipeline-stage-label-zh">文献综述</span>
+          <span class="pipeline-stage-label-en">Lit Review</span>
+          <span class="pipeline-stage-status">pending</span>
+          <span class="pipeline-stage-deliv">0 deliverables</span>
+        </li>
+        <li class="pipeline-stage-row" data-stage="p_design_experiment_plan">
+          <span class="pipeline-stage-icon">·</span>
+          <span class="pipeline-stage-label-zh">实验设计</span>
+          <span class="pipeline-stage-label-en">Experiment Plan</span>
+          <span class="pipeline-stage-status">pending</span>
+          <span class="pipeline-stage-deliv">0 deliverables</span>
+        </li>
+        <li class="pipeline-stage-row" data-stage="p_write_paper_draft">
+          <span class="pipeline-stage-icon">·</span>
+          <span class="pipeline-stage-label-zh">草稿撰写</span>
+          <span class="pipeline-stage-label-en">Draft</span>
+          <span class="pipeline-stage-status">pending</span>
+          <span class="pipeline-stage-deliv">0 deliverables</span>
+        </li>
+        <li class="pipeline-stage-row" data-stage="p_simulate_peer_review">
+          <span class="pipeline-stage-icon">·</span>
+          <span class="pipeline-stage-label-zh">同行评审</span>
+          <span class="pipeline-stage-label-en">Peer Review</span>
+          <span class="pipeline-stage-status">pending</span>
+          <span class="pipeline-stage-deliv">0 deliverables</span>
+        </li>
+        <li class="pipeline-stage-row" data-stage="p_revise_paper">
+          <span class="pipeline-stage-icon">·</span>
+          <span class="pipeline-stage-label-zh">修订</span>
+          <span class="pipeline-stage-label-en">Revise</span>
+          <span class="pipeline-stage-status">pending</span>
+          <span class="pipeline-stage-deliv">0 deliverables</span>
+        </li>
+        <li class="pipeline-stage-row" data-stage="p_export_final_paper">
+          <span class="pipeline-stage-icon">·</span>
+          <span class="pipeline-stage-label-zh">导出终稿</span>
+          <span class="pipeline-stage-label-en">Export</span>
+          <span class="pipeline-stage-status">pending</span>
+          <span class="pipeline-stage-deliv">0 deliverables</span>
+        </li>
+      </ol>
+    </section>
+
+    <section class="agents-help">
+      <h3>🔁 CLI 等价命令</h3>
+      <p>浏览器不调 LLM(本页只读);要在浏览器跑 pipeline,需在 server 端用 CLI:</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --full-pipeline --session {sessionId}</code></pre>
+      <p>dry-run(无 API key 也能跑通全部 7 stage):</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --full-pipeline --session {sessionId} --dry-run</code></pre>
+      <p>从断点续跑(例如 stage 5 gate_failed 后):</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --full-pipeline --session {sessionId} --start-stage-idx 5</code></pre>
+      <p>跳过某些 stage:</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --full-pipeline --session {sessionId} \
+  --skip-stages p_ideate_research_question,p_review_literature</code></pre>
+      <p>独立跑 review / revise(无需 full pipeline):</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --review-draft path/to/draft.md
+node astro-src/scripts/agents-run.mjs --revise-draft path/to/draft.md --review-json path/to/review.json</code></pre>
+    </section>
+
+    <section class="agents-help">
+      <h3>📚 这是什么?</h3>
+      <p>iter #70/71/72 引入 <code>lib/agents/pipeline.{mjs,ts}</code>(state machine
+        + per-stage gate)与 <code>lib/agents/{reviewer,reviser}.{mjs,ts}</code>(paper-level
+        review / revise agent)。</p>
+      <p>7 stage 设计对齐 Sakana AI Scientist v2 / STORM 的多阶段 pipeline,但
+        每阶段独立可 stub、可中断、可单独 resume:</p>
+      <ul>
+        <li><strong>Stage 0-3</strong>:Designer → Feedback → Gate → Modifier 复用现有 3-agent 闭环</li>
+        <li><strong>Stage 4</strong>:Reviewer agent — 5 维评分(novelty/soundness/clarity/experiments/writing) + major/minor concerns</li>
+        <li><strong>Stage 5</strong>:Reviser agent — 把 concerns 应用回 draft,产出 revision_log(每条 concern ↔ 修改状态)</li>
+        <li><strong>Stage 6</strong>:Paper-compiler 复用 — paper.md + paper.tex(7 个 LaTeX 模板)</li>
+      </ul>
+      <p>每 stage 有显式 gate criteria(PIPELINE_GATES):minDeliverables + minTotalScore
+        + minArxivRefs + requireForAdvance。gate_failed 时 stoppedReason = 'gate_failed',
+        用户 inspect reasons 后用 <code>--start-stage-idx N</code> 续跑。</p>
+      <p class={hasArchive ? '' : 'agents-help-warn'}>
+        {hasArchive
+          ? `✓ 检测到 server 端 archive/${sessionId}/pipeline_*.json;`
+          : `⚠ Server 端无 archive/${sessionId}/;`}
+        {latestPipelineJson ? `最新一份: <code>${latestPipelineJson}</code>` : '请用 CLI 跑 pipeline。'}
+      </p>
+    </section>
+  </main>
+
+  <script id="pipeline-bootstrap" type="application/json" set:html={JSON.stringify({
+    sessionId,
+    hasArchive,
+    latestPipelineJson,
+    pipelineData: pipelineData || null,
+  })}></script>
+
+  <script>
+    /* eslint-disable */
+    // -----------------------------------------------------------------------
+    // 客户端 pipeline page — iter #73
+    // -----------------------------------------------------------------------
+    //
+    // 数据源:
+    //   1. SSR 内联 pipelineData(从 archive/<sid>/pipeline_*.json 读)
+    //   2. localStorage pipeline_data_<sid>(用户在浏览器跑过的)
+    //
+    // 显示:7 stage 行 + 进度条 + summary stats。
+
+    const bootstrap = JSON.parse(document.getElementById('pipeline-bootstrap').textContent);
+    const sessionId = bootstrap.sessionId;
+    const hasArchive = bootstrap.hasArchive;
+    const latestPipelineJson = bootstrap.latestPipelineJson;
+    const ssrData = bootstrap.pipelineData;
+
+    const LOCAL_PIPELINE_KEY = (sid) => `dpr_pipeline_${sid}`;
+
+    function readLocalPipeline() {
+      try {
+        const raw = localStorage.getItem(LOCAL_PIPELINE_KEY(sessionId));
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch { return null; }
+    }
+
+    function statusToIcon(status) {
+      switch (status) {
+        case 'completed':   return '✓';
+        case 'gate_failed': return '✗';
+        case 'error':       return '⚠';
+        case 'skipped':     return '–';
+        case 'in_progress': return '…';
+        default:            return '·';
+      }
+    }
+
+    function renderPlan(plan) {
+      if (!plan || !Array.isArray(plan.stages)) {
+        document.getElementById('pipeline-source-tag').textContent = '(no pipeline data; click 🔄 or run CLI)';
+        return;
+      }
+
+      // Update summary stats
+      const completed = plan.stages.filter((s) => s.status === 'completed').length;
+      const totalDeliv = plan.stages.reduce((a, s) => a + (Array.isArray(s.deliverables) ? s.deliverables.length : 0), 0);
+      document.getElementById('pipeline-completed').textContent = String(completed);
+      document.getElementById('pipeline-deliverables').textContent = String(totalDeliv);
+      document.getElementById('pipeline-stopped').textContent = plan.stoppedReason || '—';
+      document.getElementById('pipeline-current').textContent = plan.currentStage || '(done)';
+
+      // Per-stage rows
+      for (const row of document.querySelectorAll('.pipeline-stage-row')) {
+        const stage = row.getAttribute('data-stage');
+        const rec = plan.stages.find((s) => s.stage === stage);
+        if (!rec) continue;
+        const icon = statusToIcon(rec.status);
+        row.querySelector('.pipeline-stage-icon').textContent = icon;
+        row.querySelector('.pipeline-stage-status').textContent = rec.status;
+        const deliv = Array.isArray(rec.deliverables) ? rec.deliverables.length : 0;
+        row.querySelector('.pipeline-stage-deliv').textContent = `${deliv} deliverable${deliv === 1 ? '' : 's'}`;
+        // gate reasons if gate_failed
+        let reasonsEl = row.querySelector('.pipeline-stage-reasons');
+        if (!reasonsEl) {
+          reasonsEl = document.createElement('div');
+          reasonsEl.className = 'pipeline-stage-reasons';
+          row.appendChild(reasonsEl);
+        }
+        if (rec.gate && Array.isArray(rec.gate.reasons) && rec.gate.reasons.length > 0) {
+          reasonsEl.innerHTML = rec.gate.reasons.map((r) => `✗ ${escapeHtml(r)}`).join('<br>');
+          reasonsEl.hidden = false;
+        } else {
+          reasonsEl.innerHTML = '';
+          reasonsEl.hidden = true;
+        }
+        row.className = `pipeline-stage-row pipeline-stage-${rec.status}`;
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+      })[c]);
+    }
+
+    function renderSourceTag() {
+      const tag = document.getElementById('pipeline-source-tag');
+      const local = readLocalPipeline();
+      if (local) tag.textContent = `source: localStorage · ${latestPipelineJson ? 'SSR also available' : ''}`;
+      else if (ssrData) tag.textContent = `source: SSR (${latestPipelineJson})`;
+      else tag.textContent = 'source: (none — run CLI to populate)';
+    }
+
+    // Initial render
+    renderSourceTag();
+    if (ssrData) renderPlan(ssrData);
+    else {
+      const local = readLocalPipeline();
+      if (local) renderPlan(local);
+    }
+
+    // Refresh button
+    document.getElementById('pipeline-refresh-btn').addEventListener('click', () => {
+      const local = readLocalPipeline();
+      if (local) renderPlan(local);
+      // 重新读取 SSR 内联数据(实际是 page reload,但为了 UX 提供反馈)
+      document.getElementById('pipeline-source-tag').textContent = '↻ reloaded (full refresh: page reload)';
+    });
+
+    // Copy CLI command
+    document.getElementById('pipeline-copy-cli-btn').addEventListener('click', async () => {
+      const cmd = `node astro-src/scripts/agents-run.mjs --full-pipeline --session ${sessionId}`;
+      try {
+        await navigator.clipboard.writeText(cmd);
+        const btn = document.getElementById('pipeline-copy-cli-btn');
+        const orig = btn.textContent;
+        btn.textContent = '✓ Copied!';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      } catch (err) {
+        console.error('[pipeline] copy failed:', err);
+      }
+    });
+  </script>
+</BaseLayout>
+
+<style>
+  .pipeline-stages-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .pipeline-stage-row {
+    display: grid;
+    grid-template-columns: 2rem 6rem 9rem 8rem 1fr;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.9rem;
+    border: 1px solid var(--border, #e5e7eb);
+    border-radius: 8px;
+    background: #fafbfc;
+    font-size: 0.92rem;
+    transition: background 0.15s;
+  }
+  .pipeline-stage-row.pipeline-stage-completed {
+    background: linear-gradient(90deg, #ecfdf5 0%, #f0fdf4 100%);
+    border-color: #86efac;
+  }
+  .pipeline-stage-row.pipeline-stage-gate_failed {
+    background: linear-gradient(90deg, #fef2f2 0%, #fff1f2 100%);
+    border-color: #fca5a5;
+  }
+  .pipeline-stage-row.pipeline-stage-error {
+    background: linear-gradient(90deg, #fefce8 0%, #fef9c3 100%);
+    border-color: #fde047;
+  }
+  .pipeline-stage-row.pipeline-stage-skipped {
+    background: #f3f4f6;
+    border-color: #d1d5db;
+    opacity: 0.65;
+  }
+  .pipeline-stage-icon {
+    font-family: 'SF Mono', Menlo, monospace;
+    font-weight: 700;
+    font-size: 1.1rem;
+    text-align: center;
+  }
+  .pipeline-stage-label-zh {
+    font-weight: 600;
+  }
+  .pipeline-stage-label-en {
+    color: var(--text-muted, #6b7280);
+    font-size: 0.85rem;
+  }
+  .pipeline-stage-status {
+    font-family: 'SF Mono', Menlo, monospace;
+    font-size: 0.82rem;
+    color: var(--text-muted, #6b7280);
+  }
+  .pipeline-stage-deliv {
+    color: var(--text-muted, #6b7280);
+    font-size: 0.88rem;
+  }
+  .pipeline-stage-reasons {
+    grid-column: 1 / -1;
+    margin-top: 0.4rem;
+    padding: 0.4rem 0.7rem;
+    background: rgba(239, 68, 68, 0.06);
+    border-radius: 6px;
+    color: #b91c1c;
+    font-size: 0.84rem;
+    font-family: 'SF Mono', Menlo, monospace;
+  }
+  @media (max-width: 600px) {
+    .pipeline-stage-row {
+      grid-template-columns: 1.6rem 1fr;
+      grid-template-areas:
+        "icon zh"
+        "icon en"
+        "icon status"
+        "icon deliv"
+        "reasons reasons";
+      row-gap: 0.2rem;
+    }
+    .pipeline-stage-icon { grid-area: icon; }
+    .pipeline-stage-label-zh { grid-area: zh; }
+    .pipeline-stage-label-en { grid-area: en; font-size: 0.78rem; }
+    .pipeline-stage-status { grid-area: status; }
+    .pipeline-stage-deliv { grid-area: deliv; }
+    .pipeline-stage-reasons { grid-area: reasons; }
+  }
+</style>

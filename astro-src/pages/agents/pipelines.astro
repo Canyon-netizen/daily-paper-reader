@@ -1,0 +1,242 @@
+---
+// /agents/pipelines.astro — iter #73:cross-session pipeline overview.
+//
+// 与 [sessionId]/pipeline.astro(单 session)对应,本页:
+//   - 列出所有有 archive/<sid>/pipeline_*.json 的 session
+//   - 每 session 显示:最新一份 pipeline 的进度(stoppedReason + completed/total +
+//     deliverables 总数)
+//   - 跳转到 /agents/<sid>/pipeline/ 看详情
+//
+// iter #70/71/72 给 CLI 加了 --full-pipeline;iter #73 把"研究全流程 7 stage"
+// 概念搬到浏览器侧,让用户从全局视角看"哪些 session 跑过 pipeline,跑到哪一步"。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PipelineSession {
+  sessionId: string;
+  goal: string;
+  latestPipelineJson: string | null;
+  stoppedReason: string | null;
+  currentStage: string | null;
+  completedStages: number;
+  totalStages: number;
+  totalDeliverables: number;
+  generatedAt: string | null;
+}
+
+const sessions: PipelineSession[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { /* */ }
+  for (const sid of entries) {
+    const dir = join(root, sid);
+    const metaPath = join(dir, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let goal = '';
+    try {
+      const meta = JSON.parse(await readFile(metaPath, 'utf8'));
+      goal = typeof meta.goal === 'string' ? meta.goal : '';
+    } catch { /* */ }
+    let latestPipelineJson: string | null = null;
+    let latestPlan: any = null;
+    try {
+      const files = (await readdir(dir)).filter((f) => /^pipeline_\d+\.json$/.test(f)).sort();
+      if (files.length > 0) {
+        latestPipelineJson = files[files.length - 1];
+        latestPlan = JSON.parse(await readFile(join(dir, latestPipelineJson), 'utf8'));
+      }
+    } catch { /* */ }
+    let completedStages = 0;
+    let totalDeliverables = 0;
+    if (latestPlan && Array.isArray(latestPlan.stages)) {
+      completedStages = latestPlan.stages.filter((s: any) => s.status === 'completed').length;
+      totalDeliverables = latestPlan.stages.reduce(
+        (a: number, s: any) => a + (Array.isArray(s.deliverables) ? s.deliverables.length : 0), 0,
+      );
+    }
+    sessions.push({
+      sessionId: sid,
+      goal,
+      latestPipelineJson,
+      stoppedReason: latestPlan?.stoppedReason ?? null,
+      currentStage: latestPlan?.currentStage ?? null,
+      completedStages,
+      totalStages: 7,
+      totalDeliverables,
+      generatedAt: latestPlan?.stages?.[0]?.finishedAt
+        ? new Date(latestPlan.stages[0].finishedAt).toISOString()
+        : null,
+    });
+  }
+  // 按最新 pipeline 时间倒序
+  sessions.sort((a, b) => (b.generatedAt || '').localeCompare(a.generatedAt || ''));
+}
+---
+
+<BaseLayout title="Pipelines · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← Agents Console</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>pipelines</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔬 Pipelines · <code>{sessions.length}</code> session{sessions.length === 1 ? '' : 's'}</h1>
+      <p class="agents-sub">
+        研究全流程 7 stage(ideate → lit review → experiment → draft → review → revise → export)
+        跨 session 概览。点 session id 进入单 session pipeline 详情页。
+      </p>
+    </header>
+
+    <section class="agents-stats">
+      <div class="agents-stats-row">
+        <span class="agents-stat"><strong>{sessions.length}</strong> sessions</span>
+        <span class="agents-stat">
+          <strong>{sessions.filter((s) => s.latestPipelineJson).length}</strong> ran pipeline
+        </span>
+        <span class="agents-stat">
+          <strong>{sessions.filter((s) => s.stoppedReason === 'completed').length}</strong> completed
+        </span>
+        <span class="agents-stat">
+          <strong>{sessions.filter((s) => s.stoppedReason === 'gate_failed').length}</strong> gate-failed
+        </span>
+        <span class="agents-stat-aside">
+          {sessions.reduce((a, s) => a + s.totalDeliverables, 0)} total deliverables
+        </span>
+      </div>
+    </section>
+
+    <section>
+      <h3>📋 Sessions with pipeline data</h3>
+      {sessions.length === 0 ? (
+        <p class="agents-help-warn">
+          ⚠️ No sessions with pipeline data yet. Run:
+          <code>node astro-src/scripts/agents-run.mjs --full-pipeline "your research goal" --dry-run</code>
+        </p>
+      ) : (
+        <table class="agents-table">
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Goal</th>
+              <th>Progress</th>
+              <th>Status</th>
+              <th>Stopped at</th>
+              <th>Deliv.</th>
+              <th>Generated</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.map((s) => (
+              <tr>
+                <td><code>{s.sessionId}</code></td>
+                <td class="agents-table-goal">{(s.goal || '(no goal)').slice(0, 60)}{(s.goal || '').length > 60 ? '…' : ''}</td>
+                <td>
+                  <div class="pipeline-progress-bar">
+                    <div class="pipeline-progress-fill" style={`width: ${(s.completedStages / s.totalStages) * 100}%`}></div>
+                  </div>
+                  <small>{s.completedStages} / {s.totalStages}</small>
+                </td>
+                <td>
+                  <span class={`pipeline-status-pill pipeline-status-${s.stoppedReason || 'unknown'}`}>
+                    {s.stoppedReason || '(not run)'}
+                  </span>
+                </td>
+                <td>{s.currentStage || '—'}</td>
+                <td>{s.totalDeliverables}</td>
+                <td><small>{s.generatedAt ? new Date(s.generatedAt).toLocaleString() : '—'}</small></td>
+                <td>
+                  <a class="button" href={`${base}/agents/${s.sessionId}/pipeline/`}>View →</a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-help">
+      <h3>🚀 跑你的第一个 pipeline</h3>
+      <pre><code>node astro-src/scripts/agents-run.mjs --full-pipeline "Investigate X for Y" --dry-run</code></pre>
+      <p>dry-run 无需 LLM key,会在 archive/<auto-sid>/ 落 pipeline_*.json +
+        pipeline_*.md。换成 --no-dry-run 走真 LLM。</p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+  }
+  .agents-table th, .agents-table td {
+    padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid var(--border, #e5e7eb);
+    text-align: left;
+    vertical-align: middle;
+  }
+  .agents-table th {
+    background: #f8fafc;
+    font-weight: 600;
+    color: var(--text-muted, #555);
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .agents-table-goal {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pipeline-progress-bar {
+    width: 100px;
+    height: 6px;
+    background: #e5e7eb;
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 0.2rem;
+  }
+  .pipeline-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
+    transition: width 0.3s;
+  }
+  .pipeline-status-pill {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: 'SF Mono', Menlo, monospace;
+  }
+  .pipeline-status-completed {
+    background: #d1fae5;
+    color: #065f46;
+  }
+  .pipeline-status-gate_failed {
+    background: #fee2e2;
+    color: #991b1b;
+  }
+  .pipeline-status-error {
+    background: #fef3c7;
+    color: #92400e;
+  }
+  .pipeline-status-unknown {
+    background: #e5e7eb;
+    color: #6b7280;
+  }
+</style>
