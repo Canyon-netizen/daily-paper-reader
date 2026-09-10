@@ -300,6 +300,12 @@ function escapeHtml(s: string): string {
           <input type="checkbox" id="agents-ns-immediate" checked />
           <span>--rounds {'{rounds_requested}'}: 新 session 建好立刻跑 N 轮</span>
         </label>
+        <p class="agents-ns-actions">
+          <button type="button" class="button" id="agents-ns-save-template-btn"
+                  title="把当前 Goal + 参数另存为浏览器本地模板,可在 /agents/goals/ 浏览 / 复用 / 删除">
+            💾 另存为模板
+          </button>
+        </p>
       </form>
     </section>
 
@@ -441,5 +447,44 @@ function escapeHtml(s: string): string {
       const tpl = JSON.parse(firstCard.getAttribute('data-template'));
       applyTemplate(tpl);
     } catch {}
+  }
+
+  // -------- Save current goal as custom template (localStorage) --------
+  const STORAGE_KEY = 'dpr_agents_custom_templates_v1';
+  const saveBtn = $('agents-ns-save-template-btn');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', () => {
+      const goal = goalEl.value.trim();
+      if (!goal) {
+        alert('请先填写 Goal,再保存为模板。');
+        return;
+      }
+      const title = prompt('模板名称(简短描述,例如 "arxiv-LLM-survey"):', '');
+      if (!title) return;
+      let arr = [];
+      try { arr = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]'); } catch {}
+      if (!Array.isArray(arr)) arr = [];
+      const id = title.replace(/[^a-zA-Z0-9_\-一-龥]/g, '_').slice(0, 32);
+      const existing = arr.findIndex((t) => t.id === id);
+      const entry = {
+        id,
+        title,
+        emoji: '✨',
+        blurb: goal.slice(0, 80) + (goal.length > 80 ? '…' : ''),
+        goal,
+        suggestedMaxCycles: Number(maxCyclesEl.value) || 2,
+        suggestedRounds: Number(roundsEl.value) || 1,
+        saved_at: new Date().toISOString(),
+      };
+      if (existing >= 0) {
+        if (!confirm(`模板 "${id}" 已存在,覆盖吗?`)) return;
+        arr[existing] = entry;
+      } else {
+        arr.push(entry);
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+      alert(`✅ 已保存到浏览器 localStorage: "${id}"\n跳到 /agents/goals/ 查看。`);
+      window.location.href = '/agents/goals/';
+    });
   }
 </script>

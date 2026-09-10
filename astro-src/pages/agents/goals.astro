@@ -1,0 +1,288 @@
+---
+// /agents/goals.astro — iter #78:goal template library
+//
+// 集中管理"研究目标模板":
+//   1. 内置模板(来自 new-session.astro,纯展示用,不重复维护)
+//   2. 用户从浏览器 localStorage 保存的自定义模板
+//   3. 模板使用统计(从 archive/<sid>/meta.json 提取 goal 与模板相似度近似判断)
+//
+// 用户可:
+//   - 浏览所有内置 + 自定义模板
+//   - 一键跳到 new-session 并预选模板
+//   - 把当前 goal 保存为新模板(localStorage)
+//   - 删除自定义模板
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// 内置模板(与 new-session.astro 同步 — 这是单一展示入口,不在前端重复使用)
+const BUILTIN_TEMPLATES = [
+  {
+    id: 'literature_review',
+    emoji: '📚',
+    title: 'Literature Review',
+    blurb: '整理最近 X 个月 arxiv 上 Y 主题的代表性论文,提炼共识与开放问题',
+    tags: ['arxiv', 'survey', 'literature'],
+    suggestedMaxCycles: 3,
+    suggestedRounds: 2,
+  },
+  {
+    id: 'experiment_plan',
+    emoji: '🔬',
+    title: 'Experiment Plan',
+    blurb: '基于 idea 设计可执行的实验方案,含数据、baseline、metric、ablation',
+    tags: ['experiment', 'protocol', 'ml'],
+    suggestedMaxCycles: 2,
+    suggestedRounds: 2,
+  },
+  {
+    id: 'rebuttal',
+    emoji: '📝',
+    title: 'Rebuttal 准备',
+    blurb: '针对 reviewer 提出的 N 个弱点,生成反驳段落 + 实验补充建议',
+    tags: ['rebuttal', 'writing', 'review'],
+    suggestedMaxCycles: 2,
+    suggestedRounds: 1,
+  },
+  {
+    id: 'paper_additions',
+    emoji: '➕',
+    title: 'Paper 加库',
+    blurb: '把 N 篇新发现的论文加到 project 的相关阶段',
+    tags: ['intake', 'curation'],
+    suggestedMaxCycles: 1,
+    suggestedRounds: 1,
+  },
+  {
+    id: 'free_form',
+    emoji: '✍️',
+    title: '自由目标',
+    blurb: '从零写一个自定义目标,适合探索性研究 / 头脑风暴',
+    tags: ['custom'],
+    suggestedMaxCycles: 2,
+    suggestedRounds: 1,
+  },
+];
+
+// 读 archive sessions 的 goal,做 keyword frequency 统计
+const root = join(process.cwd(), 'archive');
+const goals: string[] = [];
+const typeCounts = new Map<string, number>();
+if (existsSync(root)) {
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { /* */ }
+  for (const sid of entries) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    try {
+      const meta = JSON.parse(await readFile(metaPath, 'utf8'));
+      if (typeof meta.goal === 'string' && meta.goal.length > 0) {
+        goals.push(meta.goal);
+      }
+      // 看 rounds 里 proposal type 出现频次
+      const roundsDir = join(root, sid, 'rounds');
+      if (existsSync(roundsDir)) {
+        const files = (await readdir(roundsDir)).filter((f) => /^round_\d+\.json$/.test(f));
+        for (const f of files) {
+          try {
+            const r = JSON.parse(await readFile(join(roundsDir, f), 'utf8'));
+            for (const p of (r?.designer?.proposals ?? [])) {
+              if (p?.type) typeCounts.set(p.type, (typeCounts.get(p.type) ?? 0) + 1);
+            }
+          } catch { /* */ }
+        }
+      }
+    } catch { /* */ }
+  }
+}
+
+// 简易 goal 关键词统计 — 抓 2-gram 中文词太难,改抓 {{XXX}} 占位符或 ASCII 关键词
+function topKeywords(goalCorpus: string[]): { kw: string; n: number }[] {
+  const counts = new Map<string, number>();
+  const stopwords = new Set(['the', 'a', 'an', 'of', 'for', 'to', 'and', 'or', 'is', 'in', 'on', 'with', 'as', 'be', '我们', '需要', '完成', '列出', '一篇', '提供']);
+  for (const g of goalCorpus) {
+    // ASCII 词 ≥3 字 + 中文 2-4 字片段
+    const ascii = g.match(/[A-Za-z][A-Za-z\-]{2,}/g) ?? [];
+    for (const w of ascii) {
+      const lower = w.toLowerCase();
+      if (stopwords.has(lower)) continue;
+      counts.set(lower, (counts.get(lower) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, n]) => n >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([kw, n]) => ({ kw, n }));
+}
+
+const hotKeywords = topKeywords(goals);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="目标模板库 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / 目标模板库</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📚 目标模板库 <span class="muted" style="font-size:0.6em">(iter #78)</span></h1>
+      <p class="agents-sub">
+        5 个内置模板 + 浏览器 localStorage 自定义模板 + 你历史 session 的高频关键词。
+        点击任意模板跳到 <a href={`${base}/agents/new-session/`}>new-session</a> 自动填表。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🧩 内置模板 (5)</h2>
+      <div class="agents-template-grid">
+        {BUILTIN_TEMPLATES.map((t) => (
+          <a class="agents-template-card"
+             href={`${base}/agents/new-session/?tpl=${t.id}`}
+             data-tpl-id={t.id}>
+            <span class="agents-template-emoji">{t.emoji}</span>
+            <strong>{t.title}</strong>
+            <p class="muted">{t.blurb}</p>
+            <p>
+              {t.tags.map((tag) => <code class="agents-template-tag">{tag}</code>)}
+              <small class="muted" style="margin-left:0.5rem">
+                max-cycles={t.suggestedMaxCycles} · rounds={t.suggestedRounds}
+              </small>
+            </p>
+          </a>
+        ))}
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💾 自定义模板 (浏览器 localStorage)</h2>
+      <p class="muted">
+        在 <a href={`${base}/agents/new-session/`}>new-session</a> 表单里点 "💾 另存为模板" 即可保存。
+        模板存在浏览器本地,跨刷新保留,不会上传。
+      </p>
+      <div id="agents-custom-templates" class="agents-template-grid">
+        <p class="muted" id="agents-custom-empty">加载中…</p>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 高频关键词(来自历史 goals)</h2>
+      {goals.length === 0 ? (
+        <p class="muted">archive/ 下还没有 session(需要 meta.json)。</p>
+      ) : (
+        <>
+          <p class="muted">共扫描 {goals.length} 个 session goal,出现 ≥2 次的关键词:</p>
+          <p class="agents-arxiv-cloud">
+            {hotKeywords.length === 0
+              ? <span class="muted">没有高频词(每个 goal 都用了不同关键词)</span>
+              : hotKeywords.map((k) => (
+                <a class="agents-arxiv-chip agents-arxiv-chip-warm"
+                   href={`${base}/agents/new-session/`}
+                   title={`出现 ${k.n} 次 — 点这里复用,作为新 goal 的关键词`}>
+                  {k.kw} <small>×{k.n}</small>
+                </a>
+              ))
+            }
+          </p>
+        </>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Proposal type 全局统计</h2>
+      {[...typeCounts.entries()].length === 0 ? (
+        <p class="muted">archive/ 下还没有任何 round 跑出 proposals。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>Proposal type</th>
+              <th>出现次数</th>
+              <th>占比</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...typeCounts.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([t, n]) => {
+                const total = [...typeCounts.values()].reduce((a, b) => a + b, 0);
+                return (
+                  <tr>
+                    <td><code>{t}</code></td>
+                    <td>{n}</td>
+                    <td>{total > 0 ? ((n / total) * 100).toFixed(1) : 0}%</td>
+                  </tr>
+                );
+              })}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 快速入口</h2>
+      <p>
+        <a class="button primary" href={`${base}/agents/new-session/`}>➕ 用模板新建 session</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  // 从 localStorage 读自定义模板并渲染
+  const STORAGE_KEY = 'dpr_agents_custom_templates_v1';
+  const container = document.getElementById('agents-custom-templates');
+  const empty = document.getElementById('agents-custom-empty');
+  if (container) {
+    let arr: any[] = [];
+    try { arr = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]'); } catch {}
+    if (!Array.isArray(arr) || arr.length === 0) {
+      if (empty) empty.textContent = '还没有自定义模板 — 去 new-session 里 "另存为模板"。';
+    } else {
+      container.innerHTML = '';
+      for (const t of arr) {
+        const a = document.createElement('a');
+        a.className = 'agents-template-card';
+        a.href = `/agents/new-session/?tpl=custom_${encodeURIComponent(t.id)}`;
+        a.dataset.customId = t.id;
+        a.innerHTML = `
+          <span class="agents-template-emoji">${t.emoji || '✨'}</span>
+          <strong>${(t.title || '(无标题)').replace(/[<>&"]/g, (c: string) => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c] ?? c))}</strong>
+          <p class="muted">${(t.blurb || t.goal?.slice(0, 80) || '').replace(/[<>&"]/g, (c: string) => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c] ?? c))}</p>
+          <p class="muted"><small>📅 ${new Date(t.saved_at || Date.now()).toLocaleDateString()}</small></p>
+          <button type="button" class="button small" data-del="${t.id}" style="margin-top:0.4rem">🗑️ 删除</button>
+        `;
+        container.appendChild(a);
+      }
+      // 删除按钮
+      container.querySelectorAll('button[data-del]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const id = btn.getAttribute('data-del');
+          if (!id || !confirm(`确定删除自定义模板 "${id}"?`)) return;
+          arr = arr.filter((t: any) => t.id !== id);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+          location.reload();
+        });
+      });
+    }
+  }
+</script>
