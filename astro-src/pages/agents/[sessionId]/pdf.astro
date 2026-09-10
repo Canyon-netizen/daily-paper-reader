@@ -1,0 +1,363 @@
+---
+// /agents/[sessionId]/pdf.astro — iter #63: browser-side synthesis PDF page.
+//
+// iter #63 给 CLI 加了 --export-pdf,把 session 的所有 synthesis/*.md 装配成
+// 1 份自包含的打印就绪 HTML(用户浏览器打开 → Cmd/Ctrl+P → Save as PDF)。
+// 本页是它的浏览器版本 —— 用户在 /agents/<sid>/pdf/ 直接看渲染,
+// 切 academic / compact / presentation 3 种 CSS 变体实时预览,
+// Download 把单文件 HTML 存盘,Copy 把 HTML 写到剪贴板。
+//
+// 设计(与 export.astro / compile.astro 同模式):
+//   - SSR 列所有有 meta 的 session(同 compile.astro 的 getStaticPaths)
+//   - 客户端 import 同一份 synthesis-pdf.mjs(保证与 CLI 字节级一致)
+//   - 数据源:localStorage 优先(round 由浏览器跑过),fallback 到 CLI 提示
+//   - CSS variant 切换实时重新渲染
+//   - Download / Copy:1 份 .html 即可(单文件 = 整个 PDF bundle)
+//
+// 注:此页本身不写文件,不调 LLM,纯 SSR + client-side script。
+
+import { readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths:enumerate sessions under archive/ that have meta.json
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string }; props: { hasArchive: boolean, synthesesCount: number } }[] = [];
+  let sessions: string[] = [];
+  try { sessions = await readdir(root); } catch { return []; }
+  for (const sid of sessions) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let synthesesCount = 0;
+    try {
+      const sfiles = await readdir(join(root, sid, 'synthesis'));
+      synthesesCount = sfiles.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+    } catch { synthesesCount = 0; }
+    out.push({ params: { sessionId: sid }, props: { hasArchive: true, synthesesCount } });
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const { hasArchive, synthesesCount } = Astro.props;
+---
+
+<BaseLayout title={`PDF ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← Agents Console</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>pdf</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📑 Synthesis PDF for session <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        把 session 的所有 <code>synthesis/*.md</code> 装配成 1 份自包含的
+        <strong>打印就绪 HTML</strong> —— 与 CLI <code>--export-pdf</code> 同实现。
+        在浏览器打开下载的 <code>.html</code>,按 <kbd>Cmd/Ctrl</kbd>+<kbd>P</kbd> → "Save as PDF" 即可。
+      </p>
+    </header>
+
+    <section class="agents-stats">
+      <div class="agents-stats-row">
+        <span class="agents-stat"><strong id="pdf-syntheses">0</strong> syntheses</span>
+        <span class="agents-stat"><strong id="pdf-html-kb">0</strong> KB HTML</span>
+        <span class="agents-stat"><strong id="pdf-style-tag">academic</strong> style</span>
+        <span class="agents-stat" id="pdf-source-tag"></span>
+      </div>
+    </section>
+
+    <section class="agents-controls">
+      <div class="agents-controls-row">
+        <label class="agents-controls-label">
+          <span>CSS variant</span>
+          <select id="pdf-style">
+            <option value="academic">Academic (论文风)</option>
+            <option value="compact">Compact (紧凑)</option>
+            <option value="presentation">Presentation (演示风)</option>
+          </select>
+        </label>
+        <button class="button primary" id="pdf-download-btn" title="下载当前渲染的 .html 文件(自包含)">
+          ⬇️ Download HTML
+        </button>
+        <button class="button" id="pdf-copy-btn" title="把当前 HTML 写到剪贴板">
+          📋 Copy
+        </button>
+        <button class="button" id="pdf-refresh-btn" title="重新读取 localStorage 重建 bundle">
+          🔄 Refresh
+        </button>
+        <a class="button" href={`${base}/agents/${sessionId}/`} title="回到 session 详情">← Back</a>
+      </div>
+    </section>
+
+    <section class="agents-export-section">
+      <h3 id="pdf-preview-title">HTML preview (打开 / 复制 / Save as PDF)</h3>
+      <p id="pdf-empty-warn" class="agents-help-warn" hidden>
+        ⚠️ 本 session 没有任何 localStorage round 或 archive synthesis — bundle 是空的。
+        用 CLI 跑几轮(自动合成)或在 server 端 archive/&lt;sid&gt;/synthesis/ 放几个 synthesis_*.md:
+        <code>node astro-src/scripts/agents-run.mjs --session {sessionId} --rounds 3 --synthesize</code>
+      </p>
+      <textarea id="pdf-preview-area" rows="28" placeholder="点 🔄 Refresh 装配 PDFBundle" readonly></textarea>
+    </section>
+
+    <section class="agents-help">
+      <h3>💡 CLI 等价命令</h3>
+      <p>在仓库根目录运行(产出 archive/&lt;sid&gt;/synthesis.html 单文件):</p>
+      <pre><code>node astro-src/scripts/agents-run.mjs --session {sessionId} --export-pdf
+node astro-src/scripts/agents-run.mjs --session {sessionId} --export-pdf --pdf-style compact
+node astro-src/scripts/agents-run.mjs --session {sessionId} --export-pdf path/to/out.html
+node astro-src/scripts/agents-run.mjs --session {sessionId} --export-pdf --json</code></pre>
+      <p>下载后:</p>
+      <ol>
+        <li>用任意浏览器打开 <code>.html</code></li>
+        <li>按 <kbd>Cmd/Ctrl</kbd>+<kbd>P</kbd> → 选择 "Save as PDF"</li>
+        <li>建议边距:默认 / 缩放:100% / 启用"背景图形"</li>
+      </ol>
+    </section>
+
+    <section class="agents-help">
+      <h3>📚 这是什么?</h3>
+      <p>
+        iter #63 引入 <code>--export-pdf</code> CLI(<code>lib/agents/synthesis-pdf.{mjs,ts}</code>),
+        把 <code>archive/&lt;sid&gt;/synthesis/synthesis_*.md</code> 按编号装配成 1 份自包含的
+        <strong>打印就绪 HTML</strong> —— 内嵌 CSS + <code>@page</code> 规则 + 页码,
+        用户在浏览器里 <code>Cmd/Ctrl+P</code> → "Save as PDF" 即可。
+      </p>
+      <p>本页(iter #63 的浏览器版)把同一份 synthesis-pdf 实现搬到浏览器:</p>
+      <ul>
+        <li>数据源:localStorage 优先(round 由浏览器跑过),fallback 到空 bundle + 提示</li>
+        <li>实时切换 academic / compact / presentation 3 种 CSS 变体预览</li>
+        <li>Download 按钮触发浏览器 &lt;a download&gt; 单文件 .html</li>
+        <li>与 CLI 端 <strong>字节级一致</strong> —— 同一份 buildPdfBundle / formatPdfHtml</li>
+        <li><strong>不依赖</strong> pandoc / wkhtmltopdf 等系统 PDF 工具</li>
+      </ul>
+      <p class={hasArchive && synthesesCount ? '' : 'agents-help-warn'}>
+        {hasArchive
+          ? (synthesesCount
+              ? `✓ 检测到 server 端 archive/${sessionId}/synthesis/(${synthesesCount} 份) + ${synthesesCount} syntheses;但浏览器读不到文件系统 —— 仍需在浏览器跑 round 才有 localStorage 数据。`
+              : `⚠ Server 端 archive/${sessionId}/synthesis/ 为空(还没跑 synthesis);依赖 localStorage 中的 round。`)
+          : `⚠ Server 端无 archive/${sessionId}/;依赖 localStorage 中的 round。`}
+      </p>
+    </section>
+  </main>
+
+  <script id="session-id-data" type="application/json" set:html={JSON.stringify({ sessionId, hasArchive, synthesesCount })}></script>
+
+  <script>
+    /* eslint-disable */
+    // -----------------------------------------------------------------------
+    // 客户端 synthesis PDF — iter #63
+    // -----------------------------------------------------------------------
+    //
+    // 与 compile.astro (iter #62) / export.astro (iter #58) 同结构:
+    // 从同一份 synthesis-pdf.mjs 导入纯函数,保证与 CLI 端 --export-pdf 输出字节级一致。
+    //
+    // 关键差异(浏览器无 filesystem 限制):
+    //   - 数据源:localStorage 优先(round 由浏览器跑过)
+    //   - fallback:从 localStorage 已有 round 合成"伪 synthesis" entries
+    //     (类似 compile.astro 的 extractDeliverableLikeFromRounds)
+    //   - 用户跑了 round 后,本页能渲染 PDFBundle 预览 + 切 CSS variant
+    //   - 看完整 archive/ 内容要走 CLI --export-pdf
+
+    const sessionIdMeta = JSON.parse(document.getElementById('session-id-data').textContent);
+    const sessionId = sessionIdMeta.sessionId;
+    const hasArchive = sessionIdMeta.hasArchive;
+    const serverSyntheseCount = sessionIdMeta.synthesesCount;
+
+    const ROUNDS_KEY = (sid) => `dpr_agents_rounds_${sid}`;
+    const META_KEY = (sid) => `dpr_agents_meta_${sid}`;
+
+    import {
+      buildPdfBundle,
+      formatPdfHtml,
+      buildPdfFileName,
+    } from '../../../../lib/agents/synthesis-pdf.mjs';
+
+    // -----------------------------------------------------------------------
+    // 数据源:localStorage 优先(浏览器跑的 round),fallback 到伪合成
+    // -----------------------------------------------------------------------
+
+    function readLocalMeta() {
+      try {
+        const raw = localStorage.getItem(META_KEY(sessionId));
+        if (!raw) return null;
+        return JSON.parse(raw);
+      } catch { return null; }
+    }
+    function readLocalRounds() {
+      try {
+        const raw = localStorage.getItem(ROUNDS_KEY(sessionId));
+        if (!raw) return [];
+        return JSON.parse(raw);
+      } catch { return []; }
+    }
+
+    /**
+     * 从 localStorage round 合成"伪 synthesis" entries
+     *
+     * iter #63 限制:浏览器侧没有 synthesis/*.md 真实文件(只有 round JSON),
+     * 所以我们根据 round 数据合成 N 份"伪 synthesis",每份至少一段
+     * "本轮 round 的 proposal 摘要"。这能让 bundle 至少有几条 article
+     * 可渲染,用户能看到完整页面结构(CSS / cover / TOC / 切 variant)。
+     *
+     * CLI 版用 archive/<sid>/synthesis/*.md 真实文件 —— 更丰富。
+     * 这里走"最小可用的 bundle 装配"。
+     */
+    function synthesizePseudoSyntheses(rounds, meta) {
+      if (!rounds.length) return [];
+      const sessionTitle = meta?.goal ?? `Session ${sessionId}`;
+      return rounds.map((r, i) => {
+        const proposals = r?.designer?.proposals ?? [];
+        const promotedCount = proposals.filter((p) => p.decision === 'promoted').length;
+        const lines = [
+          '---',
+          `title: "${sessionTitle} — Round ${r.round ?? i + 1} 摘要"`,
+          `session_id: "${sessionId}"`,
+          'schema_version: 1',
+          `synthesis_index: ${i + 1}`,
+          `generated_at: "${new Date(r.timestamp ?? Date.now()).toISOString()}"`,
+          'model: "browser-pseudo"',
+          `rounds_synthesized: 1`,
+          `deliverables_referenced: ${proposals.length}`,
+          `unique_papers: ${proposals.reduce((s, p) => s + (p.evidence?.paperIds?.length ?? 0), 0)}`,
+          '---',
+          '',
+          `# 🧠 ${sessionTitle} — Round ${r.round ?? i + 1}`,
+          '',
+          '## 摘要 / Answer',
+          '',
+          `本 round 共 ${proposals.length} 条 proposal,${promotedCount} 条 promoted。`,
+          '',
+          '## 关键发现 / Key Findings',
+          '',
+        ];
+        for (const p of proposals) {
+          lines.push(`- **${p.title ?? '(untitled)'}** _(type=${p.type ?? 'draft'}, decision=${p.decision ?? 'unknown'})_: ${(p.rationale ?? '').slice(0, 200)}`);
+        }
+        lines.push('');
+        lines.push('## 论据 / Evidence');
+        lines.push('');
+        lines.push('_注:这是浏览器侧"伪 synthesis",由 localStorage round JSON 合成。');
+        lines.push('完整 synthesis/*.md 需在 CLI 端 `node agents-run.mjs --export-pdf` 才会出现在 PDFBundle 里。_');
+        return { idx: i + 1, raw: lines.join('\n') };
+      });
+    }
+
+    function buildCurrentBundle() {
+      const meta = readLocalMeta();
+      const rounds = readLocalRounds();
+      // 浏览器没有真实 synthesis/*.md —— 合成 pseudo entries 喂给 buildPdfBundle
+      const syntheses = synthesizePseudoSyntheses(rounds, meta);
+      return {
+        bundle: buildPdfBundle({
+          meta: { ...(meta ?? {}), session_id: sessionId },
+          syntheses,
+        }),
+        source: rounds.length ? 'localStorage (pseudo-synthesized from rounds)'
+                              : (hasArchive && serverSyntheseCount ? `archive/${sessionId}/synthesis/ (${serverSyntheseCount} files; not readable — empty)` : 'none'),
+      };
+    }
+
+    function getCurrentStyle() {
+      const el = document.getElementById('pdf-style');
+      return el?.value || 'academic';
+    }
+
+    function setCurrentStyle(v) {
+      const el = document.getElementById('pdf-style');
+      if (el) el.value = v;
+    }
+
+    function renderStats(bundle, source) {
+      document.getElementById('pdf-syntheses').textContent = String(bundle.stats.syntheses);
+      const kb = (formatPdfHtml(bundle, { cssVariant: 'academic' }).length / 1024).toFixed(1);
+      document.getElementById('pdf-html-kb').textContent = `${kb} KB`;
+      document.getElementById('pdf-style-tag').textContent = getCurrentStyle();
+      const tag = document.getElementById('pdf-source-tag');
+      tag.textContent = `source: ${source}`;
+    }
+
+    let currentHtml = '';
+    function renderPreview(bundle) {
+      const style = getCurrentStyle();
+      currentHtml = formatPdfHtml(bundle, { cssVariant: style });
+      const area = document.getElementById('pdf-preview-area');
+      area.value = currentHtml;
+      // 字节数显示在 title
+      const tEl = document.getElementById('pdf-preview-title');
+      tEl.textContent = `HTML preview (${(currentHtml.length / 1024).toFixed(1)} KB, ${bundle.stats.syntheses} syntheses, style=${style})`;
+      // 空 bundle 警告
+      const warn = document.getElementById('pdf-empty-warn');
+      warn.hidden = bundle.stats.syntheses > 0;
+      document.getElementById('pdf-style-tag').textContent = style;
+    }
+
+    function downloadFile(filename, content) {
+      const blob = new Blob([content], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    function boot() {
+      const { bundle, source } = buildCurrentBundle();
+      renderStats(bundle, source);
+      renderPreview(bundle);
+
+      // style 切换 → 重新渲染(不改 bundle,只是换 CSS)
+      document.getElementById('pdf-style').addEventListener('change', () => {
+        renderPreview(bundle);
+      });
+
+      // Download:用 buildPdfFileName(<sid>) 生成文件名
+      document.getElementById('pdf-download-btn').addEventListener('click', () => {
+        downloadFile(buildPdfFileName(sessionId), currentHtml);
+      });
+
+      // Copy:navigator.clipboard.writeText(currentHtml)
+      document.getElementById('pdf-copy-btn').addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(currentHtml);
+          const btn = document.getElementById('pdf-copy-btn');
+          const oldText = btn.textContent;
+          btn.textContent = '✅ Copied!';
+          setTimeout(() => { btn.textContent = oldText; }, 1500);
+        } catch (err) {
+          alert('Copy failed: ' + err.message);
+        }
+      });
+
+      // Refresh:重新读 localStorage
+      document.getElementById('pdf-refresh-btn').addEventListener('click', () => {
+        const { bundle: b, source: s } = buildCurrentBundle();
+        renderStats(b, s);
+        renderPreview(b);
+      });
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot);
+    } else {
+      boot();
+    }
+  </script>
+</BaseLayout>

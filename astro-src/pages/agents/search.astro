@@ -1,0 +1,333 @@
+---
+// astro-src/pages/agents/search.astro
+//
+// iter #48 — Archive-wide full-text search.
+//
+// Walks archive/<sid>/{meta.json, rounds/round_*.json, synthesis/synthesis_*.md}
+// and indexes searchable text. Renders results with context snippets.
+// ?q=<query> filters server-side; client-side also re-filters for instant
+// feedback as the user types.
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// Parse query from URL
+// ---------------------------------------------------------------------------
+
+const url = Astro.url;
+const qRaw = url.searchParams.get('q') ?? '';
+const q = qRaw.trim();
+const qLower = q.toLowerCase();
+
+// ---------------------------------------------------------------------------
+// Build index: one entry per (kind, sid, locator, text)
+//   kind: 'goal' | 'round' | 'proposal' | 'synthesis'
+// ---------------------------------------------------------------------------
+
+interface Hit {
+  kind: 'goal' | 'round' | 'proposal' | 'synthesis';
+  sid: string;
+  // locator 用于拼接 URL
+  rid?: number;       // round 编号 (1-based)
+  sidx?: number;      // synthesis index (1-based)
+  title: string;      // 卡片标题
+  snippet: string;    // 含 query 周围 ±15 字符的预览
+  matchedField: string; // 哪个字段命中
+  score: number;      // 命中次数
+  lastSeen: number;   // 时间戳
+}
+
+const hits: Hit[] = [];
+
+function snippetAround(text: string, query: string, radius = 50): string {
+  if (!text) return '';
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text.slice(0, radius * 2);
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(text.length, idx + query.length + radius);
+  const prefix = start > 0 ? '…' : '';
+  const suffix = end < text.length ? '…' : '';
+  return prefix + text.slice(start, end) + suffix;
+}
+
+function countOccurrences(text: string, query: string): number {
+  if (!text || !query) return 0;
+  const lower = text.toLowerCase();
+  const needle = query.toLowerCase();
+  let count = 0;
+  let pos = 0;
+  while ((pos = lower.indexOf(needle, pos)) !== -1) { count++; pos += needle.length; }
+  return count;
+}
+
+const archiveRoot = join(process.cwd(), 'archive');
+let totalRounds = 0;
+let totalSyntheses = 0;
+
+if (existsSync(archiveRoot)) {
+  const sids = await readdir(archiveRoot);
+  for (const sid of sids) {
+    const sessionDir = join(archiveRoot, sid);
+    if (!existsSync(sessionDir)) continue;
+
+    // meta.json → goal
+    const metaPath = join(sessionDir, 'meta.json');
+    if (existsSync(metaPath)) {
+      try {
+        const meta = JSON.parse(await readFile(metaPath, 'utf8'));
+        const goal: string = meta.goal ?? '';
+        const createdAt: number = meta.created_at ?? 0;
+        if (goal) {
+          const occ = countOccurrences(goal, qLower);
+          if (occ > 0) {
+            hits.push({
+              kind: 'goal',
+              sid,
+              title: `Goal: ${goal.slice(0, 80)}${goal.length > 80 ? '…' : ''}`,
+              snippet: snippetAround(goal, qLower),
+              matchedField: 'goal',
+              score: occ * 3, // goal 命中权重高
+              lastSeen: createdAt,
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // rounds
+    const roundsDir = join(sessionDir, 'rounds');
+    if (existsSync(roundsDir)) {
+      let files: string[];
+      try {
+        files = (await readdir(roundsDir)).filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      } catch { files = []; }
+      for (const f of files) {
+        totalRounds += 1;
+        let rec: any;
+        try {
+          rec = JSON.parse(await readFile(join(roundsDir, f), 'utf8'));
+        } catch { continue; }
+        const proposals = rec.designer?.proposals ?? [];
+        const critiques = rec.feedback?.critiques ?? [];
+        const finishedAt = rec.finished_at ?? 0;
+        const mm = f.match(/^round_(\d+)\.json$/);
+        const rid = mm ? Number(mm[1]) : 0;
+
+        // designer.rationale_aggregate (如有) + 每个 proposal
+        for (const p of proposals) {
+          const title = String(p.title ?? '');
+          const rationale = String(p.rationale ?? '');
+          const text = `${title}\n${rationale}`;
+          const occ = countOccurrences(text, qLower);
+          if (occ > 0) {
+            hits.push({
+              kind: 'proposal',
+              sid,
+              rid,
+              title: `[${p.type}] ${title}`,
+              snippet: snippetAround(`${title} — ${rationale}`, qLower, 60),
+              matchedField: title.toLowerCase().includes(qLower) ? 'title' : 'rationale',
+              score: occ,
+              lastSeen: finishedAt,
+            });
+          }
+        }
+
+        // round 自身的 telemetry/duration/lastSeen 不算文本命中
+        // 但 modifier.applied[].payload.title 也是 search target
+        for (const a of rec.modifier?.applied ?? []) {
+          const pt = String(a.payload?.title ?? '');
+          if (pt && pt.toLowerCase().includes(qLower)) {
+            hits.push({
+              kind: 'round',
+              sid,
+              rid,
+              title: `Applied: ${pt.slice(0, 80)}`,
+              snippet: snippetAround(pt, qLower, 50),
+              matchedField: 'applied.payload.title',
+              score: 1,
+              lastSeen: finishedAt,
+            });
+          }
+        }
+      }
+    }
+
+    // synthesis
+    const synthDir = join(sessionDir, 'synthesis');
+    if (existsSync(synthDir)) {
+      let sfiles: string[];
+      try {
+        sfiles = (await readdir(synthDir)).filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+      } catch { sfiles = []; }
+      for (const f of sfiles) {
+        totalSyntheses += 1;
+        let raw: string;
+        try { raw = await readFile(join(synthDir, f), 'utf8'); } catch { continue; }
+        const body = raw.replace(/^---\n[\s\S]*?\n---\n?/, '');
+        const metaMatch = raw.match(/^---\n([\s\S]*?)\n---/);
+        const meta: Record<string, string> = {};
+        if (metaMatch) {
+          for (const line of metaMatch[1].split(/\r?\n/)) {
+            const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
+            if (m) {
+              let v = m[2].trim();
+              if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+              meta[m[1]] = v;
+            }
+          }
+        }
+        const occ = countOccurrences(body, qLower);
+        if (occ > 0) {
+          const mm = f.match(/^synthesis_(\d+)\.md$/);
+          const sidx = mm ? Number(mm[1]) : 0;
+          hits.push({
+            kind: 'synthesis',
+            sid,
+            sidx,
+            title: `${meta.title ?? `Synthesis #${sidx}`} (#${sidx})`,
+            snippet: snippetAround(body, qLower, 80),
+            matchedField: 'synthesis body',
+            score: occ * 2,
+            lastSeen: meta.generated_at ? Date.parse(meta.generated_at) || 0 : 0,
+          });
+        }
+      }
+    }
+  }
+}
+
+// 排序:score DESC, 然后 lastSeen DESC
+hits.sort((a, b) => {
+  if (b.score !== a.score) return b.score - a.score;
+  return b.lastSeen - a.lastSeen;
+});
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function highlightSnippet(s: string, query: string): string {
+  if (!query) return escapeHtml(s);
+  const escaped = escapeHtml(s);
+  const lower = s.toLowerCase();
+  const needle = query.toLowerCase();
+  const parts: string[] = [];
+  let pos = 0;
+  while (true) {
+    const idx = lower.indexOf(needle, pos);
+    if (idx === -1) { parts.push(escapeHtml(s.slice(pos))); break; }
+    parts.push(escapeHtml(s.slice(pos, idx)));
+    parts.push(`<mark>${escapeHtml(s.slice(idx, idx + needle.length))}</mark>`);
+    pos = idx + needle.length;
+  }
+  return parts.join('');
+}
+
+function hitUrl(h: Hit): string {
+  if (h.kind === 'synthesis' && h.sidx) return `${base}/agents/${h.sid}/synthesis/${String(h.sidx).padStart(3, '0')}/`;
+  if ((h.kind === 'round' || h.kind === 'proposal') && h.rid) return `${base}/agents/${h.sid}/${String(h.rid).padStart(3, '0')}/`;
+  return `${base}/agents/${h.sid}/`;
+}
+
+const kindEmoji: Record<Hit['kind'], string> = {
+  goal: '🎯',
+  round: '🛠',
+  proposal: '💡',
+  synthesis: '📜',
+};
+---
+
+<BaseLayout title={q ? `Search: ${q}` : 'Search'}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / search</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>🔎 Archive-wide Search</h1>
+      <p class="muted">
+        跨 <strong>{totalRounds}</strong> rounds / <strong>{totalSyntheses}</strong> syntheses
+        全文搜索 goal / proposal title + rationale / synthesis body。
+        URL 形如 <code>?q=...</code>,支持中文。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <form id="agents-search-form" method="get" action={`${base}/agents/search/`}>
+        <input
+          type="search"
+          name="q"
+          id="agents-search-input"
+          value={q}
+          placeholder="例如:rebuttal, 2401, attention, 收敛..."
+          autofocus
+          class="agents-search-input"
+        />
+        <button type="submit" class="button">搜索 →</button>
+        {q && <a class="button" href={`${base}/agents/search/`}>清空</a>}
+      </form>
+    </section>
+
+    {q && (
+      <section class="agents-session-section">
+        <h2>📑 结果 ({hits.length})</h2>
+        {hits.length === 0 ? (
+          <p class="muted">没有命中。试试更短或更通用的关键词。</p>
+        ) : (
+          <ul class="agents-search-hits">
+            {hits.map((h) => (
+              <li class="agents-search-hit" data-hit-text={`${h.title} ${h.snippet} ${h.matchedField}`.toLowerCase()}>
+                <a href={hitUrl(h)} class="agents-search-hit-title">
+                  <span class="agents-search-kind">{kindEmoji[h.kind]}</span>
+                  <strong>{escapeHtml(h.title)}</strong>
+                </a>
+                <p class="agents-search-hit-meta">
+                  <a href={`${base}/agents/${h.sid}/`}>{escapeHtml(h.sid)}</a>
+                  {h.rid && <span> · round {h.rid}</span>}
+                  {h.sidx && <span> · synthesis #{h.sidx}</span>}
+                  <span> · matched: <code>{escapeHtml(h.matchedField)}</code></span>
+                  <span> · score: <strong>{h.score}</strong></span>
+                </p>
+                <p class="agents-search-hit-snippet" set:html={highlightSnippet(h.snippet, q)} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    )}
+  </main>
+</BaseLayout>
+
+<script type="module">
+  const input = document.getElementById('agents-search-input');
+  const hits = document.querySelectorAll('.agents-search-hit');
+  let timer;
+  input?.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const q = (input.value ?? '').toLowerCase().trim();
+      let visible = 0;
+      hits.forEach((li) => {
+        const text = li.getAttribute('data-hit-text') ?? '';
+        const show = !q || text.includes(q);
+        li.hidden = !show;
+        if (show) visible++;
+      });
+      // 简单替换一下结果计数
+      const counter = document.querySelector('.agents-session-section h2');
+      if (counter) counter.textContent = `📑 结果 (${visible})`;
+    }, 200);
+  });
+</script>

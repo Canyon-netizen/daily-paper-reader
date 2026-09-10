@@ -205,6 +205,182 @@ const allApplied = rounds.flatMap((r) =>
   r.modifier.applied.map((a) => ({ ...a, roundN: r.round })),
 ).sort((a, b) => (b.applied_at ?? 0) - (a.applied_at ?? 0)).slice(0, 8);
 
+// ---------------------------------------------------------------------------
+// iter #52 — Round comparison matrix
+// ---------------------------------------------------------------------------
+//
+// 给定 N 个 round,两两比较:
+//   - titles_jaccard = |A ∩ B| / |A ∪ B|(用 proposal 标题集合)
+//   - applied_jaccard = |A.applied ∩ B.applied| / |A.applied ∪ B.applied|
+//   - avg_score_delta = B.avg_score - A.avg_score
+//   - elapsed_delta_ms = B.elapsed - A.elapsed
+// 用 jaccard 0..1 作为相似度;1 - jaccard 作为分歧度。
+
+interface RoundSig {
+  roundN: number;
+  titles: Set<string>;
+  applied: Set<string>;
+  avgScore: number;
+  durationMs: number;
+}
+
+const roundSigs: RoundSig[] = rounds.map((r) => {
+  const titles = new Set(r.designer.proposals.map((p) => p.title));
+  const applied = new Set(r.modifier.applied.map((a) => a.proposal_id));
+  const cs = r.feedback.critiques;
+  const avg = cs.length ? cs.reduce((a, c) => a + c.total, 0) / cs.length : -1;
+  return {
+    roundN: r.round,
+    titles,
+    applied,
+    avgScore: avg,
+    durationMs: r.telemetry?.duration_ms ?? (r.finished_at - r.started_at),
+  };
+});
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  const uni = a.size + b.size - inter;
+  return uni === 0 ? 1 : inter / uni;
+}
+
+interface PairStat {
+  a: number;
+  b: number;
+  titleJaccard: number;
+  appliedJaccard: number;
+  avgScoreDelta: number | null;
+  elapsedDeltaMs: number;
+}
+
+const pairStats: PairStat[] = [];
+for (let i = 0; i < roundSigs.length; i++) {
+  for (let j = i + 1; j < roundSigs.length; j++) {
+    const A = roundSigs[i];
+    const B = roundSigs[j];
+    pairStats.push({
+      a: A.roundN,
+      b: B.roundN,
+      titleJaccard: jaccard(A.titles, B.titles),
+      appliedJaccard: jaccard(A.applied, B.applied),
+      avgScoreDelta: A.avgScore < 0 || B.avgScore < 0 ? null : B.avgScore - A.avgScore,
+      elapsedDeltaMs: B.durationMs - A.durationMs,
+    });
+  }
+}
+
+// 设计漂移:title_jaccard 两两的标准差(衡量研究方向的稳定性)
+function stdev(xs: number[]): number {
+  if (xs.length === 0) return 0;
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const v = xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length;
+  return Math.sqrt(v);
+}
+const designDrift = stdev(pairStats.map((p) => p.titleJaccard));
+const meanJaccard = pairStats.length === 0
+  ? 0
+  : pairStats.reduce((a, b) => a + b.titleJaccard, 0) / pairStats.length;
+const driftBucket = designDrift < 0.05 ? '稳定' : designDrift < 0.15 ? '轻微漂移' : '明显漂移';
+const driftCls = designDrift < 0.05 ? 'agents-drift-low' : designDrift < 0.15 ? 'agents-drift-mid' : 'agents-drift-high';
+
+// ---------------------------------------------------------------------------
+// iter #53 — paper × persona score matrix
+// ---------------------------------------------------------------------------
+//
+// 每行 = 出现过在本 session 任意 round evidence.paperIds 里的 paper
+// 每列 = 3 个 persona (methodologist / engineer / skeptic)
+// 单元格 = 所有 critique 中,proposal evidence 含该 paper 的 critique 的对应
+//          persona 平均分。如果该 paper 在某 persona 列没有任何评分 → null。
+//   "score_total_avg" 列: 该 paper 的所有 critique total 分平均。
+
+interface PaperPersonaRow {
+  paperId: string;
+  rounds: number[];                       // 出现过的 round 列表
+  proposalCount: number;                  // 该 paper 参与 proposal 的次数
+  evidenceOnly: boolean;                  // true = 仅出现在 evidence,没进入 critique
+  m: number | null;                       // methodologist
+  e: number | null;                       // engineer
+  s: number | null;                       // skeptic
+  totalAvg: number | null;                // total mean
+  totalSamples: number;                   // 参与 critique 总数
+}
+
+const PERSONAS = ['m', 'e', 's'] as const;
+
+// paper_id → { rounds, proposalIds, critiqueIds }
+interface PaperAgg {
+  paperId: string;
+  rounds: Set<number>;
+  proposalIds: Set<string>;
+  critiqueIds: Set<string>;
+}
+
+const paperAggMap = new Map<string, PaperAgg>();
+for (const r of rounds) {
+  for (const p of r.designer.proposals) {
+    for (const pid of p.evidence.paperIds) {
+      let agg = paperAggMap.get(pid);
+      if (!agg) {
+        agg = { paperId: pid, rounds: new Set(), proposalIds: new Set(), critiqueIds: new Set() };
+        paperAggMap.set(pid, agg);
+      }
+      agg.rounds.add(r.round);
+      agg.proposalIds.add(p.id);
+      const cr = r.feedback.critiques.find((c) => c.proposal_id === p.id);
+      if (cr) agg.critiqueIds.add(c.proposal_id);
+    }
+  }
+}
+
+const paperRows: PaperPersonaRow[] = [...paperAggMap.values()].map((agg) => {
+  // 把该 paper 关联的所有 critique 拿过来,求各 persona 平均
+  let mSum = 0, eSum = 0, sSum = 0, tSum = 0;
+  let mN = 0, eN = 0, sN = 0, tN = 0;
+  for (const r of rounds) {
+    for (const p of r.designer.proposals) {
+      if (!agg.proposalIds.has(p.id)) continue;
+      const cr = r.feedback.critiques.find((c) => c.proposal_id === p.id);
+      if (!cr) continue;
+      const sc = cr.scores as { methodologist: number; engineer: number; skeptic: number };
+      if (sc.methodologist != null) { mSum += sc.methodologist; mN++; }
+      if (sc.engineer != null)     { eSum += sc.engineer;     eN++; }
+      if (sc.skeptic != null)      { sSum += sc.skeptic;      sN++; }
+      if (cr.total != null)        { tSum += cr.total;        tN++; }
+    }
+  }
+  return {
+    paperId: agg.paperId,
+    rounds: [...agg.rounds].sort((a, b) => a - b),
+    proposalCount: agg.proposalIds.size,
+    evidenceOnly: agg.critiqueIds.size === 0,
+    m: mN === 0 ? null : mSum / mN,
+    e: eN === 0 ? null : eSum / eN,
+    s: sN === 0 ? null : sSum / sN,
+    totalAvg: tN === 0 ? null : tSum / tN,
+    totalSamples: tN,
+  };
+}).sort((a, b) => {
+  // totalAvg 大的在前(null 排到末尾)
+  if (a.totalAvg === null && b.totalAvg === null) return a.paperId.localeCompare(b.paperId);
+  if (a.totalAvg === null) return 1;
+  if (b.totalAvg === null) return -1;
+  return b.totalAvg - a.totalAvg;
+});
+
+// 顶部 / 底部:最看好 / 最看空(只看有 totalAvg 的,且参与 ≥1 critique)
+const withScores = paperRows.filter((r) => r.totalAvg !== null && r.totalSamples > 0);
+const topPicked = withScores.filter((r) => (r.totalAvg ?? 0) >= 7);
+const topSkeptical = withScores.filter((r) => (r.totalAvg ?? 0) < 5);
+
+function scoreCls(n: number | null): string {
+  if (n === null) return 'agents-matrix-na';
+  if (n >= 8) return 'agents-matrix-cell-high';
+  if (n >= 6) return 'agents-matrix-cell-mid';
+  return 'agents-matrix-cell-low';
+}
+
 // Chart geometry — SVG viewport, max values for normalization
 const N = Math.max(1, cycleStats.length);
 const CHART_W = Math.max(280, N * 80);
@@ -253,6 +429,7 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
             · 创建于 {new Date(meta.created_at).toLocaleString()}
             {meta.rounds_requested && <span> · 计划 rounds: {meta.rounds_requested}</span>}
             {meta.dry_run && <span class="badge badge-low" style="margin-left:0.5rem">DRY-RUN</span>}
+            <span class="agents-ann-badge" id="agents-ann-count-badge" data-sid={sessionId}>📝 备注 加载中…</span>
           </p>
         </header>
 
@@ -382,6 +559,165 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
         </section>
 
         <section class="agents-session-section">
+          <h2>🔁 Round Comparison Matrix (iter #52)</h2>
+          <p class="muted">
+            N×N 矩阵,每格是两两 round 的 proposal 标题 <strong>Jaccard 相似度</strong>
+            (1=完全相同研究方向,0=完全不同)。同时给出 applied proposal 相似度 + 平均分差 + 用时差。
+            <br />
+            本 session 设计漂移: <span class={driftCls}>{designDrift.toFixed(3)} ({driftBucket})</span>
+            · 平均 Jaccard: <code>{meanJaccard.toFixed(3)}</code>
+            · pair 数: <code>{pairStats.length}</code>
+          </p>
+          {roundSigs.length < 2 ? (
+            <p class="muted">少于 2 个 round,无法比较。</p>
+          ) : (
+            <div class="agents-matrix-wrapper">
+              <table class="agents-matrix-table">
+                <thead>
+                  <tr>
+                    <th class="agents-matrix-corner">r ⨯ r</th>
+                    {roundSigs.map((s) => <th>r{s.roundN}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {roundSigs.map((rowSig) => (
+                    <tr>
+                      <th>r{rowSig.roundN}</th>
+                      {roundSigs.map((colSig) => {
+                        if (rowSig.roundN === colSig.roundN) {
+                          return <td class="agents-matrix-diag"><span class="muted">—</span></td>;
+                        }
+                        // 找 pair
+                        const ps = pairStats.find((p) =>
+                          (p.a === rowSig.roundN && p.b === colSig.roundN) ||
+                          (p.a === colSig.roundN && p.b === rowSig.roundN)
+                        );
+                        if (!ps) return <td class="muted">?</td>;
+                        const j = ps.titleJaccard;
+                        const bg = `rgba(59, 130, 246, ${0.15 + j * 0.7})`;
+                        const cellCls = j >= 0.7 ? 'agents-matrix-cell-high'
+                                      : j >= 0.3 ? 'agents-matrix-cell-mid'
+                                      : 'agents-matrix-cell-low';
+                        return (
+                          <td class={`agents-matrix-cell ${cellCls}`}
+                              style={`background:${bg}`}
+                              title={`titles ∩: ${(j * 100).toFixed(0)}%  · applied ∩: ${(ps.appliedJaccard * 100).toFixed(0)}%  · Δscore: ${ps.avgScoreDelta === null ? '—' : ps.avgScoreDelta.toFixed(2)}  · Δtime: ${(ps.elapsedDeltaMs / 1000).toFixed(1)}s`}>
+                            <a href={`${base}/agents/${sessionId}/${String(rowSig.roundN).padStart(3, '0')}/`}
+                               class="agents-matrix-link">{j.toFixed(2)}</a>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {pairStats.length > 0 && (
+            <details class="agents-matrix-pair-details">
+              <summary>📋 全部 pair 详情 ({pairStats.length})</summary>
+              <table class="agents-session-table">
+                <thead>
+                  <tr>
+                    <th>rA</th><th>rB</th>
+                    <th>titles Jaccard</th>
+                    <th>applied Jaccard</th>
+                    <th>Δ avg score</th>
+                    <th>Δ time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pairStats
+                    .slice()
+                    .sort((x, y) => x.titleJaccard - y.titleJaccard)
+                    .map((p) => (
+                      <tr>
+                        <td>r{p.a}</td>
+                        <td>r{p.b}</td>
+                        <td>{p.titleJaccard.toFixed(3)}</td>
+                        <td>{p.appliedJaccard.toFixed(3)}</td>
+                        <td>{p.avgScoreDelta === null ? <span class="muted">—</span> : p.avgScoreDelta.toFixed(2)}</td>
+                        <td>{(p.elapsedDeltaMs / 1000).toFixed(1)}s</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              <p class="muted"><small>默认按 titles Jaccard 升序(分歧最大的在前)。</small></p>
+            </details>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📚 Paper × Persona Matrix (iter #53)</h2>
+          <p class="muted">
+            行 = 本 session 出现在任意 round <code>evidence.paperIds</code> 里的论文。
+            列 = 3 个 persona。<strong>单元格</strong>是该论文关联 proposal 的 critique 中对应 persona 的平均分(0..10)。
+            灰色行表示该论文仅出现在 evidence、未参与 critique。
+          </p>
+          {paperRows.length === 0 ? (
+            <p class="muted">尚无 paper 出现在 evidence 里。</p>
+          ) : (
+            <>
+              <div class="agents-paper-persona-wrapper">
+                <table class="agents-paper-persona-table">
+                  <thead>
+                    <tr>
+                      <th>paper</th>
+                      <th>rounds</th>
+                      <th>proposals</th>
+                      <th title="methodologist">m</th>
+                      <th title="engineer">e</th>
+                      <th title="skeptic">s</th>
+                      <th title="total avg (desc)">total</th>
+                      <th>n</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paperRows.map((r) => (
+                      <tr class={r.evidenceOnly ? 'agents-paper-persona-evidence-only' : ''}>
+                        <td class="agents-paper-persona-id">
+                          <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener">{r.paperId}</a>
+                          {r.evidenceOnly && <small class="muted" title="该 paper 只出现于 evidence,未进入 critique"> (evidence-only)</small>}
+                        </td>
+                        <td><small>{r.rounds.length > 0 ? r.rounds.map((n) => `r${n}`).join(', ') : <span class="muted">—</span>}</small></td>
+                        <td>{r.proposalCount}</td>
+                        <td class={scoreCls(r.m)}>{r.m === null ? <span class="muted">—</span> : r.m.toFixed(2)}</td>
+                        <td class={scoreCls(r.e)}>{r.e === null ? <span class="muted">—</span> : r.e.toFixed(2)}</td>
+                        <td class={scoreCls(r.s)}>{r.s === null ? <span class="muted">—</span> : r.s.toFixed(2)}</td>
+                        <td class={scoreCls(r.totalAvg)}><strong>{r.totalAvg === null ? <span class="muted">—</span> : r.totalAvg.toFixed(2)}</strong></td>
+                        <td><small>{r.totalSamples}</small></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {(topPicked.length > 0 || topSkeptical.length > 0) && (
+                <div class="agents-paper-persona-summary">
+                  {topPicked.length > 0 && (
+                    <p>
+                      <span class="agents-drift-low">👍 最看好 (total ≥ 7):</span>{' '}
+                      {topPicked.map((r) => (
+                        <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener" class="agents-paper-link">{r.paperId}</a>
+                      )).reduce<any>((acc, el, i) => acc.concat(i > 0 ? [', '] : [], el), [])}
+                    </p>
+                  )}
+                  {topSkeptical.length > 0 && (
+                    <p>
+                      <span class="agents-drift-high">👎 最看空 (total &lt; 5):</span>{' '}
+                      {topSkeptical.map((r) => (
+                        <a href={`${base}/papers/${r.paperId}/`} target="_blank" rel="noopener" class="agents-paper-link">{r.paperId}</a>
+                      )).reduce<any>((acc, el, i) => acc.concat(i > 0 ? [', '] : [], el), [])}
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+
+        <section class="agents-session-section">
           <h2>🛠 Recent applied actions ({allApplied.length})</h2>
           {allApplied.length === 0 ? (
             <p class="muted">尚无 applied action</p>
@@ -420,11 +756,17 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
         </section>
 
         <section class="agents-session-section">
+          <h2>📅 Proposal Timeline</h2>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/timeline/`}>查看每个 proposal 的逐轮生命周期 →</a>
+          </p>
+        </section>
+
+        <section class="agents-session-section">
           <h2>📜 Synthesis 历史</h2>
           <p class="muted">
             <a href={`${base}/agents/${sessionId}/synthesis/`}>查看全部 {syntheses.length} 份 synthesis →</a>
           </p>
-        </section>
 
         <section class="agents-session-section">
           <h2>🔁 继续 / resume</h2>
@@ -433,7 +775,127 @@ function actionHref(a: { kind: string; payload: Record<string, unknown> }): stri
   --auto-resume --session {sessionId} \
   --max-cycles 1</pre>
         </section>
+
+        <section class="agents-session-section">
+          <h2>📦 导出</h2>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/export/`}>📦 浏览器下载 .md bundle / 复制到剪贴板 (iter #58) →</a>
+          </p>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/compile/`}>📄 浏览器装配 LaTeX / Markdown / .bib (iter #62) →</a>
+          </p>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/pdf/`}>📑 浏览器合成 PDF (打印就绪 HTML, iter #63) →</a>
+          </p>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/pipeline/`}>🔬 7-stage pipeline 进度( iter #73) →</a>
+          </p>
+          <p class="muted">
+            CLI 等价:<code>node astro-src/scripts/agents-run.mjs --export-md --session {sessionId}</code>
+            <br />
+            <code>node astro-src/scripts/agents-run.mjs --compile-paper --session {sessionId}</code>
+            <br />
+            <code>node astro-src/scripts/agents-run.mjs --export-pdf --session {sessionId}</code>
+            <br />
+            <code>node astro-src/scripts/agents-run.mjs --full-pipeline --session {sessionId}</code>
+          </p>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📝 Annotations (iter #51)</h2>
+          <p class="muted">
+            浏览器 localStorage 备注。每轮可独立写一段 markdown,系统会保留历史版本 + 导出 JSON bundle。
+          </p>
+          <table class="agents-session-table" id="agents-ann-table">
+            <thead>
+              <tr><th>Round</th><th>备注条数</th><th>最近更新</th><th>预览</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr><td colspan="5" class="muted">加载中…</td></tr>
+            </tbody>
+          </table>
+          <p class="muted">
+            <a href={`${base}/agents/${sessionId}/${String(rounds[0]?.round ?? 1).padStart(3, '0')}/annotations/`}>在 round 1 打开编辑器 →</a>
+            <span style="margin-left:0.5rem">·</span>
+            <button type="button" class="button small" id="agents-ann-export-all">📋 导出所有 round 备注 (JSON)</button>
+          </p>
+        </section>
       </>
     )}
   </main>
 </BaseLayout>
+
+<script>
+  // iter #51 — session-level annotation count widget
+  document.addEventListener('DOMContentLoaded', () => {
+    const badge = document.getElementById('agents-ann-count-badge');
+    const table = document.getElementById('agents-ann-table');
+    const exportBtn = document.getElementById('agents-ann-export-all');
+    if (!badge || !table) return;
+    const sid = badge.getAttribute('data-sid') ?? '';
+    const tbody = table.querySelector('tbody');
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+      }[c] ?? c));
+    }
+
+    // Enumerate known round numbers by trying common range up to 99
+    const maxGuess = 99;
+    const counts = new Map();
+    const latest = new Map();
+    const previews = new Map();
+
+    for (let r = 1; r <= maxGuess; r++) {
+      const padded = String(r).padStart(3, '0');
+      const KEY = `dpr_agents_annotations_${sid}_${padded}`;
+      let arr = [];
+      try { arr = JSON.parse(localStorage.getItem(KEY) ?? '[]'); } catch {}
+      if (arr.length === 0) continue;
+      counts.set(r, arr.length);
+      latest.set(r, arr[arr.length - 1].saved_at);
+      previews.set(r, arr[arr.length - 1].body ?? '');
+    }
+
+    const total = [...counts.values()].reduce((a, n) => a + n, 0);
+    const numRounds = counts.size;
+    badge.textContent = `📝 备注 ${total} 条 / ${numRounds} 轮`;
+
+    if (numRounds === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">尚无备注。打开任一 round 详情,在右上方"📝 备注"小部件里写一条。</td></tr>`;
+    } else {
+      const rows = [...counts.keys()].sort((a, b) => a - b).map((r) => {
+        const padded = String(r).padStart(3, '0');
+        const dt = new Date(latest.get(r)).toLocaleString();
+        const prev = (previews.get(r) ?? '').slice(0, 60).replace(/\n/g, ' ');
+        return `<tr>
+          <td>r${r}</td>
+          <td>${counts.get(r)}</td>
+          <td><small>${dt}</small></td>
+          <td><small class="muted">${esc(prev)}${(previews.get(r) ?? '').length > 60 ? '…' : ''}</small></td>
+          <td><a class="button small" href="/agents/${sid}/${padded}/annotations/">打开 →</a></td>
+        </tr>`;
+      }).join('');
+      tbody.innerHTML = rows;
+    }
+
+    exportBtn?.addEventListener('click', () => {
+      const bundle = { session: sid, exported_at: new Date().toISOString(), rounds: {} };
+      for (const r of counts.keys()) {
+        const padded = String(r).padStart(3, '0');
+        const KEY = `dpr_agents_annotations_${sid}_${padded}`;
+        let arr = [];
+        try { arr = JSON.parse(localStorage.getItem(KEY) ?? '[]'); } catch {}
+        bundle.rounds[padded] = arr;
+      }
+      const text = JSON.stringify(bundle, null, 2);
+      const blob = new Blob([text], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `annotations-${sid}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    });
+  });
+</script>

@@ -37,6 +37,133 @@ import {
 
 import { makeRoundRecord } from '../lib/agents/types.mjs';
 
+// Export-bundle builders are now a shared lib (iter #59):
+//   agents-run.mjs --export-md (CLI)  ──┐
+//   /agents/<sid>/export/ (browser)  ──┴── both import from lib/agents/export-bundle.mjs
+// 同时 import 进本地作用域,供本文件 loadExportBundle() 内部使用;
+// 末尾再 re-export 保持向后兼容(测试 + 外部 import 都从同一处拿)。
+import { buildExportBundle, formatExportMarkdown } from '../lib/agents/export-bundle.mjs';
+export { buildExportBundle, formatExportMarkdown };
+
+// 论文装配器(iter #61):同样是 lib/agents/ 里的纯函数,CLI 只负责 IO。
+// 把 3 智能体循环撒下的碎片 markdown 装配成 markdown + LaTeX + .bib 一整篇论文。
+// iter #64 扩展:支持 4 个 LaTeX 模板(article / acmart / IEEEtran / iclr2026)。
+import {
+  DELIVERABLE_DIRS,
+  PAPER_LATEX_TEMPLATES,
+  buildPaperDraft,
+  formatPaperMarkdown,
+  formatPaperLatex,
+  formatBibtex,
+  listLatexTemplates,
+  getLatexCompileHint,
+} from '../lib/agents/paper-compiler.mjs';
+export {
+  buildPaperDraft,
+  formatPaperMarkdown,
+  formatPaperLatex,
+  formatBibtex,
+  PAPER_LATEX_TEMPLATES,
+  listLatexTemplates,
+  getLatexCompileHint,
+};
+
+// Synthesis → 打印就绪 HTML (iter #63)。生成自包含 HTML,
+// 用户在浏览器里 Cmd/Ctrl+P → "Save as PDF" 即得到 PDF。
+// 不依赖 pandoc / wkhtmltopdf 等系统工具,纯 JS,字节级稳定。
+import { buildPdfBundle, formatPdfHtml, buildPdfFileName } from '../lib/agents/synthesis-pdf.mjs';
+export { buildPdfBundle, formatPdfHtml, buildPdfFileName };
+
+// Synthesis diff (iter #66):同一 session 两份 synthesis 对比 — topics 增减 /
+// refs 增减 / 字数变化 / 模型切换 / similarity 评分
+import { diffSyntheses, formatSynthesisDiffText } from '../lib/agents/synthesis-diff.mjs';
+export { diffSyntheses, formatSynthesisDiffText };
+
+// Evaluator (iter #69):4 agent 闭环的"评估"agent — 独立模式 --evaluate,
+// 读已有 archive/<sid>/ 产出 EvaluationReport(整体分 + 4 子分 + 各项明细)
+import {
+  buildEvaluationReport,
+  formatEvaluationReportText,
+  toJSON as toEvaluationJson,
+} from '../lib/agents/evaluator.mjs';
+export { buildEvaluationReport, formatEvaluationReportText, toEvaluationJson };
+
+// Pipeline (iter #70/71/72):研究全流程 7 stage 协调器 — ideation → lit review
+// → experiment → draft → review → revise → export。CLI 走 --full-pipeline,
+// 浏览器走 /agents/<sid>/pipeline/。两者 import 同一份 lib/agents/pipeline.mjs。
+import {
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_LABELS,
+  PIPELINE_GATES,
+  STAGE_TO_PROPOSAL_TYPE,
+  STAGE_DELIVERABLE_DIRS,
+  buildPipelinePlan,
+  evaluateStageGate,
+  advancePipeline,
+  runPipelineStage,
+  runPipeline,
+  formatPipelinePlanText,
+  summarizePipeline,
+  toJSON as toPipelineJson,
+} from '../lib/agents/pipeline.mjs';
+export {
+  PIPELINE_STAGES,
+  PIPELINE_STAGE_LABELS,
+  PIPELINE_GATES,
+  STAGE_TO_PROPOSAL_TYPE,
+  STAGE_DELIVERABLE_DIRS,
+  buildPipelinePlan,
+  evaluateStageGate,
+  advancePipeline,
+  runPipelineStage,
+  runPipeline,
+  formatPipelinePlanText,
+  summarizePipeline,
+  toPipelineJson,
+};
+
+// Reviewer (iter #71):paper-reviewer agent — 对草稿做 simulated peer review。
+// Pipeline stage 5 (p_simulate_peer_review) 内部调用。CLI 独立模式 --review-draft。
+import {
+  REVIEW_PERSONAS,
+  REVIEW_RECOMMENDATIONS,
+  reviewDraft,
+  formatReviewText as formatReviewVerdictText,
+  toJSON as toReviewJson,
+} from '../lib/agents/reviewer.mjs';
+export { REVIEW_PERSONAS, REVIEW_RECOMMENDATIONS, reviewDraft, formatReviewVerdictText, toReviewJson };
+
+// Reviser (iter #71):paper-reviser agent — 应用 reviewer 的 concerns 修订草稿。
+// Pipeline stage 6 (p_revise_paper) 内部调用。CLI 独立模式 --revise-draft。
+import {
+  reviseDraft,
+  formatRevisionText as formatRevisionVerdictText,
+  toJSON as toRevisionJson,
+} from '../lib/agents/reviser.mjs';
+export { reviseDraft, formatRevisionVerdictText, toRevisionJson };
+
+// Web search (iter #68):Designer/Future 用 general web search 工具,关闭与
+// Sakana/STORM/OpenAI Deep Research "tool use" 的第二大短板(第一是 --search-arxiv)。
+// 默认 stub mode(零依赖,零网络);有 WEB_SEARCH_API_KEY 时走 Tavily backend。
+// 浏览器页面也直接 import 同一份 lib,跟 export-bundle / paper-compiler /
+// synthesis-pdf / synthesis-diff 同双 surface 共享模式。
+import {
+  normalizeWebSearchUrl,
+  buildTavilyRequest,
+  parseTavilyResponse,
+  dedupeWebSearchResults,
+  filterWebSearchResults,
+  formatWebSearchText,
+} from '../lib/agents/web-search.mjs';
+export {
+  normalizeWebSearchUrl,
+  buildTavilyRequest,
+  parseTavilyResponse,
+  dedupeWebSearchResults,
+  filterWebSearchResults,
+  formatWebSearchText,
+};
+
 // ---------------------------------------------------------------------------
 // CLI 参数解析
 // ---------------------------------------------------------------------------
@@ -57,7 +184,55 @@ function parseArgs(argv) {
     else if (a === '--last') out.last = Number(argv[++i]);
     else if (a === '--new-session') out.newSession = argv[++i];
     else if (a === '--no-run') out.noRun = true;
+    else if (a === '--quickstart') out.quickstart = argv[++i];
     else if (a === '--diff') out.diff = true;
+    else if (a === '--diff-syntheses') {
+      // --diff-syntheses [--session SID] <idxA> <idxB>
+      // 注:这两个位置参数是 idxA / idxB(整数)
+      const positions = argv.slice(i + 1).filter((x) => !x.startsWith('--')).slice(0, 2);
+      if (positions.length < 2) {
+        out._err = '--diff-syntheses requires two positional args: <idxA> <idxB>';
+      } else {
+        out.diffSyntheses = { idxA: Number(positions[0]), idxB: Number(positions[1]) };
+        i += positions.length;
+      }
+    }
+    else if (a === '--web-search') out.webSearch = argv[++i];
+    else if (a === '--evaluate') out.evaluate = true;
+    else if (a === '--web-max') out.webMax = Number(argv[++i]);
+    else if (a === '--full-pipeline') {
+      // --full-pipeline [GOAL] — 研究全流程 7 stage 串行;无 GOAL 时从已有 --session
+      // 读 archive/<sid>/meta.json 的 goal
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.fullPipeline = next; i++; }
+      else { out.fullPipeline = ''; } // 空字符串 = 用 session goal
+    }
+    else if (a === '--pipeline-status') out.pipelineStatus = true;
+    else if (a === '--review-draft') {
+      // --review-draft <draft.md path> — 单跑 reviewer agent
+      out.reviewDraft = argv[++i];
+    }
+    else if (a === '--revise-draft') {
+      // --revise-draft <draft.md path> --review-json <review.json>
+      out.reviseDraft = argv[++i];
+    }
+    else if (a === '--review-json') out.reviewJson = argv[++i];
+    else if (a === '--skip-stages') {
+      // --skip-stages p_ideate_research_question,p_review_literature
+      const next = argv[++i];
+      if (next) out.skipStages = next.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+    else if (a === '--start-stage-idx') out.startStageIdx = Number(argv[++i]);
+    else if (a === '--include-domain') {
+      out.includeDomain = out.includeDomain ?? [];
+      out.includeDomain.push(argv[++i]);
+    }
+    else if (a === '--exclude-domain') {
+      out.excludeDomain = out.excludeDomain ?? [];
+      out.excludeDomain.push(argv[++i]);
+    }
+    else if (a === '--min-score') out.minScore = Number(argv[++i]);
+    else if (a === '--web-backend') out.webBackend = argv[++i];
     else if (a === '--leaderboard') out.leaderboard = true;
     else if (a === '--top') out.top = Number(argv[++i]);
     else if (a === '--type') out.type = argv[++i];
@@ -70,6 +245,33 @@ function parseArgs(argv) {
     else if (a === '--auto-stop-threshold') out.autoStopThreshold = Number(argv[++i]);
     else if (a === '--auto-resume') out.autoResume = true;
     else if (a === '--write-deliverable') out.writeDeliverable = true;
+    else if (a === '--few-shot-from') out.fewShotFrom = Number(argv[++i]);
+    else if (a === '--search-arxiv') out.searchArxiv = argv[++i];
+    else if (a === '--export-md') {
+      // --export-md 可无参数(默认 archive/<sid>/export.md),也可 --export-md path/to/x.md
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.exportMd = next; i++; }
+      else { out.exportMd = ''; } // 空字符串 = 默认路径
+    }
+    else if (a === '--compile-paper') {
+      // --compile-paper 可无参数(默认 archive/<sid>/paper/),也可指定输出目录
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.compilePaper = next; i++; }
+      else { out.compilePaper = ''; } // 空字符串 = 默认目录
+    }
+    else if (a === '--paper-format') out.paperFormat = argv[++i];
+    else if (a === '--latex-template' || a === '--documentclass') out.latexTemplate = argv[++i];
+    else if (a === '--list-templates') out.listTemplates = true;
+    else if (a === '--export-pdf') {
+      // --export-pdf 可无参数(默认 archive/<sid>/synthesis.html),也可指定输出文件路径
+      // 无参数 = 默认路径(单个 HTML 包含所有 synthesis)
+      // --export-pdf <path.html> = 自定义路径
+      // --export-pdf <dir/>     = 落到指定目录(文件名用 buildPdfFileName)
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.exportPdf = next; i++; }
+      else { out.exportPdf = ''; } // 空字符串 = 默认路径
+    }
+    else if (a === '--pdf-style') out.pdfStyle = argv[++i];
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -102,10 +304,130 @@ if (args.help) {
                      --rounds N to immediately run N rounds on the new session.
                      Use --no-run to skip the round run.
   --no-run           With --new-session, only create the dir + meta (skip rounds)
+  --quickstart GOAL  One-command bootstrap for new users. Equivalent to
+                     --new-session GOAL --rounds 1 --preset aggressive
+                     --dry-run, then prints a friendly summary listing
+                     what was produced + 4 next-step commands.
+                     Goal: zero-friction first run (no LLM key required,
+                     Modifier writes deliverables so archive/ is non-empty).
+                     Combine with --no-dry-run to use real LLM.
+  --export-md [PATH] Write a single self-contained markdown bundle of one
+                     session to PATH (default: ./archive/<sid>/export.md).
+                     Iter #57: lets users share / archive / post-process a
+                     whole session as 1 file (no archive/ folder needed).
+                     Bundle contains: meta + per-round proposals + critiques
+                     + gate verdicts + modifier actions + latest synthesis.
+                     Use --json to dump the bundle object to stdout instead
+                     of writing to disk.
+  --compile-paper [DIR]
+                     Assemble the whole session into ONE submittable paper
+                     (iter #61). Reads archive/<sid>/{drafts,reviews,
+                     experiments,paper_additions,rebuttals}/*.md + synthesis/
+                     and routes each deliverable into a real paper section
+                     (Introduction / Related Work / Method / Results /
+                     Limitations), then emits:
+                       paper.md   markdown 版
+                       paper.tex  可编译 LaTeX(pdflatex 一次过)
+                       refs.bib   从 proposal evidence 抽的 arXiv 引文
+                     Default DIR: archive/<sid>/paper/. Use --paper-format
+                     to emit only one of latex / markdown. --json dumps the
+                     structured PaperDraft instead of writing files.
+                     This closes the "Modifier 不写 LaTeX" gap: the 3-agent
+                     loop now ends in a paper, not just scattered fragments.
+  --paper-format F   With --compile-paper: latex | markdown | both
+                     (default both).
+  --latex-template T | --documentclass T
+                     With --compile-paper: pick a LaTeX document class
+                     (iter #64/65 templates): article (default) | acmart |
+                     ieeeconf | iclr2026 | neurips | acl. Each emits a
+                     distinct preamble + title block tuned for that venue.
+  --list-templates  Print the list of supported LaTeX templates with
+                     their compile hints and exit. Useful for picking
+                     --latex-template when scripting.
+  --export-pdf [PATH]
+                     Assemble all synthesis/*.md of one session into 1
+                     self-contained print-ready HTML file (iter #63). Open
+                     the resulting .html in any browser, then Cmd/Ctrl+P →
+                     "Save as PDF". No system PDF tools required; CSS +
+                     @page rules give proper page numbers / margins.
+                     Default PATH: archive/<sid>/synthesis.html. Path may
+                     also be a directory; filename falls back to
+                     buildPdfFileName(<sid>).
+                     Use --pdf-style academic | compact | presentation to
+                     pick the CSS variant (default academic). --json dumps
+                     the PDFBundle object to stdout instead of writing.
+  --pdf-style NAME   With --export-pdf: academic | compact | presentation
+                     (default academic).
   --diff             Compare two rounds of a session (use with --session ID
                      and two positional round numbers). Outputs proposals
                      added/removed/changed + score delta + gate decision
                      transitions. JSON via --json.
+  --diff-syntheses <idxA> <idxB>
+                     Compare two synthesis_*.md of a session (iter #66).
+                     Use with --session ID + two positional synthesis idx
+                     numbers. Outputs topics added/removed/shared,
+                     arXiv refs added/removed/shared, word count delta,
+                     model/title changes, similarity score (Jaccard on
+                     topics 0.7 + refs 0.3). JSON via --json.
+  --web-search "<QUERY>"
+                     General web search via Tavily (iter #68). Closes the
+                     second tool-use gap with Sakana/STORM/Deep Research.
+                     Requires WEB_SEARCH_API_KEY env var; without it,
+                     runs in stub mode (returns 0 results, no network).
+                     Filter with --include-domain D / --exclude-domain D
+                     (repeatable). Cap at --web-max N (default 5).
+                     Drop low-quality hits with --min-score N (0-1).
+                     Backend override: --web-backend stub|tavily.
+                     --json emits the raw { results, query, backend, stub }
+                     object instead of formatted text.
+  --evaluate           Run the Evaluator 4th agent (iter #69) on an
+                     existing session. Use with --session ID. Reads
+                     archive/<sid>/{meta,rounds,synthesis,<deliverables>}/
+                     and outputs:
+                       - aggregate overall score (0-1) + 4 sub-scores
+                         (coverage / alignment / consistency /
+                         synthesisCoverage)
+                       - coverage by ProposalType (proposed vs applied)
+                       - goal alignment per deliverable (token overlap)
+                       - references: shared arXiv ids between deliverables
+                         and synthesis, plus what's unique to each
+                       - contradiction markers (heuristic count of
+                         however / 但是 / 反之 / although etc.)
+                       - gate decision histogram
+                     Writes archive/<sid>/evaluation_NNN.{json,md} and
+                     prints a formatted summary to stdout. --json dumps
+                     the EvaluationReport object instead of text. No LLM
+                     call — pure local computation.
+  --full-pipeline [GOAL]
+                     End-to-end research pipeline (iter #70/71/72). Runs
+                     7 stages in order:
+                       0. p_ideate_research_question  (Designer → Proposal[])
+                       1. p_review_literature         (3-agent loop → literature review)
+                       2. p_design_experiment_plan    (3-agent loop → experiment plan)
+                       3. p_write_paper_draft         (3-agent loop → draft md)
+                       4. p_simulate_peer_review      (Reviewer agent → review md)
+                       5. p_revise_paper              (Reviser agent → revised draft)
+                       6. p_export_final_paper        (Paper-compiler → paper.md + .tex)
+                     Each stage has its own gate (minDeliverables +
+                     minTotalScore + minArxivRefs + requireForAdvance);
+                     a gate failure stops the pipeline with stoppedReason
+                     = 'gate_failed' and you can resume with
+                     --start-stage-idx N. Use --session ID to attach to an
+                     existing session (goal read from meta.json), or pass
+                     GOAL directly. --skip-stages p_X,p_Y to skip stages.
+                     Writes archive/<sid>/pipeline_<NNN>.{json,md}.
+  --pipeline-status   With --session ID: print latest pipeline_*.json +
+                     formatted progress (no LLM call, no writes).
+  --review-draft PATH Simulated peer review of one draft (iter #71). Reads
+                     the .md, strips frontmatter, extracts arxiv ids,
+                     calls Reviewer agent. Writes <basename>.review.{json,md}.
+  --revise-draft PATH --review-json REVIEW_JSON
+                     Apply a previously-produced review to the draft
+                     (iter #71). Calls Reviser agent, writes
+                     <basename>.revised.md + <basename>.revision-log.json.
+  --skip-stages LIST  Comma-separated stage names to skip (e.g.
+                     "p_ideate_research_question,p_review_literature").
+  --start-stage-idx N Resume pipeline from stage index N (0-6).
   --leaderboard      Cross-session aggregate: scan all archive/*/rounds/
                      and rank top proposal types by avg score / apply rate
                      + top Elo proposals + most-active sessions. Filter
@@ -156,6 +478,21 @@ if (args.help) {
                      create a new session. Refuses with exit 2 if the
                      session's archive/<sid>/meta.json doesn't exist.
                      Use to pick up a previously-stopped session.
+  --few-shot-from N  With --new-session, inject top-N proposals from all
+                     other sessions (by Elo, from --leaderboard topElo)
+                     as Designer few-shot examples. Closes iter #34 ↔
+                     iter #31 loop: new sessions learn from past wins.
+                     Default 0 (disabled). Capped at 20 to bound prompt.
+  --search-arxiv Q   Designer tool use (iter #56): search arXiv API for Q
+                     before the round runs, use top results as candidates.
+                     Closes the "candidates empty → Designer has no input"
+                     gap that was the biggest blocker vs Sakana / STORM
+                     (those tools have web/Python tool use; DPR didn't).
+                     By default max 12 results, dedup by canonical id,
+                     filtered to ti: (title match) for relevance.
+                     Combine with --new-session "<GOAL>" --search-arxiv Q
+                     to bootstrap a session from a topic query, zero
+                     prior papers needed.
   --help             Show this help`);
   process.exit(0);
 }
@@ -350,6 +687,10 @@ function buildDesignerUserPrompt(input) {
     }
     lines.push(`→ Do NOT repeat promoted/applied proposals. Suggest new angles or follow-ups.`);
   }
+  // 跨 session few-shot examples(iter #39)
+  if (input.previous_designer_examples?.length) {
+    lines.push(formatFewShotExamples(input.previous_designer_examples));
+  }
   if (input.user_goal) lines.push(`Goal: ${input.user_goal}`);
   return lines.join('\n');
 }
@@ -500,6 +841,80 @@ function parseScoreCritique(raw) {
 function clampScore(s) {
   if (!Number.isFinite(s)) return 5;
   return Math.max(0, Math.min(10, Math.round(s)));
+}
+
+// ---------------------------------------------------------------------------
+// --few-shot-from:跨 session 学习的 top proposals 拉取(iter #39)
+// ---------------------------------------------------------------------------
+
+/**
+ * loadTopProposals(opts) — IO wrapper,扫所有 session 聚合 top-Elo proposals。
+ * 用于 --few-shot-from N:把过去胜出的 proposals 作为新 session Designer 的 few-shot examples。
+ *
+ * opts:
+ *   topN:           max proposals to return (default 5, cap 20)
+ *   excludeSid:     排除当前 session(避免 self-reference)
+ *   minMatches:     过滤 matches=0 的初始 Elo=1200(default 1)
+ *
+ * 返回:[{ sessionId, round, title, type, total, elo, matches, wins }]
+ *     按 elo 倒序,只含 matches > 0 且 matches > minMatches
+ */
+export async function loadTopProposals(opts = {}) {
+  const topN = Math.min(opts.topN ?? 5, 20);
+  const excludeSid = opts.excludeSid ?? null;
+  const minMatches = opts.minMatches ?? 1;
+
+  if (!existsSync('archive')) return [];
+  const entries = await readdir('archive', { withFileTypes: true });
+  const sessionIds = entries
+    .filter((e) => e.isDirectory() && /^[a-f0-9]{8,}$/.test(e.name))
+    .map((e) => e.name)
+    .filter((sid) => sid !== excludeSid);
+
+  const all = [];
+  for (const sid of sessionIds) {
+    const files = await listExistingRounds(sid);
+    for (const f of files) {
+      try {
+        const rec = JSON.parse(await readFile(f, 'utf8'));
+        const proposalsById = new Map((rec.designer?.proposals ?? []).map((p) => [p.id, p]));
+        for (const c of rec.feedback?.critiques ?? []) {
+          const matches = Number(c.matches) || 0;
+          if (matches < minMatches) continue;
+          const p = proposalsById.get(c.proposal_id);
+          if (!p) continue;
+          all.push({
+            sessionId: sid,
+            round: rec.round,
+            proposal_id: c.proposal_id,
+            title: p.title,
+            type: p.type,
+            total: Number(c.total) || 0,
+            elo: Number(c.elo) || 0,
+            matches,
+            wins: Number(c.wins) || 0,
+          });
+        }
+      } catch { /* skip corrupt */ }
+    }
+  }
+
+  all.sort((a, b) => b.elo - a.elo);
+  return all.slice(0, topN);
+}
+
+/**
+ * formatFewShotExamples(examples) — 把 top proposals 渲染成 Designer prompt 段。
+ * 给 buildDesignerUserPrompt 内部调用。
+ */
+function formatFewShotExamples(examples) {
+  if (!examples || examples.length === 0) return '';
+  const lines = ['\nFew-shot examples (top past proposals by Elo):'];
+  for (const ex of examples) {
+    lines.push(`- [${ex.sessionId} r${ex.round}] ${ex.title}  [${ex.type}]  elo=${ex.elo}, score=${ex.total}, ${ex.matches}m/${ex.wins}w`);
+  }
+  lines.push('→ 这些是过去 session 表现好的 proposal 类型 / 模式。新 session 借鉴其思路,但不要重复同一论文 ID。');
+  return lines.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -1165,6 +1580,175 @@ export function formatDiffText(diff) {
   return lines.join('\n');
 }
 
+// ---------------------------------------------------------------------------
+// --export-md 模式(iter #57):把整 session 打包成 1 个自包含 markdown
+//
+// 纯函数 buildExportBundle / formatExportMarkdown 已抽到 lib/agents/export-bundle.mjs
+// (iter #59),CLI + 浏览器 export 页共享同一份实现。CLI 端从顶部 import + re-export,
+// 见 file head。
+//
+// IO 部分(留在 CLI 这一侧):
+//   loadExportBundle(sessionId)  — 读 archive/<sid>/{meta,rounds,digest,synthesis}
+// ---------------------------------------------------------------------------
+
+/**
+ * loadExportBundle(sessionId) — IO:从 archive/<sid>/ 读 meta + rounds + syntheses + digest。
+ * 找不到 meta.json → 抛清晰错误。
+ */
+export async function loadExportBundle(sessionId) {
+  const root = join('archive', sessionId);
+  if (!existsSync(root)) {
+    throw new Error(`session ${sessionId} not found (no archive/${sessionId}/ dir)`);
+  }
+  let meta = null;
+  try {
+    meta = JSON.parse(await readFile(join(root, 'meta.json'), 'utf8'));
+  } catch (err) {
+    throw new Error(`failed to read meta.json: ${err.message}`);
+  }
+
+  let rounds = [];
+  try {
+    const files = (await readdir(join(root, 'rounds')))
+      .filter((f) => /^round_\d+\.json$/.test(f))
+      .sort();
+    rounds = await Promise.all(
+      files.map((f) => readFile(join(root, 'rounds', f), 'utf8').then((s) => JSON.parse(s))),
+    );
+    rounds.sort((a, b) => (a.round ?? 0) - (b.round ?? 0));
+  } catch (err) {
+    console.warn(`[export-md] failed to read rounds: ${err.message}`);
+  }
+
+  let syntheses = [];
+  try {
+    const sfiles = (await readdir(join(root, 'synthesis')))
+      .filter((f) => /^synthesis_\d+\.md$/.test(f))
+      .sort();
+    syntheses = await Promise.all(
+      sfiles.map(async (f) => {
+        const m = f.match(/^synthesis_(\d+)\.md$/);
+        const idx = m ? Number(m[1]) : 0;
+        const raw = await readFile(join(root, 'synthesis', f), 'utf8');
+        return { idx, raw };
+      }),
+    );
+    syntheses.sort((a, b) => a.idx - b.idx);
+  } catch (err) {
+    // synthesis/ 可能不存在(无 rounds 时);静默
+  }
+
+  // digest:取最新 1 份 (lex 排序最末 = 同一天的最后一份)
+  let digest = null;
+  try {
+    const dfiles = (await readdir(root))
+      .filter((f) => /^digest_\d+\.md$/.test(f))
+      .sort();
+    if (dfiles.length) {
+      digest = await readFile(join(root, dfiles[dfiles.length - 1]), 'utf8');
+    }
+  } catch (err) {
+    // digest/ 可能不存在;静默
+  }
+
+  return buildExportBundle({ meta, rounds, syntheses, digest });
+}
+
+/**
+ * loadDeliverables(sessionId) — IO:读 archive/<sid>/{drafts,reviews,experiments,
+ * paper_additions,rebuttals}/*.md,返回 paper-compiler 要的 DeliverableInput[]。
+ *
+ * 目录不存在(该 session 没产出这类 deliverable)是正常情况,静默跳过。
+ * 文件名里的 round / idx 用来做稳定排序:<prefix>_r<NNN>_<idx>.md。
+ */
+export async function loadDeliverables(sessionId) {
+  const root = join('archive', sessionId);
+  const out = [];
+  for (const [kind, subdir] of Object.entries(DELIVERABLE_DIRS)) {
+    const dir = join(root, subdir);
+    if (!existsSync(dir)) continue;
+    let files;
+    try {
+      files = (await readdir(dir)).filter((f) => f.endsWith('.md')).sort();
+    } catch {
+      continue; // 目录读不了就跳过,不让整次编译失败
+    }
+    for (const f of files) {
+      const m = f.match(/_r(\d+)_(\d+)\.md$/);
+      try {
+        out.push({
+          kind,
+          path: join(dir, f),
+          round: m ? Number(m[1]) : null,
+          idx: m ? Number(m[2]) : 0,
+          raw: await readFile(join(dir, f), 'utf8'),
+        });
+      } catch (err) {
+        console.warn(`[compile-paper] skipped ${join(dir, f)}: ${err.message}`);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * loadPaperDraft(sessionId) — IO wrapper:凑齐 meta + rounds + syntheses + deliverables,
+ * 交给纯函数 buildPaperDraft 装配。
+ *
+ * 复用 loadExportBundle 已经读好的 meta / rounds / syntheses(避免重复读盘逻辑),
+ * 再补上它不需要而论文需要的 deliverables。
+ */
+export async function loadPaperDraft(sessionId) {
+  const bundle = await loadExportBundle(sessionId);
+  const deliverables = await loadDeliverables(sessionId);
+  return buildPaperDraft({
+    meta: bundle.meta,
+    rounds: bundle.rounds,
+    syntheses: bundle.syntheses,
+    deliverables,
+  });
+}
+
+/**
+ * loadSynthesisPdfBundle(sessionId) — IO wrapper:读 archive/<sid>/{meta,synthesis},
+ * 交给纯函数 buildPdfBundle 装配。
+ *
+ * 复用 loadExportBundle 已经读好的 meta / syntheses(避免重复读盘逻辑),
+ * 它不需要 rounds / digest。session 不存在 → throws with descriptive error。
+ */
+export async function loadSynthesisPdfBundle(sessionId) {
+  const bundle = await loadExportBundle(sessionId);
+  return buildPdfBundle({
+    meta: bundle.meta,
+    syntheses: bundle.syntheses,
+  });
+}
+
+/**
+ * loadSynthesis(sessionId, idx) — IO:读 archive/<sid>/synthesis/synthesis_<NNN>.md。
+ * 找不到 → throws with descriptive error。给 diff / pdf 单文件喂 raw 内容。
+ */
+export async function loadSynthesis(sessionId, idx) {
+  const path = join('archive', sessionId, 'synthesis', `synthesis_${String(idx).padStart(3, '0')}.md`);
+  if (!existsSync(path)) {
+    throw new Error(`synthesis file not found: ${path}`);
+  }
+  const raw = await readFile(path, 'utf8');
+  return { idx, raw };
+}
+
+/**
+ * loadSynthesesPair(sessionId, idxA, idxB) — IO wrapper:一次读两份合成喂给
+ * diffSyntheses 纯函数。idxA / idxB 任一不存在就 throws(另一边不读)。
+ */
+export async function loadSynthesesPair(sessionId, idxA, idxB) {
+  const [a, b] = await Promise.all([
+    loadSynthesis(sessionId, idxA),
+    loadSynthesis(sessionId, idxB),
+  ]);
+  return { a, b };
+}
+
 /**
  * loadDiff(sessionId, roundA, roundB) — IO wrapper,读 archive/<sid>/rounds/round_<A|B>.json。
  * 找不到 roundA / roundB → throws with descriptive error。
@@ -1664,6 +2248,103 @@ export async function loadCandidatesFromArchive(sessionId, maxPapers = 30) {
 }
 
 // ---------------------------------------------------------------------------
+// --search-arxiv:Designer tool use (iter #56)
+//
+// arXiv API export.arxiv.org/api/query 走原生 fetch,XML 用正则抽 entry (Node 无 DOMParser)。
+// 仅搜 ti: 标题匹配,避免 all: 召回噪音;按 canonical arxiv id dedup 保留 latest。
+// 输入:query (string), opts { maxResults?: number }
+// 输出:Promise<Array<{ arxivId, title, tldr, summary, published, authors[] }>>
+//
+// 失败兜底:network 错 / 解析失败 → 返回 [] 不抛,让 round 继续跑(stub 模式)。
+// ---------------------------------------------------------------------------
+
+/**
+ * parseArxivEntry(xml) — 从 arXiv API 单条 <entry> XML 抽字段。纯函数。
+ * 用正则而不是 DOMParser,Node 没有原生 DOMParser;字段命名与 TS ArxivEntry 对齐。
+ */
+export function parseArxivEntry(xml) {
+  const idMatch = xml.match(/<id>\s*(https?:\/\/arxiv\.org\/abs\/([^<>\s]+))\s*<\/id>/);
+  if (!idMatch) return null;
+  const arxivId = idMatch[2].trim();
+  const titleMatch = xml.match(/<title>\s*([\s\S]*?)\s*<\/title>/);
+  const summaryMatch = xml.match(/<summary>\s*([\s\S]*?)\s*<\/summary>/);
+  const publishedMatch = xml.match(/<published>\s*([^<]+?)\s*<\/published>/);
+  const updatedMatch = xml.match(/<updated>\s*([^<]+?)\s*<\/updated>/);
+  const authors = [];
+  const authorRe = /<author>\s*<name>\s*([^<]+?)\s*<\/name>/g;
+  let m;
+  while ((m = authorRe.exec(xml)) !== null) authors.push(m[1].trim());
+  return {
+    arxivId,
+    title: (titleMatch?.[1] ?? '').replace(/\s+/g, ' ').trim(),
+    summary: (summaryMatch?.[1] ?? '').replace(/\s+/g, ' ').trim(),
+    published: publishedMatch?.[1]?.trim() ?? '',
+    updated: updatedMatch?.[1]?.trim() ?? '',
+    authors,
+  };
+}
+
+/**
+ * canonicalArxivId(id) — 去掉 /v\d+ 后缀,避免 v1/v2 视为不同论文。
+ * 与 astro-src/lib/dom-utils.ts canonicalArxivId 行为一致。
+ */
+export function canonicalArxivId(id) {
+  if (typeof id !== 'string') return '';
+  return id.replace(/\/v\d+$/i, '').replace(/v\d+$/i, '');
+}
+
+/**
+ * searchArxivApi(query, opts) — 调 arXiv API,返回 dedup + 截断后的 candidates。
+ * 纯 IO,内部失败 → 返回 [],不抛(让 round 跑 stub)。
+ *
+ * opts.maxResults 默认 12(与 paper-analyzer.ts:searchArxiv 一致)。
+ */
+export async function searchArxivApi(query, opts = {}) {
+  if (typeof query !== 'string' || query.trim().length === 0) return [];
+  const maxResults = Math.max(1, Math.min(50, opts.maxResults ?? 12));
+  const q = query.trim();
+  // 限定 ti: 标题匹配 + 默认 cs 主流类目过滤
+  // 类目过滤与 paper-analyzer.ts:buildCategoryFilter 行为一致,但硬编码避免引 settings.ts
+  const cats = ['cs.AI', 'cs.CL', 'cs.LG', 'cs.CV', 'cs.MA', 'cs.IR'];
+  const catFilter = cats.map((c) => `cat:${c}`).join(' OR ');
+  const searchExpr = `ti:"${q.replace(/"/g, '\\"')}" AND (${catFilter})`;
+  const url = `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(searchExpr)}&max_results=${maxResults}&sortBy=relevance&sortOrder=descending`;
+
+  let xmlText;
+  try {
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'dpr-agents-runner/1.0 (+https://github.com/Canyon-netizen/daily-paper-reader)' },
+    });
+    if (!res.ok) {
+      console.warn(`[search-arxiv] HTTP ${res.status} for "${q}"`);
+      return [];
+    }
+    xmlText = await res.text();
+  } catch (err) {
+    console.warn(`[search-arxiv] network failed for "${q}": ${err.message}`);
+    return [];
+  }
+
+  // 抽所有 <entry>...</entry> 块;允许跨行
+  const entryRe = /<entry>([\s\S]*?)<\/entry>/g;
+  const entries = [];
+  let m;
+  while ((m = entryRe.exec(xmlText)) !== null) {
+    const parsed = parseArxivEntry(m[1]);
+    if (parsed && parsed.arxivId && parsed.title) entries.push(parsed);
+  }
+
+  // 按 canonical id dedup,保留 updated 最新的
+  const byCanonical = new Map();
+  for (const e of entries) {
+    const key = canonicalArxivId(e.arxivId);
+    const cur = byCanonical.get(key);
+    if (!cur || (e.updated || '') > (cur.updated || '')) byCanonical.set(key, e);
+  }
+  return Array.from(byCanonical.values()).slice(0, maxResults);
+}
+
+// ---------------------------------------------------------------------------
 // --status 模式:从已有 round JSONs 生成 session 摘要(纯函数,无 LLM)
 // ---------------------------------------------------------------------------
 
@@ -1910,6 +2591,25 @@ export async function createSession(sessionId, opts = {}) {
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // 模式 -1: --quickstart (新用户零摩擦入口,iter #54)
+  // 等价于 --new-session GOAL --rounds 1 --preset aggressive --dry-run,
+  // 然后打印 1 段友好 summary,列出产生了哪些文件 + 4 条下一步建议。
+  // 注:--quickstart 始终 dry-run(无 API key 也能跑),真跑请用 --new-session。
+  // 必须放在 preset/dryRun const 之前,否则会被默认值盖住。
+  if (args.quickstart !== undefined) {
+    const goal = args.quickstart;
+    if (typeof goal !== 'string' || goal.trim().length === 0) {
+      console.error('[error] --quickstart requires a non-empty GOAL string');
+      process.exit(2);
+    }
+    // opinionated defaults: 1 round + dry-run + aggressive(让 Modifier 写 deliverables)
+    args.newSession = goal;
+    if (args.maxRounds === undefined) args.maxRounds = 1;
+    if (args.preset === undefined) args.preset = 'aggressive';
+    args.dryRun = true;
+    args._quickstartMode = true;
+  }
+
   const preset = args.preset ?? 'balanced';
   if (!['conservative', 'balanced', 'aggressive'].includes(preset)) {
     console.error(`[error] --preset must be conservative|balanced|aggressive, got: ${preset}`);
@@ -2001,6 +2701,17 @@ async function main() {
     args.project = sid;
     args.session = sid;
     if (!args.maxRounds) args.maxRounds = 3;
+    // 跨 session few-shot examples(iter #39):把 leaderboard topElo 注入
+    const fewShotN = Math.max(0, Number(args.fewShotFrom ?? 0));
+    if (fewShotN > 0) {
+      const examples = await loadTopProposals({ topN: fewShotN, excludeSid: sid });
+      if (examples.length) {
+        args._fewShotExamples = examples;
+        if (!args.json) {
+          console.log(`[few-shot-from] loaded ${examples.length} examples from past sessions (excluded ${sid})`);
+        }
+      }
+    }
     console.log(`[new-session] → running ${args.maxRounds} round(s) on ${sid} ...`);
     // 继续到下面的 session 处理
   }
@@ -2045,6 +2756,616 @@ async function main() {
       } else {
         console.log(formatDiffText(diff));
       }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.6: --export-md (整 session 打包成 1 个 markdown,iter #57)
+  if (args.exportMd !== undefined) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --export-md requires --session ID');
+      process.exit(2);
+    }
+    try {
+      const bundle = await loadExportBundle(sessionId);
+      if (args.json) {
+        console.log(JSON.stringify(bundle, null, 2));
+      } else {
+        const outPath = args.exportMd.length > 0
+          ? args.exportMd
+          : join('archive', sessionId, 'export.md');
+        const md = formatExportMarkdown(bundle);
+        const outDir = dirname(outPath);
+        if (outDir && outDir !== '.' && !existsSync(outDir)) {
+          await mkdir(outDir, { recursive: true });
+        }
+        await writeFile(outPath, md, 'utf8');
+        console.log(`📦 Exported session ${sessionId} → ${outPath}`);
+        console.log(`   ${bundle.stats.rounds} rounds, ${bundle.stats.proposals} proposals, ${bundle.stats.applied} applied, ${bundle.stats.syntheses} syntheses, hasDigest=${bundle.stats.hasDigest}`);
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.63: --diff-syntheses <idxA> <idxB> (iter #66)
+  if (args.diffSyntheses) {
+    if (args._err) {
+      console.error(`[error] ${args._err}`);
+      process.exit(2);
+    }
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --diff-syntheses requires --session ID');
+      process.exit(2);
+    }
+    const { idxA, idxB } = args.diffSyntheses;
+    try {
+      const { a, b } = await loadSynthesesPair(sessionId, idxA, idxB);
+      const diff = diffSyntheses(a, b);
+      if (args.json) {
+        console.log(JSON.stringify(diff, null, 2));
+        return;
+      }
+      console.log(formatSynthesisDiffText(diff));
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.67: --web-search "<QUERY>" (iter #68)
+  if (args.webSearch != null) {
+    const query = String(args.webSearch ?? '').trim();
+    if (!query) {
+      console.error('[error] --web-search requires a non-empty query string');
+      process.exit(2);
+    }
+    const requestedBackend = args.webBackend ?? 'tavily';
+    const apiKey = process.env.WEB_SEARCH_API_KEY ?? '';
+    const useTavily = requestedBackend === 'tavily' && apiKey.length > 0;
+
+    const searchOpts = {
+      maxResults: args.webMax ?? 5,
+      includeDomains: Array.isArray(args.includeDomain) ? args.includeDomain : undefined,
+      excludeDomains: Array.isArray(args.excludeDomain) ? args.excludeDomain : undefined,
+      minScore: typeof args.minScore === 'number' ? args.minScore : 0,
+    };
+
+    /** @type {{ results: any[], query: string, backend: 'stub'|'tavily', stub: boolean, error: string|null }} */
+    let response;
+    if (useTavily) {
+      try {
+        const req = buildTavilyRequest(query, { ...searchOpts, apiKey });
+        const fetchResp = await fetch(req.url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(req.body),
+        });
+        if (!fetchResp.ok) {
+          response = {
+            query, backend: 'tavily', stub: false,
+            results: [],
+            error: `Tavily HTTP ${fetchResp.status}: ${fetchResp.statusText}`,
+          };
+        } else {
+          const json = await fetchResp.json();
+          const parsed = parseTavilyResponse(json);
+          const deduped = dedupeWebSearchResults(parsed);
+          const filtered = filterWebSearchResults(deduped, searchOpts);
+          response = { query, backend: 'tavily', stub: false, results: filtered, error: null };
+        }
+      } catch (err) {
+        response = {
+          query, backend: 'tavily', stub: false,
+          results: [],
+          error: `Tavily fetch failed: ${err?.message ?? err}`,
+        };
+      }
+    } else {
+      // stub mode — 没设 WEB_SEARCH_API_KEY 或显式 --web-backend stub
+      response = {
+        query, backend: 'stub', stub: true, results: [], error: null,
+      };
+      if (requestedBackend === 'tavily' && !apiKey) {
+        response.error = 'WEB_SEARCH_API_KEY not set — falling back to stub mode';
+      }
+    }
+
+    if (args.json) {
+      console.log(JSON.stringify(response, null, 2));
+    } else {
+      console.log(formatWebSearchText(response));
+      if (!useTavily && requestedBackend === 'tavily' && !apiKey) {
+        // 友好提示怎么启用真 backend
+        console.error('\nℹ  Set WEB_SEARCH_API_KEY (e.g. Tavily tvly-...) to enable real search.');
+      }
+    }
+    return;
+  }
+
+  // 模式 0.70: --full-pipeline (iter #70/71/72):研究全流程 7 stage 串行
+  //   ideation → lit review → experiment → draft → review → revise → export
+  // 与 Sakana AI Scientist v2 / STORM 的多阶段 pipeline 对齐;每阶段有独立
+  // gate,gate_failed 就停;产物落 archive/<sid>/pipeline_<NNN>.json + .md
+  if (args.fullPipeline !== undefined) {
+    let sessionId = args.project ?? args.session;
+    let goal = typeof args.fullPipeline === 'string' ? args.fullPipeline : '';
+
+    if (!sessionId) {
+      // 允许不带 --session:自动 generateSessionId 并 bootstrap meta
+      const { generateSessionId } = await import('../lib/agents/export-bundle.mjs').catch(() => ({}));
+      if (generateSessionId && typeof generateSessionId === 'function') {
+        sessionId = generateSessionId();
+      } else {
+        sessionId = 's_' + Math.random().toString(36).slice(2, 10);
+      }
+      console.error(`[pipeline] auto-creating session: ${sessionId}`);
+    }
+
+    // 若 --full-pipeline 没给 goal,尝试从 meta.json 读
+    if (!goal) {
+      try {
+        const metaPath = join('archive', sessionId, 'meta.json');
+        const metaRaw = await readFile(metaPath, 'utf8');
+        const meta = JSON.parse(metaRaw);
+        if (typeof meta.goal === 'string' && meta.goal.length > 0) {
+          goal = meta.goal;
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (!goal || goal.trim().length === 0) {
+      console.error('[error] --full-pipeline requires a non-empty GOAL (or use --session ID with meta.json goal)');
+      process.exit(2);
+    }
+
+    // 确保 meta.json 存在(bootstrap if needed)
+    const root = join('archive', sessionId);
+    await mkdir(root, { recursive: true });
+    const metaPath = join(root, 'meta.json');
+    let meta;
+    try {
+      meta = JSON.parse(await readFile(metaPath, 'utf8'));
+    } catch {
+      meta = {
+        schema_version: 1,
+        session_id: sessionId,
+        goal,
+        created_at: new Date().toISOString(),
+        mode: 'full_pipeline',
+      };
+      await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
+    }
+
+    // 加载 candidates 与 project(若可)
+    let candidates = [];
+    let project = { id: sessionId, name: goal, statement: goal };
+    try {
+      candidates = await loadCandidatesFromArchive(sessionId, 30);
+    } catch { /* ignore */ }
+
+    try {
+      const { runPipeline } = await import('../lib/agents/pipeline.mjs');
+      const result = await runPipeline({
+        sessionId,
+        goal,
+        project,
+        candidates,
+        caller,
+        model: args.model,
+        gatePreset: preset,
+        maxStages: args.maxRounds, // 复用 --rounds 表示最多跑几 stage
+        startStageIdx: args.startStageIdx,
+        skipStages: args.skipStages || [],
+        dryRun,
+      });
+
+      // 落盘 pipeline.json + pipeline.md
+      const stamp = String(Date.now()).slice(-6);
+      const planJsonPath = join(root, `pipeline_${stamp}.json`);
+      const planMdPath = join(root, `pipeline_${stamp}.md`);
+      await writeFile(planJsonPath, JSON.stringify(toPipelineJson(result), null, 2), 'utf8');
+
+      const summary = summarizePipeline(result);
+      let md = `# Full Pipeline · ${sessionId}\n\n`;
+      md += `**Goal**: ${goal}\n\n`;
+      md += `**Stopped at**: ${result.stoppedReason} · current stage: ${result.currentStage || '(done)'}\n\n`;
+      md += `**Summary**: ${summary.completedStages}/${summary.totalStages} stages completed, `;
+      md += `${summary.totalDeliverables} deliverables, `;
+      md += `skipped=${summary.skippedStages}, gate_failed=${summary.gateFailedStages}, errored=${summary.erroredStages}\n\n`;
+      md += `\`\`\`\n${formatPipelinePlanText(result.stages)}\n\`\`\`\n\n`;
+      // stage-by-stage 详细
+      for (const s of result.stages) {
+        if (s.status === 'skipped') continue;
+        md += `## ${s.stage}\n\n`;
+        md += `- status: ${s.status}\n`;
+        md += `- deliverables: ${s.deliverables.length}\n`;
+        if (s.gate && s.gate.reasons.length) md += `- gate reasons: ${s.gate.reasons.join('; ')}\n`;
+        md += `\n`;
+      }
+      await writeFile(planMdPath, md, 'utf8');
+
+      if (args.json) {
+        console.log(JSON.stringify(toPipelineJson(result), null, 2));
+      } else {
+        console.log(`\n${'='.repeat(60)}`);
+        console.log(`Full Pipeline · ${sessionId}`);
+        console.log('='.repeat(60));
+        console.log(`Goal: ${goal}`);
+        console.log(`Stopped at: ${result.stoppedReason} · current stage: ${result.currentStage || '(done)'}`);
+        console.log(`Summary: ${summary.completedStages}/${summary.totalStages} stages, ${summary.totalDeliverables} deliverables`);
+        console.log('');
+        console.log(formatPipelinePlanText(result.stages));
+        console.log('');
+        console.log(`Artifacts:`);
+        console.log(`  ${planJsonPath}`);
+        console.log(`  ${planMdPath}`);
+        if (summary.gateFailedStages > 0) {
+          console.log(`\n⚠  ${summary.gateFailedStages} stage(s) gate-failed. Inspect reasons above, then re-run with --start-stage-idx N to retry.`);
+          process.exit(1);
+        }
+      }
+    } catch (err) {
+      console.error(`[error] --full-pipeline failed: ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.70b: --pipeline-status (iter #70):只读不写,打印当前 session 的
+  // pipeline 进度(最近一份 pipeline_*.json + plan summary)
+  if (args.pipelineStatus) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --pipeline-status requires --session ID');
+      process.exit(2);
+    }
+    const root = join('archive', sessionId);
+    if (!existsSync(root)) {
+      console.error(`[error] archive/${sessionId} not found`);
+      process.exit(2);
+    }
+    const files = (await readdir(root)).filter((f) => /^pipeline_\d+\.json$/.test(f)).sort();
+    if (files.length === 0) {
+      console.log(`(no pipeline_*.json in archive/${sessionId}; run --full-pipeline first)`);
+      return;
+    }
+    const latest = files[files.length - 1];
+    const plan = JSON.parse(await readFile(join(root, latest), 'utf8'));
+    if (args.json) {
+      console.log(JSON.stringify(plan, null, 2));
+    } else {
+      console.log(`\nPipeline status · ${sessionId} · ${latest}`);
+      console.log(`Stopped at: ${plan.stoppedReason} · current stage: ${plan.currentStage || '(done)'}`);
+      console.log('');
+      const stagesBack = (plan.stages || []).map((s) => ({
+        stage: s.stage, stageIdx: s.stageIdx, status: s.status,
+        deliverables: (s.deliverables || []).length,
+      }));
+      console.log(formatPipelinePlanText(stagesBack));
+    }
+    return;
+  }
+
+  // 模式 0.71: --review-draft (iter #71):独立跑 reviewer agent
+  // 读 1 个 draft.md path,产出 review.json + review.md;常用于
+  // 用户已经手动写了一稿、想看 simulated peer review 的场景
+  if (args.reviewDraft) {
+    const draftPath = args.reviewDraft;
+    let draftText = '';
+    try {
+      draftText = await readFile(draftPath, 'utf8');
+    } catch (err) {
+      console.error(`[error] --review-draft: cannot read ${draftPath}: ${err.message}`);
+      process.exit(2);
+    }
+    // 浅 frontmatter 剥离(同 evaluator / paper-compiler)
+    let title = '';
+    let abstract = '';
+    let body = draftText;
+    const fmMatch = draftText.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (fmMatch) {
+      const fmLines = fmMatch[1].split(/\r?\n/);
+      for (const line of fmLines) {
+        const m = line.match(/^(title|abstract)\s*:\s*(.*)$/);
+        if (m) {
+          if (m[1] === 'title') title = m[2].trim().replace(/^["']|["']$/g, '');
+          if (m[1] === 'abstract') abstract = m[2].trim().replace(/^["']|["']$/g, '');
+        }
+      }
+      body = draftText.slice(fmMatch[0].length).trim();
+    }
+    // 抽 arxiv id
+    const arxivIds = (body.match(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g) || []).slice(0, 30);
+
+    try {
+      const verdict = await reviewDraft(
+        { title, abstract, body, arxivIds },
+        { caller, model: args.model, draftId: draftPath },
+      );
+      const outBase = draftPath.replace(/\.md$/i, '');
+      const jsonPath = `${outBase}.review.json`;
+      const mdPath = `${outBase}.review.md`;
+      await writeFile(jsonPath, JSON.stringify(toReviewJson(verdict), null, 2), 'utf8');
+      await writeFile(mdPath, formatReviewVerdictText(verdict), 'utf8');
+      if (args.json) {
+        console.log(JSON.stringify(toReviewJson(verdict), null, 2));
+      } else {
+        console.log(`\nReview verdict: ${verdict.recommendation} · overall ${verdict.scores.overall}/10 · ${verdict.concerns.length} concerns`);
+        console.log(`Artifacts:`);
+        console.log(`  ${jsonPath}`);
+        console.log(`  ${mdPath}`);
+        if (!verdict.stub) {
+          console.log(`\nSummary: ${verdict.summary}`);
+        }
+      }
+    } catch (err) {
+      console.error(`[error] --review-draft failed: ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.71b: --revise-draft <draft.md path> --review-json <review.json>
+  // (iter #71):跑 reviser agent,读 review.json + draft,产出 revised_draft.md
+  if (args.reviseDraft) {
+    const draftPath = args.reviseDraft;
+    const reviewJsonPath = args.reviewJson;
+    if (!reviewJsonPath) {
+      console.error('[error] --revise-draft requires --review-json <review.json>');
+      process.exit(2);
+    }
+    let draftText = '';
+    let reviewObj = null;
+    try {
+      draftText = await readFile(draftPath, 'utf8');
+      reviewObj = JSON.parse(await readFile(reviewJsonPath, 'utf8'));
+    } catch (err) {
+      console.error(`[error] --revise-draft: ${err.message}`);
+      process.exit(2);
+    }
+    let title = ''; let abstract = ''; let body = draftText;
+    const fmMatch = draftText.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (fmMatch) {
+      const fmLines = fmMatch[1].split(/\r?\n/);
+      for (const line of fmLines) {
+        const m = line.match(/^(title|abstract)\s*:\s*(.*)$/);
+        if (m) {
+          if (m[1] === 'title') title = m[2].trim().replace(/^["']|["']$/g, '');
+          if (m[1] === 'abstract') abstract = m[2].trim().replace(/^["']|["']$/g, '');
+        }
+      }
+      body = draftText.slice(fmMatch[0].length).trim();
+    }
+    const arxivIds = (body.match(/\b\d{4}\.\d{4,5}(?:v\d+)?\b/g) || []).slice(0, 30);
+
+    try {
+      const verdict = {
+        concerns: Array.isArray(reviewObj.concerns) ? reviewObj.concerns : [],
+        summary: reviewObj.summary || '',
+        scores: reviewObj.scores || {},
+        recommendation: reviewObj.recommendation || 'revise',
+      };
+      const rev = await reviseDraft(
+        { title, abstract, body, arxivIds },
+        verdict,
+        { caller, model: args.model, draftId: draftPath },
+      );
+      const outPath = draftPath.replace(/\.md$/i, '') + '.revised.md';
+      await writeFile(outPath, `# ${title || 'Revised Draft'}\n\n${rev.body}`, 'utf8');
+      const logPath = draftPath.replace(/\.md$/i, '') + '.revision-log.json';
+      await writeFile(logPath, JSON.stringify(toRevisionJson(rev), null, 2), 'utf8');
+      if (args.json) {
+        console.log(JSON.stringify(toRevisionJson(rev), null, 2));
+      } else {
+        console.log(`\nRevision:`);
+        console.log(formatRevisionVerdictText(rev));
+        console.log(`\nArtifacts:`);
+        console.log(`  ${outPath}`);
+        console.log(`  ${logPath}`);
+      }
+    } catch (err) {
+      console.error(`[error] --revise-draft failed: ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.68: --evaluate (iter #69):Evaluator 4th agent — 读已有 session
+  // 产出 EvaluationReport(overall + 4 子分 + 各项明细),落 json + md。
+  if (args.evaluate) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --evaluate requires --session ID');
+      process.exit(2);
+    }
+    try {
+      const bundle = await loadExportBundle(sessionId);
+      const deliverables = await loadDeliverables(sessionId);
+      const report = buildEvaluationReport({
+        meta: bundle.meta,
+        rounds: bundle.rounds,
+        deliverables,
+        syntheses: bundle.syntheses,
+        generatedAt: new Date().toISOString(),
+      });
+
+      // 落 json + md 到 archive/<sid>/(取下一个 NNN 序号)
+      const root = join('archive', sessionId);
+      await mkdir(root, { recursive: true });
+      let nextIdx = 1;
+      try {
+        const existing = (await readdir(root)).filter((f) => /^evaluation_\d+\.json$/.test(f));
+        const nums = existing.map((f) => Number(f.match(/^evaluation_(\d+)\.json$/)[1])).filter((n) => Number.isFinite(n));
+        nextIdx = (nums.length ? Math.max(...nums) : 0) + 1;
+      } catch { /* ignore */ }
+      const stamp = String(nextIdx).padStart(3, '0');
+      const jsonPath = join(root, `evaluation_${stamp}.json`);
+      const mdPath = join(root, `evaluation_${stamp}.md`);
+      const jsonStr = toEvaluationJson(report);
+      await writeFile(jsonPath, jsonStr, 'utf8');
+
+      // markdown 报告 = 文本 + 机器读 json 链接
+      const o = report.scores?.overall ?? 0;
+      const grade = o >= 0.7 ? '🟢' : o >= 0.4 ? '🟡' : '🔴';
+      let md = `# Evaluation Report · ${sessionId} · overall ${grade} ${o}\n\n`;
+      md += `Generated at ${report.generatedAt}\n\n`;
+      if (report.goal) md += `**Goal**: ${report.goal}\n\n`;
+      md += `\`\`\`\n${formatEvaluationReportText(report)}\n\`\`\`\n\n`;
+      md += `## Scores\n\n`;
+      md += `| Score | Value |\n|---|---|\n`;
+      md += `| coverage | ${report.scores.coverage} |\n`;
+      md += `| alignment | ${report.scores.alignment} |\n`;
+      md += `| consistency | ${report.scores.consistency} |\n`;
+      md += `| synthesisCoverage | ${report.scores.synthesisCoverage} |\n`;
+      md += `| **overall** | **${report.scores.overall}** |\n\n`;
+      md += `## Totals\n\n`;
+      md += `rounds=${report.totals.rounds} · proposals=${report.totals.proposals} · applied=${report.totals.applied} · deliverables=${report.totals.deliverables} · syntheses=${report.totals.syntheses} · references=${report.totals.references}\n\n`;
+      md += `## Files\n\n`;
+      md += `- machine-readable: \`${jsonPath}\`\n`;
+      await writeFile(mdPath, md, 'utf8');
+
+      if (args.json) {
+        console.log(jsonStr);
+      } else {
+        console.log(formatEvaluationReportText(report));
+        console.log(`\n📁 Wrote ${jsonPath} + ${mdPath}`);
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.64: --list-templates (打印可用 LaTeX 模板,iter #64)
+  if (args.listTemplates) {
+    const list = listLatexTemplates();
+    console.log('📐 Available LaTeX templates (iter #64):');
+    for (const t of list) {
+      console.log(`  ${t.id.padEnd(12)}  ${t.preambleHead}`);
+      console.log(`  ${''.padEnd(12)}  compile: ${t.compileHint}`);
+    }
+    return;
+  }
+
+  // 模式 0.65: --compile-paper (session 碎片 → 一篇论文,iter #61)
+  if (args.compilePaper !== undefined) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --compile-paper requires --session ID');
+      process.exit(2);
+    }
+    const format = args.paperFormat ?? 'both';
+    if (!['latex', 'markdown', 'both'].includes(format)) {
+      console.error(`[error] --paper-format must be latex | markdown | both (got "${format}")`);
+      process.exit(2);
+    }
+    try {
+      const draft = await loadPaperDraft(sessionId);
+      if (args.json) {
+        console.log(JSON.stringify(draft, null, 2));
+        return;
+      }
+      const outDir = args.compilePaper.length > 0
+        ? args.compilePaper
+        : join('archive', sessionId, 'paper');
+      if (!existsSync(outDir)) await mkdir(outDir, { recursive: true });
+
+      const written = [];
+      if (format === 'markdown' || format === 'both') {
+        const p = join(outDir, 'paper.md');
+        await writeFile(p, formatPaperMarkdown(draft), 'utf8');
+        written.push(p);
+      }
+      // iter #64: --latex-template 选择具体模板
+      const tmplName = args.latexTemplate ?? 'article';
+      if (!PAPER_LATEX_TEMPLATES[tmplName]) {
+        console.error(`[error] unknown --latex-template "${tmplName}". Available: ${Object.keys(PAPER_LATEX_TEMPLATES).join(', ')}`);
+        process.exit(2);
+      }
+      const compileHint = getLatexCompileHint(tmplName);
+      if (format === 'latex' || format === 'both') {
+        const tex = join(outDir, 'paper.tex');
+        await writeFile(tex, formatPaperLatex(draft, { documentclass: tmplName }), 'utf8');
+        written.push(tex);
+        const bib = join(outDir, 'refs.bib');
+        await writeFile(bib, formatBibtex(draft.bibliography), 'utf8');
+        written.push(bib);
+      }
+
+      const s = draft.stats;
+      console.log(`📄 Compiled paper for session ${sessionId} → ${outDir}/`);
+      for (const p of written) console.log(`   ✍️  ${p}`);
+      console.log(`   template: ${tmplName}`);
+      console.log(`   ${s.rounds} rounds · ${s.deliverables} deliverables · ${s.sectionsWithContent}/${draft.sections.length} sections filled · ${s.references} references`);
+      const emptySections = draft.sections.filter((x) => x.empty).map((x) => x.title);
+      if (emptySections.length) {
+        console.log(`   ⚠️  empty sections: ${emptySections.join(', ')}`);
+        console.log('      (跑更多轮让 Modifier 产出对应 deliverable,或用 --promote --write-deliverable 手动补)');
+      }
+      if (format !== 'markdown') {
+        console.log(`   编译:${compileHint}`);
+      }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.66: --export-pdf (synthesis → 打印就绪 HTML,iter #63)
+  if (args.exportPdf !== undefined) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --export-pdf requires --session ID');
+      process.exit(2);
+    }
+    const style = args.pdfStyle ?? 'academic';
+    if (!['academic', 'compact', 'presentation'].includes(style)) {
+      console.error(`[error] --pdf-style must be academic | compact | presentation (got "${style}")`);
+      process.exit(2);
+    }
+    try {
+      const bundle = await loadSynthesisPdfBundle(sessionId);
+      if (args.json) {
+        console.log(JSON.stringify(bundle, null, 2));
+        return;
+      }
+
+      // 解析输出路径:无参数 = archive/<sid>/synthesis.html;
+      // 给的是目录(以 / 结尾或不存在 .html 后缀且是已存在的目录)= 落到该目录
+      // 给的是文件路径(以 .html 结尾或不存在)= 写到该文件
+      let outPath;
+      const arg = args.exportPdf;
+      if (!arg) {
+        outPath = join('archive', sessionId, 'synthesis.html');
+      } else if (arg.endsWith('/') || (existsSync(arg) && (await stat(arg)).isDirectory())) {
+        const fname = buildPdfFileName(sessionId);
+        outPath = join(arg, fname);
+      } else if (arg.endsWith('.html') || arg.endsWith('.htm')) {
+        outPath = arg;
+      } else {
+        // 不带 .html 后缀且不是目录:也当文件路径(append .html)
+        outPath = `${arg}.html`;
+      }
+      if (!existsSync(dirname(outPath))) await mkdir(dirname(outPath), { recursive: true });
+
+      const html = formatPdfHtml(bundle, { cssVariant: style });
+      await writeFile(outPath, html, 'utf8');
+
+      console.log(`📑 Synthesized print-ready HTML for session ${sessionId}`);
+      console.log(`   ✍️  ${outPath}  (${(html.length / 1024).toFixed(1)} KB)`);
+      console.log(`   📊 ${bundle.stats.syntheses} synthesis / synthesis · ${bundle.syntheses.length} pieces · style=${style}`);
+      console.log(`   🖨  Open in browser, then Cmd/Ctrl+P → "Save as PDF" (推荐边距:默认 / 缩放:100% / 启用"背景图形")`);
     } catch (err) {
       console.error(`[error] ${err.message}`);
       process.exit(2);
@@ -2146,6 +3467,9 @@ async function main() {
         resume: !!args.resume,
         noCandidates: !!args.noCandidates,
         noSynthesize: !!args.noSynthesize,
+        fewShotExamples: args._fewShotExamples ?? [],
+        _quickstartMode: !!args._quickstartMode,
+        searchArxiv: args.searchArxiv ?? null,
       });
     }
     return;
@@ -2164,6 +3488,9 @@ async function main() {
     resume: !!args.resume,
     noCandidates: !!args.noCandidates,
     noSynthesize: !!args.noSynthesize,
+    fewShotExamples: args._fewShotExamples ?? [],
+    _quickstartMode: !!args._quickstartMode,
+    searchArxiv: args.searchArxiv ?? null,
   });
 }
 
@@ -2181,13 +3508,25 @@ async function runOneSession(sessionId, caller, opts) {
 
   // 自动从 archive/<session>/recommend/ 加载 candidates
   // 除非用户用 --no-candidates 显式关掉
+  // 或者 --search-arxiv 提供了真 arXiv 实时搜索(覆盖 archive 推荐)
   let candidates = [];
-  if (!opts.noCandidates) {
+  let candidatesSource = 'archive';
+  if (opts.searchArxiv) {
+    const queried = await searchArxivApi(opts.searchArxiv, { maxResults: 12 });
+    candidates = queried.map((q) => ({
+      arxivId: q.arxivId,
+      title: q.title,
+      tldr: q.summary?.slice(0, 200),
+    }));
+    candidatesSource = `arxiv-search:${opts.searchArxiv}`;
+    console.log(`  [search-arxiv] loaded ${candidates.length} papers from arXiv API for "${opts.searchArxiv}"`);
+  } else if (!opts.noCandidates) {
     candidates = await loadCandidatesFromArchive(sessionId, 30);
     if (candidates.length) {
       console.log(`  [candidates] loaded ${candidates.length} papers from archive/${sessionId}/recommend/`);
     }
   }
+  console.log(`  [candidates-source] ${candidatesSource}`);
 
   const input = {
     project: { id: sessionId, name: sessionId, statement: '(auto)' },
@@ -2196,6 +3535,7 @@ async function runOneSession(sessionId, caller, opts) {
     round: startRound,
     session_id: sessionId,
     previous_rounds: previousRounds,
+    previous_designer_examples: opts.fewShotExamples ?? [],
   };
 
   for (let i = 0; i < opts.maxRounds; i++) {
@@ -2232,6 +3572,49 @@ async function runOneSession(sessionId, caller, opts) {
       console.warn(`[session ${sessionId}] synthesis failed: ${err.message}`);
     }
   }
+
+  // --quickstart 模式:跑完后打印友好 summary(iter #54)
+  if (opts._quickstartMode) {
+    printQuickstartSummary(sessionId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// --quickstart 友好 summary(iter #54):列出本轮产出 + 4 条下一步命令
+// ---------------------------------------------------------------------------
+
+function printQuickstartSummary(sessionId) {
+  const sid = sessionId;
+  const files = [
+    `archive/${sid}/meta.json`,
+    `archive/${sid}/rounds/round_001.json`,
+    `archive/${sid}/digest_<YYYYMMDD>.md`,
+    `archive/${sid}/synthesis/synthesis_001.md`,
+  ];
+  console.log(`
+🎉 Quickstart 完成 — 你的第一个 3 智能体 session 已落地:
+
+   session id: ${sid}
+
+📂 产出文件:
+   - archive/${sid}/meta.json               (session 元数据)
+   - archive/${sid}/rounds/round_001.json   (Designer + Feedback + Gate + Modifier 完整轮)
+   - archive/${sid}/drafts/ / reviews/ /    (Modifier 真写的 deliverables)
+     experiments/ / paper_additions/ /
+     rebuttals/   (按 proposal type 路由)
+   - archive/${sid}/digest_<YYYYMMDD>.md    (1 段中文摘要)
+   - archive/${sid}/synthesis/synthesis_001.md  (Deep-Research 综合报告)
+
+🚀 下一步:
+   1. 浏览器看结果:    /agents/${sid}/  (localStorage 已写一份副本)
+   2. 继续跑 3 轮:     node astro-src/scripts/agents-run.mjs --session ${sid} --rounds 3
+   3. 看全局战况:       node astro-src/scripts/agents-run.mjs --leaderboard
+   4. 接真 LLM 再跑:    LLM_BASE_URL=... LLM_API_KEY=... LLM_MODEL=... \\
+                        node astro-src/scripts/agents-run.mjs --new-session "<新目标>" --rounds 3
+
+🔬 这是 3 智能体闭环的一次跑通版本 — Designer 提议 → Feedback 多 persona 评分 →
+   Gate 过滤 → Modifier 真写 deliverables。详见 docs/agents-workflow.md。
+`);
 }
 
 // ---------------------------------------------------------------------------

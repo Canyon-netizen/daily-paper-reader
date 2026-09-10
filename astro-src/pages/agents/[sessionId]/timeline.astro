@@ -1,0 +1,206 @@
+---
+// astro-src/pages/agents/[sessionId]/timeline.astro
+//
+// iter #49 — Proposal lifecycle timeline.
+//
+// Walks archive/<sid>/rounds/round_*.json, groups by proposal.id, and
+// renders a table where rows = unique proposal ids, columns = rounds.
+// Each cell shows the gate decision (promoted / candidate / sketch /
+// rejected / missing) + per-round critique avg score.
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// ---------------------------------------------------------------------------
+// getStaticPaths
+// ---------------------------------------------------------------------------
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { return []; }
+  const out: { params: { sessionId: string } }[] = [];
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (existsSync(metaPath)) out.push({ params: { sessionId: sid } });
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+
+// ---------------------------------------------------------------------------
+// Load rounds + build per-proposal × per-round map
+// ---------------------------------------------------------------------------
+
+interface Critique { total: number; elo: number; proposal_id: string; }
+interface RoundRecord {
+  round: number;
+  started_at: number;
+  finished_at: number;
+  designer: { proposals: { id: string; title: string; type: string; rationale: string }[] };
+  feedback: { critiques: Critique[] };
+  gate: { promoted: string[]; candidate: string[]; sketch: string[]; rejected: string[] };
+  modifier: { applied: { id: string; proposal_id: string; applied_at: number; kind: string }[] };
+}
+
+interface ProposalRow {
+  id: string;
+  title: string;
+  type: string;
+  firstRound: number;
+  // per round: { decision, score, appliedAt, appliedKind }
+  perRound: Record<number, { decision: string; score: number | null; appliedAt: number | null; appliedKind: string | null }>;
+}
+
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+let rounds: RoundRecord[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds'))).filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = (await Promise.all(
+    files.map((f) => readFile(join(sessionDir, 'rounds', f), 'utf8').then((raw) => JSON.parse(raw) as RoundRecord))
+  )).sort((a, b) => a.round - b.round);
+} catch {}
+
+const proposals = new Map<string, ProposalRow>();
+
+function decisionFor(round: RoundRecord, pid: string): string {
+  if (round.gate.promoted.includes(pid)) return 'promoted';
+  if (round.gate.candidate.includes(pid)) return 'candidate';
+  if (round.gate.sketch.includes(pid)) return 'sketch';
+  if (round.gate.rejected.includes(pid)) return 'rejected';
+  return 'missing';
+}
+
+for (const r of rounds) {
+  for (const p of r.designer.proposals) {
+    if (!proposals.has(p.id)) {
+      proposals.set(p.id, { id: p.id, title: p.title, type: p.type, firstRound: r.round, perRound: {} });
+    }
+    const row = proposals.get(p.id)!;
+    const cs = r.feedback.critiques.filter((c) => c.proposal_id === p.id);
+    const avg = cs.length ? cs.reduce((a, c) => a + c.total, 0) / cs.length : null;
+    const applied = r.modifier.applied.find((a) => a.proposal_id === p.id);
+    row.perRound[r.round] = {
+      decision: decisionFor(r, p.id),
+      score: avg,
+      appliedAt: applied?.applied_at ?? null,
+      appliedKind: applied?.kind ?? null,
+    };
+  }
+}
+
+const proposalRows = [...proposals.values()].sort((a, b) => {
+  // 按首次出现顺序,然后按 title
+  if (a.firstRound !== b.firstRound) return a.firstRound - b.firstRound;
+  return a.title.localeCompare(b.title);
+});
+
+const decisionClass: Record<string, string> = {
+  promoted: 'agents-tl-promoted',
+  candidate: 'agents-tl-candidate',
+  sketch: 'agents-tl-sketch',
+  rejected: 'agents-tl-rejected',
+  missing: 'agents-tl-missing',
+};
+
+const decisionLabel: Record<string, string> = {
+  promoted: '✓',
+  candidate: '?',
+  sketch: '~',
+  rejected: '✗',
+  missing: '·',
+};
+
+function escapeHtml(s: string): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title={`Proposal Timeline · ${sessionId}`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / </span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="muted"> / timeline</span>
+    </nav>
+
+    <header class="agents-session-header">
+      <h1>📅 Proposal Timeline · {sessionId}</h1>
+      <p class="muted">
+        共 <strong>{rounds.length}</strong> 个 round / <strong>{proposalRows.length}</strong> 个唯一 proposal。
+        每行追踪一个 proposal 在所有 round 中的生命周期。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎨 图例</h2>
+      <p>
+        <span class="agents-tl-cell agents-tl-promoted" style="display:inline-block; padding:2px 8px;">✓ promoted</span>
+        <span class="agents-tl-cell agents-tl-candidate" style="display:inline-block; padding:2px 8px;">? candidate</span>
+        <span class="agents-tl-cell agents-tl-sketch" style="display:inline-block; padding:2px 8px;">~ sketch</span>
+        <span class="agents-tl-cell agents-tl-rejected" style="display:inline-block; padding:2px 8px;">✗ rejected</span>
+        <span class="agents-tl-cell agents-tl-missing" style="display:inline-block; padding:2px 8px;">· 未出现</span>
+      </p>
+    </section>
+
+    {proposalRows.length === 0 ? (
+      <section class="agents-status">
+        <p class="muted">尚无 proposal 数据。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <div style="overflow-x:auto;">
+          <table class="agents-session-table agents-tl-table">
+            <thead>
+              <tr>
+                <th style="position:sticky; left:0; background:var(--surface-muted, #f3f4f6); min-width:280px;">Proposal</th>
+                {rounds.map((r) => <th>r{r.round}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {proposalRows.map((p) => (
+                <tr>
+                  <td style="position:sticky; left:0; background:var(--surface, #fff);">
+                    <strong>{escapeHtml(p.title)}</strong>
+                    <br />
+                    <small class="muted"><code>{escapeHtml(p.id)}</code> · {escapeHtml(p.type)}</small>
+                  </td>
+                  {rounds.map((r) => {
+                    const cell = p.perRound[r.round];
+                    if (!cell) {
+                      return <td class="agents-tl-cell agents-tl-missing" title="未出现">·</td>;
+                    }
+                    const cls = decisionClass[cell.decision] ?? 'agents-tl-missing';
+                    const label = decisionLabel[cell.decision] ?? '?';
+                    const scoreStr = cell.score !== null ? cell.score.toFixed(1) : '—';
+                    const appliedInfo = cell.appliedKind ? `\napplied: ${cell.appliedKind}` : '';
+                    const title = `round ${r.round} · ${cell.decision} · score ${scoreStr}${appliedInfo}`;
+                    return (
+                      <td class={`agents-tl-cell ${cls}`} title={title}>
+                        <strong>{label}</strong>
+                        <br /><small>{scoreStr}</small>
+                        {cell.appliedKind && <><br /><small class="agents-tl-applied">→ {escapeHtml(cell.appliedKind)}</small></>}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    )}
+  </main>
+</BaseLayout>
