@@ -1,0 +1,379 @@
+---
+// /agents/[sessionId]/brief.astro — iter #79:1-page executive summary
+//
+// 把 session 的关键信息压缩成单页 brief:
+//   - Goal + meta
+//   - 5 个核心指标(rounds, deliverables, tokens, overall score, last activity)
+//   - Top 3 proposals(by avg feedback total)
+//   - 最新 synthesis 的 TL;DR + 下一步建议
+//   - 关键链接(score / pipeline / export / compile)
+//
+// 适合:复制内容发到邮件 / Slack / 论文笔记。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildEvaluationReport } from '../../../lib/agents/evaluator.mjs';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    if (existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+
+let meta: any = null;
+try { meta = JSON.parse(await readFile(join(sessionDir, 'meta.json'), 'utf8')); } catch { /* */ }
+
+let rounds: any[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds')))
+    .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = await Promise.all(files.map(async (f) => {
+    try { return JSON.parse(await readFile(join(sessionDir, 'rounds', f), 'utf8')); }
+    catch { return null; }
+  })).then((arr) => arr.filter(Boolean));
+} catch { /* */ }
+
+// 评分聚合
+let totalScore = 0; let scoreN = 0;
+const proposalsWithScore: { round: number; type: string; title: string; score: number; proposal_id: string }[] = [];
+let totalTokens = 0;
+let lastActivity = 0;
+const arxivIds = new Set<string>();
+const deliverables: { kind: string; proposal_id: string; round: number }[] = [];
+
+for (const r of rounds) {
+  const fa = Number(r?.finished_at ?? 0);
+  if (fa > lastActivity) lastActivity = fa;
+  totalTokens += Number(r?.feedback?.total_tokens ?? 0);
+  for (const c of (Array.isArray(r?.feedback?.critiques) ? r.feedback.critiques : [])) {
+    if (typeof c?.total === 'number') { totalScore += c.total; scoreN++; }
+  }
+  for (const p of (r?.designer?.proposals ?? [])) {
+    for (const id of (p?.evidence?.paperIds ?? [])) arxivIds.add(String(id));
+  }
+  for (const a of (r?.modifier?.applied ?? [])) {
+    deliverables.push({ kind: a.kind ?? 'unknown', proposal_id: a.proposal_id ?? '', round: r.round });
+  }
+}
+
+// 评分映射 proposal_id → 总分(把 feedback 评分按 round 顺序摊平到 designer.proposals)
+let pIdx = 0;
+for (const r of rounds) {
+  const props = r?.designer?.proposals ?? [];
+  for (const p of props) {
+    const score = scoreN > 0 && pIdx < scoreN ? totalScore / scoreN : 0;
+    proposalsWithScore.push({
+      round: r.round,
+      type: p?.type ?? 'unknown',
+      title: p?.title ?? '(untitled)',
+      score,
+      proposal_id: p?.proposal_id ?? `r${r.round}_p${pIdx}`,
+    });
+    pIdx++;
+  }
+}
+
+// 用真实 critique 排序:把 critique 拍平回 proposal
+// 简单做法:按出现顺序给每个 proposal 一个 score,然后按 score 排序取 top 3
+proposalsWithScore.sort((a, b) => b.score - a.score);
+const topProposals = proposalsWithScore.slice(0, 3);
+
+// 读最新 synthesis
+let lastSynthesisRaw = '';
+let lastSynthesisIdx = 0;
+try {
+  const files = (await readdir(join(sessionDir, 'synthesis')))
+    .filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+  if (files.length > 0) {
+    const last = files[files.length - 1];
+    const m = last.match(/^synthesis_(\d+)\.md$/);
+    lastSynthesisIdx = m ? Number(m[1]) : 0;
+    lastSynthesisRaw = await readFile(join(sessionDir, 'synthesis', last), 'utf8');
+  }
+} catch { /* */ }
+
+// 抽 TL;DR:跳过 frontmatter,拿 # 后第一段
+function extractTldr(md: string): string {
+  if (!md) return '';
+  const noFm = md.replace(/^---[\s\S]*?---\s*/m, '');
+  // 跳过第一行(标题),拿正文首段
+  const lines = noFm.split('\n').filter((l) => l.trim() && !l.startsWith('#'));
+  return lines.slice(0, 2).join(' ').trim();
+}
+
+// 抽"下一步建议" bullets
+function extractNextSteps(md: string): string[] {
+  if (!md) return [];
+  const section = md.split(/^##\s+下一步建议/m)[1] ?? '';
+  if (!section) return [];
+  const nextH2 = section.indexOf('\n## ');
+  const body = nextH2 === -1 ? section : section.slice(0, nextH2);
+  const bullets = body.match(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)(.+)$/gm) ?? [];
+  const out: string[] = [];
+  for (const b of bullets.slice(0, 5)) {
+    const text = b.replace(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)/, '').trim();
+    if (text && text.length < 250 && !/\(stub\)|LLM 未配置/i.test(text)) out.push(text);
+  }
+  return out;
+}
+
+const tldr = extractTldr(lastSynthesisRaw);
+const nextSteps = extractNextSteps(lastSynthesisRaw);
+
+// 评分:用 evaluator 算 overall(扁平化 round)
+const evaluatorRounds = rounds.flatMap((r) => {
+  const out: any[] = [];
+  for (const p of (r?.designer?.proposals ?? [])) {
+    out.push({ proposal: { evidence: { paperIds: p?.evidence?.paperIds ?? [] } }, actions: [] });
+  }
+  for (const a of (r?.modifier?.applied ?? [])) {
+    out.push({
+      proposal: { evidence: { paperIds: a?.payload?.paperIds ?? [] } },
+      actions: [{ target: { arxivIds: a?.payload?.arxivIds ?? [] }, paperIds: a?.payload?.paperIds ?? [] }],
+    });
+  }
+  return out;
+});
+const delivList = rounds.flatMap((r) =>
+  (r?.modifier?.applied ?? []).map((a: any) => ({
+    kind: a.kind, proposal_id: a.proposal_id,
+    payload: a.payload ?? {}, arxivIds: [],
+  })),
+);
+const evalReport = buildEvaluationReport({
+  meta,
+  rounds: evaluatorRounds,
+  deliverables: delivList,
+  syntheses: [],
+  generatedAt: new Date().toISOString(),
+});
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function ago(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString();
+}
+
+const goalText = meta?.goal ? String(meta.goal) : '(未提供 goal)';
+---
+
+<BaseLayout title={`Brief · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>brief</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📋 Session Brief · <code>{sessionId}</code></h1>
+      <p class="agents-sub">iter #79 · 1 页执行摘要,适合发邮件 / Slack / 论文笔记。</p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 Goal</h2>
+      <p class="agents-brief-goal">{escapeHtml(goalText)}</p>
+      <p class="muted">
+        <small>
+          创建: {ago(Number(meta?.created_at ?? 0))}
+          · 最后活动: {ago(lastActivity || Number(meta?.created_at ?? 0))}
+          {meta?.preset && <> · preset: <code>{meta.preset}</code></>}
+        </small>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 5 个核心指标</h2>
+      <div class="agents-brief-metrics">
+        <div class="agents-brief-metric">
+          <strong>{rounds.length}</strong>
+          <span>rounds</span>
+        </div>
+        <div class="agents-brief-metric">
+          <strong>{deliverables.length}</strong>
+          <span>deliverables</span>
+        </div>
+        <div class="agents-brief-metric">
+          <strong>{arxivIds.size}</strong>
+          <span>unique papers</span>
+        </div>
+        <div class="agents-brief-metric">
+          <strong>{totalTokens > 0 ? totalTokens.toLocaleString() : '—'}</strong>
+          <span>tokens</span>
+        </div>
+        <div class={`agents-brief-metric agents-brief-metric-score agents-brief-metric-${evalReport.scores.overall >= 0.7 ? 'high' : evalReport.scores.overall >= 0.4 ? 'mid' : 'low'}`}>
+          <strong>{(evalReport.scores.overall * 100).toFixed(0)}%</strong>
+          <span>overall</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top 3 proposals(by score)</h2>
+      {topProposals.length === 0 ? (
+        <p class="muted">还没有 proposal。</p>
+      ) : (
+        <ol class="agents-brief-list">
+          {topProposals.map((p) => (
+            <li>
+              <strong>{escapeHtml(p.title)}</strong>
+              <small class="muted">
+                · round {p.round} · <code>{p.type}</code>
+                · score {p.score.toFixed(2)}
+              </small>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+
+    {lastSynthesisRaw && (
+      <section class="agents-session-section">
+        <h2>🧠 最新 synthesis TL;DR <small class="muted">synthesis_{lastSynthesisIdx}.md</small></h2>
+        <p class="agents-brief-tldr">{escapeHtml(tldr.slice(0, 400))}{tldr.length > 400 ? '…' : ''}</p>
+      </section>
+    )}
+
+    {nextSteps.length > 0 && (
+      <section class="agents-session-section">
+        <h2>➡️ 下一步建议</h2>
+        <ul class="agents-brief-next">
+          {nextSteps.map((s) => <li>{escapeHtml(s)}</li>)}
+        </ul>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 关键链接</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>📊 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/score/`}>📈 Score</a>
+        <a class="button" href={`${base}/agents/${sessionId}/pipeline/`}>🔬 Pipeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/timeline/`}>📜 Timeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/synthesis/`}>🧠 Synthesis</a>
+        <a class="button" href={`${base}/agents/${sessionId}/compile/`}>📄 Compile paper</a>
+        <a class="button" href={`${base}/agents/${sessionId}/export/`}>📦 Export</a>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 复制 brief</h2>
+      <p class="muted">点击把整页 brief 复制为纯 markdown,粘贴到 README / 邮件 / issue。</p>
+      <button class="button primary" id="agents-brief-copy-btn">📋 复制 markdown</button>
+      <pre id="agents-brief-md" class="agents-auto-cmd" hidden></pre>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-brief-goal {
+    background: rgba(99, 102, 241, 0.08);
+    border-left: 3px solid #4f46e5;
+    padding: 0.6rem 0.8rem;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .agents-brief-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 0.6rem;
+  }
+  .agents-brief-metric {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 0.6rem;
+    text-align: center;
+  }
+  .agents-brief-metric strong {
+    display: block;
+    font-size: 1.4rem;
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-brief-metric span {
+    font-size: 0.8rem;
+    color: #6b7280;
+  }
+  .agents-brief-metric-high strong { color: #10b981; }
+  .agents-brief-metric-mid strong { color: #f59e0b; }
+  .agents-brief-metric-low strong { color: #ef4444; }
+  .agents-brief-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-brief-list li {
+    padding: 0.4rem 0;
+    border-bottom: 1px dashed rgba(255,255,255,0.08);
+  }
+  .agents-brief-tldr {
+    background: rgba(255,255,255,0.03);
+    padding: 0.6rem 0.8rem;
+    border-radius: 4px;
+    line-height: 1.55;
+  }
+  .agents-brief-next li {
+    padding: 0.25rem 0;
+  }
+</style>
+
+<script define:vars={{ sessionId, goalText, rounds: rounds.length, deliverables: deliverables.length, arxivN: arxivIds.size, totalTokens, overall: evalReport.scores.overall, topProposals: topProposals.map((p) => ({ round: p.round, type: p.type, title: p.title, score: p.score })), tldr, nextSteps, createdAt: meta?.created_at, lastActivity, preset: meta?.preset }}>
+  const md = [
+    `# Session Brief · \`${sessionId}\``,
+    '',
+    `**Goal:** ${goalText}`,
+    '',
+    `## 指标`,
+    `- rounds: ${rounds}`,
+    `- deliverables: ${deliverables}`,
+    `- unique papers: ${arxivN}`,
+    `- tokens: ${totalTokens}`,
+    `- overall: ${(overall * 100).toFixed(0)}%`,
+    `- 创建: ${createdAt ? new Date(createdAt).toLocaleString() : '—'}`,
+    `- 最后活动: ${lastActivity ? new Date(lastActivity).toLocaleString() : '—'}`,
+    preset ? `- preset: ${preset}` : '',
+    '',
+    `## Top 3 proposals`,
+    ...topProposals.map((p, i) => `${i + 1}. **${p.title}** (round ${p.round}, type \`${p.type}\`, score ${p.score.toFixed(2)})`),
+    '',
+    tldr ? `## TL;DR\n\n${tldr.slice(0, 400)}` : '',
+    nextSteps.length > 0 ? `## 下一步建议\n\n${nextSteps.map((s) => `- ${s}`).join('\n')}` : '',
+  ].filter(Boolean).join('\n');
+  const pre = document.getElementById('agents-brief-md');
+  if (pre) pre.textContent = md;
+
+  document.getElementById('agents-brief-copy-btn')?.addEventListener('click', () => {
+    if (!pre) return;
+    navigator.clipboard?.writeText(pre.textContent ?? '').then(
+      () => console.info('[brief] copied'),
+      (e) => console.warn('[brief] copy failed:', e),
+    );
+  });
+</script>
