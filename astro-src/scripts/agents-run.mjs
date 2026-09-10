@@ -74,6 +74,11 @@ export {
 import { buildPdfBundle, formatPdfHtml, buildPdfFileName } from '../lib/agents/synthesis-pdf.mjs';
 export { buildPdfBundle, formatPdfHtml, buildPdfFileName };
 
+// Synthesis diff (iter #66):同一 session 两份 synthesis 对比 — topics 增减 /
+// refs 增减 / 字数变化 / 模型切换 / similarity 评分
+import { diffSyntheses, formatSynthesisDiffText } from '../lib/agents/synthesis-diff.mjs';
+export { diffSyntheses, formatSynthesisDiffText };
+
 // ---------------------------------------------------------------------------
 // CLI 参数解析
 // ---------------------------------------------------------------------------
@@ -96,6 +101,17 @@ function parseArgs(argv) {
     else if (a === '--no-run') out.noRun = true;
     else if (a === '--quickstart') out.quickstart = argv[++i];
     else if (a === '--diff') out.diff = true;
+    else if (a === '--diff-syntheses') {
+      // --diff-syntheses [--session SID] <idxA> <idxB>
+      // 注:这两个位置参数是 idxA / idxB(整数)
+      const positions = argv.slice(i + 1).filter((x) => !x.startsWith('--')).slice(0, 2);
+      if (positions.length < 2) {
+        out._err = '--diff-syntheses requires two positional args: <idxA> <idxB>';
+      } else {
+        out.diffSyntheses = { idxA: Number(positions[0]), idxB: Number(positions[1]) };
+        i += positions.length;
+      }
+    }
     else if (a === '--leaderboard') out.leaderboard = true;
     else if (a === '--top') out.top = Number(argv[++i]);
     else if (a === '--type') out.type = argv[++i];
@@ -225,6 +241,13 @@ if (args.help) {
                      and two positional round numbers). Outputs proposals
                      added/removed/changed + score delta + gate decision
                      transitions. JSON via --json.
+  --diff-syntheses <idxA> <idxB>
+                     Compare two synthesis_*.md of a session (iter #66).
+                     Use with --session ID + two positional synthesis idx
+                     numbers. Outputs topics added/removed/shared,
+                     arXiv refs added/removed/shared, word count delta,
+                     model/title changes, similarity score (Jaccard on
+                     topics 0.7 + refs 0.3). JSON via --json.
   --leaderboard      Cross-session aggregate: scan all archive/*/rounds/
                      and rank top proposal types by avg score / apply rate
                      + top Elo proposals + most-active sessions. Filter
@@ -1522,6 +1545,31 @@ export async function loadSynthesisPdfBundle(sessionId) {
 }
 
 /**
+ * loadSynthesis(sessionId, idx) — IO:读 archive/<sid>/synthesis/synthesis_<NNN>.md。
+ * 找不到 → throws with descriptive error。给 diff / pdf 单文件喂 raw 内容。
+ */
+export async function loadSynthesis(sessionId, idx) {
+  const path = join('archive', sessionId, 'synthesis', `synthesis_${String(idx).padStart(3, '0')}.md`);
+  if (!existsSync(path)) {
+    throw new Error(`synthesis file not found: ${path}`);
+  }
+  const raw = await readFile(path, 'utf8');
+  return { idx, raw };
+}
+
+/**
+ * loadSynthesesPair(sessionId, idxA, idxB) — IO wrapper:一次读两份合成喂给
+ * diffSyntheses 纯函数。idxA / idxB 任一不存在就 throws(另一边不读)。
+ */
+export async function loadSynthesesPair(sessionId, idxA, idxB) {
+  const [a, b] = await Promise.all([
+    loadSynthesis(sessionId, idxA),
+    loadSynthesis(sessionId, idxB),
+  ]);
+  return { a, b };
+}
+
+/**
  * loadDiff(sessionId, roundA, roundB) — IO wrapper,读 archive/<sid>/rounds/round_<A|B>.json。
  * 找不到 roundA / roundB → throws with descriptive error。
  */
@@ -2559,6 +2607,33 @@ async function main() {
         console.log(`📦 Exported session ${sessionId} → ${outPath}`);
         console.log(`   ${bundle.stats.rounds} rounds, ${bundle.stats.proposals} proposals, ${bundle.stats.applied} applied, ${bundle.stats.syntheses} syntheses, hasDigest=${bundle.stats.hasDigest}`);
       }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.63: --diff-syntheses <idxA> <idxB> (iter #66)
+  if (args.diffSyntheses) {
+    if (args._err) {
+      console.error(`[error] ${args._err}`);
+      process.exit(2);
+    }
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --diff-syntheses requires --session ID');
+      process.exit(2);
+    }
+    const { idxA, idxB } = args.diffSyntheses;
+    try {
+      const { a, b } = await loadSynthesesPair(sessionId, idxA, idxB);
+      const diff = diffSyntheses(a, b);
+      if (args.json) {
+        console.log(JSON.stringify(diff, null, 2));
+        return;
+      }
+      console.log(formatSynthesisDiffText(diff));
     } catch (err) {
       console.error(`[error] ${err.message}`);
       process.exit(2);
