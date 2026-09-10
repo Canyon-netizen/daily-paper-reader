@@ -1,0 +1,332 @@
+---
+// /agents/notebook.astro — iter #80:research notebook
+//
+// 按时间倒序列出 ALL sessions,像 research journal / lab notebook:
+//   - 日期(创建 + 最后活动)
+//   - Goal 摘要
+//   - Overall score 圆点(色编码)
+//   - 1 行 synthesis TL;DR
+//   - 关键链接(详情 / brief / score / synthesis / export)
+//
+// 用户可以从这里一路点击进入任一 session,快速回顾"我做了什么研究"。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildEvaluationReport } from '../../lib/agents/evaluator.mjs';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Entry {
+  sid: string;
+  goal: string;
+  createdAt: number;
+  lastActivity: number;
+  roundCount: number;
+  proposalCount: number;
+  appliedCount: number;
+  uniquePapers: number;
+  overall: number;
+  tldr: string;
+  nextSteps: string[];
+}
+
+async function loadEntry(sid: string): Promise<Entry | null> {
+  const dir = join(process.cwd(), 'archive', sid);
+  const metaPath = join(dir, 'meta.json');
+  if (!existsSync(metaPath)) return null;
+  let meta: any = null;
+  try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { return null; }
+
+  let rounds: any[] = [];
+  try {
+    const files = (await readdir(join(dir, 'rounds')))
+      .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+    rounds = await Promise.all(files.map(async (f) => {
+      try { return JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8')); }
+      catch { return null; }
+    })).then((arr) => arr.filter(Boolean));
+  } catch { /* */ }
+
+  let lastActivity = 0;
+  let proposalCount = 0;
+  let appliedCount = 0;
+  const arxivIds = new Set<string>();
+  for (const r of rounds) {
+    const fa = Number(r?.finished_at ?? 0);
+    if (fa > lastActivity) lastActivity = fa;
+    for (const p of (r?.designer?.proposals ?? [])) {
+      proposalCount++;
+      for (const id of (p?.evidence?.paperIds ?? [])) arxivIds.add(String(id));
+    }
+    appliedCount += Array.isArray(r?.modifier?.applied) ? r.modifier.applied.length : 0;
+  }
+
+  // 读最新 synthesis
+  let tldr = '';
+  let nextSteps: string[] = [];
+  try {
+    const files = (await readdir(join(dir, 'synthesis')))
+      .filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+    if (files.length > 0) {
+      const last = files[files.length - 1];
+      const raw = await readFile(join(dir, 'synthesis', last), 'utf8');
+      const noFm = raw.replace(/^---[\s\S]*?---\s*/m, '');
+      const lines = noFm.split('\n').filter((l) => l.trim() && !l.startsWith('#'));
+      tldr = lines.slice(0, 2).join(' ').trim().slice(0, 200);
+
+      const section = raw.split(/^##\s+下一步建议/m)[1] ?? '';
+      const nextH2 = section.indexOf('\n## ');
+      const body = nextH2 === -1 ? section : section.slice(0, nextH2);
+      const bullets = body.match(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)(.+)$/gm) ?? [];
+      for (const b of bullets.slice(0, 3)) {
+        const text = b.replace(/^\s*(?:[-*]\s+(?:\[[ x]\]\s+)?|\[[ x]\]\s+)/, '').trim();
+        if (text && text.length < 200 && !/\(stub\)|LLM 未配置/i.test(text)) {
+          nextSteps.push(text);
+        }
+      }
+    }
+  } catch { /* */ }
+
+  // evaluator overall
+  const evalRounds = rounds.flatMap((r) => {
+    const out: any[] = [];
+    for (const p of (r?.designer?.proposals ?? [])) {
+      out.push({ proposal: { evidence: { paperIds: p?.evidence?.paperIds ?? [] } }, actions: [] });
+    }
+    for (const a of (r?.modifier?.applied ?? [])) {
+      out.push({
+        proposal: { evidence: { paperIds: a?.payload?.paperIds ?? [] } },
+        actions: [{ target: { arxivIds: a?.payload?.arxivIds ?? [] }, paperIds: a?.payload?.paperIds ?? [] }],
+      });
+    }
+    return out;
+  });
+  const delivs = rounds.flatMap((r) =>
+    (r?.modifier?.applied ?? []).map((a: any) => ({
+      kind: a.kind, proposal_id: a.proposal_id, payload: a.payload ?? {}, arxivIds: [],
+    })),
+  );
+  let overall = 0;
+  try {
+    const rpt = buildEvaluationReport({
+      meta, rounds: evalRounds, deliverables: delivs, syntheses: [], generatedAt: new Date().toISOString(),
+    });
+    overall = rpt.scores.overall;
+  } catch { /* */ }
+
+  return {
+    sid,
+    goal: typeof meta.goal === 'string' ? meta.goal : '(无 goal)',
+    createdAt: Number(meta.created_at ?? 0),
+    lastActivity: lastActivity || Number(meta.created_at ?? 0),
+    roundCount: rounds.length,
+    proposalCount,
+    appliedCount,
+    uniquePapers: arxivIds.size,
+    overall,
+    tldr,
+    nextSteps,
+  };
+}
+
+const root = join(process.cwd(), 'archive');
+const entries: Entry[] = [];
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const e = await loadEntry(sid);
+    if (e) entries.push(e);
+  }
+}
+
+// 按 lastActivity 倒序(最新在前)
+entries.sort((a, b) => b.lastActivity - a.lastActivity);
+
+function scoreClass(n: number): string {
+  if (n >= 0.7) return 'high';
+  if (n >= 0.4) return 'mid';
+  return 'low';
+}
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function dateStr(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleDateString();
+}
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const days = Math.floor((now - ts) / 86_400_000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  if (days < 365) return `${Math.floor(days / 30)} 个月前`;
+  return `${Math.floor(days / 365)} 年前`;
+}
+
+const now = Date.now();
+---
+
+<BaseLayout title="研究手记 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / notebook</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📓 研究手记 <span class="muted" style="font-size:0.6em">(iter #80)</span></h1>
+      <p class="agents-sub">
+        按时间倒序列出所有 session,像 research journal。每条带 overall score 色点、
+        Goal、synthesis TL;DR、下一步建议,点击进入详情。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <p class="muted">共 {entries.length} 个 session,按最后活动倒序。</p>
+      {entries.length === 0 ? (
+        <p class="muted">archive/ 下还没有任何 session。<a href={`${base}/agents/new-session/`}>➕ 新建</a></p>
+      ) : (
+        <ol class="agents-notebook-list">
+          {entries.map((e) => (
+            <li class={`agents-notebook-item agents-notebook-${scoreClass(e.overall)}`}>
+              <header class="agents-notebook-head">
+                <span class={`agents-notebook-dot agents-notebook-dot-${scoreClass(e.overall)}`} title={`overall ${(e.overall * 100).toFixed(0)}%`}></span>
+                <h3>
+                  <a href={`${base}/agents/${e.sid}/`}>{e.sid}</a>
+                </h3>
+                <small class="muted">
+                  📅 {dateStr(e.createdAt)} · 最近 {agoStr(e.lastActivity)}
+                </small>
+              </header>
+              <p class="agents-notebook-goal">
+                <strong>Goal:</strong> {escapeHtml(e.goal.length > 200 ? e.goal.slice(0, 199) + '…' : e.goal)}
+              </p>
+              <p class="agents-notebook-stats muted">
+                <span><strong>{e.roundCount}</strong> rounds</span>
+                <span><strong>{e.proposalCount}</strong> proposals</span>
+                <span><strong>{e.appliedCount}</strong> applied</span>
+                <span><strong>{e.uniquePapers}</strong> papers</span>
+                <span class={`agents-notebook-overall-${scoreClass(e.overall)}`}>
+                  overall <strong>{(e.overall * 100).toFixed(0)}%</strong>
+                </span>
+              </p>
+              {e.tldr && (
+                <p class="agents-notebook-tldr">
+                  <strong>🧠 TL;DR:</strong> {escapeHtml(e.tldr)}
+                </p>
+              )}
+              {e.nextSteps.length > 0 && (
+                <details class="agents-notebook-next">
+                  <summary>➡️ 下一步建议 ({e.nextSteps.length})</summary>
+                  <ul>
+                    {e.nextSteps.map((s) => <li>{escapeHtml(s)}</li>)}
+                  </ul>
+                </details>
+              )}
+              <footer class="agents-notebook-links">
+                <a class="button small" href={`${base}/agents/${e.sid}/`}>详情</a>
+                <a class="button small" href={`${base}/agents/${e.sid}/brief/`}>📋 brief</a>
+                <a class="button small" href={`${base}/agents/${e.sid}/score/`}>📊 score</a>
+                <a class="button small" href={`${base}/agents/${e.sid}/synthesis/`}>🧠 synth</a>
+              </footer>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button primary" href={`${base}/agents/new-session/`}>➕ 新建 session</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/goals/`}>📚 Goals</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-notebook-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-notebook-item {
+    background: rgba(255,255,255,0.03);
+    border-left: 4px solid #6b7280;
+    border-radius: 4px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.8rem;
+    transition: background 0.15s;
+  }
+  .agents-notebook-item:hover {
+    background: rgba(255,255,255,0.06);
+  }
+  .agents-notebook-high { border-left-color: #10b981; }
+  .agents-notebook-mid { border-left-color: #f59e0b; }
+  .agents-notebook-low { border-left-color: #ef4444; }
+  .agents-notebook-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .agents-notebook-head h3 { margin: 0; font-size: 1.05rem; }
+  .agents-notebook-head h3 a { font-family: ui-monospace, monospace; }
+  .agents-notebook-dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .agents-notebook-dot-high { background: #10b981; box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
+  .agents-notebook-dot-mid { background: #f59e0b; }
+  .agents-notebook-dot-low { background: #ef4444; }
+  .agents-notebook-goal {
+    margin: 0.5rem 0;
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+  .agents-notebook-stats {
+    margin: 0.4rem 0;
+    display: flex;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+    font-size: 0.85rem;
+  }
+  .agents-notebook-stats span strong { color: #4f46e5; }
+  .agents-notebook-overall-high strong { color: #10b981; }
+  .agents-notebook-overall-mid strong { color: #f59e0b; }
+  .agents-notebook-overall-low strong { color: #ef4444; }
+  .agents-notebook-tldr {
+    margin: 0.5rem 0;
+    font-size: 0.88rem;
+    background: rgba(99, 102, 241, 0.06);
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+  }
+  .agents-notebook-next {
+    margin: 0.4rem 0;
+    font-size: 0.85rem;
+  }
+  .agents-notebook-links {
+    margin-top: 0.5rem;
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+</style>
