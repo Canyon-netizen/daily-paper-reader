@@ -201,9 +201,9 @@ if (args.help) {
                      (default both).
   --latex-template T | --documentclass T
                      With --compile-paper: pick a LaTeX document class
-                     (iter #64 templates): article (default) | acmart |
-                     ieeeconf | iclr2026. Each emits a distinct preamble
-                     + title block tuned for that venue.
+                     (iter #64/65 templates): article (default) | acmart |
+                     ieeeconf | iclr2026 | neurips | acl. Each emits a
+                     distinct preamble + title block tuned for that venue.
   --list-templates  Print the list of supported LaTeX templates with
                      their compile hints and exit. Useful for picking
                      --latex-template when scripting.

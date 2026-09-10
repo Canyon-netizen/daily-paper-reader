@@ -645,6 +645,57 @@ export const PAPER_LATEX_TEMPLATES = {
     bibStyle: 'thebibliography',
     compileHint: '⚠️ 需先下载 ICLR 2026 模板(iclr_conference.sty);否则退回 --paper-format article',
   },
+
+  // iter #65: 再加 2 个会议模板 (NeurIPS + ACL)。同样是占位 — 都需要用户
+  // 先下载官方 sty。NeurIPS 用 preprint 选项(双盲前);ACL 用 acl_natbib。
+
+  neurips: {
+    preamble: [
+      '% NeurIPS 官方模板(neurips_2024.sty)需从 NeurIPS Overleaf 模板下载',
+      '% https://media.neurips.cc/Conferences/NeurIPS2024/Styles.zip',
+      '% 下载后取消下一行注释,并把下面 \\documentclass{article} 注释掉',
+      '% \\documentclass{article}',
+      '\\documentclass{article}',  // 占位 fallback
+      '\\usepackage[preprint]{neurips_2024}',
+      '\\usepackage[utf8]{inputenc}',
+      '\\usepackage{amsmath,amssymb}',
+      '\\usepackage{hyperref}',
+      '% 如果 \\usepackage[preprint]{neurips_2024} 报"File not found",',
+      '% 按上方链接下载 sty 文件,或退回 --paper-format article',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: '⚠️ 需先下载 NeurIPS 模板(neurips_2024.sty);否则退回 --paper-format article',
+  },
+
+  acl: {
+    preamble: [
+      '% ACL 官方模板(acl_latex.sty / acl_natbib.sty)需从 ACL Overleaf 模板下载',
+      '% https://acl-org.github.io/ACLPub/acl_latex.html',
+      '% 下载后取消下一行注释,并把下面 \\documentclass{article} 注释掉',
+      '% \\documentclass{article}',
+      '\\documentclass{article}',  // 占位 fallback
+      '\\usepackage{times}',
+      '\\usepackage{acl}',
+      '\\usepackage{acl_natbib}',
+      '\\usepackage[utf8]{inputenc}',
+      '\\usepackage{amsmath,amssymb}',
+      '% 如果 \\usepackage{acl} 报"File not found",',
+      '% 按上方链接下载 sty 文件,或退回 --paper-format article',
+    ],
+    titleBlock: (t) => [
+      `\\title{${escapeLatex(t)}}`,
+      '\\author{DPR Multi-Agent Research Loop}',
+      '\\affiliation{DPR Lab}',
+      '\\maketitle',
+    ],
+    bibStyle: 'thebibliography',
+    compileHint: '⚠️ 需先下载 ACL 模板(acl.sty + acl_natbib.sty);否则退回 --paper-format article',
+  },
 };
 
 /**
