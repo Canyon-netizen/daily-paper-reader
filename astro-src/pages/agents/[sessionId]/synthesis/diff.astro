@@ -1,0 +1,374 @@
+---
+// /agents/[sessionId]/synthesis/diff.astro — iter #82:synthesis diff browser UI
+//
+// 选两份 synthesis 文件,服务端调用 diffSyntheses() + formatSynthesisDiffText() 生成
+// HTML 友好的 diff 视图。展示:
+//   - meta 对比 + delta
+//   - body 字数差、topics added/removed/shared、refs added/removed/shared
+//   - similarity 0-1
+//   - 可选:展开两份 markdown 全文并排
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { diffSyntheses } from '../../../../lib/agents/synthesis-diff.mjs';
+import BaseLayout from '../../../../layouts/BaseLayout.astro';
+import Navbar from '../../../../components/Navbar.astro';
+import '../../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    const sdir = join(root, sid, 'synthesis');
+    if (!existsSync(sdir)) continue;
+    const files = (await readdir(sdir)).filter((f) => /^synthesis_\d+\.md$/.test(f));
+    if (files.length >= 2 && existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+const sdir = join(sessionDir, 'synthesis');
+
+// 列出所有 synthesis
+const synthFiles = (await readdir(sdir))
+  .filter((f) => /^synthesis_\d+\.md$/.test(f))
+  .sort();
+
+const syntheses: { idx: number; path: string; raw: string; preview: string }[] = [];
+for (const f of synthFiles) {
+  const m = f.match(/^synthesis_(\d+)\.md$/);
+  const idx = m ? Number(m[1]) : 0;
+  const path = join(sdir, f);
+  const raw = await readFile(path, 'utf8');
+  const noFm = raw.replace(/^---[\s\S]*?---\s*/m, '');
+  const preview = noFm.replace(/\n/g, ' ').slice(0, 80).trim();
+  syntheses.push({ idx, path, raw, preview });
+}
+
+// URL params
+const url = Astro.url;
+const aIdx = Number(url.searchParams.get('a') ?? syntheses[0]?.idx ?? 0);
+const bIdx = Number(url.searchParams.get('b') ?? syntheses[syntheses.length - 1]?.idx ?? 0);
+
+const a = syntheses.find((s) => s.idx === aIdx) ?? syntheses[0];
+const b = syntheses.find((s) => s.idx === bIdx) ?? syntheses[syntheses.length - 1];
+
+const diff = (a && b) ? diffSyntheses({ idx: a.idx, raw: a.raw }, { idx: b.idx, raw: b.raw }) : null;
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function fmtDate(s: string | null): string {
+  if (!s) return '—';
+  const t = Date.parse(s);
+  if (isNaN(t)) return s;
+  return new Date(t).toLocaleString();
+}
+
+function deltaStr(n: number | null | undefined): string {
+  if (n == null) return '—';
+  if (n > 0) return `+${n}`;
+  return String(n);
+}
+---
+
+<BaseLayout title={`Synthesis Diff · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/synthesis/`}>synthesis</a>
+      <span class="muted"> / diff</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔀 Synthesis Diff · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #82 · 选两份 synthesis,展示 meta delta + topics/refs added/removed/shared +
+        similarity 评分。可用于追踪研究方向漂移或 synthesis 风格变化。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📂 选两份 synthesis</h2>
+      <form method="get" class="agents-sdiff-form">
+        <label>
+          <span>A (基线)</span>
+          <select name="a" onchange="this.form.submit()">
+            {syntheses.map((s) => (
+              <option value={s.idx} selected={s.idx === a?.idx}>
+                synthesis_{s.idx}.md — {escapeHtml(s.preview)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>B (对比)</span>
+          <select name="b" onchange="this.form.submit()">
+            {syntheses.map((s) => (
+              <option value={s.idx} selected={s.idx === b?.idx}>
+                synthesis_{s.idx}.md — {escapeHtml(s.preview)}
+              </option>
+            ))}
+          </select>
+        </label>
+      </form>
+    </section>
+
+    {diff && a && b && (
+      <>
+        <section class="agents-session-section">
+          <h2>📊 Meta 对比</h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr><th>字段</th><th>A · synthesis_{a.idx}</th><th>B · synthesis_{b.idx}</th><th>Δ</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>title</td>
+                <td>{escapeHtml(diff.meta.titleA ?? '—')}</td>
+                <td>{escapeHtml(diff.meta.titleB ?? '—')}</td>
+                <td>{diff.metaDelta.titleChanged ? '<span class="badge badge-mid">changed</span>' : '<span class="muted">same</span>'}</td>
+              </tr>
+              <tr>
+                <td>generated_at</td>
+                <td>{fmtDate(diff.meta.generatedAtA)}</td>
+                <td>{fmtDate(diff.meta.generatedAtB)}</td>
+                <td>
+                  {diff.metaDelta.generatedAtDeltaMs != null
+                    ? deltaStr(Math.round(diff.metaDelta.generatedAtDeltaMs / 1000)) + 's'
+                    : '—'}
+                </td>
+              </tr>
+              <tr>
+                <td>model</td>
+                <td><code>{escapeHtml(diff.meta.modelA ?? '—')}</code></td>
+                <td><code>{escapeHtml(diff.meta.modelB ?? '—')}</code></td>
+                <td>{diff.metaDelta.modelChanged ? '<span class="badge badge-mid">changed</span>' : '<span class="muted">same</span>'}</td>
+              </tr>
+              <tr>
+                <td>rounds_synthesized</td>
+                <td>{diff.meta.roundsSynthesizedA ?? '—'}</td>
+                <td>{diff.meta.roundsSynthesizedB ?? '—'}</td>
+                <td>{deltaStr(diff.metaDelta.roundsSynthesizedDelta)}</td>
+              </tr>
+              <tr>
+                <td>deliverables_referenced</td>
+                <td>{diff.meta.deliverablesReferencedA ?? '—'}</td>
+                <td>{diff.meta.deliverablesReferencedB ?? '—'}</td>
+                <td>{deltaStr(diff.metaDelta.deliverablesReferencedDelta)}</td>
+              </tr>
+              <tr>
+                <td>unique_papers</td>
+                <td>{diff.meta.uniquePapersA ?? '—'}</td>
+                <td>{diff.meta.uniquePapersB ?? '—'}</td>
+                <td>{deltaStr(diff.metaDelta.uniquePapersDelta)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🧠 内容差异</h2>
+          <div class="agents-sdiff-metrics">
+            <div class="agents-sdiff-metric">
+              <strong>{diff.stats.similarity != null ? (diff.stats.similarity * 100).toFixed(1) + '%' : '—'}</strong>
+              <span>similarity (topics 0.7 + refs 0.3 Jaccard)</span>
+            </div>
+            {diff.body && (
+              <>
+                <div class="agents-sdiff-metric">
+                  <strong>{diff.body.wordCountA} → {diff.body.wordCountB}</strong>
+                  <span>字数 ({deltaStr(diff.body.wordCountDelta)})</span>
+                </div>
+                <div class="agents-sdiff-metric agents-sdiff-metric-add">
+                  <strong>+{diff.stats.topicsAdded}</strong>
+                  <span>topics added</span>
+                </div>
+                <div class="agents-sdiff-metric agents-sdiff-metric-rm">
+                  <strong>−{diff.stats.topicsRemoved}</strong>
+                  <span>topics removed</span>
+                </div>
+                <div class="agents-sdiff-metric agents-sdiff-metric-shared">
+                  <strong>{diff.stats.topicsShared}</strong>
+                  <span>topics shared</span>
+                </div>
+                <div class="agents-sdiff-metric agents-sdiff-metric-add">
+                  <strong>+{diff.stats.refsAdded}</strong>
+                  <span>arxiv refs added</span>
+                </div>
+                <div class="agents-sdiff-metric agents-sdiff-metric-rm">
+                  <strong>−{diff.stats.refsRemoved}</strong>
+                  <span>arxiv refs removed</span>
+                </div>
+                <div class="agents-sdiff-metric agents-sdiff-metric-shared">
+                  <strong>{diff.stats.refsShared}</strong>
+                  <span>arxiv refs shared</span>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+
+        {diff.body && (
+          <>
+            <section class="agents-session-section">
+              <h2>➕ Topics added (B - A)</h2>
+              {diff.body.topicsAdded.length === 0 ? (
+                <p class="muted">无新增 topics。</p>
+              ) : (
+                <ul class="agents-sdiff-topic-list">
+                  {diff.body.topicsAdded.map((t) => (
+                    <li class="agents-sdiff-topic-add"><code>{escapeHtml(t)}</code></li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section class="agents-session-section">
+              <h2>➖ Topics removed (A - B)</h2>
+              {diff.body.topicsRemoved.length === 0 ? (
+                <p class="muted">无删除 topics。</p>
+              ) : (
+                <ul class="agents-sdiff-topic-list">
+                  {diff.body.topicsRemoved.map((t) => (
+                    <li class="agents-sdiff-topic-rm"><code>{escapeHtml(t)}</code></li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section class="agents-session-section">
+              <h2>🔗 arxiv refs added/removed</h2>
+              {(diff.body.refsRefIdsAdded.length === 0 && diff.body.refsRefIdsRemoved.length === 0) ? (
+                <p class="muted">无 arxiv ID 变化。</p>
+              ) : (
+                <p class="agents-arxiv-cloud">
+                  {diff.body.refsRefIdsAdded.map((id) => (
+                    <a class="agents-arxiv-chip agents-arxiv-chip-warm" href={`https://arxiv.org/abs/${id}`} target="_blank" rel="noopener">
+                      +{id}
+                    </a>
+                  ))}
+                  {diff.body.refsRefIdsRemoved.map((id) => (
+                    <a class="agents-arxiv-chip agents-arxiv-chip-hot" href={`https://arxiv.org/abs/${id}`} target="_blank" rel="noopener">
+                      −{id}
+                    </a>
+                  ))}
+                </p>
+              )}
+            </section>
+          </>
+        )}
+
+        <section class="agents-session-section">
+          <h2>📜 展开两份原文</h2>
+          <details>
+            <summary>📄 A: synthesis_{a.idx}.md</summary>
+            <pre class="agents-sdiff-raw">{a.raw}</pre>
+          </details>
+          <details>
+            <summary>📄 B: synthesis_{b.idx}.md</summary>
+            <pre class="agents-sdiff-raw">{b.raw}</pre>
+          </details>
+        </section>
+      </>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/synthesis/`}>← Synthesis 列表</a>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/score/`}>📊 Score</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sdiff-form {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .agents-sdiff-form label {
+    flex: 1;
+    min-width: 280px;
+  }
+  .agents-sdiff-form label span {
+    display: block;
+    margin-bottom: 0.3rem;
+    font-size: 0.85rem;
+    color: #6b7280;
+  }
+  .agents-sdiff-form select {
+    width: 100%;
+    padding: 0.4rem;
+    border-radius: 4px;
+    border: 1px solid #d1d5db;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-sdiff-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.6rem;
+  }
+  .agents-sdiff-metric {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 0.6rem;
+    text-align: center;
+  }
+  .agents-sdiff-metric strong {
+    display: block;
+    font-size: 1.2rem;
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-sdiff-metric span { font-size: 0.78rem; color: #6b7280; }
+  .agents-sdiff-metric-add strong { color: #10b981; }
+  .agents-sdiff-metric-rm strong { color: #ef4444; }
+  .agents-sdiff-metric-shared strong { color: #f59e0b; }
+  .agents-sdiff-topic-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .agents-sdiff-topic-list li {
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+  .agents-sdiff-topic-add { background: rgba(16, 185, 129, 0.15); border-left: 3px solid #10b981; }
+  .agents-sdiff-topic-rm { background: rgba(239, 68, 68, 0.15); border-left: 3px solid #ef4444; }
+  .agents-sdiff-raw {
+    background: rgba(0,0,0,0.2);
+    padding: 0.8rem;
+    border-radius: 4px;
+    max-height: 600px;
+    overflow: auto;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
