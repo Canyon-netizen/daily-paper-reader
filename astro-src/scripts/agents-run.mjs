@@ -56,6 +56,12 @@ import {
 } from '../lib/agents/paper-compiler.mjs';
 export { buildPaperDraft, formatPaperMarkdown, formatPaperLatex, formatBibtex };
 
+// Synthesis → 打印就绪 HTML (iter #63)。生成自包含 HTML,
+// 用户在浏览器里 Cmd/Ctrl+P → "Save as PDF" 即得到 PDF。
+// 不依赖 pandoc / wkhtmltopdf 等系统工具,纯 JS,字节级稳定。
+import { buildPdfBundle, formatPdfHtml, buildPdfFileName } from '../lib/agents/synthesis-pdf.mjs';
+export { buildPdfBundle, formatPdfHtml, buildPdfFileName };
+
 // ---------------------------------------------------------------------------
 // CLI 参数解析
 // ---------------------------------------------------------------------------
@@ -105,6 +111,16 @@ function parseArgs(argv) {
       else { out.compilePaper = ''; } // 空字符串 = 默认目录
     }
     else if (a === '--paper-format') out.paperFormat = argv[++i];
+    else if (a === '--export-pdf') {
+      // --export-pdf 可无参数(默认 archive/<sid>/synthesis.html),也可指定输出文件路径
+      // 无参数 = 默认路径(单个 HTML 包含所有 synthesis)
+      // --export-pdf <path.html> = 自定义路径
+      // --export-pdf <dir/>     = 落到指定目录(文件名用 buildPdfFileName)
+      const next = argv[i + 1];
+      if (next && !next.startsWith('--')) { out.exportPdf = next; i++; }
+      else { out.exportPdf = ''; } // 空字符串 = 默认路径
+    }
+    else if (a === '--pdf-style') out.pdfStyle = argv[++i];
     else if (a === '--session' || a === '--project') out.project = argv[++i];
     else if (a === '--rounds' || a === '--max-rounds') out.maxRounds = Number(argv[++i]);
     else if (a === '--limit') out.limit = Number(argv[++i]);
@@ -169,6 +185,20 @@ if (args.help) {
                      loop now ends in a paper, not just scattered fragments.
   --paper-format F   With --compile-paper: latex | markdown | both
                      (default both).
+  --export-pdf [PATH]
+                     Assemble all synthesis/*.md of one session into 1
+                     self-contained print-ready HTML file (iter #63). Open
+                     the resulting .html in any browser, then Cmd/Ctrl+P →
+                     "Save as PDF". No system PDF tools required; CSS +
+                     @page rules give proper page numbers / margins.
+                     Default PATH: archive/<sid>/synthesis.html. Path may
+                     also be a directory; filename falls back to
+                     buildPdfFileName(<sid>).
+                     Use --pdf-style academic | compact | presentation to
+                     pick the CSS variant (default academic). --json dumps
+                     the PDFBundle object to stdout instead of writing.
+  --pdf-style NAME   With --export-pdf: academic | compact | presentation
+                     (default academic).
   --diff             Compare two rounds of a session (use with --session ID
                      and two positional round numbers). Outputs proposals
                      added/removed/changed + score delta + gate decision
@@ -1455,6 +1485,21 @@ export async function loadPaperDraft(sessionId) {
 }
 
 /**
+ * loadSynthesisPdfBundle(sessionId) — IO wrapper:读 archive/<sid>/{meta,synthesis},
+ * 交给纯函数 buildPdfBundle 装配。
+ *
+ * 复用 loadExportBundle 已经读好的 meta / syntheses(避免重复读盘逻辑),
+ * 它不需要 rounds / digest。session 不存在 → throws with descriptive error。
+ */
+export async function loadSynthesisPdfBundle(sessionId) {
+  const bundle = await loadExportBundle(sessionId);
+  return buildPdfBundle({
+    meta: bundle.meta,
+    syntheses: bundle.syntheses,
+  });
+}
+
+/**
  * loadDiff(sessionId, roundA, roundB) — IO wrapper,读 archive/<sid>/rounds/round_<A|B>.json。
  * 找不到 roundA / roundB → throws with descriptive error。
  */
@@ -2549,6 +2594,57 @@ async function main() {
       if (format !== 'markdown') {
         console.log(`   编译:cd ${outDir} && pdflatex paper.tex   (正文含中文时改用 xelatex + 取消 ctex 注释)`);
       }
+    } catch (err) {
+      console.error(`[error] ${err.message}`);
+      process.exit(2);
+    }
+    return;
+  }
+
+  // 模式 0.66: --export-pdf (synthesis → 打印就绪 HTML,iter #63)
+  if (args.exportPdf !== undefined) {
+    const sessionId = args.project ?? args.session;
+    if (!sessionId) {
+      console.error('[error] --export-pdf requires --session ID');
+      process.exit(2);
+    }
+    const style = args.pdfStyle ?? 'academic';
+    if (!['academic', 'compact', 'presentation'].includes(style)) {
+      console.error(`[error] --pdf-style must be academic | compact | presentation (got "${style}")`);
+      process.exit(2);
+    }
+    try {
+      const bundle = await loadSynthesisPdfBundle(sessionId);
+      if (args.json) {
+        console.log(JSON.stringify(bundle, null, 2));
+        return;
+      }
+
+      // 解析输出路径:无参数 = archive/<sid>/synthesis.html;
+      // 给的是目录(以 / 结尾或不存在 .html 后缀且是已存在的目录)= 落到该目录
+      // 给的是文件路径(以 .html 结尾或不存在)= 写到该文件
+      let outPath;
+      const arg = args.exportPdf;
+      if (!arg) {
+        outPath = join('archive', sessionId, 'synthesis.html');
+      } else if (arg.endsWith('/') || (existsSync(arg) && (await stat(arg)).isDirectory())) {
+        const fname = buildPdfFileName(sessionId);
+        outPath = join(arg, fname);
+      } else if (arg.endsWith('.html') || arg.endsWith('.htm')) {
+        outPath = arg;
+      } else {
+        // 不带 .html 后缀且不是目录:也当文件路径(append .html)
+        outPath = `${arg}.html`;
+      }
+      if (!existsSync(dirname(outPath))) await mkdir(dirname(outPath), { recursive: true });
+
+      const html = formatPdfHtml(bundle, { cssVariant: style });
+      await writeFile(outPath, html, 'utf8');
+
+      console.log(`📑 Synthesized print-ready HTML for session ${sessionId}`);
+      console.log(`   ✍️  ${outPath}  (${(html.length / 1024).toFixed(1)} KB)`);
+      console.log(`   📊 ${bundle.stats.syntheses} synthesis / synthesis · ${bundle.syntheses.length} pieces · style=${style}`);
+      console.log(`   🖨  Open in browser, then Cmd/Ctrl+P → "Save as PDF" (推荐边距:默认 / 缩放:100% / 启用"背景图形")`);
     } catch (err) {
       console.error(`[error] ${err.message}`);
       process.exit(2);

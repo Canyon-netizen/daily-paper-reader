@@ -2,7 +2,7 @@
 
 > DPR 的 **3 智能体闭环**（Designer → Feedback → Modifier，Gate 在中间做硬过滤）的设计哲学、与主流科研自动化工具的对比、以及上手路径。
 
-最后更新：2026-09-09（iter #54 引入 `--quickstart` + 本文档）
+最后更新：2026-09-10（iter #63 引入 `--export-pdf` + 本文档）
 
 ---
 
@@ -123,6 +123,10 @@ ls archive/<sid>/reviews/         # Modifier 真写的 deliverable
 # iter #61: 把碎片装配成论文(markdown + LaTeX + .bib)
 node astro-src/scripts/agents-run.mjs --session <sid> --compile-paper
 ls archive/<sid>/paper/           # paper.md / paper.tex / refs.bib
+
+# iter #63: synthesis 整成 1 份打印就绪 HTML(浏览器 Cmd/Ctrl+P → Save as PDF)
+node astro-src/scripts/agents-run.mjs --session <sid> --export-pdf
+open archive/<sid>/synthesis.html  # macOS 用 Preview 打开,Cmd+P
 ```
 
 ### 5.2 接真 LLM 跑 3 轮
@@ -159,6 +163,7 @@ LLM_BASE_URL=... LLM_API_KEY=... LLM_MODEL=... \
 - `/agents/auto/` 是 auto loop 的可视化 dashboard
 - `/agents/new-session/` 是模板式引导（literature_review / experiment_plan / rebuttal / free_form）
 - `/agents/<sid>/compile/` 是 iter #62 —— iter #61 `--compile-paper` 的浏览器版（实时切换 LaTeX/markdown/.bib 预览 + 3 文件下载）
+- `/agents/<sid>/pdf/` 是 iter #63 —— iter #63 `--export-pdf` 的浏览器版(实时切 academic / compact / presentation 3 种 CSS 变体预览,Download 单文件 .html,Save as PDF 即可)
 
 ### 5.5 看全局战况
 
@@ -177,17 +182,17 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 
 - ❌ ~~**Designer 不能调外部工具**~~ — **iter #56 已修复 `--search-arxiv`**:可调 arXiv API 实时拉论文作为 candidates,关闭了最大短板
 - ❌ ~~**Modifier 不写 LaTeX**~~ — **iter #61 已修复 `--compile-paper`**:session 碎片装配成可编译 LaTeX + markdown + .bib,论文章节由 deliverable kind 路由(Intro / Related Work / Method / Results / Limitations)
+- ❌ ~~**synthesis 没法直接出 PDF**~~ — **iter #63 已修复 `--export-pdf`**:session 所有 `synthesis/*.md` 装配成 1 份自包含打印就绪 HTML(内嵌 CSS + `@page` + 页码),用户在浏览器 `Cmd/Ctrl+P` → "Save as PDF" 即可;**不依赖** pandoc / wkhtmltopdf 等系统 PDF 工具
 - ❌ **archive/ 不入版本控制**：每次 git status 容易"看上去大"，但 archive 在 .gitignore 顶层通常没问题；可手动 cp 出 demo
 - ⚠️ **3 个智能体都共用 1 个 LLM endpoint**：persona 视角差异主要靠 prompt 实现，不是真不同模型；要"真多视角"可在 feedback.ts 加 model 数组
 - ⚠️ **`--search-arxiv` 只搜 arXiv**：不像 STORM / Deep Research 那样能搜维基 / 联网；要"真 web research"需要加 web fetch 工具
 
 下个 milestone 候选：
 - 加 web search 工具（GeneralistAI / Tavily / Bing API）
-- 把 synthesis 输出为 PDF（pandoc / wkhtmltopdf）
 - 加 evaluator 智能体：4 agent 版本（设计 → 反馈 → 修改 → **评估**）
 - 跨平台 npm 包发布：让 DPR Agents 不只跑在仓库内
-- `--compile-paper` 浏览器版本:在 `/agents/<sid>/compile/` 页面实时预览 + 调格式,与 export 页同模式
 - `--paper-format` 扩到支持 ACL / NeurIPS / IEEE 模板
+- synthesis PDF 加可选项:加 cover image、加 author byline、加 table of figures
 
 最近重要迭代：
 
@@ -207,5 +212,6 @@ node astro-src/scripts/agents-run.mjs --new-session "新目标" --rounds 3 --few
 | **#60** | **lib/agents/export-bundle.ts** | **typed mirror,TS caller 也能用同一份实现** |
 | **#61** | **--compile-paper** | **3 智能体循环碎片 → 一篇可编译 LaTeX + markdown + .bib,关闭 §6 #1 差距 "Modifier 不写 LaTeX";新 lib/agents/paper-compiler.{mjs,ts} 纯函数,跟 export-bundle 同双 surface 共享模式** |
 | **#62** | **/agents/<sid>/compile/** | **iter #61 的浏览器版 —— 实时切换 LaTeX/markdown/.bib 预览 + 3 文件下载套件,document class 切换 (article / acmart / ieeeconf / iclr2026);同 paper-compiler.mjs 双 surface 字节级一致;localStorage 合成 pseudo-deliverable 应对浏览器无 filesystem 限制** |
+| **#63** | **--export-pdf + /agents/<sid>/pdf/** | **synthesis/*.md → 1 份自包含打印就绪 HTML(内嵌 CSS + @page + 页码,3 种 CSS 变体 academic / compact / presentation);用户浏览器 Cmd/Ctrl+P → "Save as PDF";不依赖 pandoc / wkhtmltopdf 等系统 PDF 工具;新 lib/agents/synthesis-pdf.{mjs,ts} 纯函数,跟 export-bundle / paper-compiler 同双 surface 共享模式;CLI + 浏览器页面同步上线** |
 | **#59** | **lib/agents/export-bundle.mjs** | **CLI + 浏览器双 surface 共享同一份 buildExportBundle / formatExportMarkdown,字节级一致** |
 | **#60** | **lib/agents/export-bundle.ts** | **typed 镜像 — 6 个 type contract + re-export .mjs 运行时,TS caller 可 typed import** |
