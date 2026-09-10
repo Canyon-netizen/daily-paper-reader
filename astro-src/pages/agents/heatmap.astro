@@ -1,0 +1,351 @@
+---
+// /agents/heatmap.astro — iter #81:activity heatmap
+//
+// 类似 GitHub contributions,展示 session + round + proposal 活动密度
+// 按日聚合(过去 365 天)。给用户一个"研究勤奋度"的可视化,帮助回顾。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface DayStats {
+  sessionsCreated: number;
+  roundsFinished: number;
+  proposalsDesigned: number;
+  totalTokens: number;
+}
+
+interface DayEntry extends DayStats {
+  date: string; // YYYY-MM-DD
+  intensity: number; // 0-4 强度等级
+}
+
+const now = new Date();
+const startDate = new Date(now.getTime() - 364 * 86_400_000); // 365 天前
+startDate.setHours(0, 0, 0, 0);
+
+const days: DayEntry[] = [];
+const dayMap = new Map<string, DayStats>();
+for (let i = 0; i < 365; i++) {
+  const d = new Date(startDate.getTime() + i * 86_400_000);
+  const key = d.toISOString().slice(0, 10);
+  dayMap.set(key, { sessionsCreated: 0, roundsFinished: 0, proposalsDesigned: 0, totalTokens: 0 });
+  days.push({
+    date: key,
+    sessionsCreated: 0,
+    roundsFinished: 0,
+    proposalsDesigned: 0,
+    totalTokens: 0,
+    intensity: 0,
+  });
+}
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const dir = join(root, sid);
+    // meta.json → sessionsCreated
+    try {
+      const meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8'));
+      const ts = Number(meta?.created_at ?? 0);
+      if (ts > 0) {
+        const key = new Date(ts).toISOString().slice(0, 10);
+        const s = dayMap.get(key);
+        if (s) s.sessionsCreated++;
+      }
+    } catch { /* */ }
+    // rounds/*.json → roundsFinished + proposals + tokens
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      for (const f of files) {
+        try {
+          const r = JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8'));
+          const fa = Number(r?.finished_at ?? 0);
+          if (fa > 0) {
+            const key = new Date(fa).toISOString().slice(0, 10);
+            const s = dayMap.get(key);
+            if (s) {
+              s.roundsFinished++;
+              const pn = Array.isArray(r?.designer?.proposals) ? r.designer.proposals.length : 0;
+              s.proposalsDesigned += pn;
+              s.totalTokens += Number(r?.feedback?.total_tokens ?? 0);
+            }
+          }
+        } catch { /* */ }
+      }
+    } catch { /* */ }
+  }
+}
+
+// 计算强度:按 totalActivity = rounds*2 + proposals + sessions*3 累计
+const totals: number[] = [];
+for (const d of days) {
+  const activity = d.roundsFinished * 2 + d.proposalsDesigned + d.sessionsCreated * 3;
+  totals.push(activity);
+}
+const max = totals.length > 0 ? Math.max(...totals) : 0;
+
+for (const d of days) {
+  const activity = d.roundsFinished * 2 + d.proposalsDesigned + d.sessionsCreated * 3;
+  if (max === 0 || activity === 0) {
+    d.intensity = 0;
+  } else if (activity >= max * 0.75) {
+    d.intensity = 4;
+  } else if (activity >= max * 0.5) {
+    d.intensity = 3;
+  } else if (activity >= max * 0.25) {
+    d.intensity = 2;
+  } else {
+    d.intensity = 1;
+  }
+}
+
+// 按周分组成列(每列 7 天,Sun → Sat)
+const weeks: (DayEntry | null)[][] = [];
+let currentWeek: (DayEntry | null)[] = [];
+// pad start: 把第一周前面的空位填上,使得每个 Sun 都对齐
+const firstDay = days[0];
+const firstDow = firstDay ? new Date(firstDay.date).getDay() : 0;
+for (let i = 0; i < firstDow; i++) currentWeek.push(null);
+for (const d of days) {
+  currentWeek.push(d);
+  if (currentWeek.length === 7) {
+    weeks.push(currentWeek);
+    currentWeek = [];
+  }
+}
+if (currentWeek.length > 0) {
+  while (currentWeek.length < 7) currentWeek.push(null);
+  weeks.push(currentWeek);
+}
+
+// 月份标签(按 ISO date 取每月首个出现)
+const monthLabels: { weekIdx: number; label: string }[] = [];
+let lastMonth = -1;
+weeks.forEach((w, idx) => {
+  const firstDay = w.find((d) => d !== null);
+  if (firstDay) {
+    const m = new Date(firstDay.date).getMonth();
+    if (m !== lastMonth) {
+      monthLabels.push({ weekIdx: idx, label: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m] });
+      lastMonth = m;
+    }
+  }
+});
+
+// 统计
+const totalSessions = days.reduce((a, d) => a + d.sessionsCreated, 0);
+const totalRounds = days.reduce((a, d) => a + d.roundsFinished, 0);
+const totalProposals = days.reduce((a, d) => a + d.proposalsDesigned, 0);
+const totalTokens = days.reduce((a, d) => a + d.totalTokens, 0);
+const activeDays = days.filter((d) => d.intensity > 0).length;
+const longestStreak = (() => {
+  let best = 0; let cur = 0;
+  for (const d of days) {
+    if (d.intensity > 0) { cur++; if (cur > best) best = cur; }
+    else cur = 0;
+  }
+  return best;
+})();
+const currentStreak = (() => {
+  let cur = 0;
+  for (let i = days.length - 1; i >= 0; i--) {
+    if (days[i].intensity > 0) cur++;
+    else break;
+  }
+  return cur;
+})();
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="活动热力图 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 活动热力图 <span class="muted" style="font-size:0.6em">(iter #81)</span></h1>
+      <p class="agents-sub">过去 365 天的 session + round + proposal 活动密度,像 GitHub contributions。</p>
+    </header>
+
+    <section class="agents-session-section">
+      <div class="agents-heatmap-stats">
+        <span><strong>{totalSessions}</strong> sessions</span>
+        <span><strong>{totalRounds}</strong> rounds</span>
+        <span><strong>{totalProposals}</strong> proposals</span>
+        <span><strong>{totalTokens.toLocaleString()}</strong> tokens</span>
+        <span><strong>{activeDays}</strong> 活跃天</span>
+        <span><strong>{longestStreak}</strong> 最长连续</span>
+        <span><strong>{currentStreak}</strong> 当前连续</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 过去 365 天</h2>
+      <div class="agents-heatmap-wrap">
+        <div class="agents-heatmap-months">
+          {monthLabels.map((m) => (
+            <span class="agents-heatmap-month" style={`left:${m.weekIdx * 14}px`}>{m.label}</span>
+          ))}
+        </div>
+        <div class="agents-heatmap-body">
+          <div class="agents-heatmap-dow">
+            <span>Sun</span><span></span><span>Wed</span><span></span><span>Fri</span><span></span><span></span>
+          </div>
+          <div class="agents-heatmap-grid">
+            {weeks.map((week) => (
+              <div class="agents-heatmap-week">
+                {week.map((d) => d ? (
+                  <a class={`agents-heatmap-cell agents-heatmap-l${d.intensity}`}
+                     href={`${base}/agents/?date=${d.date}`}
+                     title={`${d.date}: ${d.roundsFinished} rounds · ${d.proposalsDesigned} proposals · ${d.sessionsCreated} sessions · ${d.totalTokens} tokens`}>
+                  </a>
+                ) : (
+                  <span class="agents-heatmap-cell agents-heatmap-empty"></span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div class="agents-heatmap-legend">
+        <span class="muted">少</span>
+        <span class="agents-heatmap-cell agents-heatmap-l0"></span>
+        <span class="agents-heatmap-cell agents-heatmap-l1"></span>
+        <span class="agents-heatmap-cell agents-heatmap-l2"></span>
+        <span class="agents-heatmap-cell agents-heatmap-l3"></span>
+        <span class="agents-heatmap-cell agents-heatmap-l4"></span>
+        <span class="muted">多</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 强度分布</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>等级</th><th>天数</th><th>占比</th></tr>
+        </thead>
+        <tbody>
+          {[0, 1, 2, 3, 4].map((lvl) => {
+            const n = days.filter((d) => d.intensity === lvl).length;
+            return (
+              <tr>
+                <td>
+                  <span class={`agents-heatmap-cell agents-heatmap-l${lvl}`} style="display:inline-block;vertical-align:middle;margin-right:0.4rem"></span>
+                  L{lvl} {lvl === 0 ? '(无活动)' : lvl === 4 ? '(非常活跃)' : ''}
+                </td>
+                <td>{n}</td>
+                <td>{((n / 365) * 100).toFixed(1)}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-heatmap-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-heatmap-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-heatmap-wrap {
+    overflow-x: auto;
+    padding: 0.5rem 0;
+  }
+  .agents-heatmap-months {
+    position: relative;
+    height: 18px;
+    margin-bottom: 4px;
+    margin-left: 28px;
+  }
+  .agents-heatmap-month {
+    position: absolute;
+    font-size: 0.75rem;
+    color: #6b7280;
+    white-space: nowrap;
+  }
+  .agents-heatmap-body {
+    display: flex;
+    gap: 4px;
+  }
+  .agents-heatmap-dow {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 0.7rem;
+    color: #6b7280;
+    width: 24px;
+    text-align: right;
+  }
+  .agents-heatmap-dow span {
+    height: 12px;
+    line-height: 12px;
+  }
+  .agents-heatmap-grid {
+    display: flex;
+    gap: 3px;
+  }
+  .agents-heatmap-week {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .agents-heatmap-cell {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    display: block;
+    background: #1f2937;
+    border: 1px solid rgba(255,255,255,0.04);
+  }
+  .agents-heatmap-empty { background: transparent; border-color: transparent; }
+  .agents-heatmap-l0 { background: #1f2937; }
+  .agents-heatmap-l1 { background: rgba(99, 102, 241, 0.25); }
+  .agents-heatmap-l2 { background: rgba(99, 102, 241, 0.5); }
+  .agents-heatmap-l3 { background: rgba(99, 102, 241, 0.75); }
+  .agents-heatmap-l4 { background: #4f46e5; box-shadow: 0 0 4px rgba(99, 102, 241, 0.5); }
+  .agents-heatmap-cell:hover { outline: 1px solid #fbbf24; }
+  .agents-heatmap-legend {
+    display: flex;
+    gap: 0.3rem;
+    align-items: center;
+    margin-top: 0.5rem;
+    font-size: 0.8rem;
+  }
+  .agents-heatmap-legend .agents-heatmap-cell { display: inline-block; }
+</style>
