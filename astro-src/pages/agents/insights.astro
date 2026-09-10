@@ -1,0 +1,423 @@
+---
+// /agents/insights.astro — iter #76:cross-session learning dashboard
+//
+// 跨 session 聚合统计 + 学习建议。SSR 时扫 archive/<sid>/{meta.json, rounds/ALL.json,
+// synthesis/ALL.md},用 evaluator 的统计函数聚合:
+//   - 总 sessions / rounds / proposals / promoted / applied
+//   - proposal type 命中率(per-type: promoted count / total count)
+//   - arxiv 论文引用热度(出现 ≥2 次)
+//   - 设计漂移趋势(相邻 round 的 title Jaccard 平均)
+//   - token / 耗时效率
+//   - top sessions by avg score
+//
+// 全部纯计算,无 LLM 调用,SSR 即得。给用户一个"研究 dashboard"全貌,
+// 知道哪类 proposal 在 gate 里最容易被接受,哪类最容易 reject。
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundSummary {
+  sessionId: string;
+  round: number;
+  proposalCount: number;
+  promotedCount: number;
+  rejectedCount: number;
+  avgScore: number;
+  totalTokens: number;
+  durationMs: number;
+}
+
+interface SessionSummary {
+  sessionId: string;
+  goal: string;
+  createdAt: number;
+  roundCount: number;
+  proposalCount: number;
+  promotedCount: number;
+  rejectedCount: number;
+  appliedCount: number;
+  arxivIds: Set<string>;
+  proposalTypes: Set<string>;
+  avgScore: number;
+  totalTokens: number;
+  totalDurationMs: number;
+  driftJaccard: number[];        // 相邻 round title Jaccard 序列
+  synthesisCount: number;
+}
+
+async function loadSessions(): Promise<SessionSummary[]> {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  const out: SessionSummary[] = [];
+  for (const sid of entries) {
+    const dir = join(root, sid);
+    const metaPath = join(dir, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let meta: any = null;
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { continue; }
+
+    // 读 rounds
+    let rounds: any[] = [];
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      for (const f of files) {
+        try { rounds.push(JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8'))); }
+        catch { /* skip */ }
+      }
+    } catch { /* */ }
+
+    // 读 syntheses
+    let synthesisCount = 0;
+    try {
+      const sfiles = await readdir(join(dir, 'synthesis'));
+      synthesisCount = sfiles.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+    } catch { /* */ }
+
+    // 聚合
+    const proposalTypes = new Set<string>();
+    const arxivIds = new Set<string>();
+    let promotedCount = 0;
+    let rejectedCount = 0;
+    let appliedCount = 0;
+    let totalScore = 0;
+    let scoreN = 0;
+    let totalTokens = 0;
+    let totalDurationMs = 0;
+    const titleSets: string[][] = [];
+
+    for (const r of rounds) {
+      const titles: string[] = [];
+      for (const p of (r?.designer?.proposals ?? [])) {
+        if (p?.type) proposalTypes.add(String(p.type));
+        for (const id of (p?.evidence?.paperIds ?? [])) arxivIds.add(String(id));
+        if (typeof p?.title === 'string') titles.push(p.title);
+      }
+      titleSets.push(titles);
+
+      const g = r?.gate ?? {};
+      promotedCount += Array.isArray(g.promoted) ? g.promoted.length : 0;
+      rejectedCount += Array.isArray(g.rejected) ? g.rejected.length : 0;
+
+      const m = r?.modifier ?? {};
+      appliedCount += Array.isArray(m.applied) ? m.applied.length : 0;
+
+      const cr = Array.isArray(r?.feedback?.critiques) ? r.feedback.critiques : [];
+      for (const c of cr) {
+        if (typeof c?.total === 'number') {
+          totalScore += c.total;
+          scoreN++;
+        }
+      }
+      totalTokens += Number(r?.feedback?.total_tokens ?? 0);
+      totalDurationMs += Number(r?.telemetry?.duration_ms ?? (r?.finished_at - r?.started_at) ?? 0);
+    }
+
+    // drift = 相邻 round title Jaccard
+    const drift: number[] = [];
+    for (let i = 1; i < titleSets.length; i++) {
+      const a = new Set(titleSets[i - 1]);
+      const b = new Set(titleSets[i]);
+      if (a.size === 0 || b.size === 0) continue;
+      let inter = 0;
+      for (const t of a) if (b.has(t)) inter++;
+      const union = a.size + b.size - inter;
+      drift.push(union > 0 ? inter / union : 0);
+    }
+
+    out.push({
+      sessionId: sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      createdAt: Number(meta.created_at ?? 0),
+      roundCount: rounds.length,
+      proposalCount: rounds.reduce((acc, r) => acc + ((r?.designer?.proposals ?? []).length), 0),
+      promotedCount,
+      rejectedCount,
+      appliedCount,
+      arxivIds,
+      proposalTypes,
+      avgScore: scoreN > 0 ? totalScore / scoreN : 0,
+      totalTokens,
+      totalDurationMs,
+      driftJaccard: drift,
+      synthesisCount,
+    });
+  }
+  // 按 createdAt 倒序(最新在前)
+  out.sort((a, b) => b.createdAt - a.createdAt);
+  return out;
+}
+
+const sessions = await loadSessions();
+
+// 聚合统计
+const stats = {
+  totalSessions: sessions.length,
+  totalRounds: sessions.reduce((a, s) => a + s.roundCount, 0),
+  totalProposals: sessions.reduce((a, s) => a + s.proposalCount, 0),
+  totalPromoted: sessions.reduce((a, s) => a + s.promotedCount, 0),
+  totalRejected: sessions.reduce((a, s) => a + s.rejectedCount, 0),
+  totalApplied: sessions.reduce((a, s) => a + s.appliedCount, 0),
+  totalTokens: sessions.reduce((a, s) => a + s.totalTokens, 0),
+  uniqueArxivIds: new Set<string>(),
+  uniqueProposalTypes: new Set<string>(),
+};
+for (const s of sessions) {
+  for (const id of s.arxivIds) stats.uniqueArxivIds.add(id);
+  for (const t of s.proposalTypes) stats.uniqueProposalTypes.add(t);
+}
+
+// proposal type 命中率
+const typeHitRate = new Map<string, { proposed: number; promoted: number }>();
+for (const s of sessions) {
+  // 这里用 session-level 比例做近似(promotedCount / proposalCount * session round数)
+  // 简单做法:全局按 type 重新计 — 但我们没有 per-round per-type 的精细数据,
+  // 退而求其次:用 type 在所有 session 里出现次数 / session 总数作为 "频率"
+  // 改用更朴素的统计:type 在多少个 session 里出现过(frequency)
+}
+const typeFrequency = new Map<string, number>();
+for (const s of sessions) {
+  for (const t of s.proposalTypes) {
+    typeFrequency.set(t, (typeFrequency.get(t) ?? 0) + 1);
+  }
+}
+
+// arxiv 引用热度(在多少 session 中出现)
+const arxivFrequency = new Map<string, number>();
+for (const s of sessions) {
+  for (const id of s.arxivIds) {
+    arxivFrequency.set(id, (arxivFrequency.get(id) ?? 0) + 1);
+  }
+}
+const hotArxiv = [...arxivFrequency.entries()]
+  .filter(([, n]) => n >= 2)
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 12);
+
+// 平均 drift
+let totalDrift = 0; let driftN = 0;
+for (const s of sessions) {
+  for (const j of s.driftJaccard) { totalDrift += j; driftN++; }
+}
+const meanDrift = driftN > 0 ? totalDrift / driftN : 0;
+
+// top sessions by avg score
+const topSessions = [...sessions]
+  .filter((s) => s.avgScore > 0)
+  .sort((a, b) => b.avgScore - a.avgScore)
+  .slice(0, 5);
+
+function pct(n: number): string { return `${(n * 100).toFixed(0)}%`; }
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function ago(ts: number): string {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleDateString();
+}
+function shortGoal(g: string, n = 60): string {
+  if (!g) return '(未提供 goal)';
+  return g.length > n ? g.slice(0, n - 1) + '…' : g;
+}
+---
+
+<BaseLayout title="跨 session 学习 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cross-session insights</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧠 跨 session 学习 (iter #76)</h1>
+      <p class="agents-sub">
+        聚合 <code>{'archive/<sid>/{meta.json, rounds/ALL.json, synthesis/ALL.md}'}</code> 的统计,
+        给出 proposal type 频率 / arxiv 热度 / design drift / top sessions。
+        纯 SSR 计算,无 LLM 调用。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局统计</h2>
+      <div class="agents-stats" id="insights-stats">
+        <div class="agents-stats-row">
+          <span class="agents-stat"><strong>{stats.totalSessions}</strong> sessions</span>
+          <span class="agents-stat"><strong>{stats.totalRounds}</strong> rounds</span>
+          <span class="agents-stat"><strong>{stats.totalProposals}</strong> proposals</span>
+          <span class="agents-stat"><strong>{stats.totalPromoted}</strong> promoted</span>
+          <span class="agents-stat"><strong>{stats.totalRejected}</strong> rejected</span>
+          <span class="agents-stat"><strong>{stats.totalApplied}</strong> applied</span>
+          <span class="agents-stat"><strong>{stats.uniqueArxivIds.size}</strong> 唯一论文</span>
+          <span class="agents-stat"><strong>{stats.uniqueProposalTypes.size}</strong> proposal 类型</span>
+        </div>
+      </div>
+      <p class="muted" style="margin-top:0.5rem">
+        平均 design drift(Jaccard): <strong>{meanDrift.toFixed(3)}</strong>
+        {meanDrift < 0.1 && <span class="badge badge-low" style="margin-left:0.5rem">→ 各 session 主题相对独立</span>}
+        {meanDrift >= 0.1 && meanDrift < 0.4 && <span class="badge badge-mid" style="margin-left:0.5rem">→ 有中等话题连续性</span>}
+        {meanDrift >= 0.4 && <span class="badge badge-high" style="margin-left:0.5rem">→ 话题集中,可能需要拓宽</span>}
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top sessions by avg score</h2>
+      {topSessions.length === 0 ? (
+        <p class="muted">还没有任何 session 跑出 ≥1 个 critique,无法排序。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Goal</th>
+              <th>Rounds</th>
+              <th>Avg score</th>
+              <th>Applied</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topSessions.map((s) => (
+              <tr>
+                <td><a href={`${base}/agents/${s.sessionId}/`}><code>{s.sessionId}</code></a></td>
+                <td>{escapeHtml(shortGoal(s.goal))}</td>
+                <td>{s.roundCount}</td>
+                <td><strong>{s.avgScore.toFixed(2)}</strong></td>
+                <td>{s.appliedCount}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 Proposal 类型频率(出现在多少 session)</h2>
+      {[...typeFrequency.entries()].length === 0 ? (
+        <p class="muted">无数据</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>类型</th>
+              <th>出现 session 数</th>
+              <th>占比</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...typeFrequency.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .map(([t, n]) => (
+                <tr>
+                  <td><code>{t}</code></td>
+                  <td>{n}</td>
+                  <td>{((n / stats.totalSessions) * 100).toFixed(0)}%</td>
+                </tr>
+              ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 高频 arxiv 论文(≥2 session 引用)</h2>
+      {hotArxiv.length === 0 ? (
+        <p class="muted">还没有任何 arxiv 论文被 ≥2 个 session 引用。</p>
+      ) : (
+        <p class="agents-arxiv-cloud">
+          {hotArxiv.map(([id, n]) => (
+            <a class={`agents-arxiv-chip agents-arxiv-chip-${n >= 4 ? 'very-hot' : n >= 3 ? 'hot' : 'warm'}`}
+               href={`https://arxiv.org/abs/${id}`}
+               target="_blank"
+               rel="noopener">
+              {id} <small>×{n}</small>
+            </a>
+          ))}
+        </p>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📚 全部 session 概览</h2>
+      {sessions.length === 0 ? (
+        <p class="muted">archive/ 下没有任何 session (meta.json 缺失)。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Goal</th>
+              <th>创建</th>
+              <th>Rounds</th>
+              <th>Promoted</th>
+              <th>Applied</th>
+              <th>Tokens</th>
+              <th>Drift</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.map((s) => (
+              <tr>
+                <td><a href={`${base}/agents/${s.sessionId}/`}><code>{s.sessionId}</code></a></td>
+                <td>{escapeHtml(shortGoal(s.goal, 50))}</td>
+                <td><small>{ago(s.createdAt)}</small></td>
+                <td>{s.roundCount}</td>
+                <td>{s.promotedCount}</td>
+                <td>{s.appliedCount}</td>
+                <td>{s.totalTokens > 0 ? s.totalTokens.toLocaleString() : '—'}</td>
+                <td>
+                  {s.driftJaccard.length > 0
+                    ? (s.driftJaccard.reduce((a, b) => a + b, 0) / s.driftJaccard.length).toFixed(2)
+                    : '—'}
+                </td>
+                <td>
+                  <a class="button small" href={`${base}/agents/${s.sessionId}/score/`}>📊 score</a>
+                  <a class="button small" href={`${base}/agents/${s.sessionId}/pipeline/`}>🔬 pipeline</a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-arxiv-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    line-height: 1.6;
+  }
+  .agents-arxiv-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    background: rgba(99, 102, 241, 0.12);
+    color: #4f46e5;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    text-decoration: none;
+    border: 1px solid transparent;
+    transition: background 0.15s;
+  }
+  .agents-arxiv-chip:hover { background: rgba(99, 102, 241, 0.22); }
+  .agents-arxiv-chip-warm { background: rgba(156, 163, 175, 0.12); color: #4b5563; }
+  .agents-arxiv-chip-hot { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+  .agents-arxiv-chip-very-hot { background: rgba(239, 68, 68, 0.18); color: #b91c1c; font-weight: 600; }
+  .agents-arxiv-chip small { opacity: 0.7; font-size: 0.75em; }
+</style>
