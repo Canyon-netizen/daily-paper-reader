@@ -1,0 +1,205 @@
+---
+// /agents/round-variance.astro — iter #197:per-round score variance
+//
+// 跨 round 看每轮 score 的方差:
+//   - 高方差 = 该轮 proposals 评分分化大(产生多种结果)
+//   - 低方差 = 该轮 proposals 评分接近(同质化)
+//   - 整体方差分布
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundVariance {
+  sid: string;
+  roundIdx: number;
+  scores: number[];
+  variance: number;
+  stdDev: number;
+  mean: number;
+  count: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const records: RoundVariance[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        const scores: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') scores.push(p.total);
+          }
+        }
+        if (scores.length < 2) continue;
+        const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+        const variance = scores.reduce((s, x) => s + (x - mean) ** 2, 0) / scores.length;
+        const stdDev = Math.sqrt(variance);
+        records.push({
+          sid, roundIdx: ri,
+          scores, variance, stdDev, mean, count: scores.length,
+        });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const total = records.length;
+const avgVariance = records.length > 0 ? records.reduce((s, r) => s + r.variance, 0) / records.length : 0;
+const avgStdDev = records.length > 0 ? records.reduce((s, r) => s + r.stdDev, 0) / records.length : 0;
+
+// 直方图
+const buckets = [
+  { label: 'σ ≤ 0.5 (低)', min: 0, max: 0.5, count: 0 },
+  { label: '0.5 < σ ≤ 1.0', min: 0.5, max: 1.0, count: 0 },
+  { label: '1.0 < σ ≤ 1.5', min: 1.0, max: 1.5, count: 0 },
+  { label: '1.5 < σ ≤ 2.0', min: 1.5, max: 2.0, count: 0 },
+  { label: 'σ > 2.0 (高)', min: 2.0, max: 99, count: 0 },
+];
+for (const r of records) {
+  for (const b of buckets) {
+    if (r.stdDev > b.min && r.stdDev <= b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+const maxBucket = Math.max(...buckets.map((b) => b.count), 1);
+
+const topHigh = [...records].sort((a, b) => b.stdDev - a.stdDev).slice(0, 10);
+const topLow = [...records].filter((r) => r.count >= 3).sort((a, b) => a.stdDev - b.stdDev).slice(0, 10);
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Round Variance · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-variance</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📐 Round Variance <span class="muted" style="font-size:0.6em">(iter #197)</span></h1>
+      <p class="agents-sub">
+        跨 round 看每轮 score 的方差。
+        高方差 = 多样化;低方差 = 同质化。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rv-globals">
+        <span>总 rounds (≥ 2 proposals): <strong>{total}</strong></span>
+        <span>avg σ: <strong>{avgStdDev.toFixed(3)}</strong></span>
+        <span>avg variance: <strong>{avgVariance.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 σ 分布</h2>
+      <pre class="agents-rv-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(18)} ${bar(b.count, maxBucket, 24)}  ${String(b.count).padStart(4)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 top 10 高方差 rounds(多样化)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>round</th><th>σ</th><th>mean</th><th>count</th></tr>
+        </thead>
+        <tbody>
+          {topHigh.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>R{r.roundIdx}</td>
+              <td><strong>{r.stdDev.toFixed(2)}</strong></td>
+              <td>{r.mean.toFixed(2)}</td>
+              <td>{r.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐚 top 10 低方差 rounds(同质化)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>round</th><th>σ</th><th>mean</th><th>count</th></tr>
+        </thead>
+        <tbody>
+          {topLow.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>R{r.roundIdx}</td>
+              <td><strong>{r.stdDev.toFixed(3)}</strong></td>
+              <td>{r.mean.toFixed(2)}</td>
+              <td>{r.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>σ &gt; 1.5 = 该轮产出差异大,gate 有意义</li>
+        <li>σ &lt; 0.3 = 该轮所有 proposals 评分接近 — designer 可能在重复</li>
+        <li>对照 <a href={`${base}/agents/score-volatility/`}>Score Volatility</a> 看 session 维度</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rv-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rv-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rv-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
