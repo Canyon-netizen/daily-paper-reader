@@ -1,0 +1,214 @@
+---
+// /agents/goal-length-score.astro — iter #206:goal length vs final score correlation
+//
+// 检验 goal 文本长度 vs 最终 score 的关系:
+//   - 单 session:goal 字符数 → 最后 round avg score
+//   - Pearson r
+//   - 散点近似(用 ASCII 块)
+//   - 按 length bucket 统计 mean score
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Datum {
+  sid: string;
+  goalLen: number;
+  finalScore: number;
+  rounds: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const data: Datum[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    const last = rNum[rNum.length - 1];
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${last}.json`), 'utf8'));
+      const scores: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') scores.push(p.total);
+        }
+      }
+      if (scores.length === 0) continue;
+      const finalScore = scores.reduce((a, b) => a + b, 0) / scores.length;
+      data.push({ sid, goalLen: goal.length, finalScore, rounds: rNum.length });
+    } catch (e) { /* */ }
+  }
+}
+
+// Pearson
+function pearson(xs: number[], ys: number[]): number {
+  const n = xs.length;
+  if (n < 2) return 0;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? 0 : num / denom;
+}
+
+const r = pearson(data.map((d) => d.goalLen), data.map((d) => d.finalScore));
+const avgGoalLen = data.reduce((s, d) => s + d.goalLen, 0) / Math.max(data.length, 1);
+const avgScore = data.reduce((s, d) => s + d.finalScore, 0) / Math.max(data.length, 1);
+
+// 按长度分桶
+const buckets = [
+  { label: '< 30', min: 0, max: 30, items: [] as Datum[] },
+  { label: '30-80', min: 30, max: 80, items: [] as Datum[] },
+  { label: '80-150', min: 80, max: 150, items: [] as Datum[] },
+  { label: '150-300', min: 150, max: 300, items: [] as Datum[] },
+  { label: '> 300', min: 300, max: 99999, items: [] as Datum[] },
+];
+for (const d of data) {
+  for (const b of buckets) {
+    if (d.goalLen >= b.min && d.goalLen < b.max) {
+      b.items.push(d);
+      break;
+    }
+  }
+}
+const bucketStats = buckets.map((b) => ({
+  label: b.label,
+  count: b.items.length,
+  avgScore: b.items.length > 0 ? b.items.reduce((s, x) => s + x.finalScore, 0) / b.items.length : 0,
+  avgLen: b.items.length > 0 ? b.items.reduce((s, x) => s + x.goalLen, 0) / b.items.length : 0,
+}));
+
+// ASCII 散点
+const W = 50, H = 14;
+const xMin = 0;
+const xMax = Math.max(...data.map((d) => d.goalLen), 100);
+const yMin = 0;
+const yMax = 10;
+const grid: string[][] = Array.from({ length: H }, () => Array(W).fill(' '));
+for (const d of data) {
+  const x = Math.min(W - 1, Math.round(((d.goalLen - xMin) / (xMax - xMin)) * (W - 1)));
+  const y = Math.min(H - 1, Math.round(((yMax - d.finalScore) / (yMax - yMin)) * (H - 1)));
+  if (grid[y][x] === ' ') grid[y][x] = '·';
+  else if (grid[y][x] === '·') grid[y][x] = 'o';
+  else if (grid[y][x] === 'o') grid[y][x] = 'O';
+  else grid[y][x] = '#';
+}
+const scatter = grid.map((row, i) => {
+  const yLabel = (yMax - (i * (yMax - yMin) / H)).toFixed(1).padStart(3);
+  return `${yLabel} |${row.join('')}|`;
+}).join('\n');
+const xAxis = `    +${'-'.repeat(W)}+`;
+const xLabels = `     ${'0'.padEnd(W - 10)}goal len${String(xMax).padStart(5)}`;
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Length vs Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-length-score</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Goal Length vs Score <span class="muted" style="font-size:0.6em">(iter #206)</span></h1>
+      <p class="agents-sub">
+        检验 goal 文本长度是否与最终 score 相关。
+        r &gt; 0 = 写得越详细效果越好;r &lt; 0 = 越简短越好。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gls-globals">
+        <span>总 sessions: <strong>{data.length}</strong></span>
+        <span>avg goal len: <strong>{avgGoalLen.toFixed(0)} chars</strong></span>
+        <span>avg final score: <strong>{avgScore.toFixed(2)}</strong></span>
+        <span>Pearson r: <strong style={r > 0 ? 'color:#10b981' : 'color:#ef4444'}>{r.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 散点(goal len × final score)</h2>
+      <pre class="agents-gls-flow">{scatter}
+{xAxis}
+{xLabels}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 按长度分桶</h2>
+      <pre class="agents-gls-flow">{bucketStats.map((b) => {
+        const max = Math.max(...bucketStats.map((x) => x.avgScore), 1);
+        return `${b.label.padEnd(10)} count=${String(b.count).padStart(3)}  avgScore=${b.avgScore.toFixed(2)}  ${bar(b.avgScore, max, 16)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>r ≈ 0 = 长度与分数无关</li>
+        <li>r &gt; 0.3 = 详细 goal 与高分相关(可能因复杂任务更容易有深度结果)</li>
+        <li>r &lt; -0.3 = 简短 goal 与高分相关(可能因简洁反而清晰)</li>
+        <li>对照 <a href={`${base}/agents/goal-complexity/`}>Goal Complexity</a> 看具体词数与句数</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gls-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gls-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gls-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
