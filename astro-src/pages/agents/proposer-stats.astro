@@ -1,0 +1,221 @@
+---
+// /agents/proposer-stats.astro — iter #171:designer proposer stats
+//
+// 跨 session 看 designer agent 每次 round 产生的 proposal 数量:
+//   - 总 proposals 分布
+//   - per-session 平均
+//   - 每轮的 proposals 数量分布
+//   - "高产" vs "低产" round 标识
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundInfo {
+  sid: string;
+  roundIdx: number;
+  proposalCount: number;
+  goal: string;
+}
+
+const root = join(process.cwd(), 'archive');
+const rounds: RoundInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (!m) continue;
+      const idx = parseInt(m[1], 10);
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const count = (r.designer?.proposals ?? []).length;
+        rounds.push({ sid, roundIdx: idx, proposalCount: count, goal });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const totalRounds = rounds.length;
+const totalProposals = rounds.reduce((s, r) => s + r.proposalCount, 0);
+const avgPerRound = totalRounds > 0 ? totalProposals / totalRounds : 0;
+
+// 直方图:每 round 产出 proposal 数分布
+const dist = new Map<number, number>();
+for (const r of rounds) {
+  dist.set(r.proposalCount, (dist.get(r.proposalCount) ?? 0) + 1);
+}
+const distEntries = [...dist.entries()].sort((a, b) => a[0] - b[0]);
+
+// per-session 平均
+const sessionMap = new Map<string, { total: number; rounds: number; goal: string }>();
+for (const r of rounds) {
+  if (!sessionMap.has(r.sid)) {
+    sessionMap.set(r.sid, { total: 0, rounds: 0, goal: r.goal });
+  }
+  const s = sessionMap.get(r.sid)!;
+  s.total += r.proposalCount;
+  s.rounds += 1;
+}
+const perSession = [...sessionMap.entries()].map(([sid, v]) => ({
+  sid,
+  avg: v.total / v.rounds,
+  total: v.total,
+  rounds: v.rounds,
+  goal: v.goal,
+})).sort((a, b) => b.avg - a.avg);
+
+// 高产/低产 round 排序
+const highRounds = [...rounds].sort((a, b) => b.proposalCount - a.proposalCount).slice(0, 10);
+const lowRounds = [...rounds].filter((r) => r.proposalCount > 0).sort((a, b) => a.proposalCount - b.proposalCount).slice(0, 10);
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Proposer Stats · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / proposer-stats</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👨‍💼 Proposer Stats <span class="muted" style="font-size:0.6em">(iter #171)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 designer agent 每次 round 产出的 proposal 数量分布。
+        识别高产 / 低产 round。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ps-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>总 proposals: <strong>{totalProposals}</strong></span>
+        <span>avg/round: <strong>{avgPerRound.toFixed(2)}</strong></span>
+        <span>0-proposal rounds: <strong>{rounds.filter((r) => r.proposalCount === 0).length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 proposal 数分布</h2>
+      <pre class="agents-ps-flow">{(() => {
+        const max = Math.max(...distEntries.map(([, c]) => c), 1);
+        return distEntries.map(([k, v]) => {
+          return `${String(k).padStart(2)} proposals ${bar(v, max, 24)}  ${String(v).padStart(4)} rounds`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>👨‍💼 top 10 高产 sessions(avg/round)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>avg/round</th><th>total</th><th>rounds</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {perSession.slice(0, 10).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 14))}</code></a></td>
+              <td><strong>{s.avg.toFixed(2)}</strong></td>
+              <td>{s.total}</td>
+              <td>{s.rounds}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 40))}{(s.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 10 单轮最高产</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>round</th><th>proposals</th></tr>
+        </thead>
+        <tbody>
+          {highRounds.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>R{r.roundIdx}</td>
+              <td><strong>{r.proposalCount}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐌 top 10 单轮最低产(>0)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>round</th><th>proposals</th></tr>
+        </thead>
+        <tbody>
+          {lowRounds.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>R{r.roundIdx}</td>
+              <td>{r.proposalCount}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高产但低 promoted → designer 在重复生成相似 proposal</li>
+        <li>0-proposal rounds → designer 卡住 / 网络问题</li>
+        <li>对照 <a href={`${base}/agents/round-density/`}>Round Density</a> 看整体分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ps-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ps-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ps-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
