@@ -1,0 +1,281 @@
+---
+// /agents/[sessionId]/stats.astro — iter #87:session statistics dashboard
+//
+// 把 session 的所有 round 数据画成 text-based 图表(无需图表库,纯 HTML/CSS):
+//   - 评分趋势线(每 round 的 avg total score)
+//   - token 消耗柱状图(每 round)
+//   - 耗时分布(每 round)
+//   - proposal type 频次
+//   - gate 决定漏斗(promoted / candidate / sketch / rejected)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    if (existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+
+let meta: any = null;
+try { meta = JSON.parse(await readFile(join(sessionDir, 'meta.json'), 'utf8')); } catch { /* */ }
+
+let rounds: any[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds')))
+    .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = await Promise.all(files.map(async (f) => {
+    try { return JSON.parse(await readFile(join(sessionDir, 'rounds', f), 'utf8')); }
+    catch { return null; }
+  })).then((arr) => arr.filter(Boolean));
+} catch { /* */ }
+
+// 每 round 聚合
+interface RoundStat {
+  round: number;
+  finishedAt: number;
+  durationMs: number;
+  proposalCount: number;
+  critiqueCount: number;
+  promotedCount: number;
+  candidateCount: number;
+  sketchCount: number;
+  rejectedCount: number;
+  appliedCount: number;
+  avgScore: number;
+  totalTokens: number;
+}
+
+const stats: RoundStat[] = rounds.map((r) => {
+  const cr = Array.isArray(r?.feedback?.critiques) ? r.feedback.critiques : [];
+  const totalScore = cr.reduce((a: number, c: any) => a + (typeof c?.total === 'number' ? c.total : 0), 0);
+  const avgScore = cr.length > 0 ? totalScore / cr.length : 0;
+  return {
+    round: r.round ?? 0,
+    finishedAt: Number(r?.finished_at ?? 0),
+    durationMs: Number(r?.telemetry?.duration_ms ?? (Number(r?.finished_at ?? 0) - Number(r?.started_at ?? 0)) ?? 0),
+    proposalCount: Array.isArray(r?.designer?.proposals) ? r.designer.proposals.length : 0,
+    critiqueCount: cr.length,
+    promotedCount: Array.isArray(r?.gate?.promoted) ? r.gate.promoted.length : 0,
+    candidateCount: Array.isArray(r?.gate?.candidate) ? r.gate.candidate.length : 0,
+    sketchCount: Array.isArray(r?.gate?.sketch) ? r.gate.sketch.length : 0,
+    rejectedCount: Array.isArray(r?.gate?.rejected) ? r.gate.rejected.length : 0,
+    appliedCount: Array.isArray(r?.modifier?.applied) ? r.modifier.applied.length : 0,
+    avgScore,
+    totalTokens: Number(r?.feedback?.total_tokens ?? 0),
+  };
+});
+
+// 全局聚合
+const totalTokens = stats.reduce((a, s) => a + s.totalTokens, 0);
+const totalDurationMs = stats.reduce((a, s) => a + s.durationMs, 0);
+const avgScore = stats.length > 0 ? stats.reduce((a, s) => a + s.avgScore, 0) / stats.length : 0;
+const totalPromoted = stats.reduce((a, s) => a + s.promotedCount, 0);
+const totalRejected = stats.reduce((a, s) => a + s.rejectedCount, 0);
+const totalApplied = stats.reduce((a, s) => a + s.appliedCount, 0);
+
+// proposal type 频次
+const typeCounts = new Map<string, number>();
+for (const r of rounds) {
+  for (const p of (r?.designer?.proposals ?? [])) {
+    if (p?.type) typeCounts.set(p.type, (typeCounts.get(p.type) ?? 0) + 1);
+  }
+}
+
+// 文本柱状图(纯 CSS / 字符)
+function bar(n: number, max: number, scale = 30): string {
+  if (max === 0) return '';
+  const len = Math.round((n / max) * scale);
+  return '█'.repeat(len) + '░'.repeat(scale - len);
+}
+function fmtMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60_000).toFixed(1)}min`;
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title={`Stats · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>stats</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Session 数据统计 · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #87 · 每 round 的 token / 耗时 / 评分 / proposal / gate 决策。
+        用 ASCII 字符画成柱状图,不依赖图表库。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局指标</h2>
+      <div class="agents-stats-row">
+        <span><strong>{stats.length}</strong> rounds</span>
+        <span><strong>{totalTokens.toLocaleString()}</strong> tokens</span>
+        <span><strong>{fmtMs(totalDurationMs)}</strong> 总耗时</span>
+        <span><strong>{avgScore.toFixed(2)}</strong> avg score</span>
+        <span><strong>{totalPromoted}</strong> promoted</span>
+        <span><strong>{totalRejected}</strong> rejected</span>
+        <span><strong>{totalApplied}</strong> applied</span>
+      </div>
+    </section>
+
+    {stats.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">该 session 还没有任何 round。</p>
+      </section>
+    ) : (
+      <>
+        <section class="agents-session-section">
+          <h2>📈 评分趋势 (avg total / round)</h2>
+          <pre class="agents-stats-chart">{
+stats.map((s) => `r${String(s.round).padStart(3, '0')} │${bar(s.avgScore, 10, 30)}│ ${s.avgScore.toFixed(2)}`).join('\n')
+          }</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🔋 Token 消耗 (per round)</h2>
+          <pre class="agents-stats-chart">{
+stats.map((s) => `r${String(s.round).padStart(3, '0')} │${bar(s.totalTokens, Math.max(...stats.map((x) => x.totalTokens), 1))}│ ${s.totalTokens.toLocaleString()}`).join('\n')
+          }</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>⏱ 耗时 (per round)</h2>
+          <pre class="agents-stats-chart">{
+stats.map((s) => `r${String(s.round).padStart(3, '0')} │${bar(s.durationMs, Math.max(...stats.map((x) => x.durationMs), 1))}│ ${fmtMs(s.durationMs)}`).join('\n')
+          }</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🚦 Gate 决策漏斗 (累计)</h2>
+          <pre class="agents-stats-chart">{
+(() => {
+  let promoted = 0, candidate = 0, sketch = 0, rejected = 0;
+  return stats.map((s) => {
+    promoted += s.promotedCount;
+    candidate += s.candidateCount;
+    sketch += s.sketchCount;
+    rejected += s.rejectedCount;
+    return `r${String(s.round).padStart(3, '0')} │ promoted:${bar(promoted, Math.max(promoted, 1), 6)} candidate:${bar(candidate, Math.max(candidate, 1), 6)} sketch:${bar(sketch, Math.max(sketch, 1), 6)} rejected:${bar(rejected, Math.max(rejected, 1), 6)} │ p=${promoted} c=${candidate} s=${sketch} r=${rejected}`;
+  }).join('\n');
+})()
+          }</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📊 Proposal type 频次</h2>
+          {[...typeCounts.entries()].length === 0 ? (
+            <p class="muted">无数据</p>
+          ) : (
+            <pre class="agents-stats-chart">{
+[...typeCounts.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${t.padEnd(20)} │${bar(n, Math.max(...typeCounts.values()))}│ ${n}`).join('\n')
+            }</pre>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📋 详细表</h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr>
+                <th>round</th>
+                <th>proposals</th>
+                <th>critiques</th>
+                <th>avg score</th>
+                <th>promoted</th>
+                <th>candidate</th>
+                <th>sketch</th>
+                <th>rejected</th>
+                <th>applied</th>
+                <th>tokens</th>
+                <th>耗时</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stats.map((s) => (
+                <tr>
+                  <td><a href={`${base}/agents/${sessionId}/${String(s.round).padStart(3, '0')}/`}>#{s.round}</a></td>
+                  <td>{s.proposalCount}</td>
+                  <td>{s.critiqueCount}</td>
+                  <td><strong>{s.avgScore.toFixed(2)}</strong></td>
+                  <td>{s.promotedCount}</td>
+                  <td>{s.candidateCount}</td>
+                  <td>{s.sketchCount}</td>
+                  <td>{s.rejectedCount}</td>
+                  <td>{s.appliedCount}</td>
+                  <td>{s.totalTokens.toLocaleString()}</td>
+                  <td>{fmtMs(s.durationMs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>← Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/score/`}>📊 Score</a>
+        <a class="button" href={`${base}/agents/${sessionId}/timeline/`}>📜 Timeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/deliverables/`}>🛠 Deliverables</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-stats-row {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-stats-row strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-stats-chart {
+    background: rgba(0,0,0,0.3);
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    color: #10b981;
+    margin: 0;
+  }
+</style>
