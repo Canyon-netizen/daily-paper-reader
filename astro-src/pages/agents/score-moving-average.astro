@@ -1,0 +1,193 @@
+---
+// /agents/score-moving-average.astro — iter #311:score moving average per session
+//
+// 每个 session 的 3-round 滑动平均 score:
+//   - 原始 sparkline vs 平滑 sparkline
+//   - 看长期趋势 vs 短期波动
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SPARK_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const WINDOW = 3;
+
+function sparkline(values: number[]): string {
+  if (values.length === 0) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return SPARK_CHARS[0].repeat(values.length);
+  return values.map((v) => {
+    const idx = Math.min(7, Math.floor(((v - min) / (max - min)) * 7));
+    return SPARK_CHARS[idx];
+  }).join('');
+}
+
+function movingAvg(values: number[]): number[] {
+  const result: number[] = [];
+  for (let i = 0; i < values.length; i++) {
+    const start = Math.max(0, i - WINDOW + 1);
+    const slice = values.slice(start, i + 1);
+    result.push(slice.reduce((a, b) => a + b, 0) / slice.length);
+  }
+  return result;
+}
+
+interface SessInfo {
+  sid: string;
+  goal: string;
+  scores: number[];
+  movingAvg: number[];
+  trendSlope: number;     // 斜率
+  smoothness: number;      // 平滑度(avg diff)
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 3) continue;
+
+    const mAvg = movingAvg(scores);
+
+    // 计算 movingAvg 的线性回归斜率
+    const n = mAvg.length;
+    const xs = mAvg.map((_, i) => i);
+    const xAvg = (n - 1) / 2;
+    const yAvg = mAvg.reduce((a, b) => a + b, 0) / n;
+    let num = 0, den = 0;
+    for (let i = 0; i < n; i++) {
+      num += (xs[i] - xAvg) * (mAvg[i] - yAvg);
+      den += (xs[i] - xAvg) ** 2;
+    }
+    const slope = den === 0 ? 0 : num / den;
+
+    // 平滑度:movingAvg 的相邻差 avg
+    let sumDiff = 0;
+    for (let i = 1; i < mAvg.length; i++) {
+      sumDiff += Math.abs(mAvg[i] - mAvg[i - 1]);
+    }
+    const smoothness = sumDiff / (mAvg.length - 1);
+
+    sessions.push({ sid, goal, scores, movingAvg: mAvg, trendSlope: slope, smoothness });
+  }
+}
+
+sessions.sort((a, b) => b.trendSlope - a.trendSlope);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Moving Average · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-moving-average</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Score Moving Average <span class="muted" style="font-size:0.6em">(iter #311)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 {WINDOW}-round 滑动平均 score,看长期趋势。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📈 Top 15 上升趋势 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>raw</th><th>smoothed</th><th>slope</th><th>smoothness</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 15).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td style="font-family:ui-monospace,monospace">{sparkline(s.scores)}</td>
+              <td style="font-family:ui-monospace,monospace;color:#94a3b8">{sparkline(s.movingAvg)}</td>
+              <td style="color:#10b981"><strong>+{s.trendSlope.toFixed(3)}</strong></td>
+              <td>{s.smoothness.toFixed(3)}</td>
+              <td><small class="muted">{esc((s.goal ?? '').slice(0, 25))}{(s.goal ?? '').length > 25 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 下降趋势 Top 10</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>raw</th><th>smoothed</th><th>slope</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().sort((a, b) => a.trendSlope - b.trendSlope).slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td style="font-family:ui-monospace,monospace">{sparkline(s.scores)}</td>
+              <td style="font-family:ui-monospace,monospace;color:#94a3b8">{sparkline(s.movingAvg)}</td>
+              <td style="color:#ef4444"><strong>{s.trendSlope.toFixed(3)}</strong></td>
+              <td><small class="muted">{esc((s.goal ?? '').slice(0, 25))}{(s.goal ?? '').length > 25 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>slope 大 = 整体上升趋势显著</li>
+        <li>smoothness 小 = 即使有波动,长期方向稳定</li>
+        <li>对照 <a href={`${base}/agents/score-velocity/`}>Score Velocity</a></li>
+        <li>对照 <a href={`${base}/agents/improvement-pattern-cluster/`}>Pattern Cluster</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+</style>
