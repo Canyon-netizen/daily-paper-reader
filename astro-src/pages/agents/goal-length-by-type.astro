@@ -1,0 +1,158 @@
+---
+// /agents/goal-length-by-type.astro — iter #313:goal length distribution per type
+//
+// 每个 goal type 的 goal 字符长度分布:
+//   - avg / median / max length per type
+//   - 揭示不同类型用户的 goal 详细程度差异
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', '分析', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan'],
+  other: [],
+};
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+interface TypeLenStat {
+  name: string;
+  count: number;
+  lens: number[];
+  avg: number;
+  median: number;
+  min: number;
+  max: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const typeMap = new Map<string, TypeLenStat>();
+
+for (const t of Object.keys(TYPE_KEYWORDS)) {
+  typeMap.set(t, { name: t, count: 0, lens: [], avg: 0, median: 0, min: 0, max: 0 });
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+    const t = typeMap.get(type)!;
+    t.count += 1;
+    t.lens.push(goal.length);
+  }
+}
+
+for (const t of typeMap.values()) {
+  if (t.lens.length > 0) {
+    t.avg = t.lens.reduce((a, b) => a + b, 0) / t.lens.length;
+    const sorted = [...t.lens].sort((a, b) => a - b);
+    t.median = sorted[Math.floor(sorted.length / 2)];
+    t.min = sorted[0];
+    t.max = sorted[sorted.length - 1];
+  }
+}
+
+const arr = [...typeMap.values()].filter((t) => t.count > 0).sort((a, b) => b.avg - a.avg);
+const maxAvg = Math.max(...arr.map((t) => t.avg), 1);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Goal Length by Type · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-length-by-type</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Goal Length by Type <span class="muted" style="font-size:0.6em">(iter #313)</span></h1>
+      <p class="agents-sub">
+        每个 goal type 的 goal 字符长度统计(avg / median / min / max)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 详情</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>count</th><th>avg</th><th>median</th><th>min</th><th>max</th></tr>
+        </thead>
+        <tbody>
+          {arr.map((t) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{t.name}</strong></td>
+              <td>{t.count}</td>
+              <td><strong>{t.avg.toFixed(0)}</strong></td>
+              <td>{t.median}</td>
+              <td>{t.min}</td>
+              <td>{t.max}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 avg 长度水平柱状图</h2>
+      <pre class="agents-glbt-flow">{arr.map((t) => {
+        return `${t.name.padEnd(10)} ${bar(t.avg, maxAvg, 22)}  ${t.avg.toFixed(0)} chars (n=${t.count})`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg 长 = 该 type 用户习惯详细描述需求</li>
+        <li>median 远小于 avg = 大多数简洁但有少数极长</li>
+        <li>对照 <a href={`${base}/agents/goal-length-distribution/`}>Goal Length Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/goal-type-classifier/`}>Goal Type Classifier</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-glbt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
