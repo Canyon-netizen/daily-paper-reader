@@ -1,0 +1,180 @@
+---
+// /agents/action-win-rate-by-position.astro — iter #310:action win rate by position
+//
+// 每个 action 在不同 round position 上的 win rate(下轮 score 上升的比例):
+//   - R1 / R2 / R3 / ... 分桶统计
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PosAction {
+  position: number;
+  total: number;
+  wins: number;
+  winRate: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const posMap = new Map<number, { total: number; wins: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    const acts: string[][] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        scores.push(score);
+        const as: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          as.push(a.action ?? a.type ?? 'unknown');
+        }
+        acts.push(as);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+
+    // 看每 round 的 gain
+    for (let i = 0; i < scores.length - 1; i++) {
+      const pos = i + 1;
+      if (!posMap.has(pos)) posMap.set(pos, { total: 0, wins: 0 });
+      const p = posMap.get(pos)!;
+      p.total += 1;
+      if (scores[i + 1] > scores[i]) p.wins += 1;
+    }
+  }
+}
+
+const positions: PosAction[] = [];
+for (const [pos, info] of [...posMap.entries()].sort((a, b) => a[0] - b[0])) {
+  positions.push({
+    position: pos,
+    total: info.total,
+    wins: info.wins,
+    winRate: info.total > 0 ? info.wins / info.total : 0,
+  });
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function verdict(r: number): string {
+  if (r >= 0.7) return '🟢 strong';
+  if (r >= 0.5) return '🟡 decent';
+  if (r >= 0.3) return '🟠 weak';
+  return '🔴 poor';
+}
+---
+
+<BaseLayout title="Action Win Rate by Position · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-win-rate-by-position</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎲 Action Win Rate by Position <span class="muted" style="font-size:0.6em">(iter #310)</span></h1>
+      <p class="agents-sub">
+        在某 round position 上应用 modifier 后,下轮 score 上升的比例 = win rate。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-awrp-globals">
+        <span>positions: <strong>{positions.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎲 各 position win rate</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>position</th><th>total</th><th>wins</th><th>win rate</th><th>verdict</th></tr>
+        </thead>
+        <tbody>
+          {positions.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">R{p.position}</strong></td>
+              <td>{p.total}</td>
+              <td>{p.wins}</td>
+              <td><strong style={p.winRate >= 0.5 ? 'color:#10b981' : 'color:#ef4444'}>{(p.winRate * 100).toFixed(1)}%</strong></td>
+              <td><small>{verdict(p.winRate)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 win rate 水平柱状图</h2>
+      <pre class="agents-awrp-flow">{positions.map((p) => {
+        return `R${p.position.toString().padStart(2)}  ${bar(p.winRate, 1, 22)}  ${(p.winRate * 100).toFixed(1)}%  (${p.wins}/${p.total})`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>win rate &gt; 50% = modifier 在该位置多数时候有效</li>
+        <li>win rate &lt; 30% = 该位置 modifier 经常无效甚至退步</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+        <li>对照 <a href={`${base}/agents/modifier-decision-by-position/`}>Modifier Decision</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-awrp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-awrp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-awrp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
