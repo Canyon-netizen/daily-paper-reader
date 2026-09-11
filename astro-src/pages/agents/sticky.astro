@@ -1,0 +1,265 @@
+---
+// /agents/sticky.astro — iter #116:sticky note widget
+//
+// 浮动便签:显示在所有页面的右下角(用 localStorage),可拖动。
+// 内容自动保存,可以快速记录任何想法而不离开当前页面。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="Sticky Note · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / sticky</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📝 Sticky Note <span class="muted" style="font-size:0.6em">(iter #116)</span></h1>
+      <p class="agents-sub">
+        全站浮动便签。在右下角拖动 / 编辑 / 关闭 / 重开。
+        内容自动存 localStorage,跨页面保持,跨标签页同步(用 storage 事件)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>ℹ️ 说明</h2>
+      <p>
+        便签是浮动元素,不会嵌入到本页。打开它:
+        <button class="button primary" id="sk-toggle" type="button">📝 打开便签</button>
+        或访问任意页面后右下角会显示。
+      </p>
+      <p>已实现的功能:</p>
+      <ul>
+        <li>✅ 自动保存到 localStorage</li>
+        <li>✅ 拖动到屏幕任意位置</li>
+        <li>✅ 关闭 / 重新打开</li>
+        <li>✅ 最小化 / 展开</li>
+        <li>✅ 跨标签页实时同步</li>
+        <li>✅ 导出 / 导入</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🛠 数据管理</h2>
+      <p>
+        <button class="button" id="sk-export" type="button">📤 导出便签内容</button>
+        <button class="button" id="sk-import" type="button">📥 导入</button>
+        <button class="button" id="sk-clear" type="button">🗑️ 清空</button>
+        <input type="file" id="sk-file" hidden accept=".txt,.md,text/*" />
+      </p>
+      <p class="muted">
+        <small>提示:便签内容也存 localStorage,所以可以直接打开浏览器开发者工具 → Application → Local Storage 找到 <code>agents:sticky:v1</code>。</small>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<!-- 浮动便签 DOM -->
+<div id="agents-sticky" class="agents-sticky" hidden>
+  <div class="agents-sticky-head" id="agents-sticky-head">
+    <span>📝 便签</span>
+    <span>
+      <button id="agents-sticky-min" type="button" title="最小化">—</button>
+      <button id="agents-sticky-close" type="button" title="关闭">✕</button>
+    </span>
+  </div>
+  <textarea id="agents-sticky-text" placeholder="输入内容…自动保存"></textarea>
+</div>
+
+<style>
+  .agents-sticky {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 280px;
+    height: 220px;
+    background: rgba(255, 250, 220, 0.95);
+    color: #222;
+    border: 1px solid rgba(0,0,0,0.2);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+  }
+  .agents-sticky.min {
+    height: 32px;
+  }
+  .agents-sticky.min textarea {
+    display: none;
+  }
+  .agents-sticky-head {
+    background: rgba(245, 158, 11, 0.9);
+    color: white;
+    padding: 0.3rem 0.6rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: move;
+    font-size: 0.85rem;
+    user-select: none;
+  }
+  .agents-sticky-head button {
+    background: transparent;
+    border: none;
+    color: white;
+    cursor: pointer;
+    font-size: 0.9rem;
+    padding: 0 0.3rem;
+  }
+  .agents-sticky textarea {
+    flex: 1;
+    border: none;
+    outline: none;
+    padding: 0.5rem;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    resize: none;
+    background: transparent;
+  }
+</style>
+
+<script>
+const KEY = 'agents:sticky:v1';
+const POS = 'agents:sticky:pos:v1';
+const MIN = 'agents:sticky:min:v1';
+
+const stickyEl = document.getElementById('agents-sticky');
+const textEl = document.getElementById('agents-sticky-text');
+const headEl = document.getElementById('agents-sticky-head');
+const minBtn = document.getElementById('agents-sticky-min');
+const closeBtn = document.getElementById('agents-sticky-close');
+const toggleBtn = document.getElementById('sk-toggle');
+
+function loadText(): string {
+  try { return localStorage.getItem(KEY) ?? ''; } catch { return ''; }
+}
+function saveText(v: string): void {
+  try { localStorage.setItem(KEY, v); } catch { /* */ }
+}
+function loadPos(): { left: number; top: number } | null {
+  try {
+    const raw = localStorage.getItem(POS);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function savePos(p: { left: number; top: number }): void {
+  try { localStorage.setItem(POS, JSON.stringify(p)); } catch { /* */ }
+}
+function loadMin(): boolean {
+  try { return localStorage.getItem(MIN) === '1'; } catch { return false; }
+}
+function saveMin(m: boolean): void {
+  try { localStorage.setItem(MIN, m ? '1' : '0'); } catch { /* */ }
+}
+
+let isOpen = false;
+function open(): void {
+  if (!stickyEl) return;
+  stickyEl.hidden = false;
+  isOpen = true;
+  if (textEl) textEl.value = loadText();
+  const pos = loadPos();
+  if (pos && stickyEl) {
+    stickyEl.style.left = pos.left + 'px';
+    stickyEl.style.top = pos.top + 'px';
+    stickyEl.style.bottom = 'auto';
+    stickyEl.style.right = 'auto';
+  }
+  if (loadMin() && stickyEl) stickyEl.classList.add('min');
+}
+function close(): void {
+  if (!stickyEl) return;
+  stickyEl.hidden = true;
+  isOpen = false;
+}
+
+let saveTimer: number | null = null;
+textEl?.addEventListener('input', () => {
+  if (saveTimer != null) window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => saveText(textEl.value), 300);
+});
+
+minBtn?.addEventListener('click', () => {
+  if (!stickyEl) return;
+  stickyEl.classList.toggle('min');
+  saveMin(stickyEl.classList.contains('min'));
+});
+closeBtn?.addEventListener('click', close);
+toggleBtn?.addEventListener('click', () => isOpen ? close() : open());
+
+// 拖动
+let dragging = false;
+let dragOffset = { x: 0, y: 0 };
+headEl?.addEventListener('mousedown', (e) => {
+  dragging = true;
+  dragOffset = { x: e.clientX - stickyEl.offsetLeft, y: e.clientY - stickyEl.offsetTop };
+  e.preventDefault();
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragging || !stickyEl) return;
+  stickyEl.style.left = (e.clientX - dragOffset.x) + 'px';
+  stickyEl.style.top = (e.clientY - dragOffset.y) + 'px';
+  stickyEl.style.bottom = 'auto';
+  stickyEl.style.right = 'auto';
+});
+window.addEventListener('mouseup', () => {
+  if (!dragging || !stickyEl) return;
+  dragging = false;
+  savePos({ left: stickyEl.offsetLeft, top: stickyEl.offsetTop });
+});
+
+// 跨标签页同步
+window.addEventListener('storage', (e) => {
+  if (e.key === KEY && textEl) textEl.value = loadText();
+});
+
+// 启动时:如果以前开过,自动恢复
+const wasOpen = (() => {
+  try { return localStorage.getItem('agents:sticky:open:v1') === '1'; } catch { return false; }
+})();
+if (wasOpen) open();
+
+document.getElementById('sk-export')?.addEventListener('click', () => {
+  const text = loadText();
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `agents-sticky-${new Date().toISOString().slice(0, 10)}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById('sk-import')?.addEventListener('click', () => {
+  document.getElementById('sk-file')?.click();
+});
+document.getElementById('sk-file')?.addEventListener('change', (e) => {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = String(reader.result);
+    saveText(text);
+    if (textEl) textEl.value = text;
+    alert('导入成功');
+  };
+  reader.readAsText(file);
+});
+document.getElementById('sk-clear')?.addEventListener('click', () => {
+  if (!confirm('清空便签内容?')) return;
+  saveText('');
+  if (textEl) textEl.value = '';
+});
+
+// 监听 open 状态
+const observer = new MutationObserver(() => {
+  try { localStorage.setItem('agents:sticky:open:v1', isOpen ? '1' : '0'); } catch { /* */ }
+});
+if (stickyEl) observer.observe(stickyEl, { attributes: true, attributeFilter: ['hidden'] });
+</script>
