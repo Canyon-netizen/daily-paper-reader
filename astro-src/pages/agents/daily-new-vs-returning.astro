@@ -1,0 +1,196 @@
+---
+// /agents/daily-new-vs-returning.astro — iter #262:daily new vs returning sessions
+//
+// 每天活跃 session 中,新 session(当天创建) vs 老 session(更早创建但当天活跃)
+// 展示最近 30 天趋势
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const ONE_DAY = 24 * 60 * 60 * 1000;
+
+interface Session {
+  created: number;
+  activeDays: Set<string>;
+}
+
+interface Day {
+  date: string;
+  newSessions: number;
+  returningSessions: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Session[] = [];
+
+function dayKey(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    if (rfs.length === 0) continue;
+    let created = 0;
+    let latest = 0;
+    const activeDays = new Set<string>();
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        if (created === 0 || st.mtimeMs < created) created = st.mtimeMs;
+        if (st.mtimeMs > latest) latest = st.mtimeMs;
+        activeDays.add(dayKey(st.mtimeMs));
+      } catch (e) { /* */ }
+    }
+    if (created > 0) {
+      sessions.push({ created, activeDays });
+    }
+  }
+}
+
+// 生成最近 30 天
+const today = new Date();
+today.setUTCHours(0, 0, 0, 0);
+const days: Day[] = [];
+for (let i = 29; i >= 0; i--) {
+  const d = new Date(today.getTime() - i * ONE_DAY);
+  const key = d.toISOString().slice(0, 10);
+  let newCount = 0;
+  let returningCount = 0;
+  for (const s of sessions) {
+    if (!s.activeDays.has(key)) continue;
+    const createdDay = dayKey(s.created);
+    if (createdDay === key) newCount += 1;
+    else returningCount += 1;
+  }
+  days.push({ date: key, newSessions: newCount, returningSessions: returningCount });
+}
+
+const totalNew = days.reduce((s, d) => s + d.newSessions, 0);
+const totalReturning = days.reduce((s, d) => s + d.returningSessions, 0);
+const totalActive = totalNew + totalReturning;
+const newRatio = totalActive > 0 ? (totalNew / totalActive) * 100 : 0;
+
+const maxActive = Math.max(...days.map((d) => d.newSessions + d.returningSessions), 1);
+const maxNew = Math.max(...days.map((d) => d.newSessions), 1);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Daily New vs Returning · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-new-vs-returning</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🆕 Daily New vs Returning <span class="muted" style="font-size:0.6em">(iter #262)</span></h1>
+      <p class="agents-sub">
+        每天活跃 sessions:新创建的 vs 之前创建但仍活跃的。
+        高 returning % = 用户在持续迭代;高 new % = 一次性的任务。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局(30d)</h2>
+      <div class="agents-dnv-globals">
+        <span>总新 sessions: <strong style="color:#4f46e5">{totalNew}</strong></span>
+        <span>总 returning: <strong style="color:#10b981">{totalReturning}</strong></span>
+        <span>总活跃: <strong>{totalActive}</strong></span>
+        <span>新 session 占比: <strong>{newRatio.toFixed(1)}%</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 stacked bar(新 + 老)</h2>
+      <pre class="agents-dnv-flow">{days.slice().reverse().map((d) => {
+        const total = d.newSessions + d.returningSessions;
+        const newW = Math.round((d.newSessions / maxActive) * 30);
+        const retW = Math.round((d.returningSessions / maxActive) * 30);
+        return `${d.date}  ${'█'.repeat(newW)}${'▒'.repeat(retW)}${' '.repeat(Math.max(0, 30 - newW - retW))} new=${d.newSessions.toString().padStart(2)} ret=${d.returningSessions.toString().padStart(2)}`;
+      }).join('\n')}</pre>
+      <p class="muted" style="font-size:0.85em">█ = 新 session,▒ = 老 returning session</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>date</th><th>new</th><th>returning</th><th>total</th><th>new %</th></tr>
+        </thead>
+        <tbody>
+          {days.slice().reverse().map((d) => {
+            const total = d.newSessions + d.returningSessions;
+            const pct = total > 0 ? (d.newSessions / total) * 100 : 0;
+            return (
+              <tr>
+                <td><code>{esc(d.date)}</code></td>
+                <td><strong style="color:#4f46e5">{d.newSessions}</strong></td>
+                <td>{d.returningSessions}</td>
+                <td>{total}</td>
+                <td>{pct.toFixed(1)}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>new % &gt; 70% = 多数是单次任务</li>
+        <li>new % &lt; 30% = 用户在持续迭代</li>
+        <li>returning = 老 session 仍在被使用 = 用户粘性</li>
+        <li>对照 <a href={`${base}/agents/daily-pulse/`}>Daily Pulse</a> 看 rounds 趋势</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dnv-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dnv-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dnv-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
