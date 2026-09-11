@@ -1,0 +1,306 @@
+---
+// /agents/settings.astro — iter #102:global settings & preferences
+//
+// 用户偏好(全部存 localStorage):
+//   - 默认 LLM model / max_cycles / dry_run
+//   - 估算费用 USD/M tokens
+//   - 主题(暗 / 亮 / 跟随系统)
+//   - 通知阈值(session score 达标时提醒)
+//   - 行为开关(自动追踪 session visits / 自动保存搜索 / 显示调试信息)
+//   - 导入导出
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="Settings · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / settings</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⚙️ Settings & Preferences <span class="muted" style="font-size:0.6em">(iter #102)</span></h1>
+      <p class="agents-sub">
+        全局偏好设置,存 localStorage。所有其他 agent 页面会读这些值(在客户端)。
+        可以导入 / 导出成 JSON 备份。
+      </p>
+    </header>
+
+    <form id="settings-form" class="agents-session-section">
+      <h2>🤖 LLM 默认值</h2>
+      <p class="muted"><small>新建 session 时(见 /agents/new-session/)的默认填充值。</small></p>
+
+      <label class="agents-set-row">
+        <span>默认 model</span>
+          <select id="set-model">
+            <option value="claude-sonnet-5">claude-sonnet-5</option>
+            <option value="claude-opus-5">claude-opus-5</option>
+            <option value="claude-haiku-4-5-20251001">claude-haiku-4-5-20251001</option>
+          </select>
+        </label>
+
+      <label class="agents-set-row">
+        <span>默认 max_cycles</span>
+          <input id="set-max-cycles" type="number" min="1" max="50" value="3" />
+        </label>
+
+      <label class="agents-set-row">
+        <span>默认 dry_run</span>
+          <select id="set-dry-run">
+            <option value="false">false(真实跑)</option>
+            <option value="true">true(只跑 stub)</option>
+          </select>
+        </label>
+
+      <label class="agents-set-row">
+        <span>估算费用 USD/M tokens</span>
+          <input id="set-rate" type="number" min="0" step="0.05" value="0.50" />
+        </label>
+    </form>
+
+    <form class="agents-session-section">
+      <h2>🎨 外观</h2>
+      <label class="agents-set-row">
+        <span>主题</span>
+          <select id="set-theme">
+            <option value="dark">暗色</option>
+            <option value="light">亮色</option>
+            <option value="auto">跟随系统</option>
+          </select>
+        </label>
+    </form>
+
+    <form class="agents-session-section">
+      <h2>🔔 通知阈值</h2>
+      <p class="muted"><small>在 /agents/activity/ / digest 等页面会基于这些阈值做高亮。</small></p>
+      <label class="agents-set-row">
+        <span>Score ≥ <input id="set-notif-score" type="number" min="0" max="10" step="0.1" value="8.0" style="width: 80px" /></span>
+          <span class="muted">达标</span>
+        </label>
+      <label class="agents-set-row">
+        <span>Cost ≥ $<input id="set-notif-cost" type="number" min="0" step="0.1" value="5" style="width: 80px" /></span>
+          <span class="muted">高费用</span>
+        </label>
+      <label class="agents-set-row">
+        <span>Tokens ≥ <input id="set-notif-tokens" type="number" min="0" step="1000" value="100000" style="width: 100px" /></span>
+          <span class="muted">高 token</span>
+        </label>
+    </form>
+
+    <form class="agents-session-section">
+      <h2>🔌 行为开关</h2>
+      <label class="agents-set-row">
+        <span><input id="set-track-visits" type="checkbox" checked /> 自动追踪 session 访问(供 bookmarks)</span>
+        </label>
+      <label class="agents-set-row">
+        <span><input id="set-show-debug" type="checkbox" /> 显示调试信息(timing / fetch 详情)</span>
+        </label>
+      <label class="agents-set-row">
+        <span><input id="set-confirm-delete" type="checkbox" checked /> 删除前确认</span>
+        </label>
+    </form>
+
+    <section class="agents-session-section">
+      <h2>📦 导入 / 导出</h2>
+      <p>
+        <button class="button" id="set-export" type="button">📤 导出 JSON</button>
+        <button class="button" id="set-import" type="button">📥 导入 JSON</button>
+        <button class="button" id="set-reset" type="button">↩️ 还原默认</button>
+        <input type="file" id="set-file" hidden accept="application/json" />
+      </p>
+      <p id="set-save-status" class="muted"><small>设置自动保存(每 5 秒写入 localStorage)。</small></p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-set-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    gap: 1rem;
+  }
+  .agents-set-row:last-of-type { border-bottom: none; }
+  .agents-set-row > span:first-child {
+    flex: 1;
+  }
+  .agents-set-row select,
+  .agents-set-row input[type="text"],
+  .agents-set-row input[type="number"] {
+    padding: 0.35rem 0.6rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    min-width: 120px;
+  }
+</style>
+
+<script>
+type Settings = {
+  model: string;
+  maxCycles: number;
+  dryRun: boolean;
+  rate: number;
+  theme: 'dark' | 'light' | 'auto';
+  notif: { score: number; cost: number; tokens: number };
+  flags: { trackVisits: boolean; showDebug: boolean; confirmDelete: boolean };
+};
+
+const KEY = 'agents:settings:v1';
+
+const DEFAULTS: Settings = {
+  model: 'claude-sonnet-5',
+  maxCycles: 3,
+  dryRun: false,
+  rate: 0.5,
+  theme: 'dark',
+  notif: { score: 8.0, cost: 5, tokens: 100000 },
+  flags: { trackVisits: true, showDebug: false, confirmDelete: true },
+};
+
+function load(): Settings {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return { ...DEFAULTS };
+    const parsed = JSON.parse(raw) as Partial<Settings>;
+    return {
+      model: parsed.model ?? DEFAULTS.model,
+      maxCycles: parsed.maxCycles ?? DEFAULTS.maxCycles,
+      dryRun: parsed.dryRun ?? DEFAULTS.dryRun,
+      rate: parsed.rate ?? DEFAULTS.rate,
+      theme: parsed.theme ?? DEFAULTS.theme,
+      notif: {
+        score: parsed.notif?.score ?? DEFAULTS.notif.score,
+        cost: parsed.notif?.cost ?? DEFAULTS.notif.cost,
+        tokens: parsed.notif?.tokens ?? DEFAULTS.notif.tokens,
+      },
+      flags: {
+        trackVisits: parsed.flags?.trackVisits ?? DEFAULTS.flags.trackVisits,
+        showDebug: parsed.flags?.showDebug ?? DEFAULTS.flags.showDebug,
+        confirmDelete: parsed.flags?.confirmDelete ?? DEFAULTS.flags.confirmDelete,
+      },
+    };
+  } catch { return { ...DEFAULTS }; }
+}
+
+function save(s: Settings): void {
+  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* */ }
+}
+
+function applyToUi(s: Settings): void {
+  const $ = (id: string) => document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+  ($('set-model') as HTMLSelectElement | null)?.setAttribute('value', s.model);
+  const modelSel = document.getElementById('set-model') as HTMLSelectElement | null;
+  if (modelSel) modelSel.value = s.model;
+  ($('set-max-cycles') as HTMLInputElement | null) && (($('set-max-cycles') as HTMLInputElement).value = String(s.maxCycles));
+  const dryRunSel = document.getElementById('set-dry-run') as HTMLSelectElement | null;
+  if (dryRunSel) dryRunSel.value = String(s.dryRun);
+  ($('set-rate') as HTMLInputElement | null) && (($('set-rate') as HTMLInputElement).value = String(s.rate));
+  const themeSel = document.getElementById('set-theme') as HTMLSelectElement | null;
+  if (themeSel) themeSel.value = s.theme;
+  ($('set-notif-score') as HTMLInputElement | null) && (($('set-notif-score') as HTMLInputElement).value = String(s.notif.score));
+  ($('set-notif-cost') as HTMLInputElement | null) && (($('set-notif-cost') as HTMLInputElement).value = String(s.notif.cost));
+  ($('set-notif-tokens') as HTMLInputElement | null) && (($('set-notif-tokens') as HTMLInputElement).value = String(s.notif.tokens));
+  ($('set-track-visits') as HTMLInputElement | null) && (($('set-track-visits') as HTMLInputElement).checked = s.flags.trackVisits);
+  ($('set-show-debug') as HTMLInputElement | null) && (($('set-show-debug') as HTMLInputElement).checked = s.flags.showDebug);
+  ($('set-confirm-delete') as HTMLInputElement | null) && (($('set-confirm-delete') as HTMLInputElement).checked = s.flags.confirmDelete);
+}
+
+function readFromUi(): Settings {
+  const val = (id: string, fallback: number): number => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    if (!el) return fallback;
+    const n = Number(el.value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const checked = (id: string): boolean => {
+    const el = document.getElementById(id) as HTMLInputElement | null;
+    return el ? el.checked : false;
+  };
+  const modelSel = document.getElementById('set-model') as HTMLSelectElement | null;
+  const dryRunSel = document.getElementById('set-dry-run') as HTMLSelectElement | null;
+  const themeSel = document.getElementById('set-theme') as HTMLSelectElement | null;
+  return {
+    model: modelSel?.value ?? DEFAULTS.model,
+    maxCycles: val('set-max-cycles', DEFAULTS.maxCycles),
+    dryRun: dryRunSel?.value === 'true',
+    rate: val('set-rate', DEFAULTS.rate),
+    theme: (themeSel?.value as 'dark' | 'light' | 'auto' | undefined) ?? DEFAULTS.theme,
+    notif: {
+      score: val('set-notif-score', DEFAULTS.notif.score),
+      cost: val('set-notif-cost', DEFAULTS.notif.cost),
+      tokens: val('set-notif-tokens', DEFAULTS.notif.tokens),
+    },
+    flags: {
+      trackVisits: checked('set-track-visits'),
+      showDebug: checked('set-show-debug'),
+      confirmDelete: checked('set-confirm-delete'),
+    },
+  };
+}
+
+let saveTimer: number | null = null;
+function scheduleSave(): void {
+  if (saveTimer != null) window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    save(readFromUi());
+    const status = document.getElementById('set-save-status');
+    if (status) status.textContent = `已保存 · ${new Date().toLocaleTimeString()}`;
+  }, 500);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const s = load();
+  applyToUi(s);
+
+  document.querySelectorAll('#settings-form, .agents-session-section').forEach((root) => {
+    root.addEventListener('input', scheduleSave);
+    root.addEventListener('change', scheduleSave);
+  });
+
+  document.getElementById('set-export')?.addEventListener('click', () => {
+    const data = readFromUi();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agents-settings-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById('set-import')?.addEventListener('click', () => {
+    document.getElementById('set-file')?.click();
+  });
+  document.getElementById('set-file')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result)) as Settings;
+        save(data);
+        applyToUi(data);
+        alert('导入成功');
+      } catch (err) { alert('JSON 解析错误: ' + String(err)); }
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById('set-reset')?.addEventListener('click', () => {
+    if (!confirm('还原所有设置为默认值?')) return;
+    save({ ...DEFAULTS });
+    applyToUi({ ...DEFAULTS });
+  });
+});
+</script>
