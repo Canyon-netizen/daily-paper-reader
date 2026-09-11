@@ -1,0 +1,176 @@
+---
+// /agents/daily-burn.astro — iter #155:daily token burn rate
+//
+// 跨 session 按日期聚合 token 消耗:
+//   - 每根柱 = 一天的 token 总数
+//   - 最近 60 天的 burn rate
+//   - 月度聚合
+//   - 月预算对比(假设默认 $50/月)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const dailyMap = new Map<string, number>();
+const monthlyMap = new Map<string, number>();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      const fp = join(rd, rf);
+      const st = await stat(fp).catch(() => null);
+      if (!st) continue;
+      try {
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tok = r.feedback?.total_tokens ?? 0;
+        const d = new Date(st.mtimeMs);
+        const dayKey = d.toISOString().slice(0, 10);
+        const monthKey = d.toISOString().slice(0, 7);
+        dailyMap.set(dayKey, (dailyMap.get(dayKey) ?? 0) + tok);
+        monthlyMap.set(monthKey, (monthlyMap.get(monthKey) ?? 0) + tok);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const sortedDays = [...dailyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+const sortedMonths = [...monthlyMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+const totalTokens = sortedDays.reduce((s, [, v]) => s + v, 0);
+const activeDays = sortedDays.length;
+const avgDaily = activeDays > 0 ? totalTokens / activeDays : 0;
+const maxDaily = sortedDays.reduce((m, [, v]) => Math.max(m, v), 0);
+
+// 取最近 60 天
+const today = new Date().toISOString().slice(0, 10);
+const startDate = new Date();
+startDate.setUTCDate(startDate.getUTCDate() - 59);
+const startKey = startDate.toISOString().slice(0, 10);
+const recent = sortedDays.filter(([d]) => d >= startKey && d <= today);
+
+const DAYS_TO_SHOW = 60;
+const padded: { date: string; tokens: number }[] = [];
+for (let i = 0; i < DAYS_TO_SHOW; i++) {
+  const d = new Date(startDate);
+  d.setUTCDate(d.getUTCDate() + i);
+  const k = d.toISOString().slice(0, 10);
+  padded.push({ date: k, tokens: dailyMap.get(k) ?? 0 });
+}
+const recentTotal = padded.reduce((s, d) => s + d.tokens, 0);
+
+function bar(n: number, max: number, width = 30): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+// 月度估算成本
+const SONTNET_USD_PER_M = 6; // 中间价
+const recentMonthCost = (recentTotal / 1_000_000) * SONTNET_USD_PER_M;
+---
+
+<BaseLayout title="Daily Token Burn · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-burn</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Daily Token Burn <span class="muted" style="font-size:0.6em">(iter #155)</span></h1>
+      <p class="agents-sub">
+        跨 session 按天聚合 token 消耗。
+        柱状图按天显示,月度聚合,适合预算跟踪。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-db-globals">
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>活跃天数: <strong>{activeDays}</strong></span>
+        <span>日均: <strong>{avgDaily.toFixed(0).toLocaleString()}</strong></span>
+        <span>单日 max: <strong>{maxDaily.toLocaleString()}</strong></span>
+        <span>近 60 天估算成本 (Sonnet): <strong>${recentMonthCost.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 最近 60 天(每日柱状)</h2>
+      <pre class="agents-db-flow">{padded.map((d) => {
+        const dt = new Date(d.date).toISOString().slice(5);
+        return `${dt} ${bar(d.tokens, maxDaily, 24)}  ${String(d.tokens).padStart(8)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 月度聚合</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>月份</th><th>tokens</th><th>估算成本 (Sonnet $)</th><th>活跃天数</th></tr>
+        </thead>
+        <tbody>
+          {sortedMonths.slice(-12).map(([m, t]) => {
+            const days = sortedDays.filter(([d]) => d.startsWith(m)).length;
+            const cost = (t / 1_000_000) * SONTNET_USD_PER_M;
+            return (
+              <tr>
+                <td><code>{m}</code></td>
+                <td>{t.toLocaleString()}</td>
+                <td>${cost.toFixed(2)}</td>
+                <td>{days}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高峰日期通常是连续跑 session 的日子 — 考虑分散到多天</li>
+        <li>对照 <a href={`${base}/agents/budget/`}>Budget</a> 设置月上限</li>
+        <li>对照 <a href={`${base}/agents/cost-calc/`}>Cost Calculator</a> 换 model 节省</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-db-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-db-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-db-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+</style>
