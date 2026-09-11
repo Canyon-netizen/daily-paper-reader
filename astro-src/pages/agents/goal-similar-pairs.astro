@@ -1,0 +1,168 @@
+---
+// /agents/goal-similar-pairs.astro — iter #257:top similar goal pairs
+//
+// 找出 goals 最相似的 session 对(Jaccard over 2-gram tokens)。
+// 只比较 ≥ 10 字符的 goal,过滤太短目标。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Item {
+  sid: string;
+  goal: string;
+  tokens: Set<string>;
+}
+
+const root = join(process.cwd(), 'archive');
+const items: Item[] = [];
+
+function tokenize(goal: string): Set<string> {
+  const out = new Set<string>();
+  // 中文字符 bigrams
+  const chs = goal.match(/[一-龥]+/g) ?? [];
+  for (const seg of chs) {
+    for (let i = 0; i < seg.length - 1; i++) {
+      out.add(seg.slice(i, i + 2));
+    }
+  }
+  // 英文 单词
+  const ens = goal.toLowerCase().match(/[a-z][a-z0-9]{2,}/g) ?? [];
+  for (const e of ens) out.add(e);
+  return out;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter += 1;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      if (goal.length < 10) continue;
+      items.push({ sid, goal, tokens: tokenize(goal) });
+    } catch (e) { /* */ }
+  }
+}
+
+const total = items.length;
+// 只对前 200 个 item 做 O(N²) 比较(避免过大)
+const sample = items.slice(0, 200);
+
+interface Pair {
+  a: Item;
+  b: Item;
+  score: number;
+  common: number;
+}
+
+const pairs: Pair[] = [];
+for (let i = 0; i < sample.length; i++) {
+  for (let j = i + 1; j < sample.length; j++) {
+    const score = jaccard(sample[i].tokens, sample[j].tokens);
+    if (score > 0.3) {
+      let common = 0;
+      for (const x of sample[i].tokens) if (sample[j].tokens.has(x)) common += 1;
+      pairs.push({ a: sample[i], b: sample[j], score, common });
+    }
+  }
+}
+
+pairs.sort((a, b) => b.score - a.score);
+const topPairs = pairs.slice(0, 20);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 12): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Goal Similar Pairs · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-similar-pairs</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👯 Goal Similar Pairs <span class="muted" style="font-size:0.6em">(iter #257)</span></h1>
+      <p class="agents-sub">
+        跨 session 找最相似的 goal 对(Jaccard ≥ 0.3)。
+        仅比较前 200 个 goals(避免 O(N²) 过慢);中文 bigram + 英文单词。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gsp-globals">
+        <span>总 goals: <strong>{total}</strong></span>
+        <span>被比较样本: <strong>{sample.length}</strong></span>
+        <span>高相似对(Jaccard ≥ 0.3): <strong>{pairs.length}</strong></span>
+        <span>top pairs shown: <strong>{topPairs.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 top 20 相似 goal 对</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Jaccard</th><th>common</th><th>sid A</th><th>goal A</th><th>sid B</th><th>goal B</th></tr>
+        </thead>
+        <tbody>
+          {topPairs.map((p) => (
+            <tr>
+              <td><strong style="color:#10b981">{p.score.toFixed(3)}</strong> {bar(p.score, 1, 8)}</td>
+              <td>{p.common}</td>
+              <td><a href={`${base}/agents/${p.a.sid}/`}><code>{esc(p.a.sid.slice(0, 10))}</code></a></td>
+              <td><small>{esc(p.a.goal.slice(0, 40))}{(p.a.goal ?? '').length > 40 ? '…' : ''}</small></td>
+              <td><a href={`${base}/agents/${p.b.sid}/`}><code>{esc(p.b.sid.slice(0, 10))}</code></a></td>
+              <td><small>{esc(p.b.goal.slice(0, 40))}{(p.b.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>Jaccard ≥ 0.5 = 几乎同一主题,可能是同一系列任务</li>
+        <li>Jaccard 0.3-0.5 = 相关但有差异</li>
+        <li>common = 共享 token 数</li>
+        <li>对照 <a href={`${base}/agents/goal-similarity/`}>Goal Similarity</a> 看全局相似度分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gsp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gsp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
