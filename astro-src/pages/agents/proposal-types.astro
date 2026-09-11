@@ -1,0 +1,207 @@
+---
+// /agents/proposal-types.astro — iter #125:proposal type performance
+//
+// 跨 session 聚合按 proposal.type 分组的 stats:
+//   - count
+//   - avg best feedback score
+//   - promoted / candidate / sketch / rejected 分布
+//   - ASCII 柱状图
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface TypeStats {
+  type: string;
+  count: number;
+  totalBestScore: number;
+  promoted: number;
+  candidate: number;
+  sketch: number;
+  rejected: number;
+  sessions: Set<string>;
+}
+
+const typeMap = new Map<string, TypeStats>();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const proposals = r.designer?.proposals ?? [];
+        const fbByIndex: Record<number, number> = {};
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const tot = p.total ?? 0;
+            if (!fbByIndex[idx] || tot > fbByIndex[idx]) fbByIndex[idx] = tot;
+          }
+        }
+        const gateByIndex: Record<number, string> = {};
+        for (const gp of r.gate?.proposals ?? []) {
+          const idx = gp.index ?? gp.proposal_index;
+          if (idx == null) continue;
+          gateByIndex[idx] = gp.category ?? 'rejected';
+        }
+        proposals.forEach((p: any, i: number) => {
+          const type = p.type ?? 'unknown';
+          const ts = typeMap.get(type) ?? {
+            type, count: 0, totalBestScore: 0,
+            promoted: 0, candidate: 0, sketch: 0, rejected: 0,
+            sessions: new Set<string>(),
+          };
+          ts.count += 1;
+          ts.totalBestScore += fbByIndex[i] ?? 0;
+          const cat = gateByIndex[i] ?? 'rejected';
+          if (cat in ts) (ts as any)[cat] += 1;
+          ts.sessions.add(sid);
+          typeMap.set(type, ts);
+        });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const ranked = Array.from(typeMap.values())
+  .map((t) => ({ ...t, avgScore: t.count > 0 ? t.totalBestScore / t.count : 0 }))
+  .sort((a, b) => b.avgScore - a.avgScore);
+
+const maxCount = ranked.reduce((m, t) => Math.max(m, t.count), 0);
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Proposal Types · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / proposal-types</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Proposal Type Performance <span class="muted" style="font-size:0.6em">(iter #125)</span></h1>
+      <p class="agents-sub">
+        跨 session 按 proposal.type 分组的统计:数量、平均 best feedback score、gate 分布。
+        帮你判断哪些类型的 proposal 最值得让 designer 提。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pt-globals">
+        <span>类型数: <strong>{ranked.length}</strong></span>
+        <span>总 proposals: <strong>{ranked.reduce((s, t) => s + t.count, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏷️ 按 type 聚合 <span class="muted" style="font-size:0.7em">(按平均 best score 排序)</span></h2>
+      {ranked.length === 0 ? (
+        <p class="muted">还没有 proposal 数据。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>type</th>
+              <th>count</th>
+              <th>分布</th>
+              <th>avg score</th>
+              <th>promoted</th>
+              <th>candidate</th>
+              <th>sketch</th>
+              <th>rejected</th>
+              <th>sessions</th>
+              <th>promote rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ranked.map((t) => {
+              const promoteRate = t.count > 0 ? (t.promoted / t.count) * 100 : 0;
+              return (
+                <tr>
+                  <td><code>{esc(t.type)}</code></td>
+                  <td>{t.count}</td>
+                  <td><code>{bar(t.count, maxCount, 16)}</code></td>
+                  <td>
+                    <strong style={`color:${t.avgScore >= 7 ? '#10b981' : t.avgScore >= 5 ? '#3b82f6' : '#6b7280'}`}>
+                      {t.avgScore.toFixed(2)}
+                    </strong>
+                  </td>
+                  <td>{t.promoted}</td>
+                  <td>{t.candidate}</td>
+                  <td>{t.sketch}</td>
+                  <td>{t.rejected}</td>
+                  <td>{t.sessions.size}</td>
+                  <td>{promoteRate.toFixed(1)}%</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 视图</h2>
+      <pre class="agents-pt-flow">{
+ranked.map((t) => {
+  const promoteRate = t.count > 0 ? (t.promoted / t.count) * 100 : 0;
+  return `${t.type.padEnd(20)} ${bar(t.count, maxCount, 20)}  ${String(t.count).padStart(3)}  avg=${t.avgScore.toFixed(2).padStart(5)}  promote=${promoteRate.toFixed(0).padStart(3)}%`;
+}).join('\n')
+}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li><strong>avg score 高的 type</strong> = 历史上更受欢迎,designer 应该多提</li>
+        <li><strong>promote rate 高的 type</strong> = 更容易被 gate 接收</li>
+        <li><strong>count 高但 avg 低</strong> = 常见但效果差,值得调整 prompt</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pt-globals {
+    display: flex;
+    gap: 1.2rem;
+  }
+  .agents-pt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
