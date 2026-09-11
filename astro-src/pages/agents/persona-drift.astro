@@ -1,0 +1,211 @@
+---
+// /agents/persona-drift.astro — iter #139:persona score drift over time
+//
+// 跨 session 按"周"或"月"聚合每个 persona 的 avg score:
+//   - 显示每个 persona 的趋势是变得更严 / 更宽
+//   - 适合判断 prompt 调整是否影响 persona 行为
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const PERSONAS = ['methodologist', 'engineer', 'skeptic'] as const;
+type Persona = typeof PERSONAS[number];
+
+interface Bucket { weekKey: string; ts: number; byPersona: Record<Persona, { sum: number; count: number }>; }
+
+const buckets: Bucket[] = [];
+const bucketMap = new Map<string, Bucket>();
+
+function weekKey(ts: number): { key: string; bucketStart: number } {
+  const d = new Date(ts);
+  // Monday-based week
+  const day = (d.getUTCDay() + 6) % 7;
+  const monday = new Date(ts - day * 86_400_000);
+  monday.setUTCHours(0, 0, 0, 0);
+  return { key: monday.toISOString().slice(0, 10), bucketStart: monday.getTime() };
+}
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      const fp = join(rd, rf);
+      const st = await stat(fp).catch(() => null);
+      if (!st) continue;
+      const { key, bucketStart } = weekKey(st.mtimeMs);
+      let b = bucketMap.get(key);
+      if (!b) {
+        b = { weekKey: key, ts: bucketStart, byPersona: { methodologist: { sum: 0, count: 0 }, engineer: { sum: 0, count: 0 }, skeptic: { sum: 0, count: 0 } } };
+        bucketMap.set(key, b);
+      }
+      try {
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const pn: Persona = persona.name ?? persona.persona ?? persona.role ?? 'methodologist';
+          if (!(pn in b.byPersona)) continue;
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') {
+              b.byPersona[pn].sum += p.total;
+              b.byPersona[pn].count += 1;
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+for (const b of bucketMap.values()) buckets.push(b);
+buckets.sort((a, b) => a.ts - b.ts);
+
+const trends: Record<Persona, { from: number; to: number; delta: number; weeks: number }> = {
+  methodologist: { from: 0, to: 0, delta: 0, weeks: 0 },
+  engineer: { from: 0, to: 0, delta: 0, weeks: 0 },
+  skeptic: { from: 0, to: 0, delta: 0, weeks: 0 },
+};
+for (const p of PERSONAS) {
+  const vals = buckets.map((b) => {
+    const s = b.byPersona[p];
+    return s.count > 0 ? s.sum / s.count : null;
+  }).filter((v): v is number => v != null);
+  if (vals.length >= 2) {
+    trends[p] = { from: vals[0], to: vals[vals.length - 1], delta: vals[vals.length - 1] - vals[0], weeks: vals.length };
+  } else if (vals.length === 1) {
+    trends[p] = { from: vals[0], to: vals[0], delta: 0, weeks: 1 };
+  }
+}
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function trendIcon(d: number): string {
+  if (d > 0.5) return '📈';
+  if (d < -0.5) return '📉';
+  return '➡️';
+}
+---
+
+<BaseLayout title="Persona Drift · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-drift</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Persona Score Drift <span class="muted" style="font-size:0.6em">(iter #139)</span></h1>
+      <p class="agents-sub">
+        按 ISO 周聚合每个 persona 的 avg score,看 persona 是否在变严 / 变宽。
+        适合判断 prompt / model 调整是否影响某个 persona 的行为。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局趋势</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>起始周 avg</th><th>最新周 avg</th><th>delta</th><th>图标</th><th>weeks</th></tr>
+        </thead>
+        <tbody>
+          {PERSONAS.map((p) => {
+            const t = trends[p];
+            return (
+              <tr>
+                <td><strong>{p}</strong></td>
+                <td>{t.from > 0 ? t.from.toFixed(2) : '—'}</td>
+                <td>{t.to > 0 ? t.to.toFixed(2) : '—'}</td>
+                <td><strong style={`color:${t.delta > 0 ? '#10b981' : t.delta < 0 ? '#ef4444' : '#6b7280'}`}>{t.delta > 0 ? '+' : ''}{t.delta.toFixed(2)}</strong></td>
+                <td>{trendIcon(t.delta)}</td>
+                <td>{t.weeks}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 按周时间线</h2>
+      {buckets.length === 0 ? (
+        <p class="muted">还没有足够数据。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>week</th><th>methodologist</th><th>engineer</th><th>skeptic</th><th>分布</th></tr>
+          </thead>
+          <tbody>
+            {buckets.map((b) => (
+              <tr>
+                <td><code>{b.weekKey}</code></td>
+                {PERSONAS.map((p) => {
+                  const s = b.byPersona[p];
+                  const avg = s.count > 0 ? s.sum / s.count : null;
+                  return <td>{avg != null ? avg.toFixed(2) : '—'} <small class="muted">({s.count})</small></td>;
+                })}
+                <td>
+                  {PERSONAS.map((p) => {
+                    const s = b.byPersona[p];
+                    const avg = s.count > 0 ? s.sum / s.count : 0;
+                    return <code style={`color:${avg >= 7 ? '#10b981' : avg >= 5 ? '#f59e0b' : '#ef4444'};margin-right:0.6rem`}>{p[0].toUpperCase()}: {avg.toFixed(1)}</code>;
+                  })}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 ASCII 趋势线</h2>
+      <pre class="agents-pd-flow">{
+PERSONAS.map((p) => {
+  const vals = buckets.map((b) => {
+    const s = b.byPersona[p];
+    return s.count > 0 ? s.sum / s.count : null;
+  });
+  const maxV = Math.max(...vals.filter((v): v is number => v != null), 10);
+  const minV = Math.min(...vals.filter((v): v is number => v != null), 0);
+  const line = vals.map((v) => {
+    if (v == null) return '·';
+    const norm = (v - minV) / (maxV - minV || 1);
+    if (norm >= 0.8) return '█';
+    if (norm >= 0.6) return '▓';
+    if (norm >= 0.4) return '▒';
+    if (norm >= 0.2) return '░';
+    return ' ';
+  }).join('');
+  return `${p.padEnd(15)} ${line}  ${vals.length}w`;
+}).join('\n')
+}</pre>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
