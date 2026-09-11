@@ -27,7 +27,7 @@ const fullTitle = title.includes('Daily Paper Reader') ? title : `${title} · Da
 //   - 仅 SSR 期间读 .env,客户端 bundle 不包含 API key(除了 HTML 注入)
 //   - 仅当 .env 存在且 MINIMAX_API_KEY 非空时注入,避免污染公共部署
 //   - 生产 Cloudflare Pages 部署不会读到这里(.env 不在容器里),所以公共站点
-//     不会有这个 <script>;只有本地 dev / build-with-env 时才生效
+//     不会有这个 <scr`+`ipt>;只有本地 dev / build-with-env 时才生效
 interface ServerLLMConfig {
   apiKey: string;
   baseUrl: string;
@@ -139,7 +139,7 @@ const serverLLMConfigJson = serverLLMConfig ? JSON.stringify(serverLLMConfig) : 
         } catch (e) { /* ignore */ }
       })();
 
-      // LLM 配置 bootstrap (2026-09-07) — 从 SSR 注入的 <script id="dpr-server-llm-config">
+      // LLM 配置 bootstrap (2026-09-07) — 从 SSR 注入的 <scr`+`ipt id="dpr-server-llm-config">
       // 读 .env 的 MiniMax 配置,预填到 localStorage (3 个兼容 key),让所有 LLM
       // 调用立即可用。仅在 localStorage 未设置时填充,绝不覆盖用户已有配置。
       (function() {

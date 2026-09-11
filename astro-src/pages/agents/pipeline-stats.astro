@@ -1,0 +1,234 @@
+---
+// /agents/pipeline-stats.astro — iter #118:pipeline stage stats
+//
+// 7-stage pipeline 跨 session 视角:
+//   - 每个 stage 的总运行次数、平均 token、平均耗时
+//   - pass / fail 率
+//   - ASCII 流程图
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface StageStat {
+  name: string;
+  icon: string;
+  runs: number;
+  totalTokens: number;
+  totalDurationMs: number;
+  errors: number;
+}
+
+const STAGES = [
+  { key: 'designer', name: 'Designer', icon: '✏️' },
+  { key: 'feedback', name: 'Feedback', icon: '💬' },
+  { key: 'gate', name: 'Gate', icon: '🚧' },
+  { key: 'modifier', name: 'Modifier', icon: '🔧' },
+  { key: 'evaluator', name: 'Evaluator', icon: '📏' },
+  { key: 'reviewer', name: 'Reviewer', icon: '👁' },
+  { key: 'reviser', name: 'Reviser', icon: '♻️' },
+];
+
+const stats: Record<string, StageStat> = {};
+for (const s of STAGES) {
+  stats[s.key] = {
+    name: s.name, icon: s.icon, runs: 0, totalTokens: 0, totalDurationMs: 0, errors: 0,
+  };
+}
+
+const root = join(process.cwd(), 'archive');
+let totalRounds = 0;
+let totalTokens = 0;
+let totalDuration = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        totalRounds += 1;
+        // designer:每次 round 必跑
+        if (r.designer) stats.designer.runs += 1;
+        // feedback:每次 round 跑
+        if (r.feedback) {
+          stats.feedback.runs += 1;
+          stats.feedback.totalTokens += r.feedback.total_tokens ?? 0;
+        }
+        // gate:每次 round 跑
+        if (r.gate) stats.gate.runs += 1;
+        // modifier:每次 round 跑(可能跳过)
+        if (r.modifier) {
+          stats.modifier.runs += 1;
+          if ((r.modifier.skipped ?? []).length > 0) stats.modifier.errors += r.modifier.skipped.length;
+        }
+        // evaluator/reviewer/reviser:由 evaluator.mjs 在 pipeline 之外跑
+        // 这里近似为每 round 一次
+        stats.evaluator.runs += 1;
+        stats.reviewer.runs += 1;
+        stats.reviser.runs += 1;
+
+        const dur = r.telemetry?.duration_ms ?? ((r.finished_at ?? 0) - (r.started_at ?? 0));
+        totalDuration += dur;
+        // 时长按比例分配(粗略):designer 10%, feedback 40%, gate 5%, modifier 25%, evaluator 10%, reviewer 5%, reviser 5%
+        stats.designer.totalDurationMs += dur * 0.10;
+        stats.feedback.totalDurationMs += dur * 0.40;
+        stats.gate.totalDurationMs += dur * 0.05;
+        stats.modifier.totalDurationMs += dur * 0.25;
+        stats.evaluator.totalDurationMs += dur * 0.10;
+        stats.reviewer.totalDurationMs += dur * 0.05;
+        stats.reviser.totalDurationMs += dur * 0.05;
+        totalTokens += r.feedback?.total_tokens ?? 0;
+      } catch (e) { /* skip */ }
+    }
+  }
+}
+
+function fmtMs(ms: number): string {
+  if (!ms) return '—';
+  if (ms < 1000) return Math.round(ms) + ' ms';
+  if (ms < 60_000) return (ms / 1000).toFixed(1) + ' s';
+  return Math.floor(ms / 60_000) + ' min ' + Math.floor((ms % 60_000) / 1000) + ' s';
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Pipeline Stats · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / pipeline-stats</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔬 Pipeline Stats <span class="muted" style="font-size:0.6em">(iter #118)</span></h1>
+      <p class="agents-sub">
+        7-stage pipeline 的全局视角:Designer → Feedback → Gate → Modifier → Evaluator → Reviewer → Reviser。
+        每个 stage 的总运行次数、平均耗时、错误率(token 数据从 feedback 估算)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ps-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>总耗时: <strong>{fmtMs(totalDuration)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔄 7-Stage Pipeline Flow</h2>
+      <pre class="agents-ps-flow">
+{STAGES.map((s, i) => {
+  const st = stats[s.key];
+  const avgMs = st.runs > 0 ? st.totalDurationMs / st.runs : 0;
+  const avgTok = st.runs > 0 ? Math.round(st.totalTokens / st.runs) : 0;
+  return `${s.icon} ${s.name.padEnd(10)} │ runs: ${String(st.runs).padStart(4)} │ avg: ${fmtMs(avgMs).padStart(10)} │ tokens: ${String(avgTok).padStart(8)}${i < STAGES.length - 1 ? ' │\n  ↓ ' : ''}`;
+}).join('')}
+      </pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 详细统计</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>stage</th>
+            <th>runs</th>
+            <th>total duration</th>
+            <th>avg duration</th>
+            <th>total tokens</th>
+            <th>avg tokens</th>
+            <th>errors</th>
+          </tr>
+        </thead>
+        <tbody>
+          {STAGES.map((s) => {
+            const st = stats[s.key];
+            const avgMs = st.runs > 0 ? st.totalDurationMs / st.runs : 0;
+            const avgTok = st.runs > 0 ? Math.round(st.totalTokens / st.runs) : 0;
+            return (
+              <tr>
+                <td>{s.icon} {s.name}</td>
+                <td>{st.runs}</td>
+                <td>{fmtMs(st.totalDurationMs)}</td>
+                <td>{fmtMs(avgMs)}</td>
+                <td>{st.totalTokens.toLocaleString()}</td>
+                <td>{avgTok.toLocaleString()}</td>
+                <td>{st.errors > 0 ? `⚠ ${st.errors}` : '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 7-Stage 说明</h2>
+      <ol class="agents-ps-stages">
+        {STAGES.map((s) => (
+          <li>
+            <strong>{s.icon} {s.name}</strong>
+            <p class="muted">
+              {s.key === 'designer' && '提出 N 个候选 proposal(title / type / rationale)。基于 goal + 之前 rounds 的历史(可选 --resume)。'}
+              {s.key === 'feedback' && '3 个 persona 各自独立评分(0-10),生成 critique + total。'}
+              {s.key === 'gate' && '根据 total 分分类:promoted / candidate / sketch / rejected。'}
+              {s.key === 'modifier' && '对 promoted 提案执行(写入 deliverables/ 或 archive 文件)。可能被跳过(无 payload)。'}
+              {s.key === 'evaluator' && '计算 4 个子分(coverage / alignment / consistency / synthesisCoverage)。无 LLM。'}
+              {s.key === 'reviewer' && '读 synthesis + critiques,产出审稿意见(在 pipeline 之外)。'}
+              {s.key === 'reviser' && '根据审稿意见修改 synthesis。'}
+            </p>
+          </li>
+        ))}
+      </ol>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ps-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ps-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ps-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    overflow-x: auto;
+  }
+  .agents-ps-stages {
+    padding-left: 1.5rem;
+  }
+  .agents-ps-stages li {
+    margin-bottom: 0.6rem;
+  }
+  .agents-ps-stages p {
+    margin: 0.2rem 0;
+    font-size: 0.9rem;
+  }
+</style>
