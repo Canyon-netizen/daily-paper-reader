@@ -1,0 +1,285 @@
+---
+// /agents/gate-throughput.astro — iter #119:gate throughput dashboard
+//
+// 跨 session 看 pipeline 的 gate 分类(promoted/candidate/sketch/rejected)
+//   - 全局统计 + 比例
+//   - 每个 session 的 ratio
+//   - 按 round number 看 trend
+//   - feedback score 分布
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Bucket { promoted: number; candidate: number; sketch: number; rejected: number; }
+const newBucket = (): Bucket => ({ promoted: 0, candidate: 0, sketch: 0, rejected: 0 });
+
+const globalCounts: Bucket = newBucket();
+const perSession: { sid: string; counts: Bucket; rounds: number; goal: string }[] = [];
+const perRound: Bucket[] = []; // 按 round number
+const allScores: number[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    let meta: any = {};
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch (e) { /* */ }
+    const sessionCounts = newBucket();
+    const sessionRounds = await readdir(rd).catch(() => []);
+    let roundNum = 0;
+    for (const rf of sessionRounds.sort()) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      roundNum += 1;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const proposals = r.gate?.proposals ?? [];
+        const totalPerRound = { promoted: 0, candidate: 0, sketch: 0, rejected: 0 };
+        for (const p of proposals) {
+          const cat = p.category ?? 'rejected';
+          if (cat in sessionCounts) (sessionCounts as any)[cat] += 1;
+          if (cat in globalCounts) (globalCounts as any)[cat] += 1;
+          if (cat in totalPerRound) (totalPerRound as any)[cat] += 1;
+        }
+        const fb = r.feedback?.personas ?? [];
+        for (const persona of fb) {
+          if (typeof persona?.total === 'number') allScores.push(persona.total);
+        }
+        perRound[roundNum - 1] = totalPerRound;
+      } catch (e) { /* skip */ }
+    }
+    perSession.push({ sid, counts: sessionCounts, rounds: roundNum, goal: meta.goal ?? '' });
+  }
+}
+
+perSession.sort((a, b) => {
+  const aTotal = a.counts.promoted + a.counts.candidate + a.counts.sketch + a.counts.rejected;
+  const bTotal = b.counts.promoted + b.counts.candidate + b.counts.sketch + b.counts.rejected;
+  return bTotal - aTotal;
+});
+
+const totalProposals = globalCounts.promoted + globalCounts.candidate + globalCounts.sketch + globalCounts.rejected;
+
+function pct(n: number): string {
+  if (!totalProposals) return '0.0%';
+  return ((n / totalProposals) * 100).toFixed(1) + '%';
+}
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Gate Throughput · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / gate-throughput</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🚧 Gate Throughput <span class="muted" style="font-size:0.6em">(iter #119)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 gate 把 proposals 分到 4 个桶(promoted / candidate / sketch / rejected)的分布,
+        以及 feedback score 的全局分布。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局 Gate 分布</h2>
+      <div class="agents-gt-globals">
+        <span>总 proposals: <strong>{totalProposals}</strong></span>
+        <span>promoted: <strong>{globalCounts.promoted} ({pct(globalCounts.promoted)})</strong></span>
+        <span>candidate: <strong>{globalCounts.candidate} ({pct(globalCounts.candidate)})</strong></span>
+        <span>sketch: <strong>{globalCounts.sketch} ({pct(globalCounts.sketch)})</strong></span>
+        <span>rejected: <strong>{globalCounts.rejected} ({pct(globalCounts.rejected)})</strong></span>
+      </div>
+      <pre class="agents-gt-flow">{
+[
+  ['✓ promoted', globalCounts.promoted, '#10b981'],
+  ['~ candidate', globalCounts.candidate, '#3b82f6'],
+  ['· sketch', globalCounts.sketch, '#f59e0b'],
+  ['✗ rejected', globalCounts.rejected, '#ef4444'],
+].map(([label, n]: any) => `${label.padEnd(12)} ${bar(n, totalProposals)}  ${String(n).padStart(4)}  ${pct(n)}`).join('\n')
+}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 按 Round 趋势</h2>
+      {perRound.length === 0 ? (
+        <p class="muted">暂无 round 数据。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>round #</th><th>✓ promoted</th><th>~ candidate</th><th>· sketch</th><th>✗ rejected</th><th>分布</th></tr>
+          </thead>
+          <tbody>
+            {perRound.slice(0, 30).map((c, i) => {
+              const tot = c.promoted + c.candidate + c.sketch + c.rejected;
+              return (
+                <tr>
+                  <td>#{i + 1}</td>
+                  <td>{c.promoted}</td>
+                  <td>{c.candidate}</td>
+                  <td>{c.sketch}</td>
+                  <td>{c.rejected}</td>
+                  <td>
+                    {tot > 0 ? (
+                      <span class="agents-gt-stacked">
+                        {c.promoted > 0 && <span class="agents-gt-seg agents-gt-promoted" style={`flex:${c.promoted}`}></span>}
+                        {c.candidate > 0 && <span class="agents-gt-seg agents-gt-candidate" style={`flex:${c.candidate}`}></span>}
+                        {c.sketch > 0 && <span class="agents-gt-seg agents-gt-sketch" style={`flex:${c.sketch}`}></span>}
+                        {c.rejected > 0 && <span class="agents-gt-seg agents-gt-rejected" style={`flex:${c.rejected}`}></span>}
+                      </span>
+                    ) : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 Feedback Score 分布</h2>
+      {allScores.length === 0 ? (
+        <p class="muted">暂无 feedback score 数据。</p>
+      ) : (
+        <>
+          <div class="agents-gt-globals">
+            {(() => {
+              const buckets = [0, 0, 0, 0, 0];
+              const bucketLabels = ['0-2', '2-4', '4-6', '6-8', '8-10'];
+              for (const s of allScores) {
+                if (s < 2) buckets[0]++;
+                else if (s < 4) buckets[1]++;
+                else if (s < 6) buckets[2]++;
+                else if (s < 8) buckets[3]++;
+                else buckets[4]++;
+              }
+              const maxB = Math.max(...buckets);
+              const avg = (allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(2);
+              return (
+                <>
+                  <span>总数: <strong>{allScores.length}</strong></span>
+                  <span>平均: <strong>{avg}</strong></span>
+                  <span>最高: <strong>{Math.max(...allScores).toFixed(1)}</strong></span>
+                  <span>最低: <strong>{Math.min(...allScores).toFixed(1)}</strong></span>
+                </>
+              );
+            })()}
+          </div>
+          <pre class="agents-gt-flow">{
+(() => {
+  const buckets = [0, 0, 0, 0, 0];
+  const labels = ['0-2 ', '2-4 ', '4-6 ', '6-8 ', '8-10'];
+  for (const s of allScores) {
+    if (s < 2) buckets[0]++;
+    else if (s < 4) buckets[1]++;
+    else if (s < 6) buckets[2]++;
+    else if (s < 8) buckets[3]++;
+    else buckets[4]++;
+  }
+  const maxB = Math.max(...buckets);
+  return labels.map((l, i) => `${l} ${bar(buckets[i], maxB, 30)}  ${buckets[i]}`).join('\n');
+})()
+}</pre>
+        </>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 每 Session 详情 <span class="muted" style="font-size:0.7em">(按总 proposal 数倒序)</span></h2>
+      {perSession.length === 0 ? (
+        <p class="muted">还没有 session 数据。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>session</th><th>rounds</th><th>goal 摘要</th><th>✓</th><th>~</th><th>·</th><th>✗</th><th>分布</th></tr>
+          </thead>
+          <tbody>
+            {perSession.slice(0, 50).map((s) => {
+              const tot = s.counts.promoted + s.counts.candidate + s.counts.sketch + s.counts.rejected;
+              const goalShort = s.goal.length > 40 ? s.goal.slice(0, 40) + '…' : s.goal;
+              return (
+                <tr>
+                  <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid)}</code></a></td>
+                  <td>{s.rounds}</td>
+                  <td><small>{esc(goalShort)}</small></td>
+                  <td>{s.counts.promoted}</td>
+                  <td>{s.counts.candidate}</td>
+                  <td>{s.counts.sketch}</td>
+                  <td>{s.counts.rejected}</td>
+                  <td>
+                    {tot > 0 ? (
+                      <span class="agents-gt-stacked">
+                        {s.counts.promoted > 0 && <span class="agents-gt-seg agents-gt-promoted" style={`flex:${s.counts.promoted}`}></span>}
+                        {s.counts.candidate > 0 && <span class="agents-gt-seg agents-gt-candidate" style={`flex:${s.counts.candidate}`}></span>}
+                        {s.counts.sketch > 0 && <span class="agents-gt-seg agents-gt-sketch" style={`flex:${s.counts.sketch}`}></span>}
+                        {s.counts.rejected > 0 && <span class="agents-gt-seg agents-gt-rejected" style={`flex:${s.counts.rejected}`}></span>}
+                      </span>
+                    ) : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gt-globals {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.8rem;
+  }
+  .agents-gt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  .agents-gt-stacked {
+    display: inline-flex;
+    width: 120px;
+    height: 12px;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .agents-gt-seg {
+    height: 100%;
+  }
+  .agents-gt-promoted { background: #10b981; }
+  .agents-gt-candidate { background: #3b82f6; }
+  .agents-gt-sketch { background: #f59e0b; }
+  .agents-gt-rejected { background: #ef4444; }
+</style>
