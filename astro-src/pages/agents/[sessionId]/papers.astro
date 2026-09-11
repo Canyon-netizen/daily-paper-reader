@@ -1,0 +1,239 @@
+---
+// /agents/[sessionId]/papers.astro — iter #83:browse all papers referenced in session
+//
+// 收集 session 内所有 round 的 evidence.paperIds[],按引用次数排序,
+// 展示 arxiv 链接、出现轮次、首/末次出现时间、关联 proposal 标题。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    if (existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+
+let meta: any = null;
+try { meta = JSON.parse(await readFile(join(sessionDir, 'meta.json'), 'utf8')); } catch { /* */ }
+
+let rounds: any[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds')))
+    .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = await Promise.all(files.map(async (f) => {
+    try { return JSON.parse(await readFile(join(sessionDir, 'rounds', f), 'utf8')); }
+    catch { return null; }
+  })).then((arr) => arr.filter(Boolean));
+} catch { /* */ }
+
+interface PaperEntry {
+  arxivId: string;
+  citedCount: number;
+  roundsSeen: number[];
+  firstSeenAt: number;
+  lastSeenAt: number;
+  proposalTitles: Set<string>;
+  proposalTypes: Set<string>;
+}
+
+const paperMap = new Map<string, PaperEntry>();
+for (const r of rounds) {
+  for (const p of (r?.designer?.proposals ?? [])) {
+    const fa = Number(r?.finished_at ?? 0);
+    const title = String(p?.title ?? '');
+    const type = String(p?.type ?? '');
+    for (const id of (p?.evidence?.paperIds ?? [])) {
+      let entry = paperMap.get(id);
+      if (!entry) {
+        entry = {
+          arxivId: id,
+          citedCount: 0,
+          roundsSeen: [],
+          firstSeenAt: fa,
+          lastSeenAt: fa,
+          proposalTitles: new Set(),
+          proposalTypes: new Set(),
+        };
+        paperMap.set(id, entry);
+      }
+      entry.citedCount++;
+      if (!entry.roundsSeen.includes(r.round)) entry.roundsSeen.push(r.round);
+      if (fa > 0 && (entry.firstSeenAt === 0 || fa < entry.firstSeenAt)) entry.firstSeenAt = fa;
+      if (fa > 0 && fa > entry.lastSeenAt) entry.lastSeenAt = fa;
+      if (title) entry.proposalTitles.add(title);
+      if (type) entry.proposalTypes.add(type);
+    }
+  }
+}
+
+const papers = [...paperMap.values()].sort((a, b) => b.citedCount - a.citedCount);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function fmt(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString();
+}
+---
+
+<BaseLayout title={`Papers · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>papers</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📚 Session 论文库 · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #83 · 所有 round 的 <code>evidence.paperIds[]</code> 去重 + 引用次数排序。
+        点击 arxiv 链接直接打开论文页。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 论文库总览</h2>
+      <div class="agents-paper-stats">
+        <span><strong>{papers.length}</strong> 唯一论文</span>
+        <span><strong>{papers.reduce((a, p) => a + p.citedCount, 0)}</strong> 总引用次数</span>
+        <span><strong>{papers.filter((p) => p.citedCount >= 3).length}</strong> 高频论文 (≥3 次)</span>
+        <span><strong>{rounds.length}</strong> rounds</span>
+      </div>
+    </section>
+
+    {papers.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">该 session 还没有任何 proposal 引用 arxiv 论文。</p>
+      </section>
+    ) : (
+      <>
+        <section class="agents-session-section">
+          <h2>🔥 高频论文 (≥2 引用)</h2>
+          <p class="agents-arxiv-cloud">
+            {papers.filter((p) => p.citedCount >= 2).map((p) => (
+              <a class={`agents-arxiv-chip agents-arxiv-chip-${p.citedCount >= 4 ? 'very-hot' : p.citedCount >= 3 ? 'hot' : 'warm'}`}
+                 href={`/agents/${sessionId}/papers/?focus=${p.arxivId}#${p.arxivId}`}
+                 title={`${p.citedCount} 次引用 · 出现在 round ${p.roundsSeen.join(', ')}`}>
+                {p.arxivId} <small>×{p.citedCount}</small>
+              </a>
+            ))}
+          </p>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📋 全部论文 (按引用次数排序)</h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr>
+                <th>arxiv</th>
+                <th>引用次数</th>
+                <th>出现 rounds</th>
+                <th>首→末</th>
+                <th>关联 proposal</th>
+                <th>类型</th>
+              </tr>
+            </thead>
+            <tbody>
+              {papers.map((p) => (
+                <tr id={p.arxivId}>
+                  <td>
+                    <a href={`https://arxiv.org/abs/${p.arxivId}`} target="_blank" rel="noopener">
+                      <code>{p.arxivId}</code>
+                    </a>
+                  </td>
+                  <td>
+                    <strong class={`agents-paper-cite-l${p.citedCount >= 4 ? '4' : p.citedCount >= 3 ? '3' : p.citedCount >= 2 ? '2' : '1'}`}>
+                      {p.citedCount}
+                    </strong>
+                  </td>
+                  <td>
+                    {p.roundsSeen.sort((a, b) => a - b).map((r) => (
+                      <a class="agents-paper-round-chip" href={`${base}/agents/${sessionId}/${String(r).padStart(3, '0')}/`}>
+                        #{r}
+                      </a>
+                    ))}
+                  </td>
+                  <td>
+                    <small class="muted">
+                      {fmt(p.firstSeenAt)}<br />→ {fmt(p.lastSeenAt)}
+                    </small>
+                  </td>
+                  <td>
+                    <small>{[...p.proposalTitles].slice(0, 2).map((t) => escapeHtml(t.slice(0, 40))).join('; ')}{p.proposalTitles.size > 2 ? `… (+${p.proposalTitles.size - 2})` : ''}</small>
+                  </td>
+                  <td>
+                    <small>{[...p.proposalTypes].map((t) => <code>{t}</code>).reduce((a: any, b: any, i: number) => i === 0 ? [b] : [...a, ' ', b], [])}</small>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>← Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/timeline/`}>📜 Timeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/score/`}>📊 Score</a>
+        <a class="button" href={`${base}/agents/${sessionId}/brief/`}>📋 Brief</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-paper-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-paper-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-paper-cite-l1 { color: #6b7280; }
+  .agents-paper-cite-l2 { color: #f59e0b; }
+  .agents-paper-cite-l3 { color: #ef4444; }
+  .agents-paper-cite-l4 { color: #b91c1c; font-size: 1.1em; }
+  .agents-paper-round-chip {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    margin: 0 0.2rem 0.2rem 0;
+    background: rgba(99, 102, 241, 0.12);
+    color: #4f46e5;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-family: ui-monospace, monospace;
+    text-decoration: none;
+  }
+  .agents-paper-round-chip:hover { background: rgba(99, 102, 241, 0.25); }
+</style>
