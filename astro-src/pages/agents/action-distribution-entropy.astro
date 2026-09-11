@@ -1,0 +1,195 @@
+---
+// /agents/action-distribution-entropy.astro — iter #314:action distribution entropy per session
+//
+// 每个 session 的 action 分布 Shannon entropy:
+//   - H = -Σ p*log2(p) where p 是每个 action 的频率
+//   - 衡量 action 分布的"均匀度"
+//   - 高 = action 散布均匀,低 = 集中于少数 action
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessInfo {
+  sid: string;
+  goal: string;
+  totalActions: number;
+  uniqueActions: number;
+  entropy: number;
+  topAction: { action: string; count: number; pct: number };
+  maxEntropy: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const counts = new Map<string, number>();
+    let total = 0;
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          counts.set(act, (counts.get(act) ?? 0) + 1);
+          total += 1;
+        }
+      } catch (e) { /* */ }
+    }
+    if (total < 3) continue;
+
+    let entropy = 0;
+    for (const c of counts.values()) {
+      const p = c / total;
+      if (p > 0) entropy -= p * Math.log2(p);
+    }
+    const maxEntropy = Math.log2(Math.max(1, counts.size));
+    let topAct = { action: '', count: 0, pct: 0 };
+    for (const [action, c] of counts.entries()) {
+      if (c > topAct.count) {
+        topAct = { action, count: c, pct: (c / total) * 100 };
+      }
+    }
+    sessions.push({
+      sid, goal,
+      totalActions: total,
+      uniqueActions: counts.size,
+      entropy,
+      topAction: topAct,
+      maxEntropy,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.entropy - a.entropy);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function entropyLabel(e: number, max: number): string {
+  if (max === 0) return '·';
+  const norm = e / max;
+  if (norm >= 0.9) return '🟢 uniform';
+  if (norm >= 0.7) return '🟡 mixed';
+  if (norm >= 0.5) return '🟠 skewed';
+  return '🔴 concentrated';
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Distribution Entropy · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-distribution-entropy</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌐 Action Distribution Entropy <span class="muted" style="font-size:0.6em">(iter #314)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 action 分布 Shannon entropy。归一化后看 action 分布的均匀度。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ade-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌐 Top 20 最高 entropy</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>total</th><th>unique</th><th>entropy</th><th>norm</th><th>top action</th><th>verdict</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 20).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.totalActions}</td>
+              <td>{s.uniqueActions}</td>
+              <td><strong style="color:#10b981">{s.entropy.toFixed(2)}</strong></td>
+              <td>{((s.entropy / Math.max(0.01, s.maxEntropy)) * 100).toFixed(0)}%</td>
+              <td><small><code>{esc(s.topAction.action)}</code> ({s.topAction.pct.toFixed(0)}%)</small></td>
+              <td><small>{entropyLabel(s.entropy, s.maxEntropy)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 最低 entropy (Top 10)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>total</th><th>unique</th><th>entropy</th><th>top action</th><th>verdict</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().sort((a, b) => a.entropy - b.entropy).slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.totalActions}</td>
+              <td>{s.uniqueActions}</td>
+              <td><strong style="color:#ef4444">{s.entropy.toFixed(2)}</strong></td>
+              <td><small><code>{esc(s.topAction.action)}</code> ({s.topAction.pct.toFixed(0)}%)</small></td>
+              <td><small>{entropyLabel(s.entropy, s.maxEntropy)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>entropy = log2(unique) = 完全均匀</li>
+        <li>entropy → 0 = 集中在一个 action</li>
+        <li>对照 <a href={`${base}/agents/action-set-diversity/`}>Action Set Diversity</a></li>
+        <li>对照 <a href={`${base}/agents/action-diversity-by-type/`}>Action Diversity by Type</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ade-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ade-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
