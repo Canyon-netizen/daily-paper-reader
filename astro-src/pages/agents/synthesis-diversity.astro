@@ -1,0 +1,184 @@
+---
+// /agents/synthesis-diversity.astro — iter #188:synthesis diversity
+//
+// 跨 session 测 syntheses 的多样性:
+//   - 提取每个 synthesis 的词袋
+//   - 两两 Jaccard 相似度
+//   - 平均相似度 = 多样性的倒数
+//   - 显示最相似/最不同对
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOP = new Set([
+  'a', 'an', 'the', 'of', 'in', 'on', 'for', 'with', 'to', 'and', 'or', 'is', 'are', 'was', 'were', 'be', 'been',
+  'this', 'that', 'these', 'those', 'it', 'as', 'at', 'by', 'from', 'i', 'you', 'we', 'they', 'use', 'using',
+  '的', '了', '在', '是', '和', '与', '或', '为', '有', '对', '及', '一', '不', '也', '就', '都', '而', '但', '可', '可',
+]);
+
+function tokenize(s: string): Set<string> {
+  const tokens = new Set<string>();
+  const english = (s.match(/[a-zA-Z][a-zA-Z0-9]+/g) ?? []).filter((t) => t.length >= 3 && !STOP.has(t.toLowerCase()));
+  const chinese = s.match(/[一-鿿]{2,}/g) ?? [];
+  for (const t of english.map((x) => x.toLowerCase())) tokens.add(t);
+  for (const t of chinese) tokens.add(t);
+  for (const t of [...tokens]) if (STOP.has(t.toLowerCase())) tokens.delete(t);
+  return tokens;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter += 1;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+interface Synth {
+  sid: string;
+  idx: number;
+  preview: string;
+  wordCount: number;
+  tokens: Set<string>;
+}
+
+const root = join(process.cwd(), 'archive');
+const synths: Synth[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const sfs = await readdir(sd).catch(() => []);
+    for (const f of sfs) {
+      const m = f.match(/^synthesis_(\d+)\.md$/);
+      if (!m) continue;
+      const idx = parseInt(m[1], 10);
+      const text = await readFile(join(sd, f), 'utf8').catch(() => '');
+      const preview = text.replace(/```[\s\S]*?```/g, ' ').replace(/[#*_~>|]/g, ' ').slice(0, 5000);
+      const wc = (text.match(/[\w一-鿿]+/g) ?? []).length;
+      synths.push({
+        sid, idx, preview, wordCount: wc,
+        tokens: tokenize(preview),
+      });
+    }
+  }
+}
+
+const total = synths.length;
+
+// 限制两两比较,避免 O(n²)
+const N = Math.min(total, 80);
+const sample = synths.slice(0, N);
+
+const pairs: { a: Synth; b: Synth; sim: number }[] = [];
+for (let i = 0; i < sample.length; i++) {
+  for (let j = i + 1; j < sample.length; j++) {
+    const sim = jaccard(sample[i].tokens, sample[j].tokens);
+    pairs.push({ a: sample[i], b: sample[j], sim });
+  }
+}
+
+const avgSim = pairs.length > 0 ? pairs.reduce((s, p) => s + p.sim, 0) / pairs.length : 0;
+const diversity = 1 - avgSim;
+
+const topSim = [...pairs].sort((a, b) => b.sim - a.sim).slice(0, 10);
+const topDiff = [...pairs].sort((a, b) => a.sim - b.sim).slice(0, 10);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Synthesis Diversity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / synthesis-diversity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌐 Synthesis Diversity <span class="muted" style="font-size:0.6em">(iter #188)</span></h1>
+      <p class="agents-sub">
+        跨 session 测 syntheses 的多样性。
+        高多样性 = 内容广;低多样性 = 主题集中。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sd-globals">
+        <span>总 syntheses: <strong>{total}</strong></span>
+        <span>采样对数: <strong>{pairs.length}</strong></span>
+        <span>avg Jaccard 相似度: <strong>{avgSim.toFixed(3)}</strong></span>
+        <span>diversity (1-avg): <strong style={diversity > 0.7 ? 'color:#10b981' : diversity > 0.5 ? 'color:#f59e0b' : 'color:#ef4444'}>{diversity.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔍 最相似的 10 对</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>A</th><th>B</th><th>Jaccard</th></tr>
+        </thead>
+        <tbody>
+          {topSim.map((p) => (
+            <tr>
+              <td><a href={`${base}/agents/${p.a.sid}/synthesis/${String(p.a.idx).padStart(3, '0')}/`}><code>{esc(p.a.sid.slice(0, 10))}_{p.a.idx}</code></a></td>
+              <td><a href={`${base}/agents/${p.b.sid}/synthesis/${String(p.b.idx).padStart(3, '0')}/`}><code>{esc(p.b.sid.slice(0, 10))}_{p.b.idx}</code></a></td>
+              <td><strong style="color:#f59e0b">{p.sim.toFixed(3)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌟 最不同的 10 对</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>A</th><th>B</th><th>Jaccard</th></tr>
+        </thead>
+        <tbody>
+          {topDiff.map((p) => (
+            <tr>
+              <td><a href={`${base}/agents/${p.a.sid}/synthesis/${String(p.a.idx).padStart(3, '0')}/`}><code>{esc(p.a.sid.slice(0, 10))}_{p.a.idx}</code></a></td>
+              <td><a href={`${base}/agents/${p.b.sid}/synthesis/${String(p.b.idx).padStart(3, '0')}/`}><code>{esc(p.b.sid.slice(0, 10))}_{p.b.idx}</code></a></td>
+              <td><strong style="color:#10b981">{p.sim.toFixed(3)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>diversity &lt; 0.5 = 主题集中,可能过于 narrow</li>
+        <li>diversity &gt; 0.85 = 内容分散,可能未聚焦</li>
+        <li>对照 <a href={`${base}/agents/goal-tag-affinity/`}>Goal Tag Affinity</a> 看主题关联</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
