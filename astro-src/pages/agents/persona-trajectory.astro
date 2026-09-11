@@ -1,0 +1,222 @@
+---
+// /agents/persona-trajectory.astro — iter #231:per-persona score trajectory
+//
+// 各 persona 的 avg score 跨 round position 时间序列:
+//   - 对每 persona,收集其在 round position 1,2,3... 的 avg score
+//   - 看 persona 是否随轮次变得更严苛或宽松
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const personaPosMap = new Map<string, Map<number, number[]>>();
+let maxPos = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (let i = 0; i < rNum.length; i++) {
+      const pos = i + 1;
+      if (pos > maxPos) maxPos = pos;
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          const scores: number[] = [];
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') scores.push(p.total);
+          }
+          if (scores.length === 0) continue;
+          const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+          if (!personaPosMap.has(name)) personaPosMap.set(name, new Map());
+          const m = personaPosMap.get(name)!;
+          if (!m.has(pos)) m.set(pos, []);
+          m.get(pos)!.push(avg);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 计算每个 persona 的 trajectory
+interface Trajectory {
+  name: string;
+  points: { pos: number; avg: number; count: number }[];
+  slope: number;
+  startScore: number;
+  endScore: number;
+}
+
+const trajectories: Trajectory[] = [];
+for (const [name, posMap] of personaPosMap.entries()) {
+  const points: { pos: number; avg: number; count: number }[] = [];
+  for (let p = 1; p <= maxPos; p++) {
+    const scores = posMap.get(p) ?? [];
+    if (scores.length === 0) continue;
+    points.push({
+      pos: p,
+      avg: scores.reduce((a, b) => a + b, 0) / scores.length,
+      count: scores.length,
+    });
+  }
+  if (points.length < 2) continue;
+  const startScore = points[0].avg;
+  const endScore = points[points.length - 1].avg;
+  const slope = (endScore - startScore) / Math.max(points.length - 1, 1);
+  trajectories.push({ name, points, slope, startScore, endScore });
+}
+trajectories.sort((a, b) => b.slope - a.slope);
+
+const topRising = trajectories.slice(0, 10);
+const topFalling = [...trajectories].sort((a, b) => a.slope - b.slope).slice(0, 10);
+
+// ASCII chart for top 5 personas by point count
+const topByCount = [...trajectories].sort((a, b) => {
+  return b.points.reduce((s, p) => s + p.count, 0) - a.points.reduce((s, p) => s + p.count, 0);
+}).slice(0, 5);
+
+function sparkline(avg: number, width = 6): string {
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const idx = Math.min(chars.length - 1, Math.max(0, Math.floor((avg / 10) * chars.length)));
+  return chars[idx];
+}
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Persona Trajectory · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-trajectory</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Persona Trajectory <span class="muted" style="font-size:0.6em">(iter #231)</span></h1>
+      <p class="agents-sub">
+        各 persona 的 avg score 跨 round position 变化。
+        正 slope = 越来越宽松;负 = 越来越严苛。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pt-globals">
+        <span>personas: <strong>{trajectories.length}</strong></span>
+        <span>max position: <strong>{maxPos}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 5 personas sparkline(R1 → R{maxPos})</h2>
+      <pre class="agents-pt-flow">{(() => {
+        const positions = Array.from({ length: maxPos }, (_, i) => i + 1);
+        const header = 'persona           ' + positions.map((p) => `R${p}`).join(' ');
+        const lines = topByCount.map((t) => {
+          const label = t.name.length > 16 ? t.name.slice(0, 16) + '…' : t.name.padEnd(16);
+          const cells = positions.map((p) => {
+            const pt = t.points.find((x) => x.pos === p);
+            return pt ? `${sparkline(pt.avg)}` : '  ';
+          });
+          return `${label} ${cells.join(' ')}  ${t.startScore.toFixed(1)}→${t.endScore.toFixed(1)}`;
+        });
+        return [header, ...lines].join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌅 top 10 最宽松化 personas(slope 高)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>slope</th><th>start → end</th><th>persona</th><th>points</th></tr>
+        </thead>
+        <tbody>
+          {topRising.map((t) => (
+            <tr>
+              <td><strong style="color:#10b981">+{t.slope.toFixed(3)}</strong></td>
+              <td>{t.startScore.toFixed(2)} → {t.endScore.toFixed(2)}</td>
+              <td><code>{esc(t.name)}</code></td>
+              <td>{t.points.length}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🥶 top 10 最严苛化 personas(slope 低)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>slope</th><th>start → end</th><th>persona</th><th>points</th></tr>
+        </thead>
+        <tbody>
+          {topFalling.map((t) => (
+            <tr>
+              <td><strong style="color:#ef4444">{t.slope.toFixed(3)}</strong></td>
+              <td>{t.startScore.toFixed(2)} → {t.endScore.toFixed(2)}</td>
+              <td><code>{esc(t.name)}</code></td>
+              <td>{t.points.length}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>slope = (end - start) / (n-1)</li>
+        <li>正 slope:随轮次变宽松</li>
+        <li>负 slope:随轮次变严苛</li>
+        <li>对照 <a href={`${base}/agents/persona-calibration/`}>Persona Calibration</a> 看平均 bias</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
