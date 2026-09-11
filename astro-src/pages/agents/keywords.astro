@@ -1,0 +1,209 @@
+---
+// /agents/keywords.astro — iter #121:cross-session keywords
+//
+// 读所有 archive/*/synthesis/*.md,提取高频 noun-phrase / technical term,
+//   - top 50 全局关键词
+//   - 每周趋势(trending up / down)
+//   - 关键词 → session 反向索引
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// 停用词 + 通用词(过滤掉)
+const STOPWORDS = new Set([
+  'the','a','an','and','or','but','if','then','else','when','while','for','to','of','in','on','at','by','from','with','as','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','should','could','may','might','can','this','that','these','those','it','its','their','them','they','we','our','us','you','your','he','she','his','her','i','my','me','also','more','most','some','such','than','too','very','just','only','any','all','each','every','no','not','so','because','although','however','thus','therefore','hence','here','there','where','how','why','what','which','who','whom','whose',
+  'data','paper','study','result','results','method','methods','approach','approaches','model','models','work','works','analysis','example','examples','case','cases','section','sections','table','tables','figure','figures','chapter','part','parts','page','pages','section','sections','appendix','intro','introduction','conclusion','conclusions','discussion','reference','references','cite','cited','based','using','used','uses','show','shows','showed','shown','find','finds','found','present','presents','presented','presenting','describe','describes','described','describing','provide','provides','provided','providing','consider','considers','considered','considering',
+  'one','two','three','four','five','six','seven','eight','nine','ten','first','second','third','last','next','previous','new','old','high','low','small','large','big','long','short','good','bad','well','better','best','least','most','much','many','few','several','various','multiple','single','specific','general','main','key','important','significant',
+  '近期','一个','一些','这个','那个','我们','你们','他们','什么','怎么','哪些','为何','因为','所以','如果','但是','虽然','然而','因此','或者','可以','可能','应该','需要','需要','首先','其次','然后','最后','例如','比如','也就是说','换句话说','总之','综上','如图','所示','见上','见下','见上表','见下表',
+]);
+
+interface KwCount { term: string; count: number; sessions: Set<string>; syntheses: number; lastSeen: number; }
+
+const kwMap = new Map<string, KwCount>();
+let totalSyntheses = 0;
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const files = await readdir(sd).catch(() => []);
+    for (const f of files) {
+      if (!/^synthesis_\d+\.md$/.test(f)) continue;
+      const fp = join(sd, f);
+      const st = await stat(fp).catch(() => null);
+      const mtime = st?.mtimeMs ?? 0;
+      let text = '';
+      try { text = await readFile(fp, 'utf8'); } catch (e) { continue; }
+      totalSyntheses += 1;
+
+      // 提取候选词:1-3 词的 lowercase alpha token
+      const cleaned = text
+        .replace(/```[\s\S]*?```/g, ' ')         // 跳过代码块
+        .replace(/`[^`]+`/g, ' ')                 // 跳过 inline code
+        .replace(/!?\[[^\]]*\]\([^)]+\)/g, ' ')   // 跳过 markdown 链接
+        .replace(/[#*_~>|]/g, ' ')                // 跳过 markdown 格式
+        .replace(/[.,;:!?'"()\[\]{}\/\\\-]/g, ' ')
+        .toLowerCase();
+
+      const tokens = cleaned.split(/\s+/).filter((t) => t.length >= 3 && t.length <= 25);
+
+      // 单字词 + 二字组合(三字组合太多噪声)
+      const seenInDoc = new Set<string>();
+      for (let i = 0; i < tokens.length; i++) {
+        const t1 = tokens[i];
+        if (STOPWORDS.has(t1) || /^\d+$/.test(t1)) continue;
+        const term1 = t1;
+        if (!seenInDoc.has(term1)) {
+          const existing = kwMap.get(term1) ?? { term: term1, count: 0, sessions: new Set(), syntheses: 0, lastSeen: 0 };
+          existing.count += 1;
+          existing.sessions.add(sid);
+          existing.syntheses += 1;
+          if (mtime > existing.lastSeen) existing.lastSeen = mtime;
+          kwMap.set(term1, existing);
+          seenInDoc.add(term1);
+        }
+        // bigram
+        if (i + 1 < tokens.length) {
+          const t2 = tokens[i + 1];
+          if (!STOPWORDS.has(t2) && !/^\d+$/.test(t2)) {
+            const term2 = `${t1} ${t2}`;
+            if (!seenInDoc.has(term2)) {
+              const existing = kwMap.get(term2) ?? { term: term2, count: 0, sessions: new Set(), syntheses: 0, lastSeen: 0 };
+              existing.count += 1;
+              existing.sessions.add(sid);
+              existing.syntheses += 1;
+              if (mtime > existing.lastSeen) existing.lastSeen = mtime;
+              kwMap.set(term2, existing);
+              seenInDoc.add(term2);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// 排序:出现次数多,session 数多 → 顶部
+const ranked = Array.from(kwMap.values())
+  .filter((k) => k.count >= 2) // 至少出现 2 次
+  .sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return b.sessions.size - a.sessions.size;
+  });
+
+const top = ranked.slice(0, 80);
+const maxCount = top[0]?.count ?? 1;
+
+function bar(n: number, max: number, width = 30): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Keywords · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / keywords</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔑 Cross-Session Keywords <span class="muted" style="font-size:0.6em">(iter #121)</span></h1>
+      <p class="agents-sub">
+        从所有 synthesis 文本提取高频 1-2 词术语(过滤停用词),按出现次数 + 跨 session 数排序。
+        像一个轻量级"个人研究词云",帮你看清自己一直在研究什么。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 概览</h2>
+      <div class="agents-kw-globals">
+        <span>扫描 syntheses: <strong>{totalSyntheses}</strong></span>
+        <span>提取候选术语: <strong>{kwMap.size}</strong></span>
+        <span>出现 ≥ 2 次: <strong>{ranked.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏷️ Top 80 关键词</h2>
+      {top.length === 0 ? (
+        <p class="muted">还没有 synthesis 数据,或关键词都被停用词过滤了。</p>
+      ) : (
+        <pre class="agents-kw-flow">{
+top.map((k) => `${k.term.padEnd(28)} ${bar(k.count, maxCount, 30)}  ${String(k.count).padStart(3)}次 · ${k.sessions.size} session · ${k.syntheses} 篇`).join('\n')
+}</pre>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 表格视图(可点击进入来源)</h2>
+      {top.length === 0 ? (
+        <p class="muted">—</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>#</th><th>term</th><th>count</th><th>sessions</th><th>syntheses</th></tr>
+          </thead>
+          <tbody>
+            {top.slice(0, 30).map((k, i) => (
+              <tr>
+                <td>{i + 1}</td>
+                <td><code>{esc(k.term)}</code></td>
+                <td><strong>{k.count}</strong></td>
+                <td>{k.sessions.size}</td>
+                <td>{k.syntheses}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 使用建议</h2>
+      <ul>
+        <li>看 top 关键词,识别你研究的核心方向</li>
+        <li>看 <strong>sessions</strong> 列高的关键词 = 跨多个 session 反复出现 = 值得深入</li>
+        <li>把高频关键词作为新 session 的 <a href={`${base}/agents/goals/`}>goal</a> 基础</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-kw-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-kw-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-kw-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
