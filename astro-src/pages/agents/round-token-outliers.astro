@@ -1,0 +1,177 @@
+---
+// /agents/round-token-outliers.astro — iter #266:round token outliers (z-score)
+//
+// 找出所有 rounds 的 tokens 数,用 z-score 检测异常值:
+//   - z > 2:昂贵 rounds
+//   - z < -2:异常便宜 rounds
+// 输出 top 20 异常 + 全局统计
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface TokenRec {
+  sid: string;
+  round: number;
+  tokens: number;
+  score: number;
+  z: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const recs: TokenRec[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        if (tokens > 0) recs.push({ sid, round: rn, tokens, score, z: 0 });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const total = recs.length;
+const tokens = recs.map((r) => r.tokens);
+const mean = total > 0 ? tokens.reduce((a, b) => a + b, 0) / total : 0;
+const variance = total > 0 ? tokens.reduce((s, t) => s + (t - mean) ** 2, 0) / total : 0;
+const std = Math.sqrt(variance);
+
+for (const r of recs) {
+  r.z = std > 0 ? (r.tokens - mean) / std : 0;
+}
+
+const outliers = recs.filter((r) => Math.abs(r.z) >= 2);
+const topHigh = [...recs].sort((a, b) => b.z - a.z).slice(0, 15);
+const topLow = [...recs].sort((a, b) => a.z - b.z).filter((r) => r.z >= -3).slice(0, 10);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+function zColor(z: number): string {
+  const a = Math.abs(z);
+  if (a >= 3) return '#ef4444';
+  if (a >= 2) return '#f59e0b';
+  if (a >= 1) return '#fb923c';
+  return '#999';
+}
+---
+
+<BaseLayout title="Round Token Outliers · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-token-outliers</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📐 Round Token Outliers <span class="muted" style="font-size:0.6em">(iter #266)</span></h1>
+      <p class="agents-sub">
+        跨所有 rounds 检测 tokens 的 z-score 异常值。
+        z &gt; 2 = 异常昂贵;z &lt; -2 = 异常便宜。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rto-globals">
+        <span>总 rounds: <strong>{total}</strong></span>
+        <span>mean tokens: <strong>{fmtTok(mean)}</strong></span>
+        <span>std: <strong>{fmtTok(std)}</strong></span>
+        <span>outliers(|z|≥2): <strong style="color:#f59e0b">{outliers.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 15 异常昂贵(z 最大)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>z</th><th>tokens</th><th>score</th><th>round</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topHigh.map((r) => (
+            <tr>
+              <td><strong style={`color:${zColor(r.z)}`}>{r.z.toFixed(2)}</strong></td>
+              <td><strong>{fmtTok(r.tokens)}</strong></td>
+              <td>{r.score.toFixed(2)}</td>
+              <td>R{r.round}</td>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 top 10 异常便宜(z 最小)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>z</th><th>tokens</th><th>score</th><th>round</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topLow.map((r) => (
+            <tr>
+              <td><strong style={`color:${zColor(r.z)}`}>{r.z.toFixed(2)}</strong></td>
+              <td><strong>{fmtTok(r.tokens)}</strong></td>
+              <td>{r.score.toFixed(2)}</td>
+              <td>R{r.round}</td>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>z &gt; 2 ≈ 95th percentile,异常昂贵 rounds</li>
+        <li>z &lt; -2 ≈ 5th percentile,异常便宜(可能 cache hit 或小请求)</li>
+        <li>对照 <a href={`${base}/agents/round-token-eff/`}>Round Token Eff</a> 看位置效率</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rto-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rto-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
