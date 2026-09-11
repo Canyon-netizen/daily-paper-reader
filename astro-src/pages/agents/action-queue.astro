@@ -1,0 +1,263 @@
+---
+// /agents/action-queue.astro — iter #122:unified action queue
+//
+// 跨多个 source 聚合"我下一步该做什么"的待办:
+//   - 高分 proposal(feedback ≥ 8)但还没有对应的 synthesis
+//   - 长期未活跃的 session(> 7 天)
+//   - 今日 journal 里有 open 标记的 entry
+//   - 通知里有 high severity 的
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Action {
+  kind: 'high-score' | 'stale-session' | 'large-cost' | 'no-synthesis' | 'short-round';
+  severity: 'high' | 'mid' | 'low';
+  title: string;
+  detail: string;
+  link: string;
+  ts: number;
+}
+
+const actions: Action[] = [];
+let totalSessions = 0;
+let totalRounds = 0;
+let totalProposals = 0;
+let totalSyntheses = 0;
+
+const now = Date.now();
+const STALE_MS = 7 * 86_400_000;
+const HIGH_SCORE = 8;
+const LARGE_COST = 50_000; // tokens
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    totalSessions += 1;
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    const metaStat = await stat(metaPath).catch(() => null);
+    const lastUpdate = metaStat?.mtimeMs ?? 0;
+    const rd = join(root, sid, 'rounds');
+    const sd = join(root, sid, 'synthesis');
+    const synthCount = existsSync(sd) ? (await readdir(sd).catch(() => [])).filter((f) => /^synthesis_\d+\.md$/.test(f)).length : 0;
+    const meta: any = JSON.parse(await readFile(metaPath, 'utf8').catch(() => '{}'));
+    totalSyntheses += synthCount;
+
+    if (now - lastUpdate > STALE_MS && (meta.rounds ?? 0) >= 3) {
+      actions.push({
+        kind: 'stale-session',
+        severity: 'mid',
+        title: `Session "${sid}" 7+ 天未更新`,
+        detail: `${meta.rounds ?? 0} rounds, ${synthCount} syntheses, goal: ${(meta.goal ?? '').slice(0, 60)}`,
+        link: `${base}/agents/${sid}/`,
+        ts: lastUpdate,
+      });
+    }
+
+    if (!existsSync(rd)) continue;
+    const sessionTokens = meta.tokens?.total ?? 0;
+    if (sessionTokens > LARGE_COST) {
+      actions.push({
+        kind: 'large-cost',
+        severity: 'high',
+        title: `Session "${sid}" token 消耗 ${sessionTokens.toLocaleString()}`,
+        detail: `超过 50k tokens。检查是否需要降级到更便宜的模型。`,
+        link: `${base}/agents/${sid}/`,
+        ts: lastUpdate,
+      });
+    }
+
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      const roundNum = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      totalRounds += 1;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const proposals = r.designer?.proposals ?? [];
+        totalProposals += proposals.length;
+        const fbPersonas = r.feedback?.personas ?? [];
+        const bestScorePerProposal: Record<number, number> = {};
+        for (const persona of fbPersonas) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const tot = p.total ?? 0;
+            if (!bestScorePerProposal[idx] || tot > bestScorePerProposal[idx]) bestScorePerProposal[idx] = tot;
+          }
+        }
+        for (const [idx, score] of Object.entries(bestScorePerProposal)) {
+          if (score >= HIGH_SCORE) {
+            const p = proposals[parseInt(idx, 10)];
+            actions.push({
+              kind: 'high-score',
+              severity: 'low',
+              title: `高分 proposal: ${(p?.title ?? '(untitled)').slice(0, 80)}`,
+              detail: `score=${score.toFixed(1)} · session ${sid.slice(0, 10)} · round ${roundNum}`,
+              link: `${base}/agents/${sid}/pipeline/#round-${roundNum}`,
+              ts: lastUpdate,
+            });
+          }
+        }
+        if (roundNum >= 3 && synthCount === 0 && (r.gate?.proposals?.some((p: any) => p.category === 'promoted'))) {
+          actions.push({
+            kind: 'no-synthesis',
+            severity: 'mid',
+            title: `Session "${sid}" 有 promoted proposal 但还没生成 synthesis`,
+            detail: `已有 ${roundNum} 个 rounds,继续跑让 modifier 写 synthesis`,
+            link: `${base}/agents/${sid}/`,
+            ts: lastUpdate,
+          });
+        }
+        if (roundNum >= 2 && proposals.length === 0) {
+          actions.push({
+            kind: 'short-round',
+            severity: 'mid',
+            title: `Session "${sid}" round ${roundNum} 没有 proposal 输出`,
+            detail: '检查 designer LLM 是否出错',
+            link: `${base}/agents/${sid}/pipeline/#round-${roundNum}`,
+            ts: lastUpdate,
+          });
+        }
+      } catch (e) { /* skip */ }
+    }
+  }
+}
+
+const sevWeight = { high: 3, mid: 2, low: 1 } as const;
+actions.sort((a, b) => {
+  const sw = sevWeight[b.severity] - sevWeight[a.severity];
+  if (sw !== 0) return sw;
+  return b.ts - a.ts;
+});
+
+const byKind: Record<string, number> = {};
+for (const a of actions) byKind[a.kind] = (byKind[a.kind] ?? 0) + 1;
+
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const sec = Math.floor((now - ts) / 1000);
+  if (sec < 60) return sec + ' 秒前';
+  if (sec < 3600) return Math.floor(sec / 60) + ' 分钟前';
+  if (sec < 86400) return Math.floor(sec / 3600) + ' 小时前';
+  return Math.floor(sec / 86400) + ' 天前';
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+const kindLabel: Record<string, string> = {
+  'high-score': '🏅 高分 proposal',
+  'stale-session': '🕐 长期未活跃',
+  'large-cost': '💸 高 token 消耗',
+  'no-synthesis': '📭 缺 synthesis',
+  'short-round': '⚠️ 空 round',
+};
+---
+
+<BaseLayout title="Action Queue · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-queue</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⚡ Action Queue <span class="muted" style="font-size:0.6em">(iter #122)</span></h1>
+      <p class="agents-sub">
+        跨多个来源聚合的"我下一步该做什么"。按严重度排序:high → mid → low。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-aq-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>总 proposals: <strong>{totalProposals}</strong></span>
+        <span>总 syntheses: <strong>{totalSyntheses}</strong></span>
+        <span>action items: <strong>{actions.length}</strong></span>
+      </div>
+      {Object.keys(byKind).length > 0 && (
+        <div class="agents-aq-globals" style="margin-top:0.6rem">
+          {Object.entries(byKind).map(([k, v]) => (
+            <span>{kindLabel[k] ?? k}: <strong>{v}</strong></span>
+          ))}
+        </div>
+      )}
+    </section>
+
+    {actions.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">🎉 没有需要处理的事项 — 所有 session 都健康。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>📋 Action Items <span class="muted" style="font-size:0.7em">(按严重度排序)</span></h2>
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>严重度</th><th>类型</th><th>title</th><th>detail</th><th>时间</th><th>link</th></tr>
+          </thead>
+          <tbody>
+            {actions.map((a) => (
+              <tr class={`agents-aq-row-${a.severity}`}>
+                <td><span class={`agents-aq-sev agents-aq-sev-${a.severity}`}>{a.severity.toUpperCase()}</span></td>
+                <td>{kindLabel[a.kind] ?? a.kind}</td>
+                <td><strong>{esc(a.title)}</strong></td>
+                <td><small>{esc(a.detail)}</small></td>
+                <td><small>{agoStr(a.ts)}</small></td>
+                <td><a href={a.link}><small>→</small></a></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 相关页面</h2>
+      <p>
+        <a class="button" href={`${base}/agents/notifications/`}>🔔 Notifications</a>
+        <a class="button" href={`${base}/agents/todos/`}>✅ Todos</a>
+        <a class="button" href={`${base}/agents/best-proposals/`}>🏆 Best Proposals</a>
+        <a class="button" href={`${base}/agents/health/`}>🩺 Health Check</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-aq-globals {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .agents-aq-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-aq-row-high { background: rgba(239, 68, 68, 0.08); }
+  .agents-aq-row-mid { background: rgba(245, 158, 11, 0.06); }
+  .agents-aq-row-low { background: transparent; }
+  .agents-aq-sev {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+  .agents-aq-sev-high { background: #ef4444; }
+  .agents-aq-sev-mid { background: #f59e0b; color: #1f2937; }
+  .agents-aq-sev-low { background: #6b7280; }
+</style>
