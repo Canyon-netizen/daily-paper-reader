@@ -1,0 +1,274 @@
+---
+// /agents/conclusion-quality.astro — iter #212:synthesis quality analysis
+//
+// 看 synthesis(结论)的质量:
+//   - synthesis 文本长度 / 段落数 / 行数
+//   - 是否包含特定 marker(#, **, citations)
+//   - 与 rounds 数 / final score 相关性
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SynthesisQuality {
+  sid: string;
+  goal: string;
+  rounds: number;
+  finalScore: number;
+  synLen: number;
+  synLines: number;
+  synParas: number;
+  hasHeadings: boolean;
+  hasBold: boolean;
+  hasList: boolean;
+  hasCitation: boolean;
+  quality: number;  // composite
+}
+
+function qualityOf(s: SynthesisQuality): number {
+  let q = 0;
+  if (s.synLen > 500) q += 1;
+  if (s.synLen > 1500) q += 1;
+  if (s.synLen > 3000) q += 1;
+  if (s.synParas >= 3) q += 1;
+  if (s.synParas >= 6) q += 1;
+  if (s.hasHeadings) q += 1;
+  if (s.hasBold) q += 1;
+  if (s.hasList) q += 1;
+  if (s.hasCitation) q += 1;
+  return q;
+}
+
+const root = join(process.cwd(), 'archive');
+const records: SynthesisQuality[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    const last = rNum[rNum.length - 1];
+    let finalScore = 0;
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${last}.json`), 'utf8'));
+      const arr: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') arr.push(p.total);
+        }
+      }
+      finalScore = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+    } catch (e) { /* */ }
+
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const sfs = await readdir(sd).catch(() => []);
+    let bestLen = 0;
+    let bestLines = 0;
+    let bestParas = 0;
+    let bestHeadings = false;
+    let bestBold = false;
+    let bestList = false;
+    let bestCitation = false;
+    for (const sf of sfs) {
+      if (!sf.endsWith('.md')) continue;
+      try {
+        const txt = await readFile(join(sd, sf), 'utf8');
+        const lines = txt.split('\n');
+        const paras = txt.split(/\n\s*\n/).filter((p) => p.trim().length > 0);
+        if (txt.length > bestLen) {
+          bestLen = txt.length;
+          bestLines = lines.length;
+          bestParas = paras.length;
+          bestHeadings = /^#{1,6}\s/m.test(txt);
+          bestBold = /\*\*[^*]+\*\*/.test(txt);
+          bestList = /^[\s]*[-*+\d]+[.)]\s/m.test(txt);
+          bestCitation = /\[[^\]]+\]\([^)]+\)|\[\d+\]|arxiv:\d/i.test(txt);
+        }
+      } catch (e) { /* */ }
+    }
+    if (bestLen === 0) continue;
+    const sq: SynthesisQuality = {
+      sid, goal, rounds: rNum.length, finalScore,
+      synLen: bestLen, synLines: bestLines, synParas: bestParas,
+      hasHeadings: bestHeadings, hasBold: bestBold,
+      hasList: bestList, hasCitation: bestCitation,
+      quality: 0,
+    };
+    sq.quality = qualityOf(sq);
+    records.push(sq);
+  }
+}
+
+const total = records.length;
+const avgLen = records.reduce((s, r) => s + r.synLen, 0) / Math.max(records.length, 1);
+const avgParas = records.reduce((s, r) => s + r.synParas, 0) / Math.max(records.length, 1);
+const avgQuality = records.reduce((s, r) => s + r.quality, 0) / Math.max(records.length, 1);
+const headingsCount = records.filter((r) => r.hasHeadings).length;
+const boldCount = records.filter((r) => r.hasBold).length;
+const listCount = records.filter((r) => r.hasList).length;
+const citationCount = records.filter((r) => r.hasCitation).length;
+
+// 长度分桶
+const buckets = [
+  { label: '< 500 chars', min: 0, max: 500, count: 0 },
+  { label: '500-1500', min: 500, max: 1500, count: 0 },
+  { label: '1500-3000', min: 1500, max: 3000, count: 0 },
+  { label: '3000-6000', min: 3000, max: 6000, count: 0 },
+  { label: '> 6000', min: 6000, max: 99999, count: 0 },
+];
+for (const r of records) {
+  for (const b of buckets) {
+    if (r.synLen >= b.min && r.synLen < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const topQuality = [...records].sort((a, b) => b.quality - a.quality).slice(0, 15);
+const topLen = [...records].sort((a, b) => b.synLen - a.synLen).slice(0, 10);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Conclusion Quality · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / conclusion-quality</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📜 Conclusion Quality <span class="muted" style="font-size:0.6em">(iter #212)</span></h1>
+      <p class="agents-sub">
+        Synthesis 文本质量分析:长度 / 段落 / 结构化 marker。
+        评分 0-9,综合衡量 synthesis 完整度。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cq-globals">
+        <span>总 syntheses: <strong>{total}</strong></span>
+        <span>avg len: <strong>{avgLen.toFixed(0)} chars</strong></span>
+        <span>avg paras: <strong>{avgParas.toFixed(1)}</strong></span>
+        <span>avg quality: <strong>{avgQuality.toFixed(1)}/9</strong></span>
+        <span>含 headings: <strong>{headingsCount}</strong></span>
+        <span>含 bold: <strong>{boldCount}</strong></span>
+        <span>含 list: <strong>{listCount}</strong></span>
+        <span>含 citation: <strong>{citationCount}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 长度分布</h2>
+      <pre class="agents-cq-flow">{buckets.map((b) => {
+        const max = Math.max(...buckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(16)} ${bar(b.count, max, 18)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💎 top 15 高 quality syntheses</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Q</th><th>sid</th><th>len</th><th>paras</th><th>H</th><th>B</th><th>L</th><th>C</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topQuality.map((r) => (
+            <tr>
+              <td><strong>{r.quality}</strong></td>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+              <td>{r.synLen}</td>
+              <td>{r.synParas}</td>
+              <td>{r.hasHeadings ? '✓' : '·'}</td>
+              <td>{r.hasBold ? '✓' : '·'}</td>
+              <td>{r.hasList ? '✓' : '·'}</td>
+              <td>{r.hasCitation ? '✓' : '·'}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 25))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📏 top 10 最长 syntheses</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>len</th><th>sid</th><th>rounds</th><th>final score</th></tr>
+        </thead>
+        <tbody>
+          {topLen.map((r) => (
+            <tr>
+              <td><strong>{r.synLen}</strong></td>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td>{r.finalScore.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>quality 评分 = len(3) + paras(2) + headings + bold + list + citation</li>
+        <li>H=headings / B=bold / L=list / C=citation</li>
+        <li>对照 <a href={`${base}/agents/synthesis-diversity/`}>Synthesis Diversity</a> 看内容变化</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cq-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cq-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cq-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
