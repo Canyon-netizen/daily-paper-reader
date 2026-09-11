@@ -1,0 +1,207 @@
+---
+// /agents/final-score-decile.astro — iter #282:final score decile distribution
+//
+// 把所有 sessions 按 final score 分桶(decile):
+//   - 找出每个 session 落入哪个 decile
+//   - 显示分布
+//   - top sessions in each decile
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Session {
+  sid: string;
+  goal: string;
+  finalScore: number;
+  gain: number;
+  rounds: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Session[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    let firstScore = 0;
+    let finalScore = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          if (i === rNum.length - 1) finalScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    if (finalScore > 0) {
+      sessions.push({
+        sid, goal, finalScore, gain: finalScore - firstScore, rounds: rNum.length,
+      });
+    }
+  }
+}
+
+// 按 final score 排序找 decile 边界
+const sortedByFinal = [...sessions].sort((a, b) => a.finalScore - b.finalScore);
+const n = sortedByFinal.length;
+const deciles: { min: number; max: number; count: number; samples: Session[] }[] = [];
+for (let i = 0; i < 10; i++) {
+  const minIdx = Math.floor((i / 10) * n);
+  const maxIdx = Math.floor(((i + 1) / 10) * n);
+  const min = sortedByFinal[minIdx]?.finalScore ?? 0;
+  const max = sortedByFinal[Math.min(maxIdx, n - 1)]?.finalScore ?? 0;
+  deciles.push({
+    min, max,
+    count: 0,
+    samples: [],
+  });
+}
+
+for (const s of sessions) {
+  for (let i = 0; i < 10; i++) {
+    if (s.finalScore >= deciles[i].min && s.finalScore <= deciles[i].max) {
+      deciles[i].count += 1;
+      if (deciles[i].samples.length < 2) deciles[i].samples.push(s);
+      break;
+    }
+  }
+}
+
+// sort by min desc
+const topDeciles = [...deciles].sort((a, b) => b.min - a.min);
+
+const total = sessions.length;
+const avg = total > 0 ? sessions.reduce((s, x) => s + x.finalScore, 0) / total : 0;
+const median = total > 0 ? sortedByFinal[Math.floor(total / 2)].finalScore : 0;
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Final Score Decile · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / final-score-decile</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Final Score Decile <span class="muted" style="font-size:0.6em">(iter #282)</span></h1>
+      <p class="agents-sub">
+        所有 sessions 按 final score 分 10 等分。
+        显示每个 decile 的范围 / 数量 / 样本。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-fsd-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>avg: <strong>{avg.toFixed(2)}</strong></span>
+        <span>median: <strong>{median.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 decile 分布</h2>
+      <pre class="agents-fsd-flow">{topDeciles.map((d, i) => {
+        const max = Math.max(...topDeciles.map((x) => x.count), 1);
+        return `D${10 - i}  ${d.min.toFixed(2)}-${d.max.toFixed(2)}  ${bar(d.count, max, 18)}  ${d.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔍 各 decile 样本</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>decile</th><th>final</th><th>gain</th><th>rounds</th><th>goal</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topDeciles.flatMap((d, i) => d.samples.map((s) => (
+            <tr>
+              <td><strong style="color:#4f46e5">D{10 - i}</strong></td>
+              <td>{s.finalScore.toFixed(2)}</td>
+              <td>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</td>
+              <td>{s.rounds}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 25))}{(s.goal ?? '').length > 25 ? '…' : ''}</small></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+            </tr>
+          )))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>D10 = 最高分(前 10%)</li>
+        <li>D1 = 最低分(后 10%)</li>
+        <li>decile 宽度反映 score 集中度</li>
+        <li>对照 <a href={`${base}/agents/score-leaderboard/`}>Score Leaderboard</a> 看排行</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-fsd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-fsd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-fsd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
