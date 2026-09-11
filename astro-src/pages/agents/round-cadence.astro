@@ -1,0 +1,208 @@
+---
+// /agents/round-cadence.astro — iter #239:round cadence / inter-round latency
+//
+// 同一 session 内相邻 round 的时间间隔分布:
+//   - per session,列出所有相邻 round mtime 差
+//   - 全局分桶(秒级 / 分钟级 / 小时级 / 天级)
+//   - 揭示人类手动 vs 自动 cron 节奏
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+interface Gap {
+  sid: string;
+  fromIdx: number;
+  toIdx: number;
+  gapMs: number;
+}
+const gaps: Gap[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const items: { idx: number; mtime: number }[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (!m) continue;
+      try {
+        const st = await stat(join(rd, rf));
+        items.push({ idx: parseInt(m[1], 10), mtime: st.mtimeMs });
+      } catch (e) { /* */ }
+    }
+    items.sort((a, b) => a.idx - b.idx);
+    for (let i = 1; i < items.length; i++) {
+      gaps.push({
+        sid,
+        fromIdx: items[i - 1].idx,
+        toIdx: items[i].idx,
+        gapMs: items[i].mtime - items[i - 1].mtime,
+      });
+    }
+  }
+}
+
+const total = gaps.length;
+const buckets = [
+  { label: '< 1 min (burst)', min: 0, max: 60_000, count: 0 },
+  { label: '1-10 min', min: 60_000, max: 600_000, count: 0 },
+  { label: '10-60 min', min: 600_000, max: 3_600_000, count: 0 },
+  { label: '1-6 hours', min: 3_600_000, max: 6 * 3_600_000, count: 0 },
+  { label: '6-24 hours', min: 6 * 3_600_000, max: 24 * 3_600_000, count: 0 },
+  { label: '1-7 days', min: 24 * 3_600_000, max: 7 * 24 * 3_600_000, count: 0 },
+  { label: '> 7 days', min: 7 * 24 * 3_600_000, max: 99999 * 24 * 3_600_000, count: 0 },
+];
+
+for (const g of gaps) {
+  for (const b of buckets) {
+    if (g.gapMs >= b.min && g.gapMs < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const gapMsValues = gaps.map((g) => g.gapMs).sort((a, b) => a - b);
+const avgGapMs = total > 0 ? gapMsValues.reduce((a, b) => a + b, 0) / total : 0;
+const medianGapMs = total > 0 ? gapMsValues[Math.floor(total / 2)] : 0;
+const maxGapMs = total > 0 ? gapMsValues[gapMsValues.length - 1] : 0;
+const minGapMs = total > 0 ? gapMsValues[0] : 0;
+
+const topFast = [...gaps].sort((a, b) => a.gapMs - b.gapMs).slice(0, 10);
+const topSlow = [...gaps].sort((a, b) => b.gapMs - a.gapMs).slice(0, 10);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function formatGap(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 24 * 3_600_000) return `${(ms / 3_600_000).toFixed(1)}h`;
+  return `${(ms / (24 * 3_600_000)).toFixed(1)}d`;
+}
+---
+
+<BaseLayout title="Round Cadence · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-cadence</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏱️ Round Cadence <span class="muted" style="font-size:0.6em">(iter #239)</span></h1>
+      <p class="agents-sub">
+        同一 session 内相邻 round 的时间间隔。
+        短间隔 = 自动 / burst;长间隔 = 人工思考。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rc-globals">
+        <span>总 gaps: <strong>{total}</strong></span>
+        <span>avg gap: <strong>{formatGap(avgGapMs)}</strong></span>
+        <span>median gap: <strong>{formatGap(medianGapMs)}</strong></span>
+        <span>min gap: <strong>{formatGap(minGapMs)}</strong></span>
+        <span>max gap: <strong>{formatGap(maxGapMs)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 gap 分布</h2>
+      <pre class="agents-rc-flow">{buckets.map((b) => {
+        const max = Math.max(...buckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(18)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 10 最快 gaps</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>gap</th><th>R</th><th>→</th><th>R</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topFast.map((g) => (
+            <tr>
+              <td><strong style="color:#10b981">{formatGap(g.gapMs)}</strong></td>
+              <td>R{g.fromIdx}</td>
+              <td>→</td>
+              <td>R{g.toIdx}</td>
+              <td><a href={`${base}/agents/${g.sid}/`}><code>{esc(g.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐢 top 10 最慢 gaps</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>gap</th><th>R</th><th>→</th><th>R</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topSlow.map((g) => (
+            <tr>
+              <td><strong>{formatGap(g.gapMs)}</strong></td>
+              <td>R{g.fromIdx}</td>
+              <td>→</td>
+              <td>R{g.toIdx}</td>
+              <td><a href={`${base}/agents/${g.sid}/`}><code>{esc(g.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>&lt; 1 min = burst 模式(可能脚本连跑)</li>
+        <li>1-10 min = cron / 短人工</li>
+        <li>&gt; 1 day = 长时间人工迭代</li>
+        <li>对照 <a href={`${base}/agents/round-throughput/`}>Round Throughput</a> 看日级节奏</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
