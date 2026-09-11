@@ -1,0 +1,269 @@
+---
+// /agents/daily-kpi.astro — iter #168:daily KPI dashboard
+//
+// 今日 / 昨日 / 本周 KPI 数字:
+//   - rounds 写入次数
+//   - promoted 数
+//   - tokens 消耗
+//   - 活跃 sessions
+//   - 估算成本
+//   - 同比昨日变化
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface DayStats {
+  date: string;
+  rounds: number;
+  tokens: number;
+  promoted: number;
+  activeSessions: Set<string>;
+}
+
+const now = Date.now();
+const oneDay = 24 * 60 * 60 * 1000;
+const todayKey = new Date(now).toISOString().slice(0, 10);
+const yesterdayKey = new Date(now - oneDay).toISOString().slice(0, 10);
+const sevenDayKey = new Date(now - 6 * oneDay).toISOString().slice(0, 10);
+
+const dayMap = new Map<string, DayStats>();
+function getOrCreate(d: string): DayStats {
+  if (!dayMap.has(d)) {
+    dayMap.set(d, { date: d, rounds: 0, tokens: 0, promoted: 0, activeSessions: new Set() });
+  }
+  return dayMap.get(d)!;
+}
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const dateKey = new Date(st.mtimeMs).toISOString().slice(0, 10);
+        const ds = getOrCreate(dateKey);
+        ds.rounds += 1;
+        ds.activeSessions.add(sid);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        ds.tokens += r.feedback?.total_tokens ?? 0;
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') ds.promoted += 1;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const today = dayMap.get(todayKey) ?? { date: todayKey, rounds: 0, tokens: 0, promoted: 0, activeSessions: new Set() };
+const yesterday = dayMap.get(yesterdayKey) ?? { date: yesterdayKey, rounds: 0, tokens: 0, promoted: 0, activeSessions: new Set() };
+
+let weekRounds = 0, weekTokens = 0, weekPromoted = 0, weekSessions = new Set<string>();
+for (const [d, ds] of dayMap) {
+  if (d >= sevenDayKey && d <= todayKey) {
+    weekRounds += ds.rounds;
+    weekTokens += ds.tokens;
+    weekPromoted += ds.promoted;
+    for (const sid of ds.activeSessions) weekSessions.add(sid);
+  }
+}
+
+function pctDelta(curr: number, prev: number): string {
+  if (prev === 0) return curr > 0 ? '+∞' : '—';
+  const delta = ((curr - prev) / prev) * 100;
+  return delta >= 0 ? `+${delta.toFixed(1)}%` : `${delta.toFixed(1)}%`;
+}
+
+// 估算成本
+const SONNET_PRICE = 6; // per 1M
+const todayCost = (today.tokens / 1_000_000) * SONNET_PRICE;
+const yesterdayCost = (yesterday.tokens / 1_000_000) * SONNET_PRICE;
+const weekCost = (weekTokens / 1_000_000) * SONNET_PRICE;
+
+// 近 7 天柱状
+const last7: DayStats[] = [];
+for (let i = 6; i >= 0; i--) {
+  const d = new Date(now - i * oneDay).toISOString().slice(0, 10);
+  last7.push(dayMap.get(d) ?? { date: d, rounds: 0, tokens: 0, promoted: 0, activeSessions: new Set() });
+}
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Daily KPI · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-kpi</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Daily KPI <span class="muted" style="font-size:0.6em">(iter #168)</span></h1>
+      <p class="agents-sub">
+        今日 / 昨日 / 近 7 天 KPI 数字,带同比变化。
+        适合做成 daily standup 报告。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📅 今日 · {today.date}</h2>
+      <div class="agents-kpi-row">
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">rounds 写入</div>
+          <div class="agents-kpi-value">{today.rounds}</div>
+          <div class="agents-kpi-delta">{pctDelta(today.rounds, yesterday.rounds)} vs 昨日</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">tokens 消耗</div>
+          <div class="agents-kpi-value">{today.tokens.toLocaleString()}</div>
+          <div class="agents-kpi-delta">{pctDelta(today.tokens, yesterday.tokens)} vs 昨日</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">估算成本 (Sonnet)</div>
+          <div class="agents-kpi-value">${todayCost.toFixed(2)}</div>
+          <div class="agents-kpi-delta">{pctDelta(todayCost, yesterdayCost)} vs 昨日</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">promoted</div>
+          <div class="agents-kpi-value">{today.promoted}</div>
+          <div class="agents-kpi-delta">{pctDelta(today.promoted, yesterday.promoted)} vs 昨日</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">活跃 sessions</div>
+          <div class="agents-kpi-value">{today.activeSessions.size}</div>
+          <div class="agents-kpi-delta">{pctDelta(today.activeSessions.size, yesterday.activeSessions.size)} vs 昨日</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 昨日 · {yesterday.date}</h2>
+      <div class="agents-kpi-row">
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">rounds</div>
+          <div class="agents-kpi-value">{yesterday.rounds}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">tokens</div>
+          <div class="agents-kpi-value">{yesterday.tokens.toLocaleString()}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">成本</div>
+          <div class="agents-kpi-value">${yesterdayCost.toFixed(2)}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">promoted</div>
+          <div class="agents-kpi-value">{yesterday.promoted}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">sessions</div>
+          <div class="agents-kpi-value">{yesterday.activeSessions.size}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 近 7 天</h2>
+      <div class="agents-kpi-row">
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">总 rounds</div>
+          <div class="agents-kpi-value">{weekRounds}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">总 tokens</div>
+          <div class="agents-kpi-value">{weekTokens.toLocaleString()}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">总成本</div>
+          <div class="agents-kpi-value">${weekCost.toFixed(2)}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">总 promoted</div>
+          <div class="agents-kpi-value">{weekPromoted}</div>
+        </div>
+        <div class="agents-kpi-card">
+          <div class="agents-kpi-label">active sessions</div>
+          <div class="agents-kpi-value">{weekSessions.size}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 近 7 天 token 柱状</h2>
+      <pre class="agents-kpi-flow">{(() => {
+        const max = Math.max(...last7.map((d) => d.tokens), 1);
+        return last7.map((d) => {
+          const lbl = d.date.slice(5);
+          return `${lbl} ${bar(d.tokens, max, 16)}  ${String(d.tokens).padStart(8)} (${d.rounds}r)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>如果今日 vs 昨日 tokens 增长 &gt; 50%,可能 cron 触发过多</li>
+        <li>如果 promoted 数骤降 → 检查 gate</li>
+        <li>对照 <a href={`${base}/agents/daily-burn/`}>Daily Burn</a> 看历史趋势</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-kpi-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.8rem;
+  }
+  .agents-kpi-card {
+    background: rgba(99, 102, 241, 0.05);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 6px;
+    padding: 0.8rem;
+    text-align: center;
+  }
+  .agents-kpi-label {
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 0.3rem;
+  }
+  .agents-kpi-value {
+    font-size: 1.6rem;
+    font-weight: bold;
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-bottom: 0.2rem;
+  }
+  .agents-kpi-delta {
+    font-size: 0.75rem;
+    color: rgba(255, 255, 255, 0.5);
+  }
+  .agents-kpi-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
