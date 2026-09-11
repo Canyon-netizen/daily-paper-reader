@@ -1,0 +1,282 @@
+---
+// /agents/journal.astro — iter #110:daily journal
+//
+// 自动生成的"研究日记":
+//   - 每天一行摘要(session 数 / round 数 / token 数 / 费用)
+//   - 每个 session 当天的 round 详情
+//   - 链接到 session / round / synthesis 详情
+//
+// 按时间倒序,日期分组。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface DayEntry {
+  date: string;
+  sessions: { sid: string; goal: string }[];
+  rounds: { sid: string; n: number; tokens: number; ts: number; durationMs: number; proposals: number; applied: number }[];
+  totalTokens: number;
+  totalCost: number;
+  synthesisCreated: { sid: string; idx: number }[];
+}
+
+const RATE = 0.50;
+
+interface RoundInfo {
+  sid: string;
+  n: number;
+  ts: number;
+  tokens: number;
+  durationMs: number;
+  proposals: number;
+  applied: number;
+}
+
+interface SynthesisInfo {
+  sid: string;
+  idx: number;
+  mtime: number;
+}
+
+const dayMap = new Map<string, DayEntry>();
+const root = join(process.cwd(), 'archive');
+
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let meta: any = {};
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { /* */ }
+    const goal = typeof meta.goal === 'string' ? meta.goal : '';
+
+    // rounds
+    const roundsDir = join(root, sid, 'rounds');
+    if (existsSync(roundsDir)) {
+      let rfs: string[] = [];
+      try { rfs = await readdir(roundsDir); } catch { /* */ }
+      for (const rf of rfs) {
+        const m = rf.match(/^round_(\d+)\.json$/);
+        if (!m) continue;
+        const n = Number(m[1]);
+        let raw: any = null;
+        try { raw = JSON.parse(await readFile(join(roundsDir, rf), 'utf8')); } catch { continue; }
+        const ts = raw.started_at ?? raw.finished_at ?? 0;
+        if (!ts) continue;
+        const date = new Date(ts).toISOString().slice(0, 10);
+        const tokens = raw.feedback?.total_tokens ?? 0;
+        const durationMs = raw.telemetry?.duration_ms ?? ((raw.finished_at ?? 0) - (raw.started_at ?? 0));
+        const proposals = raw.designer?.proposals?.length ?? 0;
+        const applied = raw.modifier?.applied?.length ?? 0;
+        const cur = dayMap.get(date) ?? newDayEntry(date);
+        cur.rounds.push({ sid, n, tokens, ts, durationMs, proposals, applied });
+        cur.totalTokens += tokens;
+        cur.totalCost = (cur.totalTokens / 1_000_000) * RATE;
+        if (!cur.sessions.find((x) => x.sid === sid)) cur.sessions.push({ sid, goal });
+        dayMap.set(date, cur);
+      }
+    }
+
+    // syntheses
+    const synthDir = join(root, sid, 'synthesis');
+    if (existsSync(synthDir)) {
+      let sfs: string[] = [];
+      try { sfs = await readdir(synthDir); } catch { /* */ }
+      for (const sf of sfs) {
+        const m = sf.match(/^synthesis_(\d+)\.md$/);
+        if (!m) continue;
+        let sStat: any = null;
+        try {
+          const fp = join(synthDir, sf);
+          sStat = await import('node:fs/promises').then((m) => m.stat(fp));
+        } catch { continue; }
+        const ts = sStat.mtimeMs;
+        const date = new Date(ts).toISOString().slice(0, 10);
+        const cur = dayMap.get(date) ?? newDayEntry(date);
+        cur.synthesisCreated.push({ sid, idx: Number(m[1]) });
+        if (!cur.sessions.find((x) => x.sid === sid)) cur.sessions.push({ sid, goal });
+        dayMap.set(date, cur);
+      }
+    }
+  }
+}
+
+function newDayEntry(date: string): DayEntry {
+  return { date, sessions: [], rounds: [], totalTokens: 0, totalCost: 0, synthesisCreated: [] };
+}
+
+const sortedDays = Array.from(dayMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+
+// 全局统计
+const allRoundsCount = sortedDays.reduce((s, d) => s + d.rounds.length, 0);
+const allTokens = sortedDays.reduce((s, d) => s + d.totalTokens, 0);
+const allCost = sortedDays.reduce((s, d) => s + d.totalCost, 0);
+
+function fmt$(n: number): string {
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
+}
+function fmtMs(ms: number): string {
+  if (!ms) return '—';
+  if (ms < 1000) return `${ms} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${Math.floor(ms / 60_000)} min ${Math.floor((ms % 60_000) / 1000)} s`;
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function fmtDate(s: string): string {
+  const d = new Date(s + 'T00:00:00');
+  const weekday = ['日', '一', '二', '三', '四', '五', '六'][d.getDay()];
+  return `${s} · 周${weekday}`;
+}
+---
+
+<BaseLayout title="Daily Journal · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / journal</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📔 Daily Journal <span class="muted" style="font-size:0.6em">(iter #110)</span></h1>
+      <p class="agents-sub">
+        自动生成的"研究日记"。按日期倒序列出每天发生的事:哪个 session 跑了几个 round、
+        花了多少 token / 多少钱、产出了哪些 synthesis。鼠标悬停可看详情。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 累计</h2>
+      <div class="agents-jn-globals">
+        <span>有活动的天数: <strong>{sortedDays.length}</strong></span>
+        <span>总 rounds: <strong>{allRoundsCount}</strong></span>
+        <span>总 tokens: <strong>{allTokens.toLocaleString()}</strong></span>
+        <span>总费用: <strong>{fmt$(allCost)}</strong></span>
+      </div>
+    </section>
+
+    {sortedDays.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">📔 还没有任何活动记录。跑至少 1 个 session 才能生成日记。</p>
+      </section>
+    ) : (
+      sortedDays.map((d) => (
+        <section class="agents-session-section agents-jn-day" data-date={d.date}>
+          <h2>{fmtDate(d.date)}</h2>
+          <p class="muted">
+            <strong>{d.sessions.length}</strong> sessions ·
+            <strong>{d.rounds.length}</strong> rounds ·
+            <strong>{d.synthesisCreated.length}</strong> syntheses ·
+            <strong>{d.totalTokens.toLocaleString()}</strong> tokens ·
+            <strong>{fmt$(d.totalCost)}</strong>
+          </p>
+
+          {d.sessions.length > 0 && (
+            <details open>
+              <summary>🎯 sessions ({d.sessions.length})</summary>
+              <ul>
+                {d.sessions.map((s) => (
+                  <li>
+                    <a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a>
+                    <small class="muted">— {escapeHtml(s.goal.slice(0, 80))}{s.goal.length > 80 ? '…' : ''}</small>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {d.rounds.length > 0 && (
+            <details>
+              <summary>🔄 rounds ({d.rounds.length})</summary>
+              <table class="agents-session-table">
+                <thead>
+                  <tr>
+                    <th>session</th>
+                    <th>round</th>
+                    <th>duration</th>
+                    <th>tokens</th>
+                    <th>proposals</th>
+                    <th>applied</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.rounds
+                    .sort((a, b) => b.ts - a.ts)
+                    .map((r) => (
+                      <tr>
+                        <td><a href={`${base}/agents/${r.sid}/`}><code>{r.sid}</code></a></td>
+                        <td>#{r.n}</td>
+                        <td>{fmtMs(r.durationMs)}</td>
+                        <td>{r.tokens.toLocaleString()}</td>
+                        <td>{r.proposals}</td>
+                        <td>{r.applied}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </details>
+          )}
+
+          {d.synthesisCreated.length > 0 && (
+            <details>
+              <summary>📝 syntheses created ({d.synthesisCreated.length})</summary>
+              <ul>
+                {d.synthesisCreated.map((s) => (
+                  <li>
+                    <a href={`${base}/agents/${s.sid}/synthesis/${String(s.idx).padStart(3, '0')}/`}>
+                      synthesis #{String(s.idx).padStart(3, '0')} · <code>{s.sid}</code>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </section>
+      ))
+    )}
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-jn-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-jn-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-jn-day h2 {
+    font-size: 1.15rem;
+    color: #4f46e5;
+    border-bottom: 1px solid rgba(99, 102, 241, 0.3);
+    padding-bottom: 0.3rem;
+  }
+  details {
+    margin: 0.5rem 0;
+  }
+  details summary {
+    cursor: pointer;
+    padding: 0.3rem 0.5rem;
+    background: rgba(99, 102, 241, 0.08);
+    border-radius: 4px;
+  }
+  ul {
+    padding-left: 1.5rem;
+    margin: 0.3rem 0;
+  }
+</style>
