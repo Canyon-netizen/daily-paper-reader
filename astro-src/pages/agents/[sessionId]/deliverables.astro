@@ -1,0 +1,293 @@
+---
+// /agents/[sessionId]/deliverables.astro — iter #84:browse applied deliverables
+//
+// 收集 modifier.applied[] from every round,展示每个 deliverable 的:
+//   - kind(create_draft_outline / paper_additions / paper_draft / etc.)
+//   - proposal_id + 关联 proposal 标题
+//   - round 号 + 时间戳
+//   - payload 摘要(展开成可读 key:value)
+//   - 是否被 synthesis 引用(基于 synthesis files grep)
+// 用户可一眼看到"agent 真正做了什么"。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    if (existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+
+let meta: any = null;
+try { meta = JSON.parse(await readFile(join(sessionDir, 'meta.json'), 'utf8')); } catch { /* */ }
+
+let rounds: any[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds')))
+    .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = await Promise.all(files.map(async (f) => {
+    try { return JSON.parse(await readFile(join(sessionDir, 'rounds', f), 'utf8')); }
+    catch { return null; }
+  })).then((arr) => arr.filter(Boolean));
+} catch { /* */ }
+
+// 收集 proposal_id → title / type 映射
+const proposalMap = new Map<string, { title: string; type: string; round: number }>();
+for (const r of rounds) {
+  for (const p of (r?.designer?.proposals ?? [])) {
+    if (p?.proposal_id) {
+      proposalMap.set(p.proposal_id, {
+        title: p?.title ?? '',
+        type: p?.type ?? '',
+        round: r.round,
+      });
+    }
+  }
+}
+
+interface DeliverableEntry {
+  round: number;
+  roundFinishedAt: number;
+  id: string;
+  kind: string;
+  proposal_id: string;
+  proposalTitle: string;
+  proposalType: string;
+  applied_at: number;
+  payload: Record<string, any>;
+  payloadSummary: string;
+}
+
+const entries: DeliverableEntry[] = [];
+for (const r of rounds) {
+  for (const a of (r?.modifier?.applied ?? [])) {
+    const proposal = proposalMap.get(a.proposal_id ?? '') ?? { title: '', type: '', round: r.round };
+    const payload = (a.payload ?? {}) as Record<string, any>;
+    // 摘要:截前 4 个 key 拼成可读字符串
+    const summaryParts: string[] = [];
+    let n = 0;
+    for (const [k, v] of Object.entries(payload)) {
+      if (n >= 4) { summaryParts.push(`+${Object.keys(payload).length - 4} more`); break; }
+      let s: string;
+      if (typeof v === 'string') s = v.length > 40 ? v.slice(0, 39) + '…' : v;
+      else if (Array.isArray(v)) s = `[${v.length} items]`;
+      else s = String(v).slice(0, 40);
+      summaryParts.push(`${k}=${s}`);
+      n++;
+    }
+    entries.push({
+      round: r.round,
+      roundFinishedAt: Number(r?.finished_at ?? 0),
+      id: a.id ?? '',
+      kind: a.kind ?? 'unknown',
+      proposal_id: a.proposal_id ?? '',
+      proposalTitle: proposal.title,
+      proposalType: proposal.type,
+      applied_at: Number(a.applied_at ?? r?.finished_at ?? 0),
+      payload,
+      payloadSummary: summaryParts.join(' · '),
+    });
+  }
+}
+
+// 按 applied_at 倒序
+entries.sort((a, b) => b.applied_at - a.applied_at);
+
+// 按 kind 聚合
+const kindCounts = new Map<string, number>();
+for (const e of entries) kindCounts.set(e.kind, (kindCounts.get(e.kind) ?? 0) + 1);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function fmt(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString();
+}
+
+function kindClass(k: string): string {
+  if (k.includes('outline') || k.includes('draft')) return 'kind-writing';
+  if (k.includes('paper_additions') || k.includes('intake')) return 'kind-intake';
+  if (k.includes('experiment')) return 'kind-experiment';
+  if (k.includes('idea')) return 'kind-idea';
+  return 'kind-other';
+}
+---
+
+<BaseLayout title={`Deliverables · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>deliverables</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🛠 Session Deliverables · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #84 · Modifier 实际应用到上游模块的所有 deliverable(<code>modifier.applied[]</code>)。
+        按时间倒序,展示 kind / proposal / payload 摘要。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-deliv-stats">
+        <span><strong>{entries.length}</strong> deliverables 总数</span>
+        <span><strong>{kindCounts.size}</strong> 不同 kind</span>
+        <span><strong>{[...new Set(entries.map((e) => e.proposal_id))].length}</strong> 唯一 proposal</span>
+      </div>
+      {kindCounts.size > 0 && (
+        <table class="agents-session-table" style="margin-top:0.6rem">
+          <thead>
+            <tr><th>kind</th><th>次数</th><th>占比</th></tr>
+          </thead>
+          <tbody>
+            {[...kindCounts.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => (
+              <tr>
+                <td><code>{escapeHtml(k)}</code></td>
+                <td>{n}</td>
+                <td>{((n / entries.length) * 100).toFixed(0)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    {entries.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">该 session 还没有任何 deliverable — Modifier 还没成功 apply 过任何 proposal。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>📋 全部 deliverable ({entries.length})</h2>
+        <ol class="agents-deliv-list">
+          {entries.map((e) => (
+            <li class="agents-deliv-item">
+              <header class="agents-deliv-head">
+                <span class={`agents-deliv-kind agents-deliv-${kindClass(e.kind)}`}>
+                  <code>{escapeHtml(e.kind)}</code>
+                </span>
+                <span class="muted">
+                  round <a href={`${base}/agents/${sessionId}/${String(e.round).padStart(3, '0')}/`}>#{e.round}</a>
+                  · {fmt(e.applied_at)}
+                </span>
+              </header>
+              <p class="agents-deliv-proposal">
+                {e.proposalTitle
+                  ? <strong>{escapeHtml(e.proposalTitle)}</strong>
+                  : <span class="muted"><em>(未找到 proposal_id={escapeHtml(e.proposal_id)} 的标题)</em></span>}
+                {e.proposalType && <code class="agents-deliv-type">{escapeHtml(e.proposalType)}</code>}
+              </p>
+              <details>
+                <summary>📦 payload 摘要:<code>{escapeHtml(e.payloadSummary)}</code></summary>
+                <pre class="agents-deliv-payload">{JSON.stringify(e.payload, null, 2)}</pre>
+              </details>
+            </li>
+          ))}
+        </ol>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>← Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/timeline/`}>📜 Timeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/papers/`}>📚 Papers</a>
+        <a class="button" href={`${base}/agents/${sessionId}/score/`}>📊 Score</a>
+        <a class="button" href={`${base}/agents/${sessionId}/export/`}>📦 Export</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-deliv-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-deliv-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-deliv-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-deliv-item {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.6rem;
+  }
+  .agents-deliv-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+  }
+  .agents-deliv-kind code {
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+  .agents-deliv-kind-writing code { background: rgba(99, 102, 241, 0.15); color: #4f46e5; }
+  .agents-deliv-kind-intake code { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+  .agents-deliv-kind-experiment code { background: rgba(245, 158, 11, 0.15); color: #b45309; }
+  .agents-deliv-kind-idea code { background: rgba(168, 85, 247, 0.15); color: #a855f7; }
+  .agents-deliv-kind-other code { background: rgba(107, 114, 128, 0.15); color: #6b7280; }
+  .agents-deliv-proposal {
+    margin: 0.4rem 0;
+    font-size: 0.92rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .agents-deliv-type {
+    font-size: 0.78rem;
+    padding: 0.1rem 0.4rem;
+    background: rgba(0,0,0,0.2);
+    border-radius: 4px;
+  }
+  .agents-deliv-payload {
+    background: rgba(0,0,0,0.3);
+    padding: 0.6rem;
+    border-radius: 4px;
+    max-height: 300px;
+    overflow: auto;
+    font-size: 0.8rem;
+    margin-top: 0.4rem;
+  }
+</style>
