@@ -1,0 +1,243 @@
+---
+// /agents/pipeline-detect.astro — iter #220:pipeline stage auto-detection
+//
+// 7-stage pipeline:ideation → lit review → experiment → draft → review → revise → export
+// 自动检测每个 session 当前所在 stage:
+//   - ideation:有 meta + 一些 proposals
+//   - lit review:rounds 中有 lit 相关
+//   - experiment:rounds 中有 experiment 引用
+//   - draft:synthesis 存在(早期版本)
+//   - review:reviewer 相关文件存在
+//   - revise:rounds 持续推进
+//   - export:export bundle 存在
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionStage {
+  sid: string;
+  goal: string;
+  currentStage: string;
+  stageNum: number;  // 1-7
+  hasMeta: boolean;
+  hasRounds: boolean;
+  hasSynthesis: boolean;
+  hasReview: boolean;
+  hasRevision: boolean;
+  hasExport: boolean;
+  totalArtifacts: number;
+}
+
+const STAGES = [
+  { num: 1, name: 'ideation', key: 'ideation' },
+  { num: 2, name: 'lit review', key: 'lit' },
+  { num: 3, name: 'experiment', key: 'experiment' },
+  { num: 4, name: 'draft', key: 'draft' },
+  { num: 5, name: 'review', key: 'review' },
+  { num: 6, name: 'revise', key: 'revise' },
+  { num: 7, name: 'export', key: 'export' },
+];
+
+function detectStage(s: SessionStage): { num: number; name: string } {
+  if (s.hasExport) return { num: 7, name: 'export' };
+  if (s.hasRevision && s.rounds >= 3) return { num: 6, name: 'revise' };
+  if (s.hasReview) return { num: 5, name: 'review' };
+  if (s.hasSynthesis && s.rounds >= 2) return { num: 4, name: 'draft' };
+  if (s.rounds >= 2) return { num: 3, name: 'experiment' };
+  if (s.hasRounds) return { num: 2, name: 'lit review' };
+  return { num: 1, name: 'ideation' };
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionStage[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    let hasMeta = false;
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; hasMeta = true; }
+      catch (e) { /* */ }
+    }
+    let rounds = 0;
+    let hasReview = false;
+    let hasRevision = false;
+    const rd = join(root, sid, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        rounds += 1;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          if (r.review) hasReview = true;
+          if ((r.modifier?.applied ?? []).length > 0) hasRevision = true;
+        } catch (e) { /* */ }
+      }
+    }
+    let hasSynthesis = false;
+    const sd = join(root, sid, 'synthesis');
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) hasSynthesis = true;
+      }
+    }
+    let hasExport = false;
+    const ed = join(root, sid, 'export');
+    if (existsSync(ed)) {
+      const efs = await readdir(ed).catch(() => []);
+      hasExport = efs.length > 0;
+    }
+    const totalArtifacts = (hasMeta ? 1 : 0) + rounds + (hasSynthesis ? 1 : 0) + (hasReview ? 1 : 0) + (hasExport ? 1 : 0);
+    sessions.push({
+      sid, goal,
+      currentStage: '', stageNum: 0,
+      hasMeta, hasRounds: rounds > 0, hasSynthesis, hasReview, hasRevision, hasExport,
+      totalArtifacts,
+      rounds,
+    });
+  }
+}
+
+for (const s of sessions) {
+  const stage = detectStage(s);
+  s.stageNum = stage.num;
+  s.currentStage = stage.name;
+}
+
+// 分布
+const stageCount = new Map<string, number>();
+for (const s of sessions) {
+  stageCount.set(s.currentStage, (stageCount.get(s.currentStage) ?? 0) + 1);
+}
+const stageList = STAGES.map((st) => ({
+  num: st.num,
+  name: st.name,
+  count: stageCount.get(st.name) ?? 0,
+}));
+
+const stageMatrix = sessions.map((s) => ({
+  ...s,
+  stageName: s.currentStage,
+}));
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Pipeline Stage Detector · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / pipeline-detect</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎚️ Pipeline Stage Detector <span class="muted" style="font-size:0.6em">(iter #220)</span></h1>
+      <p class="agents-sub">
+        7-stage pipeline 自动检测:sessions 当前所在 stage。
+        ideation → lit review → experiment → draft → review → revise → export
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-psd-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Stage 分布</h2>
+      <pre class="agents-psd-flow">{stageList.map((st) => {
+        const max = Math.max(...stageList.map((x) => x.count), 1);
+        const label = `${st.num}. ${st.name}`;
+        return `${label.padEnd(16)} ${bar(st.count, max, 20)}  ${st.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 按 stage 列出 sessions</h2>
+      {STAGES.map((st) => {
+        const inStage = sessions.filter((s) => s.stageNum === st.num);
+        return (
+          <details>
+            <summary><strong>{st.num}. {st.name}</strong> ({inStage.length} sessions)</summary>
+            <table class="agents-session-table">
+              <thead>
+                <tr><th>sid</th><th>rounds</th><th>artifacts</th><th>goal</th></tr>
+              </thead>
+              <tbody>
+                {inStage.slice(0, 30).map((s) => (
+                  <tr>
+                    <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+                    <td>{s.rounds}</td>
+                    <td>{s.totalArtifacts}</td>
+                    <td><small class="muted">{esc(s.goal.slice(0, 50))}{(s.goal ?? '').length > 50 ? '…' : ''}</small></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        );
+      })}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>stage 1-2:早期(尚未深度迭代)</li>
+        <li>stage 3-4:中段(已有实质内容)</li>
+        <li>stage 5-7:后期(导出/收尾)</li>
+        <li>对照 <a href={`${base}/agents/pipelines/`}>Pipelines</a> 看跨 session 概览</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-psd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-psd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-psd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  details {
+    margin: 0.5rem 0;
+  }
+  details summary {
+    cursor: pointer;
+    padding: 0.4rem 0;
+  }
+</style>
