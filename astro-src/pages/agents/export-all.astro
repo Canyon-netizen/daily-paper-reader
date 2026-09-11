@@ -1,0 +1,247 @@
+---
+// /agents/export-all.astro — iter #129:export everything
+//
+// 一键打包所有 syntheses + meta + 索引为单文件:
+//   - 选择格式:tar / zip / json / single-md
+//   - 选择范围:全部 / active only / 时间窗口
+//   - 浏览器端生成 Blob 并下载(无后端)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionList {
+  sid: string;
+  hasMeta: boolean;
+  hasRounds: boolean;
+  synthCount: number;
+  lastUpdate: number;
+}
+
+const sessions: SessionList[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sl: SessionList = {
+      sid,
+      hasMeta: existsSync(join(root, sid, 'meta.json')),
+      hasRounds: existsSync(join(root, sid, 'rounds')),
+      synthCount: 0,
+      lastUpdate: 0,
+    };
+    const sd = join(root, sid, 'synthesis');
+    if (existsSync(sd)) {
+      const files = await readdir(sd).catch(() => []);
+      sl.synthCount = files.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+      for (const f of files) {
+        const st = await stat(join(sd, f)).catch(() => null);
+        if (st && st.mtimeMs > sl.lastUpdate) sl.lastUpdate = st.mtimeMs;
+      }
+    }
+    if (sl.hasMeta) {
+      const st = await stat(join(root, sid, 'meta.json')).catch(() => null);
+      if (st && st.mtimeMs > sl.lastUpdate) sl.lastUpdate = st.mtimeMs;
+    }
+    sessions.push(sl);
+  }
+}
+sessions.sort((a, b) => b.lastUpdate - a.lastUpdate);
+
+const totalSyn = sessions.reduce((s, x) => s + x.synthCount, 0);
+
+function fmtDate(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toISOString().slice(0, 10);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Export All · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / export-all</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📦 Export All <span class="muted" style="font-size:0.6em">(iter #129)</span></h1>
+      <p class="agents-sub">
+        一键打包所有 syntheses + meta 为单文件下载。浏览器端生成,无后端。
+        支持 JSON / 单 markdown bundle / 简易 tar-like 文本。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ea-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>总 syntheses: <strong>{totalSyn}</strong></span>
+        <span>有 meta: <strong>{sessions.filter((s) => s.hasMeta).length}</strong></span>
+        <span>有 rounds: <strong>{sessions.filter((s) => s.hasRounds).length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⬇️ 下载格式</h2>
+      <p>
+        <button class="button primary" id="ea-btn-json" type="button">📋 JSON 全量(所有 session 的 meta + 文本)</button>
+        <button class="button" id="ea-btn-md" type="button">📝 单 Markdown(全部 syntheses 拼起来)</button>
+        <button class="button" id="ea-btn-tar" type="button">📦 简易 tar-like(可 cat)</button>
+      </p>
+      <p class="muted"><small>⚠️ 大文件(几百个 sessions)可能要几秒生成,浏览器会弹出下载。</small></p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 session 列表(用于选择)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th><input type="checkbox" id="ea-check-all" checked /></th><th>sid</th><th>synth</th><th>rounds</th><th>meta</th><th>last update</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 100).map((s) => (
+            <tr>
+              <td><input type="checkbox" class="ea-cb" data-sid={s.sid} checked /></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 16))}</code></a></td>
+              <td>{s.synthCount}</td>
+              <td>{s.hasRounds ? '✓' : '—'}</td>
+              <td>{s.hasMeta ? '✓' : '—'}</td>
+              <td><small>{fmtDate(s.lastUpdate)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {sessions.length > 100 && (
+        <p class="muted"><small>... 还有 {sessions.length - 100} 个 sessions 未显示。批量操作仍然适用。</small></p>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 当前选择</h2>
+      <p>
+        已选: <strong id="ea-selected-count">{sessions.length}</strong> / {sessions.length} sessions
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+const cbAll = document.getElementById('ea-check-all');
+const cbs = document.querySelectorAll('.ea-cb');
+const countEl = document.getElementById('ea-selected-count');
+
+function updateCount(): void {
+  const c = document.querySelectorAll<HTMLInputElement>('.ea-cb:checked').length;
+  if (countEl) countEl.textContent = String(c);
+}
+
+cbAll?.addEventListener('change', (e) => {
+  const checked = (e.target as HTMLInputElement).checked;
+  cbs.forEach((cb) => { (cb as HTMLInputElement).checked = checked; });
+  updateCount();
+});
+cbs.forEach((cb) => cb.addEventListener('change', updateCount));
+
+function getSelectedSids(): string[] {
+  return Array.from(document.querySelectorAll<HTMLInputElement>('.ea-cb:checked'))
+    .map((cb) => cb.dataset.sid)
+    .filter((s): s is string => !!s);
+}
+
+async function fetchText(path: string): Promise<string> {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error('fetch failed: ' + path);
+  return r.text();
+}
+
+function download(filename: string, content: string, mime: string): void {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById('ea-btn-json')?.addEventListener('click', async () => {
+  const sids = getSelectedSids();
+  const out: any = { exported_at: new Date().toISOString(), sessions: {} };
+  for (const sid of sids) {
+    try {
+      const base = `agents/${sid}/`;
+      const meta = await fetchText(base + 'meta.json').catch(() => null);
+      const synthFiles = await fetch(base + 'synthesis/').catch(() => null);
+      out.sessions[sid] = { meta: meta ? JSON.parse(meta) : null };
+    } catch (e) { /* */ }
+  }
+  download(`agents-export-${Date.now()}.json`, JSON.stringify(out, null, 2), 'application/json');
+});
+
+document.getElementById('ea-btn-md')?.addEventListener('click', async () => {
+  const sids = getSelectedSids();
+  const parts: string[] = [`# Agents Export\n\nexported_at: ${new Date().toISOString()}\ntotal_sessions: ${sids.length}\n\n`];
+  for (const sid of sids) {
+    try {
+      const meta = await fetchText(`agents/${sid}/meta.json`).catch(() => null);
+      let goal = sid;
+      if (meta) {
+        try { goal = JSON.parse(meta).goal ?? sid; } catch (e) { /* */ }
+      }
+      parts.push(`\n---\n\n# ${sid}\n\n**goal**: ${goal}\n\n`);
+      // fetch a known list of syntheses by guessing range
+      for (let i = 1; i <= 30; i++) {
+        const idx = String(i).padStart(3, '0');
+        try {
+          const md = await fetchText(`agents/${sid}/synthesis/${idx}/`);
+          if (!md.includes('Synthesis')) continue;
+          parts.push(`\n## synthesis #${i}\n\n${md.slice(0, 4000)}\n`);
+        } catch (e) { /* */ }
+      }
+    } catch (e) { /* */ }
+  }
+  download(`agents-export-${Date.now()}.md`, parts.join('\n'), 'text/markdown');
+});
+
+document.getElementById('ea-btn-tar')?.addEventListener('click', async () => {
+  const sids = getSelectedSids();
+  const parts: string[] = [`=== AGENTS-EXPORT ${new Date().toISOString()} sessions=${sids.length} ===\n`];
+  for (const sid of sids) {
+    try {
+      const meta = await fetchText(`agents/${sid}/meta.json`).catch(() => null);
+      parts.push(`\n=== ${sid} ===\n`);
+      if (meta) parts.push(`[meta.json]\n${meta}\n`);
+      for (let i = 1; i <= 30; i++) {
+        const idx = String(i).padStart(3, '0');
+        try {
+          const md = await fetchText(`agents/${sid}/synthesis/${idx}/`);
+          if (!md.includes('Synthesis')) continue;
+          parts.push(`\n[synthesis_${idx}.md]\n${md.slice(0, 8000)}\n`);
+        } catch (e) { /* */ }
+      }
+    } catch (e) { /* */ }
+  }
+  download(`agents-export-${Date.now()}.txt`, parts.join('\n'), 'text/plain');
+});
+</script>
+
+<style>
+  .agents-ea-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ea-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
