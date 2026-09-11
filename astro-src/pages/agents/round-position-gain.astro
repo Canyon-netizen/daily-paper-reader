@@ -1,0 +1,179 @@
+---
+// /agents/round-position-gain.astro — iter #308:round position × avg gain
+//
+// 每个 round position 上 modifier 带来的平均 gain(per-round-position):
+//   - R1 → R2, R2 → R3, R3 → R4, ...
+//   - gain vs position 的关系 = 边际收益曲线
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PosGain {
+  position: number;     // 1-based, position 表示"该 gain 来自的位置"
+  gains: number[];
+  count: number;
+  avg: number;
+  positive: number;
+  negative: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const posMap = new Map<number, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+
+    for (let i = 1; i < scores.length; i++) {
+      const pos = i + 1;
+      const gain = scores[i] - scores[i - 1];
+      if (!posMap.has(pos)) posMap.set(pos, []);
+      posMap.get(pos)!.push(gain);
+    }
+  }
+}
+
+const positions: PosGain[] = [];
+for (const [pos, gains] of [...posMap.entries()].sort((a, b) => a[0] - b[0])) {
+  positions.push({
+    position: pos, gains,
+    count: gains.length,
+    avg: gains.reduce((a, b) => a + b, 0) / gains.length,
+    positive: gains.filter((g) => g > 0).length,
+    negative: gains.filter((g) => g < 0).length,
+  });
+}
+
+const maxAbs = Math.max(...positions.map((p) => Math.max(Math.abs(p.avg), 0.01)), 1);
+
+function bar(g: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.min(width, Math.round((Math.abs(g) / max) * width));
+  if (g >= 0) return '█'.repeat(filled) + '░'.repeat(width - filled);
+  return '░'.repeat(width - filled) + '█'.repeat(filled);
+}
+
+const totalGainSum = positions.reduce((s, p) => s + p.avg * p.count, 0);
+const totalCount = positions.reduce((s, p) => s + p.count, 0);
+const globalAvg = totalCount > 0 ? totalGainSum / totalCount : 0;
+---
+
+<BaseLayout title="Round Position × Avg Gain · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-position-gain</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Round Position × Avg Gain <span class="muted" style="font-size:0.6em">(iter #308)</span></h1>
+      <p class="agents-sub">
+        每个 round position 上的平均 gain(per-round-position)。看边际收益曲线。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rpg-globals">
+        <span>global avg gain: <strong>{globalAvg >= 0 ? '+' : ''}{globalAvg.toFixed(3)}</strong></span>
+        <span>positions: <strong>{positions.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 各 position 的 avg gain</h2>
+      <pre class="agents-rpg-flow">{positions.map((p) => {
+        const sym = p.avg >= 0 ? '+' : ' ';
+        return `R${p.position.toString().padStart(2)}  ${bar(p.avg, maxAbs, 22)}  ${sym}${p.avg.toFixed(3)}  pos=${p.positive} neg=${p.negative} n=${p.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>position</th><th>count</th><th>avg gain</th><th>positive</th><th>negative</th><th>% positive</th></tr>
+        </thead>
+        <tbody>
+          {positions.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">R{p.position}</strong></td>
+              <td>{p.count}</td>
+              <td style={p.avg >= 0 ? 'color:#10b981' : 'color:#ef4444'}><strong>{p.avg >= 0 ? '+' : ''}{p.avg.toFixed(3)}</strong></td>
+              <td>{p.positive}</td>
+              <td>{p.negative}</td>
+              <td>{((p.positive / Math.max(1, p.count)) * 100).toFixed(0)}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>early position (R2, R3) gain 大 = modifier 在早期很有效</li>
+        <li>late position gain 小或负 = 边际收益递减</li>
+        <li>% positive 低的位置 = modifier 在该位置更容易退步</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+        <li>对照 <a href={`${base}/agents/score-velocity/`}>Score Velocity</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rpg-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rpg-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rpg-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
