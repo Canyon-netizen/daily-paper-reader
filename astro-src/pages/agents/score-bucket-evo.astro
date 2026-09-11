@@ -1,0 +1,197 @@
+---
+// /agents/score-bucket-evo.astro — iter #193:score bucket evolution
+//
+// 跨 session 看 score bucket 分布如何随月份变化:
+//   - 行 = 月份
+//   - 列 = score bucket (0-2 / 2-4 / 4-6 / 6-8 / 8-10)
+//   - 每格 = 该月份该 bucket 的 proposal 数
+//   - 显示整体质量趋势
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const BUCKETS = ['0-2', '2-4', '4-6', '6-8', '8-10'];
+const matrix: Map<string, number[]> = new Map(); // month → bucket counts
+
+const root = join(process.cwd(), 'archive');
+const allMonths = new Set<string>();
+let total = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const fp = join(rd, `round_${ri}.json`);
+        const st = await stat(fp);
+        const monthKey = new Date(st.mtimeMs).toISOString().slice(0, 7);
+        allMonths.add(monthKey);
+        if (!matrix.has(monthKey)) matrix.set(monthKey, [0, 0, 0, 0, 0]);
+        const row = matrix.get(monthKey)!;
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total !== 'number') continue;
+            total += 1;
+            let bucketIdx = 0;
+            if (p.total < 2) bucketIdx = 0;
+            else if (p.total < 4) bucketIdx = 1;
+            else if (p.total < 6) bucketIdx = 2;
+            else if (p.total < 8) bucketIdx = 3;
+            else bucketIdx = 4;
+            row[bucketIdx] += 1;
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const sortedMonths = [...allMonths].sort();
+const maxColCount = Math.max(...sortedMonths.flatMap((m) => matrix.get(m) ?? []), 1);
+
+function intensity(n: number, max: number): string {
+  if (n === 0) return 'rgba(99,102,241,0.05)';
+  const ratio = n / max;
+  if (ratio < 0.2) return 'rgba(99,102,241,0.2)';
+  if (ratio < 0.4) return 'rgba(99,102,241,0.4)';
+  if (ratio < 0.6) return 'rgba(99,102,241,0.6)';
+  if (ratio < 0.8) return 'rgba(99,102,241,0.8)';
+  return 'rgba(99,102,241,1)';
+}
+---
+
+<BaseLayout title="Score Bucket Evolution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-bucket-evo</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Score Bucket Evolution <span class="muted" style="font-size:0.6em">(iter #193)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 score bucket 分布如何随月份变化。
+        行 = 月份,列 = score 段,颜色 = 数量。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sbe-globals">
+        <span>总 proposals: <strong>{total}</strong></span>
+        <span>月份数: <strong>{sortedMonths.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 月份 × bucket 矩阵</h2>
+      <table class="agents-sbe-matrix">
+        <thead>
+          <tr>
+            <th>月份</th>
+            {BUCKETS.map((b) => <th>{b}</th>)}
+            <th>total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sortedMonths.slice(-12).map((m) => {
+            const row = matrix.get(m) ?? [0, 0, 0, 0, 0];
+            const total = row.reduce((a, b) => a + b, 0);
+            return (
+              <tr>
+                <td><code>{m}</code></td>
+                {row.map((c) => (
+                  <td style={`background:${intensity(c, maxColCount)}`}>
+                    <strong>{c}</strong>
+                  </td>
+                ))}
+                <td>{total}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 月份 × bucket 比例(%)</h2>
+      <table class="agents-sbe-matrix">
+        <thead>
+          <tr>
+            <th>月份</th>
+            {BUCKETS.map((b) => <th>{b}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {sortedMonths.slice(-12).map((m) => {
+            const row = matrix.get(m) ?? [0, 0, 0, 0, 0];
+            const total = row.reduce((a, b) => a + b, 0);
+            return (
+              <tr>
+                <td><code>{m}</code></td>
+                {row.map((c) => (
+                  <td>
+                    <small>{total > 0 ? ((c / total) * 100).toFixed(1) : '0'}%</small>
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>6-8 / 8-10 段随时间增长 = 系统在改善</li>
+        <li>0-2 / 2-4 段越来越多 = 退化中,看 <a href={`${base}/agents/goal-quality/`}>Goal Quality</a></li>
+        <li>对照 <a href={`${base}/agents/score-matrix/`}>Score Matrix</a> 看与 gate 的关联</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sbe-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sbe-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sbe-matrix {
+    border-collapse: collapse;
+  }
+  .agents-sbe-matrix th, .agents-sbe-matrix td {
+    padding: 0.5rem 0.8rem;
+    text-align: center;
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    min-width: 60px;
+  }
+  .agents-sbe-matrix th {
+    background: rgba(99, 102, 241, 0.1);
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+</style>
