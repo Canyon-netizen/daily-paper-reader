@@ -1,0 +1,192 @@
+---
+// /agents/weekly-digest.astro — iter #195:auto weekly digest
+//
+// 自动生成"上周摘要":
+//   - 上周创建 sessions 数
+//   - 上周 rounds 数
+//   - 上周 promoted 数
+//   - 上周 tokens / 估算成本
+//   - 上周最常被研究的 goal stem
+//   - 上周最活跃的 5 个 sessions
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+const ONE_DAY = 24 * 60 * 60 * 1000;
+const now = Date.now();
+const weekStart = new Date(now - ONE_WEEK);
+const weekStartStr = weekStart.toISOString().slice(0, 10);
+
+interface WeeklyStat {
+  newSessions: number;
+  newRounds: number;
+  newPromoted: number;
+  totalTokens: number;
+  activeSessions: Set<string>;
+  newGoals: { sid: string; goal: string; mtime: number }[];
+  topSessions: { sid: string; rounds: number; goal: string; mtime: number }[];
+}
+
+const stats: WeeklyStat = {
+  newSessions: 0,
+  newRounds: 0,
+  newPromoted: 0,
+  totalTokens: 0,
+  activeSessions: new Set(),
+  newGoals: [],
+  topSessions: [],
+};
+
+const SONNET_PRICE = 6;
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    let goal = '';
+    if (existsSync(mp)) {
+      try {
+        const st = await stat(mp);
+        if (st.mtimeMs > now - ONE_WEEK) {
+          stats.newSessions += 1;
+          goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+          stats.newGoals.push({ sid, goal, mtime: st.mtimeMs });
+        }
+      } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    let sessionNewRounds = 0;
+    for (const ri of rNum) {
+      try {
+        const fp = join(rd, `round_${ri}.json`);
+        const st = await stat(fp);
+        if (st.mtimeMs > now - ONE_WEEK) {
+          stats.newRounds += 1;
+          stats.activeSessions.add(sid);
+          sessionNewRounds += 1;
+          const r = JSON.parse(await readFile(fp, 'utf8'));
+          stats.totalTokens += r.feedback?.total_tokens ?? 0;
+          for (const gp of r.gate?.proposals ?? []) {
+            if (gp.category === 'promoted') stats.newPromoted += 1;
+          }
+        }
+      } catch (e) { /* */ }
+    }
+    if (sessionNewRounds > 0) {
+      stats.topSessions.push({ sid, rounds: sessionNewRounds, goal, mtime: now });
+    }
+  }
+}
+
+stats.topSessions.sort((a, b) => b.rounds - a.rounds);
+const weeklyCost = (stats.totalTokens / 1_000_000) * SONNET_PRICE;
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+
+const today = new Date(now).toISOString().slice(0, 10);
+---
+
+<BaseLayout title="Weekly Digest · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / weekly-digest</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📰 Weekly Digest <span class="muted" style="font-size:0.6em">(iter #195)</span></h1>
+      <p class="agents-sub">
+        自动生成的"上周摘要"({weekStartStr} → {today})。
+        类似 dev team's standup 报告。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 上周数据</h2>
+      <div class="agents-wd-globals">
+        <span>新 sessions: <strong>{stats.newSessions}</strong></span>
+        <span>新 rounds: <strong>{stats.newRounds}</strong></span>
+        <span>新 promoted: <strong>{stats.newPromoted}</strong></span>
+        <span>tokens 消耗: <strong>{stats.totalTokens.toLocaleString()}</strong></span>
+        <span>估算成本 (Sonnet): <strong>${weeklyCost.toFixed(2)}</strong></span>
+        <span>活跃 sessions: <strong>{stats.activeSessions.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📜 上周新创建的 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {stats.newGoals.map((g) => (
+            <tr>
+              <td><a href={`${base}/agents/${g.sid}/`}><code>{esc(g.sid.slice(0, 14))}</code></a></td>
+              <td><small class="muted">{esc(g.goal.slice(0, 80))}{(g.goal ?? '').length > 80 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 上周最活跃 top 5 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds (上周)</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {stats.topSessions.slice(0, 5).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 14))}</code></a></td>
+              <td><strong>{s.rounds}</strong></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 60))}{(s.goal ?? '').length > 60 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 摘要</h2>
+      <ul>
+        <li>上周创建 {stats.newSessions} 个新 session</li>
+        <li>跑了 {stats.newRounds} 个 round,采纳 {stats.newPromoted} 个 promoted</li>
+        <li>消耗 ~${weeklyCost.toFixed(2)}(Sonnet 估算)</li>
+        {stats.newSessions === 0 && stats.newRounds === 0 && <li>⚠️ 上周无活动 — 可能是静默期</li>}
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-wd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-wd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
