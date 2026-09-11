@@ -1,0 +1,210 @@
+---
+// /agents/goal-type-score-matrix.astro — iter #286:goal type × score bucket matrix
+//
+// 6 种 goal type × 3 种 score bucket(low/mid/high)的矩阵:
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', '分析', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan', 'plan'],
+  other: [],
+};
+
+const root = join(process.cwd(), 'archive');
+const matrix: Record<string, { low: number; mid: number; high: number }> = {
+  research: { low: 0, mid: 0, high: 0 },
+  code: { low: 0, mid: 0, high: 0 },
+  write: { low: 0, mid: 0, high: 0 },
+  analyze: { low: 0, mid: 0, high: 0 },
+  design: { low: 0, mid: 0, high: 0 },
+  other: { low: 0, mid: 0, high: 0 },
+};
+
+const typeTotals: Record<string, number> = {
+  research: 0, code: 0, write: 0, analyze: 0, design: 0, other: 0,
+};
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+    typeTotals[type] += 1;
+
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+    let finalScore = 0;
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${rNums[rNums.length - 1]}.json`), 'utf8'));
+      const arr: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') arr.push(p.total);
+        }
+      }
+      if (arr.length > 0) finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+    } catch (e) { continue; }
+
+    if (finalScore < 5) matrix[type].low += 1;
+    else if (finalScore < 7) matrix[type].mid += 1;
+    else matrix[type].high += 1;
+  }
+}
+
+const types = ['research', 'code', 'write', 'analyze', 'design', 'other'];
+const totals = types.map((t) => matrix[t].low + matrix[t].mid + matrix[t].high);
+const maxTotal = Math.max(...totals, 1);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function cell(v: number): string {
+  if (v === 0) return '<span class="muted">·</span>';
+  if (v >= 10) return `<strong style="color:#10b981">${v}</strong>`;
+  return `${v}`;
+}
+---
+
+<BaseLayout title="Goal Type × Score Matrix · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-score-matrix</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧬 Goal Type × Score Matrix <span class="muted" style="font-size:0.6em">(iter #286)</span></h1>
+      <p class="agents-sub">
+        6 种 goal type × 3 种 final score bucket(low &lt;5 / mid 5-7 / high ≥7)的交叉矩阵。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🧬 矩阵</h2>
+      <table class="agents-session-table agents-gtsm-matrix">
+        <thead>
+          <tr>
+            <th>type</th>
+            <th>low (&lt;5)</th>
+            <th>mid (5-7)</th>
+            <th>high (≥7)</th>
+            <th>total</th>
+            <th>% high</th>
+          </tr>
+        </thead>
+        <tbody>
+          {types.map((t) => {
+            const m = matrix[t];
+            const total = m.low + m.mid + m.high;
+            const pct = total > 0 ? ((m.high / total) * 100).toFixed(0) : '0';
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{t}</strong></td>
+                <td>{m.low}</td>
+                <td>{m.mid}</td>
+                <td>{m.high}</td>
+                <td>{total}</td>
+                <td>{pct}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 按 total 的水平柱状图</h2>
+      <pre class="agents-gtsm-flow">{types.map((t) => {
+        const total = totals[types.indexOf(t)];
+        const filled = Math.round((total / maxTotal) * 30);
+        return `${t.padEnd(10)} ${'█'.repeat(filled)}${'░'.repeat(30 - filled)} ${total}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 % high 排行</h2>
+      <ol>
+        {types.map((t) => {
+          const m = matrix[t];
+          const total = m.low + m.mid + m.high;
+          const pct = total > 0 ? ((m.high / total) * 100).toFixed(0) : '0';
+          return (
+            <li><strong style="color:#4f46e5">{t}</strong> — {pct}% sessions scored ≥7(of {total})</li>
+          );
+        })}
+      </ol>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>% high 高的 type = 当前系统擅长的目标类型</li>
+        <li>% low 高的 type = 用户需求 / 系统能力错位</li>
+        <li>对照 <a href={`${base}/agents/goal-type-classifier/`}>Goal Type Classifier</a></li>
+        <li>对照 <a href={`${base}/agents/type-action-rec/`}>Type Action Rec</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtsm-matrix th, .agents-gtsm-matrix td {
+    text-align: center;
+  }
+  .agents-gtsm-matrix td:first-child {
+    text-align: left;
+  }
+  .agents-gtsm-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtsm-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
