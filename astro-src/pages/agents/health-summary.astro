@@ -1,0 +1,262 @@
+---
+// /agents/health-summary.astro — iter #167:pipeline health narrative
+//
+// 自动生成一段系统健康状态总结:
+//   - 总 sessions / 活跃 / 终止 / 流产
+//   - 总 promoted 数 / promoted rate
+//   - 今日活跃
+//   - 平均 score / rounds
+//   - LLM 偏好
+//   - 月度 token 趋势
+//   - 风险信号
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const now = Date.now();
+const TODAY = new Date(now).toISOString().slice(0, 10);
+const ABORT_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface SessionHealth {
+  sid: string;
+  goal: string;
+  rounds: number;
+  promoted: number;
+  rejected: number;
+  avgScore: number;
+  tokens: number;
+  lastMtime: number;
+  status: 'active' | 'dormant' | 'aborted';
+}
+
+const sessions: SessionHealth[] = [];
+let activeToday = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length === 0) continue;
+    let promoted = 0, rejected = 0, tokens = 0;
+    let lastMtime = 0;
+    const scores: number[] = [];
+    for (const ri of rNum) {
+      try {
+        const fp = join(rd, `round_${ri}.json`);
+        const st = await stat(fp);
+        if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs;
+        if (st.mtimeMs > now - 24 * 60 * 60 * 1000) activeToday += 1;
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        tokens += r.feedback?.total_tokens ?? 0;
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') scores.push(p.total);
+          }
+        }
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+          if (gp.category === 'rejected') rejected += 1;
+        }
+      } catch (e) { /* */ }
+    }
+    const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    let status: 'active' | 'dormant' | 'aborted' = 'active';
+    if (rNum.length < 3 && (now - lastMtime) > ABORT_MS) status = 'aborted';
+    else if ((now - lastMtime) > ABORT_MS) status = 'dormant';
+    sessions.push({
+      sid, goal,
+      rounds: rNum.length,
+      promoted, rejected,
+      avgScore, tokens,
+      lastMtime, status,
+    });
+  }
+}
+
+const total = sessions.length;
+const active = sessions.filter((s) => s.status === 'active').length;
+const dormant = sessions.filter((s) => s.status === 'dormant').length;
+const aborted = sessions.filter((s) => s.status === 'aborted').length;
+const totalPromoted = sessions.reduce((s, x) => s + x.promoted, 0);
+const totalRejected = sessions.reduce((s, x) => s + x.rejected, 0);
+const totalRounds = sessions.reduce((s, x) => s + x.rounds, 0);
+const totalTokens = sessions.reduce((s, x) => s + x.tokens, 0);
+
+const scoredSessions = sessions.filter((s) => s.avgScore > 0);
+const avgScore = scoredSessions.length > 0 ? scoredSessions.reduce((s, x) => s + x.avgScore, 0) / scoredSessions.length : 0;
+
+const promotionRate = totalRounds > 0 ? (totalPromoted / totalRounds) : 0;
+const rejectionRate = totalRounds > 0 ? (totalRejected / totalRounds) : 0;
+
+// 风险信号
+const signals: { kind: 'good' | 'warn' | 'bad'; msg: string }[] = [];
+if (aborted > total * 0.2) signals.push({ kind: 'bad', msg: `流产 session 比例高 (${aborted}/${total}) — 可能有用户流失` });
+else if (aborted > 0) signals.push({ kind: 'warn', msg: `${aborted} 个 session 处于流产状态 (< 3 rounds + 7d 无更新)` });
+if (totalPromoted === 0 && total > 5) signals.push({ kind: 'bad', msg: '总 promoted 为 0 — gate 可能过严,看 Gate Throughput' });
+else if (promotionRate < 0.1) signals.push({ kind: 'warn', msg: `promotion rate 偏低 (${(promotionRate*100).toFixed(1)}%)` });
+if (rejectionRate > 0.7) signals.push({ kind: 'bad', msg: `rejection rate 极高 (${(rejectionRate*100).toFixed(1)}%) — gate 在拒绝大部分 proposal` });
+if (activeToday === 0) signals.push({ kind: 'warn', msg: '今日无 round 更新' });
+else signals.push({ kind: 'good', msg: `今日有 ${activeToday} 次 round 写入` });
+if (avgScore >= 7) signals.push({ kind: 'good', msg: `整体平均分高 (${avgScore.toFixed(2)})` });
+else if (avgScore > 0 && avgScore < 5) signals.push({ kind: 'warn', msg: `整体平均分偏低 (${avgScore.toFixed(2)})` });
+if (totalTokens > 0) {
+  // 最近 30 天 tokens 估算
+  const recentTokens = sessions
+    .filter((s) => (now - s.lastMtime) < 30 * 24 * 60 * 60 * 1000)
+    .reduce((sum, s) => sum + s.tokens, 0);
+  if (recentTokens > 100_000_000) signals.push({ kind: 'warn', msg: `近 30 天 tokens > 100M,考虑换小模型或降低 frequency` });
+}
+---
+
+<BaseLayout title="Health Summary · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / health-summary</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💊 Health Summary <span class="muted" style="font-size:0.6em">(iter #167)</span></h1>
+      <p class="agents-sub">
+        自动生成一段系统健康叙事。
+        所有数字从 archive/ 中实时聚合,适合每日 dashboard 头部。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📝 自动生成的健康报告 · {TODAY}</h2>
+      <div class="agents-hs-report">
+        <p>
+          📊 <strong>覆盖</strong>:目前系统有 <strong>{total}</strong> 个 session,
+          其中 <strong>{active}</strong> 活跃,<strong>{dormant}</strong> 休眠,
+          <strong>{aborted}</strong> 流产(&lt; 3 rounds + 7d 无更新)。
+        </p>
+        <p>
+          🔬 <strong>产出</strong>:跨 {totalRounds} 轮共产生了
+          <strong>{totalPromoted}</strong> 个 promoted proposal,
+          <strong>{totalRejected}</strong> 个 rejected。
+          平均每轮 promoted 率 <strong>{(promotionRate*100).toFixed(1)}%</strong>,
+          rejected 率 <strong>{(rejectionRate*100).toFixed(1)}%</strong>。
+        </p>
+        <p>
+          🎯 <strong>质量</strong>:
+          {scoredSessions.length > 0
+            ? <span>平均 feedback score <strong>{avgScore.toFixed(2)}</strong>,基于 {scoredSessions.length} 个 session。</span>
+            : <span>暂无有效 score。</span>
+        </p>
+        <p>
+          💰 <strong>资源</strong>:累计 token 消耗 <strong>{totalTokens.toLocaleString()}</strong>。
+          今日 round 写入 <strong>{activeToday}</strong> 次。
+        </p>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚦 信号灯</h2>
+      <ul class="agents-hs-signals">
+        {signals.map((s) => (
+          <li class={`agents-hs-signal agents-hs-${s.kind}`}>
+            <strong>{s.kind === 'good' ? '✅' : s.kind === 'warn' ? '⚠️' : '🚨'}</strong>
+            <span>{s.msg}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 关键数字</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>指标</th><th>值</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>总 sessions</td><td>{total}</td></tr>
+          <tr><td>活跃 (active)</td><td>{active}</td></tr>
+          <tr><td>休眠 (dormant)</td><td>{dormant}</td></tr>
+          <tr><td>流产 (aborted)</td><td>{aborted}</td></tr>
+          <tr><td>总 rounds</td><td>{totalRounds}</td></tr>
+          <tr><td>总 promoted</td><td>{totalPromoted}</td></tr>
+          <tr><td>总 rejected</td><td>{totalRejected}</td></tr>
+          <tr><td>promoted/round</td><td>{(promotionRate*100).toFixed(1)}%</td></tr>
+          <tr><td>rejected/round</td><td>{(rejectionRate*100).toFixed(1)}%</td></tr>
+          <tr><td>avg score</td><td>{avgScore.toFixed(2)}</td></tr>
+          <tr><td>总 tokens</td><td>{totalTokens.toLocaleString()}</td></tr>
+          <tr><td>今日写入 rounds</td><td>{activeToday}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 下一步建议</h2>
+      <ul>
+        {aborted > 0 && <li>查看 <a href={`${base}/agents/round-density/`}>Round Density</a> 恢复流产 sessions</li>}
+        {totalPromoted === 0 && <li>看 <a href={`${base}/agents/gate-throughput/`}>Gate Throughput</a> 检查 gate 阈值</li>}
+        {avgScore > 0 && avgScore < 5 && <li>查看 <a href={`${base}/agents/goal-quality/`}>Goal Quality</a> 改进 goal 写法</li>}
+        <li>查看 <a href={`${base}/agents/funnel/`}>Funnel</a> 看 session 转化率</li>
+        <li>查看 <a href={`${base}/agents/daily-burn/`}>Daily Burn</a> 控制 token 节奏</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-hs-report {
+    background: rgba(99, 102, 241, 0.08);
+    border-left: 4px solid rgba(99, 102, 241, 0.5);
+    padding: 1rem;
+    border-radius: 4px;
+    line-height: 1.7;
+  }
+  .agents-hs-report p {
+    margin: 0.5rem 0;
+  }
+  .agents-hs-report strong {
+    color: #4f46e5;
+  }
+  .agents-hs-signals {
+    list-style: none;
+    padding: 0;
+  }
+  .agents-hs-signal {
+    padding: 0.5rem;
+    margin-bottom: 0.4rem;
+    border-radius: 4px;
+    border-left: 4px solid;
+  }
+  .agents-hs-signal strong {
+    margin-right: 0.5rem;
+  }
+  .agents-hs-good {
+    background: rgba(16, 185, 129, 0.1);
+    border-color: #10b981;
+  }
+  .agents-hs-warn {
+    background: rgba(245, 158, 11, 0.1);
+    border-color: #f59e0b;
+  }
+  .agents-hs-bad {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: #ef4444;
+  }
+</style>
