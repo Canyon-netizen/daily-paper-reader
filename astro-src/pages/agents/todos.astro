@@ -1,0 +1,371 @@
+---
+// /agents/todos.astro — iter #108:cross-session todo list
+//
+// 聚合所有 session 的 synthesis "## 下一步建议" / "## Gap & 矛盾" 小节下的所有
+// bullet,去重 → 排序 → 一次性展示。
+//
+// 每个 todo:
+//   - text(原文)
+//   - sources(出现在哪几个 sid/synthesis 编号)
+//   - checked(完成状态,localStorage)
+//   - frequency(出现次数,反映这个建议的"普适性")
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Todo {
+  text: string;
+  sources: { sid: string; idx: number }[];
+  frequency: number;
+  topicHint: string;
+}
+
+interface SessionAgg {
+  sid: string;
+  goal: string;
+  todoCount: number;
+  checkedCount: number;
+}
+
+const todoMap = new Map<string, Todo>();
+const sessionStats: SessionAgg[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    let meta: any = {};
+    try { meta = JSON.parse(await readFile(join(root, sid, 'meta.json'), 'utf8')); } catch { /* */ }
+    let files: string[] = [];
+    try { files = await readdir(sd); } catch { continue; }
+    let todoCount = 0;
+    for (const f of files) {
+      if (!/^synthesis_\d+\.md$/.test(f)) continue;
+      const m = f.match(/^synthesis_(\d+)\.md$/);
+      const idx = m ? Number(m[1]) : 0;
+      let raw = '';
+      try { raw = await readFile(join(sd, f), 'utf8'); } catch { continue; }
+      const sections = raw.split(/^##\s+/m);
+      for (const sec of sections) {
+        if (!sec.startsWith('下一步建议') && !sec.startsWith('Gap &') && !sec.startsWith('Gaps &')) continue;
+        const bullets = sec.match(/^[-*]\s+(?:\[[ x]\]\s+)?.+$/gm) ?? [];
+        for (const b of bullets) {
+          // 清洗
+          let t = b.replace(/^[-*]\s+(?:\[[ x]\]\s+)?/, '').trim();
+          if (!t || t.startsWith('(') || t.startsWith('(无') || t.startsWith('(stub')) continue;
+          // 归一化作为 key:lowercase + 去标点 + 压缩空白
+          const key = t.toLowerCase().replace(/[^\w\s一-鿿]/g, '').replace(/\s+/g, ' ').slice(0, 200);
+          if (!key || key.length < 5) continue;
+          const existing = todoMap.get(key);
+          if (existing) {
+            existing.frequency += 1;
+            if (!existing.sources.find((s) => s.sid === sid && s.idx === idx)) {
+              existing.sources.push({ sid, idx });
+            }
+          } else {
+            todoMap.set(key, {
+              text: t,
+              sources: [{ sid, idx }],
+              frequency: 1,
+              topicHint: extractTopic(t),
+            });
+          }
+          todoCount += 1;
+        }
+      }
+    }
+    sessionStats.push({
+      sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      todoCount,
+      checkedCount: 0,
+    });
+  }
+}
+
+function extractTopic(text: string): string {
+  // 提取前 2-3 个非空词作为主题提示
+  const words = text.split(/[\s,;:。、]+/).filter((w) => w.length > 1);
+  return words.slice(0, 3).join(' ');
+}
+
+const sortedTodos = Array.from(todoMap.values()).sort((a, b) => b.frequency - a.frequency);
+const topTodos = sortedTodos.slice(0, 200);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+---
+
+<BaseLayout title="Cross-Session Todos · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / todos</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>✅ Cross-Session Todos <span class="muted" style="font-size:0.6em">(iter #108)</span></h1>
+    <p class="agents-sub">
+      聚合所有 session 的 synthesis <code>## 下一步建议</code> / <code>## Gap & 矛盾</code> 小节下的 bullet,
+      去重 / 排序后给出统一的待办清单。出现频次 = "普适性" 指标(同一条建议被多次提及,说明它很关键)。
+      完成状态存 localStorage(浏览器本地)。
+    </p>
+  </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-td-stats">
+        <span>总 todo: <strong>{sortedTodos.length}</strong></span>
+        <span>显示前: <strong>{topTodos.length}</strong></span>
+        <span>已勾选: <strong id="td-checked">0</strong></span>
+        <span>完成度: <strong id="td-pct">0%</strong></span>
+        <span>跨 session 出现 (频次 > 1): <strong>{sortedTodos.filter((t) => t.frequency > 1).length}</strong></span>
+      </div>
+      <div class="agents-td-progress">
+        <div class="agents-td-bar"><div class="agents-td-bar-fill" id="td-fill"></div></div>
+        <button class="button small" id="td-reset" type="button">↩️ 重置勾选</button>
+        <button class="button small" id="td-export" type="button">📤 导出 JSON</button>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔍 过滤</h2>
+      <div class="agents-td-filters">
+        <input id="td-q" type="text" placeholder="过滤文本" />
+        <label><input id="td-only-multi" type="checkbox" /> 只看频次 &gt; 1</label>
+        <label><input id="td-only-unchecked" type="checkbox" /> 只看未完成</label>
+        <select id="td-sort">
+          <option value="freq">按频次</option>
+          <option value="text">按字母</option>
+          <option value="random">随机</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 待办清单(前 {topTodos.length})</h2>
+      <ul class="agents-td-list" id="td-list">
+        {topTodos.map((t, i) => (
+          <li data-key={escapeHtml(t.text.toLowerCase().replace(/[^\w\s一-鿿]/g, '').replace(/\s+/g, ' ').slice(0, 200))} data-idx={i}>
+            <label>
+              <input type="checkbox" class="td-check" data-idx={i} />
+              <span class="agents-td-text">{escapeHtml(truncate(t.text, 240))}</span>
+            </label>
+            <small class="muted">
+              出现 <strong>{t.frequency}</strong> 次
+              {t.frequency > 1 && ' 🔥'}
+              · 主题: <code>{escapeHtml(t.topicHint)}</code>
+              · 来源: {t.sources.slice(0, 3).map((s) => (
+                <a href={`${base}/agents/${s.sid}/synthesis/${String(s.idx).padStart(3, '0')}/`}><small>{escapeHtml(s.sid)}/#{s.idx}</small></a>
+              )).reduce((acc, x, j) => j === 0 ? [x] : [...acc, <span>, </span>, x], [] as any[])}
+              {t.sources.length > 3 && <small> +{t.sources.length - 3}</small>}
+            </small>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Session 概览</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>session</th><th>todo 数</th><th>goal 摘要</th></tr>
+        </thead>
+        <tbody>
+          {sessionStats.map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a></td>
+              <td>{s.todoCount}</td>
+              <td><small class="muted">{escapeHtml(truncate(s.goal, 80))}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-td-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+  }
+  .agents-td-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.2rem;
+  }
+  .agents-td-progress {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+  }
+  .agents-td-bar {
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    height: 12px;
+    flex: 1;
+    overflow: hidden;
+  }
+  .agents-td-bar-fill {
+    background: linear-gradient(90deg, #10b981, #4f46e5);
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  .agents-td-filters {
+    display: flex;
+    gap: 0.7rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .agents-td-filters input, .agents-td-filters select {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+  .agents-td-filters input[type="text"] { flex: 1; min-width: 200px; }
+  .agents-td-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-td-list li {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 3px solid #4f46e5;
+    border-radius: 4px;
+    padding: 0.5rem 0.7rem;
+    margin-bottom: 0.3rem;
+  }
+  .agents-td-list li.checked {
+    border-left-color: #10b981;
+    opacity: 0.7;
+  }
+  .agents-td-list li.hidden {
+    display: none;
+  }
+  .agents-td-list label {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-start;
+    cursor: pointer;
+  }
+  .agents-td-text {
+    flex: 1;
+  }
+  .agents-td-list li.checked .agents-td-text {
+    text-decoration: line-through;
+  }
+</style>
+
+<script>
+const KEY = 'agents:todos:v1';
+
+function load(): Record<string, true> {
+  try {
+    const raw = localStorage.getItem(KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+function save(s: Record<string, true>): void {
+  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* */ }
+}
+
+function refresh(): void {
+  const checked = load();
+  const checks = document.querySelectorAll<HTMLInputElement>('.td-check');
+  let cnt = 0;
+  checks.forEach((c) => {
+    const li = c.closest('li');
+    const idx = Number(c.dataset.idx);
+    const key = li?.dataset.key ?? '';
+    const isChecked = !!checked[key];
+    c.checked = isChecked;
+    li?.classList.toggle('checked', isChecked);
+    if (isChecked) cnt += 1;
+  });
+  const fillEl = document.getElementById('td-fill');
+  const checkedEl = document.getElementById('td-checked');
+  const pctEl = document.getElementById('td-pct');
+  if (fillEl) fillEl.style.width = checks.length ? `${(cnt / checks.length) * 100}%` : '0%';
+  if (checkedEl) checkedEl.textContent = String(cnt);
+  if (pctEl) pctEl.textContent = `${checks.length ? Math.round((cnt / checks.length) * 100) : 0}%`;
+}
+
+function applyFilters(): void {
+  const q = (document.getElementById('td-q') as HTMLInputElement | null)?.value.toLowerCase() ?? '';
+  const onlyMulti = (document.getElementById('td-only-multi') as HTMLInputElement | null)?.checked ?? false;
+  const onlyUnchecked = (document.getElementById('td-only-unchecked') as HTMLInputElement | null)?.checked ?? false;
+  const checked = load();
+  document.querySelectorAll<HTMLLIElement>('#td-list li').forEach((li) => {
+    const text = li.querySelector('.agents-td-text')?.textContent ?? '';
+    const freqText = li.querySelectorAll('small strong')[0]?.textContent ?? '';
+    const freq = Number(freqText);
+    const key = li.dataset.key ?? '';
+    const isChecked = !!checked[key];
+    let show = true;
+    if (q && !text.toLowerCase().includes(q)) show = false;
+    if (onlyMulti && freq <= 1) show = false;
+    if (onlyUnchecked && isChecked) show = false;
+    li.classList.toggle('hidden', !show);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refresh();
+  document.body.addEventListener('change', (e) => {
+    const t = e.target as HTMLInputElement;
+    if (t.classList.contains('td-check')) {
+      const li = t.closest('li');
+      const key = li?.dataset.key ?? '';
+      const checked = load();
+      if (t.checked) checked[key] = true;
+      else delete checked[key];
+      save(checked);
+      refresh();
+      applyFilters();
+    }
+  });
+  document.getElementById('td-q')?.addEventListener('input', applyFilters);
+  document.getElementById('td-only-multi')?.addEventListener('change', applyFilters);
+  document.getElementById('td-only-unchecked')?.addEventListener('change', applyFilters);
+  document.getElementById('td-reset')?.addEventListener('click', () => {
+    if (!confirm('重置所有勾选?')) return;
+    localStorage.removeItem(KEY);
+    refresh();
+    applyFilters();
+  });
+  document.getElementById('td-export')?.addEventListener('click', () => {
+    const data = load();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agents-todos-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+});
+</script>
