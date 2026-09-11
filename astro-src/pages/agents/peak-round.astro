@@ -1,0 +1,223 @@
+---
+// /agents/peak-round.astro — iter #259:peak round distribution
+//
+// 每个 session 的 peak(最高分)出现在哪个 round index?
+// 分布展示 + 早期/中期/晚期 peak 的 session 各举几个例子
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PeakInfo {
+  sid: string;
+  peakRoundIdx: number;
+  peakScore: number;
+  totalRounds: number;
+  position: number;  // peakRoundIdx / (totalRounds-1)
+  phase: 'early' | 'mid' | 'late';
+}
+
+const root = join(process.cwd(), 'archive');
+const peaks: PeakInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 3) continue;
+    rNum.sort((a, b) => a - b);
+    const scores: { idx: number; score: number }[] = [];
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          scores.push({ idx: rn, score: arr.reduce((a, b) => a + b, 0) / arr.length });
+        }
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 3) continue;
+    let maxEntry = scores[0];
+    for (const e of scores) {
+      if (e.score > maxEntry.score) maxEntry = e;
+    }
+    const total = scores.length;
+    const pos = total > 1 ? maxEntry.idx / (scores[scores.length - 1].idx || 1) : 0;
+    const phase: 'early' | 'mid' | 'late' = pos <= 0.33 ? 'early' : pos <= 0.66 ? 'mid' : 'late';
+    peaks.push({
+      sid,
+      peakRoundIdx: maxEntry.idx,
+      peakScore: maxEntry.score,
+      totalRounds: total,
+      position: pos,
+      phase,
+    });
+  }
+}
+
+const total = peaks.length;
+const phaseDist = { early: 0, mid: 0, late: 0 };
+for (const p of peaks) phaseDist[p.phase] += 1;
+
+// 按 peak round index 范围分桶
+const buckets = [
+  { label: 'R0-R1', min: 0, max: 2, count: 0 },
+  { label: 'R2-R3', min: 2, max: 4, count: 0 },
+  { label: 'R4-R5', min: 4, max: 6, count: 0 },
+  { label: 'R6-R10', min: 6, max: 11, count: 0 },
+  { label: 'R11-R20', min: 11, max: 21, count: 0 },
+  { label: 'R21+', min: 21, max: 9999, count: 0 },
+];
+for (const p of peaks) {
+  for (const b of buckets) {
+    if (p.peakRoundIdx >= b.min && p.peakRoundIdx < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+// top examples per phase
+const earlySample = peaks.filter((p) => p.phase === 'early').slice(0, 5);
+const midSample = peaks.filter((p) => p.phase === 'mid').slice(0, 5);
+const lateSample = peaks.filter((p) => p.phase === 'late').slice(0, 5);
+
+const maxBucketCount = Math.max(...buckets.map((b) => b.count), 1);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Peak Round · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / peak-round</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⛰️ Peak Round <span class="muted" style="font-size:0.6em">(iter #259)</span></h1>
+      <p class="agents-sub">
+        每个 session 的最高分(round index)出现在什么位置?
+        early = 前 1/3;mid = 中 1/3;late = 后 1/3。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pr-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>early peak: <strong style="color:#f59e0b">{phaseDist.early}</strong></span>
+        <span>mid peak: <strong style="color:#10b981">{phaseDist.mid}</strong></span>
+        <span>late peak: <strong style="color:#4f46e5">{phaseDist.late}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 peak index 桶分布</h2>
+      <pre class="agents-pr-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(10)} ${bar(b.count, maxBucketCount, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 样本</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>phase</th><th>peak R</th><th>peak score</th><th>total rounds</th><th>pos</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {earlySample.map((p) => (
+            <tr>
+              <td><strong style="color:#f59e0b">early</strong></td>
+              <td>R{p.peakRoundIdx}</td>
+              <td>{p.peakScore.toFixed(2)}</td>
+              <td>{p.totalRounds}</td>
+              <td>{p.position.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${p.sid}/`}><code>{esc(p.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+          {midSample.map((p) => (
+            <tr>
+              <td><strong style="color:#10b981">mid</strong></td>
+              <td>R{p.peakRoundIdx}</td>
+              <td>{p.peakScore.toFixed(2)}</td>
+              <td>{p.totalRounds}</td>
+              <td>{p.position.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${p.sid}/`}><code>{esc(p.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+          {lateSample.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">late</strong></td>
+              <td>R{p.peakRoundIdx}</td>
+              <td>{p.peakScore.toFixed(2)}</td>
+              <td>{p.totalRounds}</td>
+              <td>{p.position.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${p.sid}/`}><code>{esc(p.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>early peak(前 1/3) = 后期难突破 / 过拟合</li>
+        <li>mid peak(中 1/3) = 黄金期内达峰</li>
+        <li>late peak(后 1/3) = 持续精进</li>
+        <li>对照 <a href={`${base}/agents/trajectory-classifier/`}>Trajectory Classifier</a> 看整体形状</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
