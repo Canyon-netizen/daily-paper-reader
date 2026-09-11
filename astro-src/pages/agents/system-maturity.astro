@@ -1,0 +1,296 @@
+---
+// /agents/system-maturity.astro — iter #240:system maturity composite index
+//
+// 综合健康度评分 — 把多个子指标合并成一个 0-100 的成熟度分数:
+//   - 多样性 (action/persona diversity)
+//   - 活跃度 (rounds/sessions/week)
+//   - 质量 (avg final score)
+//   - 收敛 (avg |Δ|)
+//   - 覆盖率 (syntheses/sessions)
+//   - 成本效率 (avg gain/cost)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+const ONE_WEEK = 7 * 24 * 60 * 60 * 1000;
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+let totalSessions = 0;
+let totalRounds = 0;
+let recentSessions = 0;
+let recentRounds = 0;
+let totalSyntheses = 0;
+let totalTokens = 0;
+let totalCost = 0;
+let totalGain = 0;
+let scores: number[] = [];
+let deltas: number[] = [];
+const actionSet = new Set<string>();
+const personaSet = new Set<string>();
+let finalScores: number[] = [];
+
+const now = Date.now();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let isRecent = false;
+    try {
+      const st = await stat(sp);
+      isRecent = now - st.mtimeMs < ONE_WEEK;
+    } catch (e) { /* */ }
+    if (isRecent) recentSessions += 1;
+    totalSessions += 1;
+    let goalStr = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goalStr = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    let sessionFirstScore = 0;
+    let sessionFinalScore = 0;
+    let sessionTokens = 0;
+    const rNum: number[] = [];
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        const m = rf.match(/^round_(\d+)\.json$/);
+        if (m) rNum.push(parseInt(m[1], 10));
+      }
+      rNum.sort((a, b) => a - b);
+      if (rNum.length > 0) {
+        for (let i = 0; i < rNum.length; i++) {
+          try {
+            const fp = join(rd, `round_${rNum[i]}.json`);
+            const r = JSON.parse(await readFile(fp, 'utf8'));
+            const arr: number[] = [];
+            for (const persona of r.feedback?.personas ?? []) {
+              const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+              personaSet.add(name);
+              for (const p of persona.proposals ?? []) {
+                if (typeof p.total === 'number') {
+                  arr.push(p.total);
+                  scores.push(p.total);
+                }
+              }
+            }
+            for (const a of r.modifier?.applied ?? []) {
+              actionSet.add(a.action ?? a.type ?? 'unknown');
+            }
+            const tokens = r.feedback?.total_tokens ?? 0;
+            sessionTokens += tokens;
+            const avg = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+            if (i === 0) sessionFirstScore = avg;
+            if (i === rNum.length - 1) sessionFinalScore = avg;
+          } catch (e) { /* */ }
+        }
+      }
+    }
+    if (sessionTokens > 0) totalTokens += sessionTokens;
+    if (sessionFinalScore > 0) finalScores.push(sessionFinalScore);
+    if (sessionFirstScore > 0 && sessionFinalScore > 0) {
+      totalGain += (sessionFinalScore - sessionFirstScore);
+      deltas.push(sessionFinalScore - sessionFirstScore);
+    }
+    const sd = join(sp, 'synthesis');
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) totalSyntheses += 1;
+      }
+    }
+  }
+}
+
+// Recompute totalRounds correctly
+let totalRoundsFixed = 0;
+let recentRoundsFixed = 0;
+for (const sid of (await readdir(root).catch(() => []))) {
+  const rd = join(root, sid, 'rounds');
+  if (!existsSync(rd)) continue;
+  const rfs = await readdir(rd).catch(() => []);
+  for (const rf of rfs) {
+    if (!/^round_\d+\.json$/.test(rf)) continue;
+    totalRoundsFixed += 1;
+    try {
+      const st = await stat(join(rd, rf));
+      if (now - st.mtimeMs < ONE_WEEK) recentRoundsFixed += 1;
+    } catch (e) { /* */ }
+  }
+}
+totalRounds = totalRoundsFixed;
+recentRounds = recentRoundsFixed;
+
+totalCost = (totalTokens / 1_000_000) * SONNET_PRICE;
+
+// 子指标(每个 0-1)
+const diversity = actionSet.size > 0 ? Math.min(actionSet.size / 20, 1) : 0;
+const activity = Math.min(recentRounds / 50, 1);
+const quality = finalScores.length > 0 ? finalScores.reduce((a, b) => a + b, 0) / finalScores.length / 10 : 0;
+const convergence = deltas.length > 0 ? Math.max(0, 1 - Math.abs(deltas.reduce((a, b) => a + b, 0) / deltas.length) / 5) : 0;
+const synthCoverage = totalSessions > 0 ? Math.min(totalSyntheses / totalSessions, 1) : 0;
+const costEfficiency = totalCost > 0 ? Math.max(0, Math.min(totalGain / totalCost / 10, 1)) : 0;
+
+// 加权合并
+const maturity = (
+  diversity * 0.15 +
+  activity * 0.20 +
+  quality * 0.25 +
+  convergence * 0.10 +
+  synthCoverage * 0.15 +
+  costEfficiency * 0.15
+) * 100;
+
+const grade = maturity >= 90 ? 'A' :
+              maturity >= 80 ? 'B' :
+              maturity >= 70 ? 'C' :
+              maturity >= 60 ? 'D' : 'F';
+
+const gradeColor = grade === 'A' ? '#10b981' :
+                   grade === 'B' ? '#84cc16' :
+                   grade === 'C' ? '#f59e0b' :
+                   grade === 'D' ? '#fb923c' : '#ef4444';
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="System Maturity · Agents">
+  <Navbar />
+  <main class="shell agents-shell maturity-special">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / system-maturity</span>
+    </nav>
+
+    <header class="agents-header maturity-hero">
+      <h1>🌟 System Maturity Index <span class="muted" style="font-size:0.5em">(iter #240)</span></h1>
+      <p class="agents-sub">
+        综合健康度评分 — 0-100 分。
+        由 6 个子指标加权:diversity / activity / quality / convergence / synth coverage / cost efficiency。
+      </p>
+    </header>
+
+    <section class="agents-session-section maturity-score">
+      <h2>🏅 总分</h2>
+      <div class="maturity-big" style={`color:${gradeColor}`}>
+        <span class="big-score">{maturity.toFixed(0)}</span>
+        <span class="big-grade">/ 100 — Grade {grade}</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 子指标</h2>
+      <pre class="agents-sm-flow">{`diversity       (15%)  ${bar(diversity, 1, 24)}  ${(diversity * 100).toFixed(0)}%
+activity        (20%)  ${bar(activity, 1, 24)}  ${(activity * 100).toFixed(0)}%
+quality         (25%)  ${bar(quality, 1, 24)}  ${(quality * 100).toFixed(0)}%
+convergence     (10%)  ${bar(convergence, 1, 24)}  ${(convergence * 100).toFixed(0)}%
+synth coverage  (15%)  ${bar(synthCoverage, 1, 24)}  ${(synthCoverage * 100).toFixed(0)}%
+cost efficiency (15%)  ${bar(costEfficiency, 1, 24)}  ${(costEfficiency * 100).toFixed(0)}%`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 全局统计</h2>
+      <div class="agents-sm-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>近 7 天 sessions: <strong>{recentSessions}</strong></span>
+        <span>近 7 天 rounds: <strong>{recentRounds}</strong></span>
+        <span>总 syntheses: <strong>{totalSyntheses}</strong></span>
+        <span>unique actions: <strong>{actionSet.size}</strong></span>
+        <span>unique personas: <strong>{personaSet.size}</strong></span>
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>总 cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>avg final score: <strong>{finalScores.length > 0 ? (finalScores.reduce((a, b) => a + b, 0) / finalScores.length).toFixed(2) : 'N/A'}</strong></span>
+        <span>总 gain: <strong>{totalGain.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>A (90+):系统高度成熟</li>
+        <li>B (80-90):良好状态</li>
+        <li>C (70-80):可接受</li>
+        <li>D / F:需要改善(尤其是低维度子指标)</li>
+        <li>对照 <a href={`${base}/agents/health-score/`}>Health Score</a> 看简化版</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .maturity-special {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.05), rgba(99, 102, 241, 0.05));
+    padding-bottom: 3rem;
+  }
+  .maturity-hero {
+    text-align: center;
+    padding: 1.5rem 0;
+  }
+  .maturity-score {
+    text-align: center;
+  }
+  .maturity-big {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 1rem;
+    padding: 2rem 0;
+  }
+  .big-score {
+    font-size: 5rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+  .big-grade {
+    font-size: 1.5rem;
+    opacity: 0.7;
+  }
+  .agents-sm-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .agents-sm-globals {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .agents-sm-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
