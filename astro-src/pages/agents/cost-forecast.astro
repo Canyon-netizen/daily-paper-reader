@@ -1,0 +1,224 @@
+---
+// /agents/cost-forecast.astro — iter #265:cost forecast (linear projection)
+//
+// 基于近 12 周 cost 数据,线性外推预测未来 4 周成本。
+// 输出:斜率 / 截距 / R² / 预测值
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+function isoWeek(ms: number): { key: string; year: number; week: number } {
+  const d = new Date(ms);
+  const onejan = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil((((d.getTime() - onejan.getTime()) / 86400000) + onejan.getDay() + 1) / 7);
+  return { key: `${d.getFullYear()}-W${week.toString().padStart(2, '0')}`, year: d.getFullYear(), week };
+}
+
+const root = join(process.cwd(), 'archive');
+const weeklyCosts = new Map<string, { cost: number; rounds: number; idx: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        const cost = (tokens / 1_000_000) * SONNET_PRICE;
+        const { key } = isoWeek(st.mtimeMs);
+        if (!weeklyCosts.has(key)) weeklyCosts.set(key, { cost: 0, rounds: 0, idx: 0 });
+        const w = weeklyCosts.get(key)!;
+        w.cost += cost;
+        w.rounds += 1;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const sortedWeeks = Array.from(weeklyCosts.entries())
+  .sort((a, b) => a[0].localeCompare(b[0]))
+  .map(([key, v], idx) => ({ key, ...v, idx }));
+
+// 取最近 12 周
+const recent = sortedWeeks.slice(-12);
+const xs = recent.map((w) => w.idx);
+const ys = recent.map((w) => w.cost);
+
+function linearRegression(xs: number[], ys: number[]): { slope: number; intercept: number; r2: number } {
+  const n = xs.length;
+  if (n < 2) return { slope: 0, intercept: ys[0] ?? 0, r2: 0 };
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const slope = dx2 === 0 ? 0 : num / dx2;
+  const intercept = my - slope * mx;
+  const denom = Math.sqrt(dx2 * dy2);
+  const r = denom === 0 ? 0 : num / denom;
+  return { slope, intercept, r2: r * r };
+}
+
+const reg = linearRegression(xs, ys);
+
+// 预测未来 4 周
+const totalRoundsLast4 = sortedWeeks.slice(-4).reduce((s, w) => s + w.rounds, 0);
+const lastIdx = xs[xs.length - 1] ?? 0;
+const forecast = [];
+for (let i = 1; i <= 4; i++) {
+  const futureIdx = lastIdx + i;
+  const futureCost = reg.slope * futureIdx + reg.intercept;
+  forecast.push({ idx: futureIdx, cost: Math.max(0, futureCost) });
+}
+
+const currentWeeklyAvg = recent.length > 0 ? recent.reduce((s, w) => s + w.cost, 0) / recent.length : 0;
+const totalRecentCost = recent.reduce((s, w) => s + w.cost, 0);
+const totalLifetimeCost = sortedWeeks.reduce((s, w) => s + w.cost, 0);
+const totalRoundsAll = sortedWeeks.reduce((s, w) => s + w.rounds, 0);
+
+function fmtCost(c: number): string {
+  return `$${c.toFixed(2)}`;
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+const maxRecentCost = Math.max(...recent.map((w) => w.cost), 1);
+---
+
+<BaseLayout title="Cost Forecast · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-forecast</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔮 Cost Forecast <span class="muted" style="font-size:0.6em">(iter #265)</span></h1>
+      <p class="agents-sub">
+        基于近 12 周 weekly cost 线性回归,预测未来 4 周。
+        slope = $/week 增长;intercept = 起始。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cf-globals">
+        <span>总周数: <strong>{sortedWeeks.length}</strong></span>
+        <span>12w 总 cost: <strong>{fmtCost(totalRecentCost)}</strong></span>
+        <span>avg weekly: <strong>{fmtCost(currentWeeklyAvg)}</strong></span>
+        <span>lifetime cost: <strong>{fmtCost(totalLifetimeCost)}</strong></span>
+        <span>lifetime rounds: <strong>{totalRoundsAll.toLocaleString()}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📐 回归参数</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>参数</th><th>值</th><th>解读</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>slope</td>
+            <td><strong style={`color:${reg.slope > 0 ? '#f59e0b' : '#10b981'}`}>{fmtCost(reg.slope)} / week</strong></td>
+            <td><small>{reg.slope > 0 ? 'cost 在上升' : reg.slope < 0 ? 'cost 在下降' : 'cost 平稳'}</small></td>
+          </tr>
+          <tr>
+            <td>intercept</td>
+            <td>{fmtCost(reg.intercept)}</td>
+            <td><small>基线 cost</small></td>
+          </tr>
+          <tr>
+            <td>R²</td>
+            <td><strong style={`color:${reg.r2 > 0.5 ? '#10b981' : '#f59e0b'}`}>{reg.r2.toFixed(3)}</strong></td>
+            <td><small>{reg.r2 > 0.7 ? '强拟合' : reg.r2 > 0.3 ? '中拟合' : '弱拟合(波动大)'}</small></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 近 12 周 cost</h2>
+      <pre class="agents-cf-flow">{recent.map((w) => {
+        return `${w.key}  ${bar(w.cost, maxRecentCost, 22)}  ${fmtCost(w.cost)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔮 未来 4 周预测</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>future idx</th><th>predicted cost</th></tr>
+        </thead>
+        <tbody>
+          {forecast.map((f) => (
+            <tr>
+              <td>+{f.idx - lastIdx} 周</td>
+              <td><strong style="color:#4f46e5">{fmtCost(f.cost)}</strong></td>
+            </tr>
+          ))}
+          <tr style="background:rgba(99,102,241,0.1)">
+            <td><strong>4 周合计</strong></td>
+            <td><strong style="color:#f59e0b">{fmtCost(forecast.reduce((s, f) => s + f.cost, 0))}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>R² &lt; 0.3 = 预测不可靠(cost 波动大)</li>
+        <li>4 周合计 = 短期内预计总花费</li>
+        <li>对照 <a href={`${base}/agents/cost-cumulative-curve/`}>Cost Curve</a> 看历史累计</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cf-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cf-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cf-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
