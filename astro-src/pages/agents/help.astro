@@ -1,0 +1,230 @@
+---
+// /agents/help.astro — iter #112:help / FAQ
+//
+// 把常见问题 / 用法 / 故障排查聚合成一个搜索友好的页。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface QA {
+  cat: string;
+  q: string;
+  a: string; // HTML allowed (safe content)
+}
+
+const QAS: QA[] = [
+  {
+    cat: '🚀 开始',
+    q: '什么是多智能体研究自动化?',
+    a: '<p>一个让多个 AI agent 协同完成科研全流程的系统。核心循环:Designer(提出方案)→Feedback(3 persona 评估)→Gate(分类)→Modifier(执行)→Evaluator(评分)→Reviewer(审稿)→Reviser(修改)。每跑 1 个 round,系统会在 archive/&lt;sid&gt;/rounds/ 下生成 round_NNN.json,每个 cycle 还会生成 synthesis_NNN.md。</p>',
+  },
+  {
+    cat: '🚀 开始',
+    q: '如何新建一个 session?',
+    a: '<p>访问 <a href="/agents/new-session/">/agents/new-session/</a>, 选模板 / 填 goal,点 "▶ Run",等命令完成后 session 就建好了。也可以从 <a href="/agents/capture/">/agents/capture/</a> 里点 "🚀 作为 session goal" 跳过来预填。</p>',
+  },
+  {
+    cat: '🚀 开始',
+    q: 'session 跑完后我看什么?',
+    a: '<p>从 <a href="/agents/">控制台</a> 进 session 详情页,推荐按顺序看:</p><ol><li><a href="/agents/[sid]/brief/">brief</a> — 1 页执行摘要</li><li><a href="/agents/[sid]/score/">score</a> — 评分(4 子分)</li><li><a href="/agents/[sid]/synthesis/">synthesis</a> — 完整 synthesis</li><li><a href="/agents/[sid]/critiques/">critiques</a> — 3 persona 的具体反馈</li></ol>',
+  },
+  {
+    cat: '⚙️ 进阶',
+    q: '怎么调整 LLM model / max_cycles / dry_run?',
+    a: '<p>在 <a href="/agents/new-session/">/agents/new-session/</a> 页面有表单,改完会自动生成对应 CLI 命令。也可以全局默认值,见 <a href="/agents/settings/">/agents/settings/</a>。</p>',
+  },
+  {
+    cat: '⚙️ 进阶',
+    q: '怎么 --resume 跑?',
+    a: '<p><code>node astro-src/scripts/agents-run.mjs --session &lt;sid&gt; --rounds 1 --resume</code>。会把之前 rounds 的 proposals 喂给 Designer,降低重复。</p>',
+  },
+  {
+    cat: '⚙️ 进阶',
+    q: '怎么 export 一个 session?',
+    a: '<p>访问 <a href="/agents/[sid]/export/">/agents/&lt;sid&gt;/export/</a> 页面下载 markdown bundle,或 CLI:<br><code>node astro-src/scripts/agents-run.mjs --export-md --session &lt;sid&gt;</code></p>',
+  },
+  {
+    cat: '⚙️ 进阶',
+    q: '怎么删除 / 复制 session?',
+    a: '<p>CLI 提供 --delete(移到 .trash/)和 --duplicate 两个子命令。完整命令清单见 <a href="/agents/[sid]/cli/">/agents/&lt;sid&gt;/cli/</a>。</p>',
+  },
+  {
+    cat: '📊 数据',
+    q: '数据存在哪里?',
+    a: '<p>所有 session 数据在 <code>archive/&lt;sid&gt;/</code> 下,典型结构:</p><ul><li><code>meta.json</code> — session 配置(goal, preset, created_at 等)</li><li><code>rounds/round_NNN.json</code> — 每个 round 的完整 trace</li><li><code>synthesis/synthesis_NNN.md</code> — 每个 cycle 的综合</li><li><code>deliverables/*.md</code> — Modifier 实际写入的产物</li></ul>',
+  },
+  {
+    cat: '📊 数据',
+    q: '怎么跨 session 看数据?',
+    a: '<p>有一组"全局视图"页:</p><ul><li><a href="/agents/insights/">insights</a> — proposal 类型 / arxiv 热度 / drift</li><li><a href="/agents/arxiv/">arxiv</a> — 论文 reverse index</li><li><a href="/agents/syntheses/">syntheses</a> — 最新 syntheses feed</li><li><a href="/agents/todos/">todos</a> — 聚合所有 "下一步建议"</li><li><a href="/agents/digest/">digest</a> — 自动研究简报</li></ul>',
+  },
+  {
+    cat: '📊 数据',
+    q: '怎么 estimate 费用?',
+    a: '<p>默认 $0.50 USD / 1M tokens。在 <a href="/agents/settings/">settings</a> 或 <a href="/agents/budget/">budget</a> 页可以改。实际花费根据模型定价而定,这里只是个粗估。</p>',
+  },
+  {
+    cat: '🛠 故障排查',
+    q: 'session 跑一半挂了,怎么恢复?',
+    a: '<p>CLI 自带 --resume 模式,会从最后完成的 round 继续:<br><code>node astro-src/scripts/agents-run.mjs --session &lt;sid&gt; --resume --rounds 1</code></p>',
+  },
+  {
+    cat: '🛠 故障排查',
+    q: '页面 500 错误了怎么办?',
+    a: '<p>先看 <a href="/agents/health/">/agents/health/</a> — 它会扫所有 session 的 issue。常见原因:synthesis 缺失、round 文件被手动改坏、archive 目录权限问题。</p>',
+  },
+  {
+    cat: '🛠 故障排查',
+    q: '怎么 dry_run 验证 pipeline?',
+    a: '<p><code>node astro-src/scripts/agents-run.mjs --session &lt;sid&gt; --rounds 1 --dry-run</code><br>不调真实 LLM,只跑 stub,验证 7-stage pipeline 是否工作。</p>',
+  },
+  {
+    cat: '🎨 个性化',
+    q: '我能保存自己的目标模板吗?',
+    a: '<p>可以。在 <a href="/agents/goals/">/agents/goals/</a> 页填名字 + 模板内容,点 "💾 保存",浏览器 localStorage 会记住。也支持导入 / 导出 JSON。</p>',
+  },
+  {
+    cat: '🎨 个性化',
+    q: '我能给 session 打 tag / 记笔记吗?',
+    a: '<p>可以。<a href="/agents/tags/">tags</a> 和 <a href="/agents/notes/">notes</a> 都用 localStorage,跨设备需要手动导入 / 导出。</p>',
+  },
+  {
+    cat: '🎨 个性化',
+    q: '我能跟着读 syntheses 吗?',
+    a: '<p>有 <a href="/agents/reading/">Now Reading</a> 页 — 追踪所有 syntheses 的阅读进度(scroll %),标记已读/未读,一键跳到下一份。</p>',
+  },
+  {
+    cat: '🔗 集成',
+    q: '我能在自己代码里调 agent 吗?',
+    a: '<p>CLI 是入口:<code>node astro-src/scripts/agents-run.mjs --help</code>。所有子命令(json / status / eval / export / diff / compile)都可脚本化。也支持环境变量注入 LLM config(.env → MINIMAX_API_KEY)。</p>',
+  },
+  {
+    cat: '🔗 集成',
+    q: '怎么 import 一个旧 session?',
+    a: '<p>CLI:<br><code>node astro-src/scripts/agents-run.mjs --import &lt;bundle.json&gt; --session &lt;new-sid&gt;</code><br>bundle.json 由 --export-bundle 生成。</p>',
+  },
+];
+
+const cats = Array.from(new Set(QAS.map((q) => q.cat)));
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Help · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / help</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>❓ Help / FAQ <span class="muted" style="font-size:0.6em">(iter #112)</span></h1>
+      <p class="agents-sub">
+        常见问题与答案。按分类组织。客户端 JS 支持模糊搜索 + 跳转到对应分类。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🔍 搜索</h2>
+      <input id="hp-q" type="text" placeholder="输入关键字过滤(eg resume, export, budget)" style="width:100%;padding:0.5rem;border:1px solid rgba(99,102,241,0.3);background:rgba(0,0,0,0.2);color:inherit;border-radius:4px;" />
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📚 分类导航</h2>
+      <p>
+        {cats.map((c) => (
+          <a class="button small" href={`#cat-${escapeHtml(c)}`} style="margin-right:0.4rem">{c}</a>
+        ))}
+      </p>
+    </section>
+
+    {cats.map((c) => (
+      <section class="agents-session-section agents-hp-cat" id={`cat-${c}`} data-cat={c}>
+        <h2>{c}</h2>
+        <div class="agents-hp-list">
+          {QAS.filter((q) => q.cat === c).map((qa, i) => (
+            <details class="agents-hp-item" data-q={escapeHtml((qa.q + ' ' + qa.a.replace(/<[^>]+>/g, ' ')).toLowerCase())}>
+              <summary>{qa.q}</summary>
+              <div class="agents-hp-a" set:html={qa.a}></div>
+            </details>
+          ))}
+        </div>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>🆘 还有问题?</h2>
+      <p>
+        没找到答案?看 <a href={`${base}/agents/about/`}>/agents/about/</a>(系统完整导览)
+        或 <a href={`${base}/agents/tour/`}>/agents/tour/</a>(6 步引导)。
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-hp-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .agents-hp-item {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .agents-hp-item summary {
+    cursor: pointer;
+    padding: 0.6rem 0.8rem;
+    font-weight: 500;
+    background: rgba(99, 102, 241, 0.05);
+  }
+  .agents-hp-item[open] summary {
+    border-bottom: 1px solid rgba(99, 102, 241, 0.2);
+  }
+  .agents-hp-a {
+    padding: 0.7rem 0.8rem;
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+  .agents-hp-a code {
+    background: rgba(0,0,0,0.3);
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.85em;
+  }
+  .agents-hp-item.hidden {
+    display: none;
+  }
+  .agents-hp-cat.hidden {
+    display: none;
+  }
+</style>
+
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const inp = document.getElementById('hp-q') as HTMLInputElement | null;
+    inp?.addEventListener('input', () => {
+      const q = inp.value.toLowerCase().trim();
+      const items = document.querySelectorAll<HTMLDetailsElement>('.agents-hp-item');
+      items.forEach((it) => {
+        if (!q || (it.dataset.q ?? '').includes(q)) it.classList.remove('hidden');
+        else it.classList.add('hidden');
+      });
+      // 隐藏空分类
+      document.querySelectorAll<HTMLElement>('.agents-hp-cat').forEach((cat) => {
+        const visible = cat.querySelectorAll('.agents-hp-item:not(.hidden)').length;
+        cat.classList.toggle('hidden', q ? visible === 0 : false);
+      });
+    });
+  });
+</script>
