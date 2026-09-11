@@ -1,0 +1,192 @@
+---
+// /agents/action-pair-win-rate.astro — iter #319:action pair win rate
+//
+// 各 action 对的 win rate(下轮 score 上升):
+//   - 高频 action 对中,哪些真正"管用"
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PairInfo {
+  a: string;
+  b: string;
+  total: number;
+  wins: number;
+  winRate: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const pairMap = new Map<string, { a: string; b: string; total: number; wins: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    const roundActs: string[][] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        scores.push(score);
+        const acts: string[] = [];
+        const seen = new Set<string>();
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!seen.has(act)) {
+            seen.add(act);
+            acts.push(act);
+          }
+        }
+        roundActs.push(acts);
+      } catch (e) { scores.push(0); roundActs.push([]); }
+    }
+
+    if (scores.length < 2) continue;
+    for (let i = 0; i < scores.length - 1; i++) {
+      const acts = roundActs[i];
+      const win = scores[i + 1] > scores[i];
+      for (let j = 0; j < acts.length; j++) {
+        for (let k = j + 1; k < acts.length; k++) {
+          const sorted = [acts[j], acts[k]].sort();
+          const key = `${sorted[0]}||${sorted[1]}`;
+          if (!pairMap.has(key)) pairMap.set(key, { a: sorted[0], b: sorted[1], total: 0, wins: 0 });
+          const p = pairMap.get(key)!;
+          p.total += 1;
+          if (win) p.wins += 1;
+        }
+      }
+    }
+  }
+}
+
+const arr: PairInfo[] = [...pairMap.values()]
+  .map((p) => ({ a: p.a, b: p.b, total: p.total, wins: p.wins, winRate: p.total > 0 ? p.wins / p.total : 0 }))
+  .filter((p) => p.total >= 5)
+  .sort((a, b) => b.winRate - a.winRate);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function verdict(r: number): string {
+  if (r >= 0.8) return '🟢 excellent';
+  if (r >= 0.6) return '🟡 good';
+  if (r >= 0.4) return '🟠 weak';
+  return '🔴 poor';
+}
+---
+
+<BaseLayout title="Action Pair Win Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-pair-win-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎲 Action Pair Win Rate <span class="muted" style="font-size:0.6em">(iter #319)</span></h1>
+      <p class="agents-sub">
+        action 对同时应用时,下轮 score 上升的概率。 win rate = wins / total。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-apwr-globals">
+        <span>qualifying pairs (≥5 应用): <strong>{arr.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎲 Top 20 最强组合</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>action A</th><th>action B</th><th>total</th><th>wins</th><th>win rate</th><th>verdict</th></tr>
+        </thead>
+        <tbody>
+          {arr.slice(0, 20).map((p, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td>{p.total}</td>
+              <td><strong style="color:#10b981">{p.wins}</strong></td>
+              <td><strong style="color:#10b981">{(p.winRate * 100).toFixed(1)}%</strong></td>
+              <td><small>{verdict(p.winRate)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 最差 Top 10</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>action A</th><th>action B</th><th>total</th><th>wins</th><th>win rate</th><th>verdict</th></tr>
+        </thead>
+        <tbody>
+          {arr.slice().sort((a, b) => a.winRate - b.winRate).slice(0, 10).map((p, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td>{p.total}</td>
+              <td>{p.wins}</td>
+              <td><strong style="color:#ef4444">{(p.winRate * 100).toFixed(1)}%</strong></td>
+              <td><small>{verdict(p.winRate)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>win rate ≥ 70% = 强力协同</li>
+        <li>win rate ≤ 30% = 经常拖后腿</li>
+        <li>对照 <a href={`${base}/agents/action-pair-synergy/`}>Action Pair Synergy</a></li>
+        <li>对照 <a href={`${base}/agents/action-pair-cost/`}>Action Pair Cost</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-apwr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-apwr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
