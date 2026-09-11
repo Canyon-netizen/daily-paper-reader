@@ -1,0 +1,270 @@
+---
+// /agents/streak.astro — iter #149:daily streak tracker
+//
+// 跨 session 按日期分组统计活动天数:
+//   - 当前连续活跃天数(streak)
+//   - 最长连续活跃天数(max streak)
+//   - 最近 90 天的日历视图(类似 GitHub contribution)
+//   - 今日是否活跃
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const dailyActivity = new Map<string, number>();
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sd = join(root, sid);
+    const metaPath = join(sd, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    // meta.json mtime
+    const st1 = await stat(metaPath).catch(() => null);
+    if (st1) {
+      const d = new Date(st1.mtimeMs).toISOString().slice(0, 10);
+      dailyActivity.set(d, (dailyActivity.get(d) ?? 0) + 1);
+    }
+    // rounds
+    const rd = join(sd, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        const st = await stat(join(rd, rf)).catch(() => null);
+        if (st) {
+          const d = new Date(st.mtimeMs).toISOString().slice(0, 10);
+          dailyActivity.set(d, (dailyActivity.get(d) ?? 0) + 1);
+        }
+      }
+    }
+    // syntheses
+    const sd2 = join(sd, 'synthesis');
+    if (existsSync(sd2)) {
+      const sfs = await readdir(sd2).catch(() => []);
+      for (const f of sfs) {
+        const st = await stat(join(sd2, f)).catch(() => null);
+        if (st) {
+          const d = new Date(st.mtimeMs).toISOString().slice(0, 10);
+          dailyActivity.set(d, (dailyActivity.get(d) ?? 0) + 1);
+        }
+      }
+    }
+  }
+}
+
+// 按日期排序
+const sortedDates = [...dailyActivity.keys()].sort();
+
+// 计算 current streak
+const today = new Date().toISOString().slice(0, 10);
+const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+let currentStreak = 0;
+let cursor = dailyActivity.has(today) ? today : (dailyActivity.has(yesterday) ? yesterday : '');
+if (cursor) {
+  const d = new Date(cursor);
+  while (dailyActivity.has(d.toISOString().slice(0, 10))) {
+    currentStreak += 1;
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+}
+
+// 计算 max streak
+let maxStreak = 0;
+let curRun = 0;
+let prev: Date | null = null;
+for (const date of sortedDates) {
+  const d = new Date(date);
+  if (prev) {
+    const diff = (d.getTime() - prev.getTime()) / 86_400_000;
+    if (Math.round(diff) === 1) curRun += 1;
+    else curRun = 1;
+  } else {
+    curRun = 1;
+  }
+  if (curRun > maxStreak) maxStreak = curRun;
+  prev = d;
+}
+
+const totalActiveDays = dailyActivity.size;
+const firstDay = sortedDates[0] ?? '—';
+const lastDay = sortedDates[sortedDates.length - 1] ?? '—';
+
+// 90 天日历视图
+const CAL_DAYS = 91; // 13 weeks * 7
+const startDate = new Date();
+startDate.setUTCDate(startDate.getUTCDate() - CAL_DAYS + 1);
+const cells: { date: string; count: number; isFuture: boolean }[] = [];
+for (let i = 0; i < CAL_DAYS; i++) {
+  const d = new Date(startDate);
+  d.setUTCDate(d.getUTCDate() + i);
+  const key = d.toISOString().slice(0, 10);
+  cells.push({
+    date: key,
+    count: dailyActivity.get(key) ?? 0,
+    isFuture: d.getTime() > Date.now(),
+  });
+}
+
+function colorFor(count: number): string {
+  if (count === 0) return 'rgba(107,114,128,0.15)';
+  if (count < 3) return 'rgba(16,185,129,0.3)';
+  if (count < 6) return 'rgba(16,185,129,0.6)';
+  if (count < 10) return 'rgba(16,185,129,0.85)';
+  return 'rgba(16,185,129,1)';
+}
+
+// 分布桶(预计算,避免 JSX fragment shorthand 问题)
+const distCounts = [0, 0, 0, 0, 0];
+const distLabels = ['0', '1-2', '3-5', '6-10', '> 10'];
+for (const c of dailyActivity.values()) {
+  if (c === 0) distCounts[0]++;
+  else if (c <= 2) distCounts[1]++;
+  else if (c <= 5) distCounts[2]++;
+  else if (c <= 10) distCounts[3]++;
+  else distCounts[4]++;
+}
+---
+
+<BaseLayout title="Daily Streak · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / streak</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Daily Streak <span class="muted" style="font-size:0.6em">(iter #149)</span></h1>
+      <p class="agents-sub">
+        跨 session 跟踪连续活跃天数。GitHub contribution 风格的热力图。
+        当前 streak + max streak + 今日是否活跃。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 状态</h2>
+      <div class="agents-streak-globals">
+        <div class="agents-streak-tile agents-streak-current">
+          <span class="agents-streak-emoji">{currentStreak > 0 ? '🔥' : '💤'}</span>
+          <span class="agents-streak-num">{currentStreak}</span>
+          <span class="muted">当前 streak(天)</span>
+        </div>
+        <div class="agents-streak-tile agents-streak-max">
+          <span class="agents-streak-emoji">🏆</span>
+          <span class="agents-streak-num">{maxStreak}</span>
+          <span class="muted">历史最长 streak</span>
+        </div>
+        <div class="agents-streak-tile">
+          <span class="agents-streak-emoji">📅</span>
+          <span class="agents-streak-num">{totalActiveDays}</span>
+          <span class="muted">总活跃天数</span>
+        </div>
+        <div class="agents-streak-tile">
+          <span class="agents-streak-emoji">📊</span>
+          <span class="agents-streak-num">{dailyActivity.has(today) ? '✓' : '✗'}</span>
+          <span class="muted">今日活跃</span>
+        </div>
+      </div>
+      <p class="muted">
+        <small>首次活跃: {firstDay} · 最近活跃: {lastDay}</small>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 最近 91 天(13 周)</h2>
+      <div class="agents-streak-cal">
+        {Array.from({ length: 13 }).map((_, week) => (
+          <div class="agents-streak-week">
+            {Array.from({ length: 7 }).map((_, day) => {
+              const idx = week * 7 + day;
+              const c = cells[idx];
+              if (!c) return null;
+              return (
+                <div
+                  class="agents-streak-day"
+                  style={`background:${c.isFuture ? 'transparent' : colorFor(c.count)};border:1px solid rgba(99,102,241,0.1)`}
+                  title={`${c.date}: ${c.count} 次活动${c.isFuture ? '(future)' : ''}`}
+                ></div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <p class="muted">
+        <small>
+          {Array.from({ length: 13 }).map((_, i) => {
+            const idx = i * 7;
+            return cells[idx]?.date.slice(5) ?? '';
+          }).filter(Boolean).join(' · ')}
+        </small>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 活跃度分布</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>活跃事件数</th><th>天数</th></tr>
+        </thead>
+        <tbody>
+          {distLabels.map((l, i) => (
+            <tr>
+              <td>{l}</td>
+              <td>{distCounts[i]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-streak-globals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.6rem;
+  }
+  .agents-streak-tile {
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    padding: 0.8rem;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .agents-streak-emoji {
+    font-size: 1.8rem;
+  }
+  .agents-streak-num {
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-streak-current .agents-streak-num { color: #10b981; }
+  .agents-streak-max .agents-streak-num { color: #f59e0b; }
+  .agents-streak-cal {
+    display: flex;
+    gap: 0.2rem;
+    overflow-x: auto;
+  }
+  .agents-streak-week {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .agents-streak-day {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    cursor: default;
+  }
+</style>
