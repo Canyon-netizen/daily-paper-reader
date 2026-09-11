@@ -1,0 +1,356 @@
+---
+// /agents/reading.astro — iter #103:"Now Reading" / Reading Queue
+//
+// 把所有 syntheses 变成一个阅读队列:
+//   - localStorage 记录每个 synthesis 的阅读进度(scroll %)
+//   - 标记 read / unread
+//   - "下一份未读" 一键跳转
+//   - 阅读统计(总字数 / 已读数 / 平均完成度 / 预计剩余时间)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Entry {
+  sid: string;
+  idx: number;
+  title: string;
+  mtime: number;
+  wordCount: number;
+  refCount: number;
+}
+
+const allEntries: Entry[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const sdir = join(root, sid, 'synthesis');
+    if (!existsSync(sdir)) continue;
+    let files: string[] = [];
+    try { files = await readdir(sdir); } catch { continue; }
+    for (const f of files) {
+      if (!/^synthesis_\d+\.md$/.test(f)) continue;
+      const m = f.match(/^synthesis_(\d+)\.md$/);
+      const idx = m ? Number(m[1]) : 0;
+      let raw = '';
+      let mtime = 0;
+      try {
+        const fp = join(sdir, f);
+        raw = await readFile(fp, 'utf8');
+        mtime = (await stat(fp)).mtimeMs;
+      } catch { continue; }
+      const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+      let title = `synthesis_${idx}`;
+      if (fm) {
+        const titleM = fm[1].match(/^title:\s*["']?(.+?)["']?\s*$/m);
+        if (titleM) title = titleM[1];
+      }
+      const noFm = raw.replace(/^---[\s\S]*?---\n?/, '');
+      const wordCount = noFm.replace(/[^\w\s一-鿿]/g, '').length;
+      const refCount = (noFm.match(/\b\d{4}\.\d{4,5}/g) ?? []).length;
+      allEntries.push({ sid, idx, title, mtime, wordCount, refCount });
+    }
+  }
+}
+
+allEntries.sort((a, b) => b.mtime - a.mtime);
+
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  return `${Math.floor(days / 30)} 个月前`;
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Reading Queue · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / reading</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📖 Now Reading <span class="muted" style="font-size:0.6em">(iter #103)</span></h1>
+      <p class="agents-sub">
+        把所有 syntheses 变成阅读队列。在浏览器打开任意 synthesis 页面会自动更新阅读进度;
+        本页显示队列全貌 + "下一份未读" 一键跳转。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 队列统计</h2>
+      <div class="agents-rd-stats" id="rd-stats">
+        <span><strong id="rd-total">{allEntries.length}</strong> 份 synthesis</span>
+        <span><strong id="rd-read">0</strong> 已读</span>
+        <span><strong id="rd-unread">0</strong> 未读</span>
+        <span><strong id="rd-progress">0%</strong> 平均完成度</span>
+        <span>剩余 <strong id="rd-eta">—</strong></span>
+      </div>
+      <p>
+        <a class="button primary" id="rd-next" href="#">▶ 下一份未读</a>
+        <button class="button" id="rd-mark-all" type="button">📚 全部标记为已读</button>
+        <button class="button" id="rd-reset" type="button">↩️ 清空阅读记录</button>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 完整队列</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>synthesis</th>
+            <th>session</th>
+            <th>进度</th>
+            <th>字数</th>
+            <th>refs</th>
+            <th>mtime</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="rd-rows">
+          {allEntries.map((e) => (
+            <tr
+              data-sid={e.sid}
+              data-idx={e.idx}
+              data-words={e.wordCount}
+            >
+              <td class="agents-rd-status">⏳</td>
+              <td>
+                <a href={`${base}/agents/${e.sid}/synthesis/${String(e.idx).padStart(3, '0')}/`}>
+                  {escapeHtml(e.title)}
+                </a>
+              </td>
+              <td><a href={`${base}/agents/${e.sid}/`}><small>{escapeHtml(e.sid)}</small></a></td>
+              <td class="agents-rd-progress-cell">
+                <div class="agents-rd-bar"><div class="agents-rd-bar-fill"></div></div>
+                <small class="muted">0%</small>
+              </td>
+              <td><small>{e.wordCount.toLocaleString()}</small></td>
+              <td><small>{e.refCount}</small></td>
+              <td><small>{agoStr(e.mtime)}</small></td>
+              <td>
+                <button class="button small agents-rd-toggle" type="button">✓ 已读</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/syntheses/`}>🧠 最新 Syntheses</a>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/digest/`}>📰 Digest</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rd-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+    padding: 0.4rem 0;
+  }
+  .agents-rd-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-rd-bar {
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    height: 8px;
+    width: 100px;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  .agents-rd-bar-fill {
+    background: linear-gradient(90deg, #4f46e5, #10b981);
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  .agents-rd-progress-cell small {
+    margin-left: 0.4rem;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-rd-status-read { color: #10b981; }
+  .agents-rd-status-unread { color: #f59e0b; }
+</style>
+
+<script>
+type ReadingState = {
+  read: Record<string, true>;      // sid/idx → true
+  progress: Record<string, number>; // sid/idx → 0..1
+  lastVisited: Record<string, number>; // sid/idx → ts
+};
+
+const KEY = 'agents:reading:v1';
+
+function load(): ReadingState {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return { read: {}, progress: {}, lastVisited: {} };
+    const parsed = JSON.parse(raw) as Partial<ReadingState>;
+    return {
+      read: parsed.read ?? {},
+      progress: parsed.progress ?? {},
+      lastVisited: parsed.lastVisited ?? {},
+    };
+  } catch { return { read: {}, progress: {}, lastVisited: {} }; }
+}
+function save(s: ReadingState): void {
+  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { /* */ }
+}
+function k(sid: string, idx: number): string { return `${sid}/${String(idx).padStart(3, '0')}`; }
+
+function refresh(): void {
+  const state = load();
+  const rows = document.querySelectorAll<HTMLTableRowElement>('#rd-rows tr');
+  let totalProgress = 0;
+  let readCount = 0;
+  let unreadCount = 0;
+  let nextUnreadHref: string | null = null;
+
+  rows.forEach((row) => {
+    const sid = row.dataset.sid ?? '';
+    const idx = Number(row.dataset.idx ?? '0');
+    const key = k(sid, idx);
+    const isRead = !!state.read[key];
+    const progress = state.progress[key] ?? 0;
+    const last = state.lastVisited[key] ?? 0;
+
+    // 状态列
+    const statusCell = row.querySelector('.agents-rd-status');
+    if (statusCell) {
+      statusCell.textContent = isRead ? '✅' : (last ? '🟡' : '⏳');
+      statusCell.classList.toggle('agents-rd-status-read', isRead);
+      statusCell.classList.toggle('agents-rd-status-unread', !isRead);
+    }
+
+    // 进度条
+    const fill = row.querySelector<HTMLDivElement>('.agents-rd-bar-fill');
+    const pctSmall = row.querySelector<HTMLElement>('.agents-rd-progress-cell small');
+    if (fill) fill.style.width = `${Math.round(progress * 100)}%`;
+    if (pctSmall) pctSmall.textContent = `${Math.round(progress * 100)}%`;
+
+    // toggle 按钮文字
+    const toggle = row.querySelector<HTMLButtonElement>('.agents-rd-toggle');
+    if (toggle) toggle.textContent = isRead ? '↩️ 标未读' : '✓ 已读';
+
+    // 累计
+    totalProgress += progress;
+    if (isRead) readCount += 1;
+    else {
+      unreadCount += 1;
+      if (!nextUnreadHref) {
+        const a = row.querySelector<HTMLAnchorElement>('a[href*="/synthesis/"]');
+        nextUnreadHref = a?.getAttribute('href') ?? null;
+      }
+    }
+  });
+
+  const total = rows.length;
+  const avgProgress = total ? Math.round((totalProgress / total) * 100) : 0;
+  const setEl = (id: string, val: string) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  };
+  setEl('rd-read', String(readCount));
+  setEl('rd-unread', String(unreadCount));
+  setEl('rd-progress', `${avgProgress}%`);
+
+  // 估算剩余时间:总字数 * (1 - avg progress) / 250 words per minute
+  let totalWords = 0;
+  let doneWords = 0;
+  rows.forEach((row) => {
+    const sid = row.dataset.sid ?? '';
+    const idx = Number(row.dataset.idx ?? '0');
+    const key = k(sid, idx);
+    const w = Number(row.dataset.words ?? '0');
+    totalWords += w;
+    doneWords += w * (state.progress[key] ?? 0);
+  });
+  const remainWords = totalWords - doneWords;
+  const remainMin = Math.max(0, Math.round(remainWords / 250));
+  setEl('rd-eta', remainMin < 1 ? '完成' : `约 ${remainMin} 分钟`);
+
+  // 下一份未读按钮
+  const nextBtn = document.getElementById('rd-next');
+  if (nextBtn) {
+    if (nextUnreadHref) {
+      nextBtn.setAttribute('href', nextUnreadHref);
+      nextBtn.removeAttribute('disabled');
+    } else {
+      nextBtn.setAttribute('href', '#');
+      nextBtn.setAttribute('disabled', 'true');
+    }
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refresh();
+
+  document.body.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    if (t.classList.contains('agents-rd-toggle')) {
+      const row = t.closest('tr');
+      const sid = row?.dataset.sid ?? '';
+      const idx = Number(row?.dataset.idx ?? '0');
+      const key = k(sid, idx);
+      const state = load();
+      if (state.read[key]) {
+        delete state.read[key];
+      } else {
+        state.read[key] = true;
+        state.progress[key] = 1;
+      }
+      save(state);
+      refresh();
+    }
+  });
+
+  document.getElementById('rd-mark-all')?.addEventListener('click', () => {
+    const state = load();
+    document.querySelectorAll<HTMLTableRowElement>('#rd-rows tr').forEach((row) => {
+      const sid = row.dataset.sid ?? '';
+      const idx = Number(row.dataset.idx ?? '0');
+      const key = k(sid, idx);
+      state.read[key] = true;
+      state.progress[key] = 1;
+    });
+    save(state);
+    refresh();
+  });
+
+  document.getElementById('rd-reset')?.addEventListener('click', () => {
+    if (!confirm('清空所有阅读记录?')) return;
+    localStorage.removeItem(KEY);
+    refresh();
+  });
+});
+</script>
