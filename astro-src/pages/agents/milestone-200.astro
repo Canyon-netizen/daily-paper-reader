@@ -1,0 +1,286 @@
+---
+// /agents/milestone-200.astro — iter #200:BICENTENNIAL 🎉
+//
+// 200 次迭代里程碑:全时统计 + 关键 milestone + 成就解锁
+//   - 全局累积统计
+//   - 关键 milestone 时间线(iter 25/50/100/150/200)
+//   - 成就墙(achievements)
+//   - 系统成长曲线
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+
+// 全局累积统计
+let totalSessions = 0;
+let totalRounds = 0;
+let totalProposals = 0;
+let totalPromoted = 0;
+let totalApplied = 0;
+let totalTokens = 0;
+let totalSyntheses = 0;
+let firstSessionDate = '';
+let lastSessionDate = '';
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let metaMtime = 0;
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try {
+        const m = JSON.parse(await readFile(mp, 'utf8'));
+        const st = (await import('node:fs/promises')).stat(mp);
+        const stx = await st;
+        metaMtime = stx.mtimeMs;
+        totalSessions += 1;
+        const dateStr = new Date(metaMtime).toISOString().slice(0, 10);
+        if (!firstSessionDate || dateStr < firstSessionDate) firstSessionDate = dateStr;
+        if (!lastSessionDate || dateStr > lastSessionDate) lastSessionDate = dateStr;
+      } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        const m = rf.match(/^round_(\d+)\.json$/);
+        if (!m) continue;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          totalRounds += 1;
+          totalTokens += r.feedback?.total_tokens ?? 0;
+          for (const persona of r.feedback?.personas ?? []) {
+            totalProposals += (persona.proposals ?? []).length;
+          }
+          for (const gp of r.gate?.proposals ?? []) {
+            if (gp.category === 'promoted') totalPromoted += 1;
+          }
+          totalApplied += (r.modifier?.applied ?? []).length;
+        } catch (e) { /* */ }
+      }
+    }
+    const sd = join(root, sid, 'synthesis');
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) totalSyntheses += 1;
+      }
+    }
+  }
+}
+
+// milestones
+const milestones = [
+  { iter: 25, emoji: '🌱', label: 'Multi-agent v0', desc: 'Designer/Feedback/Modifier 最小循环' },
+  { iter: 50, emoji: '🔬', label: '7-stage pipeline', desc: 'ideation→lit review→experiment→draft→review→revise→export' },
+  { iter: 75, emoji: '🧠', label: 'Insights dashboard', desc: '跨 session 学习 + drift 监测' },
+  { iter: 100, emoji: '🎉', label: 'Centennial', desc: '100 次迭代 + milestone page' },
+  { iter: 125, emoji: '⚙️', label: 'Settings + Budget', desc: 'LLM config + 费用预算' },
+  { iter: 150, emoji: '🚀', label: 'Daily analytics', desc: 'heatmap / daily burn / KPI 全套' },
+  { iter: 175, emoji: '🔮', label: 'Predictor + Search', desc: 'improvement predictor + 全文搜索' },
+  { iter: 200, emoji: '🏆', label: 'Bicentennial', desc: '200 iters · 多智能体科研系统成型' },
+];
+
+// 成就
+const achievements = [
+  { id: 'first-round', emoji: '🥚', name: '第一轮', desc: '完成 1 个 round', got: totalRounds >= 1 },
+  { id: 'ten-sessions', emoji: '📚', name: '10 sessions', desc: '创建 10 个 session', got: totalSessions >= 10 },
+  { id: 'hundred-rounds', emoji: '💯', name: '100 rounds', desc: '跑 100 个 round', got: totalRounds >= 100 },
+  { id: 'thousand-tokens', emoji: '💸', name: '1k tokens', desc: '消耗 1k tokens', got: totalTokens >= 1000 },
+  { id: 'first-synthesis', emoji: '📝', name: 'First synthesis', desc: '产出 1 篇 synthesis', got: totalSyntheses >= 1 },
+  { id: 'promoter', emoji: '🎯', name: 'Promoter', desc: 'promoted ≥ 10', got: totalPromoted >= 10 },
+  { id: 'applier', emoji: '🔧', name: 'Applier', desc: 'applied ≥ 20', got: totalApplied >= 20 },
+  { id: 'centurion', emoji: '💯', name: 'Centurion', desc: '达成 iter #100', got: true },
+  { id: 'bicentennial', emoji: '🏆', name: 'Bicentennial', desc: '达成 iter #200', got: true },
+];
+
+const unlocked = achievements.filter((a) => a.got).length;
+
+const daysSinceFirst = firstSessionDate
+  ? Math.max(1, Math.ceil((Date.now() - new Date(firstSessionDate).getTime()) / (24 * 60 * 60 * 1000)))
+  : 1;
+
+// 阶段划分
+const sessionBucket = totalSessions < 5 ? '🌱 实验期' :
+  totalSessions < 20 ? '🌿 发展期' :
+  totalSessions < 50 ? '🌳 成长期' : '🌲 成熟期';
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Bicentennial Milestone · Agents">
+  <Navbar />
+  <main class="shell agents-shell milestone-special">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone-200</span>
+    </nav>
+
+    <header class="agents-header milestone-hero">
+      <h1>🏆 BICENTENNIAL <span class="muted" style="font-size:0.5em">(iter #200)</span></h1>
+      <p class="agents-sub milestone-tagline">
+        <strong>200 次迭代</strong> · 多智能体科研自动化系统成型
+      </p>
+      <div class="milestone-cake">🎂</div>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全时统计</h2>
+      <div class="agents-m2-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>总 proposals: <strong>{totalProposals}</strong></span>
+        <span>总 promoted: <strong>{totalPromoted}</strong></span>
+        <span>总 applied: <strong>{totalApplied}</strong></span>
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>总 syntheses: <strong>{totalSyntheses}</strong></span>
+        <span>首次 session: <strong>{firstSessionDate || 'N/A'}</strong></span>
+        <span>最近 session: <strong>{lastSessionDate || 'N/A'}</strong></span>
+        <span>运行天数: <strong>{daysSinceFirst}d</strong></span>
+        <span>当前阶段: <strong>{sessionBucket}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 Milestone 时间线</h2>
+      <ol class="milestone-timeline">
+        {milestones.map((m) => (
+          <li>
+            <span class="ms-emoji">{m.emoji}</span>
+            <span class="ms-iter">iter #{m.iter}</span>
+            <strong>{m.label}</strong>
+            <span class="muted"> — {m.desc}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏅 成就墙</h2>
+      <p class="muted">已解锁 {unlocked}/{achievements.length} 个成就</p>
+      <div class="achievements-grid">
+        {achievements.map((a) => (
+          <div class={`achievement-card ${a.got ? 'unlocked' : 'locked'}`}>
+            <span class="ach-emoji">{a.got ? a.emoji : '🔒'}</span>
+            <strong>{a.name}</strong>
+            <small>{a.desc}</small>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 下一步</h2>
+      <ul>
+        <li>🤖 接 OpenAI/Anthropic SDK,dry-run 切真实推理</li>
+        <li>📡 加入 web UI(cron + 实时事件)</li>
+        <li>📦 把 archive 接到 GitHub Pages 持续部署</li>
+        <li>🧪 跑一份端到端 demo session</li>
+        <li>📈 长期 metrics:Prometheus + Grafana</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 致谢</h2>
+      <p>
+        从 0 到 200,从一个空 Astro 模板到一个 7-stage multi-agent 科研辅助系统。
+        接下来继续向 iter #300 推进。
+      </p>
+      <p class="muted">— daily-paper-reader multi-agent team</p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .milestone-special {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.05), rgba(236, 72, 153, 0.05));
+    padding-bottom: 3rem;
+  }
+  .milestone-hero {
+    text-align: center;
+    padding: 2rem 0;
+  }
+  .milestone-tagline {
+    font-size: 1.2rem;
+    margin: 1rem 0;
+  }
+  .milestone-cake {
+    font-size: 4rem;
+    margin: 1rem 0;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+  }
+  .agents-m2-globals {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .agents-m2-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .milestone-timeline {
+    list-style: none;
+    padding: 0;
+  }
+  .milestone-timeline li {
+    padding: 0.5rem 0;
+    border-left: 3px solid #4f46e5;
+    padding-left: 1rem;
+    margin: 0.5rem 0;
+  }
+  .ms-emoji {
+    font-size: 1.3rem;
+    margin-right: 0.5rem;
+  }
+  .ms-iter {
+    display: inline-block;
+    background: rgba(99, 102, 241, 0.2);
+    color: #4f46e5;
+    padding: 0.1rem 0.5rem;
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.8rem;
+    margin-right: 0.5rem;
+  }
+  .achievements-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 0.8rem;
+  }
+  .achievement-card {
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    text-align: center;
+    transition: transform 0.2s;
+  }
+  .achievement-card.unlocked {
+    background: rgba(99, 102, 241, 0.1);
+  }
+  .achievement-card.locked {
+    opacity: 0.4;
+    background: rgba(0, 0, 0, 0.2);
+  }
+  .achievement-card:hover {
+    transform: translateY(-2px);
+  }
+  .ach-emoji {
+    display: block;
+    font-size: 2rem;
+    margin-bottom: 0.3rem;
+  }
+</style>
