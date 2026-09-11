@@ -1,0 +1,284 @@
+---
+// /agents/session-timeline.astro — iter #124:session timeline (gantt-style)
+//
+// 跨 session 把每个 session 的活动窗口画成横向条:
+//   - X 轴 = 时间
+//   - Y 轴 = session(按开始时间排序)
+//   - 每个 session 显示:首次活动 / 最后活动 / 总 rounds / 总长度
+//   - 颜色按 status:active(7d 内) / recent(30d) / old
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionTimeline {
+  sid: string;
+  goal: string;
+  firstTs: number;
+  lastTs: number;
+  totalRounds: number;
+  status: 'active' | 'recent' | 'old' | 'ancient';
+}
+
+const sessions: SessionTimeline[] = [];
+
+const now = Date.now();
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    let firstTs = Infinity;
+    let lastTs = 0;
+    let totalRounds = 0;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      const fp = join(rd, rf);
+      const st = await stat(fp).catch(() => null);
+      if (!st) continue;
+      if (st.mtimeMs < firstTs) firstTs = st.mtimeMs;
+      if (st.mtimeMs > lastTs) lastTs = st.mtimeMs;
+      if (/^round_\d+\.json$/.test(rf)) totalRounds += 1;
+    }
+    if (firstTs === Infinity) continue;
+    const goal = await readFile(metaPath, 'utf8').catch(() => '{}').then((s) => {
+      try { return JSON.parse(s).goal ?? ''; } catch (e) { return ''; }
+    });
+    const daysSince = (now - lastTs) / 86_400_000;
+    let status: SessionTimeline['status'];
+    if (daysSince <= 7) status = 'active';
+    else if (daysSince <= 30) status = 'recent';
+    else if (daysSince <= 90) status = 'old';
+    else status = 'ancient';
+    sessions.push({ sid, goal, firstTs, lastTs, totalRounds, status });
+  }
+}
+
+sessions.sort((a, b) => a.firstTs - b.firstTs);
+
+const minTs = sessions.reduce((m, s) => Math.min(m, s.firstTs), Date.now());
+const maxTs = sessions.reduce((m, s) => Math.max(m, s.lastTs), 0);
+const spanMs = Math.max(maxTs - minTs, 86_400_000);
+const TOTAL_DAYS = Math.ceil(spanMs / 86_400_000);
+
+function pct(ts: number): number {
+  return ((ts - minTs) / spanMs) * 100;
+}
+function fmtDate(ts: number): string {
+  return new Date(ts).toISOString().slice(0, 10);
+}
+function fmtRel(ts: number): string {
+  const days = Math.floor((now - ts) / 86_400_000);
+  if (days < 1) return 'today';
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) return `${Math.floor(days / 7)}w ago`;
+  if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+  return `${Math.floor(days / 365)}y ago`;
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+const statusColor: any = {
+  active: '#10b981',
+  recent: '#3b82f6',
+  old: '#f59e0b',
+  ancient: '#6b7280',
+};
+
+// 计算 X 轴刻度(每 TOTAL_DAYS / 6 一个 tick)
+const TICK_COUNT = 6;
+const ticks: { pct: number; label: string }[] = [];
+for (let i = 0; i <= TICK_COUNT; i++) {
+  const ts = minTs + (spanMs * i) / TICK_COUNT;
+  ticks.push({ pct: (i / TICK_COUNT) * 100, label: fmtDate(ts) });
+}
+---
+
+<BaseLayout title="Session Timeline · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-timeline</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Session Timeline <span class="muted" style="font-size:0.6em">(iter #124)</span></h1>
+      <p class="agents-sub">
+        跨 session 横向时间线。每行一个 session,从首次活动到最后活动。颜色按新鲜度:
+        <span style="color:#10b981">●</span> active (7d) ·
+        <span style="color:#3b82f6">●</span> recent (30d) ·
+        <span style="color:#f59e0b">●</span> old (90d) ·
+        <span style="color:#6b7280">●</span> ancient
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-st-globals">
+        <span>session 总数: <strong>{sessions.length}</strong></span>
+        <span>时间跨度: <strong>{TOTAL_DAYS} 天</strong></span>
+        <span>active: <strong>{sessions.filter((s) => s.status === 'active').length}</strong></span>
+        <span>recent: <strong>{sessions.filter((s) => s.status === 'recent').length}</strong></span>
+        <span>old: <strong>{sessions.filter((s) => s.status === 'old').length}</strong></span>
+      </div>
+      <p class="muted">
+        <small>最早: {fmtDate(minTs)} · 最近: {fmtDate(maxTs)}</small>
+      </p>
+    </section>
+
+    {sessions.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">还没有 session 数据。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>🗓 Timeline</h2>
+        <div class="agents-st-gantt">
+          <div class="agents-st-axis">
+            <span></span>
+            <div class="agents-st-axis-ticks">
+              {ticks.map((t) => (
+                <span class="agents-st-tick" style={`left:${t.pct}%`}>{t.label}</span>
+              ))}
+            </div>
+          </div>
+          <div class="agents-st-rows">
+            {sessions.map((s) => {
+              const left = pct(s.firstTs);
+              const width = Math.max(pct(s.lastTs) - left, 0.5);
+              return (
+                <div class="agents-st-row">
+                  <a class="agents-st-label" href={`${base}/agents/${s.sid}/`} title={esc(s.goal)}>
+                    <code>{esc(s.sid.slice(0, 16))}</code>
+                    <small class="muted">{s.totalRounds}r · {fmtRel(s.lastTs)}</small>
+                  </a>
+                  <div class="agents-st-bar-track">
+                    <a
+                      class="agents-st-bar"
+                      href={`${base}/agents/${s.sid}/`}
+                      style={`left:${left}%;width:${width}%;background:${statusColor[s.status]}`}
+                      title={`${s.sid} · ${fmtDate(s.firstTs)} → ${fmtDate(s.lastTs)} · ${s.totalRounds} rounds`}
+                    >{width > 4 ? `${s.totalRounds}r` : ''}</a>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>📋 列表视图</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>goal 摘要</th><th>rounds</th><th>首次</th><th>最后</th><th>状态</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 60).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 16))}</code></a></td>
+              <td><small>{esc((s.goal ?? '').slice(0, 60))}{(s.goal ?? '').length > 60 ? '…' : ''}</small></td>
+              <td>{s.totalRounds}</td>
+              <td><small>{fmtDate(s.firstTs)}</small></td>
+              <td><small>{fmtDate(s.lastTs)} ({fmtRel(s.lastTs)})</small></td>
+              <td><span style={`color:${statusColor[s.status]}`}>● {s.status}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-st-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-st-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-st-gantt {
+    overflow-x: auto;
+  }
+  .agents-st-axis {
+    display: flex;
+    border-bottom: 1px solid rgba(99, 102, 241, 0.3);
+    padding-bottom: 0.3rem;
+    margin-bottom: 0.3rem;
+  }
+  .agents-st-axis > span {
+    width: 220px;
+    flex-shrink: 0;
+  }
+  .agents-st-axis-ticks {
+    flex: 1;
+    position: relative;
+    height: 20px;
+  }
+  .agents-st-tick {
+    position: absolute;
+    transform: translateX(-50%);
+    font-size: 0.7rem;
+    color: #6b7280;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-st-rows {
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .agents-st-row {
+    display: flex;
+    align-items: center;
+    height: 28px;
+    border-bottom: 1px solid rgba(99, 102, 241, 0.06);
+  }
+  .agents-st-label {
+    width: 220px;
+    flex-shrink: 0;
+    padding-right: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    text-decoration: none;
+    color: inherit;
+  }
+  .agents-st-label small {
+    font-size: 0.65rem;
+  }
+  .agents-st-bar-track {
+    flex: 1;
+    height: 20px;
+    position: relative;
+    background: rgba(99, 102, 241, 0.04);
+    border-radius: 2px;
+  }
+  .agents-st-bar {
+    position: absolute;
+    height: 100%;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-decoration: none;
+    min-width: 4px;
+  }
+  .agents-st-bar:hover {
+    filter: brightness(1.2);
+  }
+</style>
