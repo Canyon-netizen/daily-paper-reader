@@ -1,0 +1,180 @@
+---
+// /agents/inbox.astro — iter #150:unified inbox
+//
+// 把多个 localStorage 数据源在 SSR 端聚合(用 default / empty 表示):
+//   - agents:action-queue
+//   - agents:sticky
+//   - agents:tags
+//   - agents:notes
+//   - agents:capture
+//   - agents:todos
+//
+// 由于 localStorage 是浏览器端,这里展示"占位 + 操作说明",让用户清楚每个数据存在哪里。
+// 真正跨源汇总由浏览器脚本完成(localStorage.getItem 跨多 keys)。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Source {
+  key: string;
+  label: string;
+  emoji: string;
+  desc: string;
+  href: string;
+  count: string;
+}
+
+const SOURCES: Source[] = [
+  { key: 'agents:action-queue:v1', label: 'Action Queue', emoji: '⚡', desc: '跨源严重度排序的 action items', href: '/agents/action-queue/', count: '高' },
+  { key: 'agents:notifications:v1', label: 'Notifications', emoji: '🔔', desc: '严重度排序的 inbox(stale / 高 cost / 健康)', href: '/agents/notifications/', count: '中' },
+  { key: 'agents:sticky:v1', label: 'Sticky', emoji: '📝', desc: '浮动便签内容(全局)', href: '/agents/sticky/', count: '浮动' },
+  { key: 'agents:capture:v1', label: 'Capture', emoji: '📥', desc: '灵感收件箱(快速记录的想法)', href: '/agents/capture/', count: '高' },
+  { key: 'agents:todos:v1', label: 'Todos', emoji: '✅', desc: '跨 session 下一步建议聚合', href: '/agents/todos/', count: '高' },
+  { key: 'agents:tags:v1', label: 'Tags', emoji: '🏷️', desc: 'session 标签管理', href: '/agents/tags/', count: '中' },
+  { key: 'agents:notes:v1', label: 'Notes', emoji: '🗒️', desc: 'session 备注', href: '/agents/notes/', count: '中' },
+  { key: 'agents:bookmarks:v1', label: 'Bookmarks', emoji: '🔖', desc: '收藏的 search / session / paper', href: '/agents/bookmarks/', count: '中' },
+  { key: 'agents:reading:v1', label: 'Reading', emoji: '📖', desc: 'Now Reading 队列 + 阅读进度', href: '/agents/reading/', count: '中' },
+  { key: 'agents:pinned:v1', label: 'Pinned', emoji: '📌', desc: '钉选的 session 顺序', href: '/agents/pinned/', count: '低' },
+];
+---
+
+<BaseLayout title="Unified Inbox · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / inbox</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📥 Unified Inbox <span class="muted" style="font-size:0.6em">(iter #150)</span></h1>
+      <p class="agents-sub">
+        跨 localStorage 的所有"待处理"数据源索引。
+        点击下方任一来源进入对应管理页面,或在下面看实时聚合的合并视图。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 合并视图(localStorage 实时聚合)</h2>
+      <p class="muted"><small>浏览器端读取,无需后端。</small></p>
+      <div id="ib-aggregated" class="agents-ib-aggregated">
+        <p class="muted">点击下方按钮加载最新数据…</p>
+      </div>
+      <p style="margin-top:0.6rem">
+        <button class="button primary" id="ib-load" type="button">🔄 加载所有 source</button>
+        <button class="button" id="ib-clear" type="button">🗑️ 清空视图</button>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📚 所有数据源</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>source</th><th>key</th><th>说明</th><th>频率</th><th>link</th></tr>
+        </thead>
+        <tbody>
+          {SOURCES.map((s) => (
+            <tr>
+              <td><strong>{s.emoji} {s.label}</strong></td>
+              <td><code>{s.key}</code></td>
+              <td><small>{s.desc}</small></td>
+              <td>{s.count}</td>
+              <td><a class="button small" href={`${base}${s.href}`}>→ 打开</a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+const SOURCES = [
+  { key: 'agents:action-queue:v1', label: '⚡ Action Queue', href: '/agents/action-queue/' },
+  { key: 'agents:sticky:v1', label: '📝 Sticky', href: '/agents/sticky/' },
+  { key: 'agents:capture:v1', label: '📥 Capture', href: '/agents/capture/' },
+  { key: 'agents:todos:v1', label: '✅ Todos', href: '/agents/todos/' },
+  { key: 'agents:tags:v1', label: '🏷️ Tags', href: '/agents/tags/' },
+  { key: 'agents:notes:v1', label: '🗒️ Notes', href: '/agents/notes/' },
+  { key: 'agents:bookmarks:v1', label: '🔖 Bookmarks', href: '/agents/bookmarks/' },
+  { key: 'agents:reading:v1', label: '📖 Reading', href: '/agents/reading/' },
+  { key: 'agents:pinned:v1', label: '📌 Pinned', href: '/agents/pinned/' },
+  { key: 'agents:notifications:v1', label: '🔔 Notifications', href: '/agents/notifications/' },
+];
+
+function safeRead(key: string): any {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function summarize(key: string, value: any): { count: number; sample: string } {
+  if (value == null) return { count: 0, sample: '(empty)' };
+  if (Array.isArray(value)) {
+    return { count: value.length, sample: value.slice(0, 3).map((x) => {
+      if (typeof x === 'string') return x.slice(0, 50);
+      if (typeof x === 'object' && x !== null) {
+        return JSON.stringify(x).slice(0, 80);
+      }
+      return String(x);
+    }).join(' | ') };
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (value.items && Array.isArray(value.items)) {
+      return { count: value.items.length, sample: value.items.slice(0, 3).map((x: any) => {
+        if (typeof x === 'string') return x.slice(0, 50);
+        if (typeof x === 'object') return JSON.stringify(x).slice(0, 80);
+        return String(x);
+      }).join(' | ') };
+    }
+    return { count: keys.length, sample: keys.slice(0, 5).join(', ') };
+  }
+  return { count: 1, sample: String(value).slice(0, 80) };
+}
+
+function render(): void {
+  const container = document.getElementById('ib-aggregated');
+  if (!container) return;
+  const rows: string[] = [];
+  let total = 0;
+  for (const src of SOURCES) {
+    const v = safeRead(src.key);
+    const s = summarize(src.key, v);
+    total += s.count;
+    rows.push(`<tr>
+      <td><strong>${src.label}</strong></td>
+      <td><code>${src.key}</code></td>
+      <td>${s.count}</td>
+      <td><small>${s.sample}</small></td>
+      <td><a class="button small" href="${src.href}">→</a></td>
+    </tr>`);
+  }
+  container.innerHTML = `
+    <p><strong>总计 items: ${total}</strong></p>
+    <table class="agents-session-table">
+      <thead><tr><th>source</th><th>key</th><th>count</th><th>sample</th><th>link</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>
+  `;
+}
+
+document.getElementById('ib-load')?.addEventListener('click', render);
+document.getElementById('ib-clear')?.addEventListener('click', () => {
+  const c = document.getElementById('ib-aggregated');
+  if (c) c.innerHTML = '<p class="muted">已清空。</p>';
+});
+
+// 自动加载
+render();
+</script>
+
+<style>
+  .agents-ib-aggregated table {
+    margin-top: 0.6rem;
+  }
+</style>
