@@ -1,12 +1,10 @@
 ---
-// /agents/score-volatility.astro — iter #160:score volatility index
+// /agents/score-volatility.astro — iter #264:score volatility index
 //
-// 跨 session 看每轮 feedback score 的波动度(标准差):
-//   - 高波动 session = LLM 反馈不稳定 / gate 阈值在反复跳动
-//   - 低波动 session = LLM 反馈稳态,系统稳定
-//   - 整体波动分布直方图
-//   - top 10 高波动 sessions
-//   - top 10 低波动 sessions(rounds ≥ 3)
+// 每个 session round score 的标准差 σ:
+//   - 高 σ = 分数波动大(unstable)
+//   - 低 σ = 分数稳定
+// 找出最不稳定和最稳定的 sessions
 
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -17,101 +15,93 @@ import '../../styles/agents.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
-interface VolRecord {
+interface Vol {
   sid: string;
   goal: string;
-  rounds: number;
-  meanScore: number;
-  stdScore: number;
   scores: number[];
+  rounds: number;
+  mean: number;
+  std: number;
+  range: number;
+  cv: number;  // 变异系数 std/mean
 }
 
-const records: VolRecord[] = [];
 const root = join(process.cwd(), 'archive');
+const vols: Vol[] = [];
+
+function stdev(values: number[]): { mean: number; std: number } {
+  if (values.length === 0) return { mean: 0, std: 0 };
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+  return { mean, std: Math.sqrt(variance) };
+}
+
 if (existsSync(root)) {
   const sids = await readdir(root).catch(() => []);
   for (const sid of sids) {
     const rd = join(root, sid, 'rounds');
     if (!existsSync(rd)) continue;
-    let goal = '';
-    const mp = join(root, sid, 'meta.json');
-    if (existsSync(mp)) {
-      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
-    }
     const rfs = await readdir(rd).catch(() => []);
     const rNum: number[] = [];
     for (const rf of rfs) {
       const m = rf.match(/^round_(\d+)\.json$/);
       if (m) rNum.push(parseInt(m[1], 10));
     }
+    if (rNum.length < 4) continue;
     rNum.sort((a, b) => a - b);
-    if (rNum.length < 2) continue;
+    let goal = '';
+    const mp = join(rd, '..', 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
     const scores: number[] = [];
-    for (const ri of rNum) {
+    for (const rn of rNum) {
       try {
-        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
-        const perRound: number[] = [];
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
         for (const persona of r.feedback?.personas ?? []) {
           for (const p of persona.proposals ?? []) {
-            if (typeof p.total === 'number') perRound.push(p.total);
+            if (typeof p.total === 'number') arr.push(p.total);
           }
         }
-        if (perRound.length > 0) {
-          scores.push(perRound.reduce((a, b) => a + b, 0) / perRound.length);
-        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
       } catch (e) { /* */ }
     }
-    if (scores.length < 2) continue;
-    const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
-    const variance = scores.reduce((s, x) => s + (x - mean) ** 2, 0) / scores.length;
-    const std = Math.sqrt(variance);
-    records.push({
-      sid, goal,
-      rounds: rNum.length,
-      meanScore: mean,
-      stdScore: std,
-      scores,
-    });
+    if (scores.length < 4) continue;
+    const { mean, std } = stdev(scores);
+    const range = Math.max(...scores) - Math.min(...scores);
+    const cv = mean > 0 ? std / mean : 0;
+    vols.push({ sid, goal, scores, rounds: scores.length, mean, std, range, cv });
   }
 }
 
-// 分桶
-const buckets = [
-  { label: 'σ ≤ 0.2 (稳态)', min: 0, max: 0.2, count: 0 },
-  { label: '0.2 < σ ≤ 0.5', min: 0.2, max: 0.5, count: 0 },
-  { label: '0.5 < σ ≤ 1.0', min: 0.5, max: 1.0, count: 0 },
-  { label: '1.0 < σ ≤ 1.5', min: 1.0, max: 1.5, count: 0 },
-  { label: 'σ > 1.5 (剧烈)', min: 1.5, max: 99, count: 0 },
-];
-for (const r of records) {
-  for (const b of buckets) {
-    if (r.stdScore > b.min && r.stdScore <= b.max) {
-      b.count += 1;
-      break;
-    }
-  }
-}
-const maxBucket = Math.max(...buckets.map((b) => b.count), 1);
+const total = vols.length;
+const stable = vols.filter((v) => v.std < 0.3);
+const moderate = vols.filter((v) => v.std >= 0.3 && v.std < 0.7);
+const volatile_ = vols.filter((v) => v.std >= 0.7);
 
-const stable = records.filter((r) => r.stdScore <= 0.2).length;
-const extreme = records.filter((r) => r.stdScore > 1.5).length;
-const avgStd = records.length > 0 ? records.reduce((s, r) => s + r.stdScore, 0) / records.length : 0;
-const avgMean = records.length > 0 ? records.reduce((s, r) => s + r.meanScore, 0) / records.length : 0;
+// top by std (most volatile)
+const topVolatile = [...vols].sort((a, b) => b.std - a.std).slice(0, 12);
+// top by std asc (most stable)
+const topStable = [...vols].sort((a, b) => a.std - b.std).slice(0, 12);
 
-function bar(n: number, max: number, width = 24): string {
-  if (!max) return '░'.repeat(width);
-  const filled = Math.round((n / max) * width);
-  return '█'.repeat(filled) + '░'.repeat(width - filled);
-}
+// 平均 σ
+const avgStd = total > 0 ? vols.reduce((s, v) => s + v.std, 0) / total : 0;
+const avgRange = total > 0 ? vols.reduce((s, v) => s + v.range, 0) / total : 0;
+
 function esc(s: any): string {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
-function fmtScores(scores: number[]): string {
-  return scores.map((s) => s.toFixed(1)).join(' → ');
+function sparkline(values: number[]): string {
+  const blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  if (values.length < 2) return '▅'.repeat(values.length);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min;
+  if (range === 0) return '▅'.repeat(values.length);
+  return values.map((v) => blocks[Math.min(blocks.length - 1, Math.floor(((v - min) / range) * (blocks.length - 1)))]).join('');
 }
-
-const high = [...records].sort((a, b) => b.stdScore - a.stdScore).slice(0, 10);
-const low = [...records].filter((r) => r.rounds >= 3).sort((a, b) => a.stdScore - b.stdScore).slice(0, 10);
 ---
 
 <BaseLayout title="Score Volatility · Agents">
@@ -123,45 +113,40 @@ const low = [...records].filter((r) => r.rounds >= 3).sort((a, b) => a.stdScore 
     </nav>
 
     <header class="agents-header">
-      <h1>📈 Score Volatility <span class="muted" style="font-size:0.6em">(iter #160)</span></h1>
+      <h1>📊 Score Volatility Index <span class="muted" style="font-size:0.6em">(iter #264)</span></h1>
       <p class="agents-sub">
-        跨 session 看每轮 feedback 平均分的标准差(σ)。
-        低 σ = LLM 反馈稳态;高 σ = 反馈不稳定 / 系统仍在剧烈震荡。
+        每个 session round scores 的 σ,range,CV(变异系数)。
+        高 σ = 分数反复横跳;低 σ = 平稳收敛。
       </p>
     </header>
 
     <section class="agents-session-section">
       <h2>📊 全局</h2>
       <div class="agents-sv-globals">
-        <span>≥2 rounds sessions: <strong>{records.length}</strong></span>
+        <span>总 sessions: <strong>{total}</strong></span>
         <span>avg σ: <strong>{avgStd.toFixed(3)}</strong></span>
-        <span>avg mean: <strong>{avgMean.toFixed(2)}</strong></span>
-        <span>σ ≤ 0.2 稳态: <strong>{stable}</strong> ({records.length > 0 ? ((stable/records.length)*100).toFixed(1) : '0'}%)</span>
-        <span>σ > 1.5 剧烈: <strong>{extreme}</strong> ({records.length > 0 ? ((extreme/records.length)*100).toFixed(1) : '0'}%)</span>
+        <span>avg range: <strong>{avgRange.toFixed(2)}</strong></span>
+        <span>稳定(σ &lt; 0.3): <strong style="color:#10b981">{stable.length}</strong></span>
+        <span>中等(0.3-0.7): <strong style="color:#f59e0b">{moderate.length}</strong></span>
+        <span>波动(σ &gt; 0.7): <strong style="color:#ef4444">{volatile_.length}</strong></span>
       </div>
     </section>
 
     <section class="agents-session-section">
-      <h2>📊 σ 分布</h2>
-      <pre class="agents-sv-flow">{buckets.map((b) => {
-        return `${b.label.padEnd(20)} ${bar(b.count, maxBucket, 24)}  ${String(b.count).padStart(4)}`;
-      }).join('\n')}</pre>
-    </section>
-
-    <section class="agents-session-section">
-      <h2>🔥 top 10 高波动 (剧烈震荡)</h2>
+      <h2>📈 top 12 最波动 sessions</h2>
       <table class="agents-session-table">
         <thead>
-          <tr><th>sid</th><th>rounds</th><th>σ</th><th>mean</th><th>score 轨迹</th></tr>
+          <tr><th>σ</th><th>range</th><th>CV</th><th>rounds</th><th>sparkline</th><th>sid</th></tr>
         </thead>
         <tbody>
-          {high.map((r) => (
+          {topVolatile.map((v) => (
             <tr>
-              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
-              <td>{r.rounds}</td>
-              <td><strong>{r.stdScore.toFixed(3)}</strong></td>
-              <td>{r.meanScore.toFixed(2)}</td>
-              <td><small class="muted">{esc(fmtScores(r.scores))}</small></td>
+              <td><strong style="color:#ef4444">{v.std.toFixed(3)}</strong></td>
+              <td>{v.range.toFixed(2)}</td>
+              <td>{v.cv.toFixed(2)}</td>
+              <td>{v.rounds}</td>
+              <td><code style="font-size:1.1em;color:#4f46e5">{sparkline(v.scores)}</code></td>
+              <td><a href={`${base}/agents/${v.sid}/`}><code>{esc(v.sid.slice(0, 12))}</code></a></td>
             </tr>
           ))}
         </tbody>
@@ -169,19 +154,20 @@ const low = [...records].filter((r) => r.rounds >= 3).sort((a, b) => a.stdScore 
     </section>
 
     <section class="agents-session-section">
-      <h2>🪨 top 10 低波动 (稳态 ≥ 3 rounds)</h2>
+      <h2>📏 top 12 最稳定 sessions</h2>
       <table class="agents-session-table">
         <thead>
-          <tr><th>sid</th><th>rounds</th><th>σ</th><th>mean</th><th>score 轨迹</th></tr>
+          <tr><th>σ</th><th>range</th><th>CV</th><th>rounds</th><th>sparkline</th><th>sid</th></tr>
         </thead>
         <tbody>
-          {low.map((r) => (
+          {topStable.map((v) => (
             <tr>
-              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
-              <td>{r.rounds}</td>
-              <td><strong>{r.stdScore.toFixed(3)}</strong></td>
-              <td>{r.meanScore.toFixed(2)}</td>
-              <td><small class="muted">{esc(fmtScores(r.scores))}</small></td>
+              <td><strong style="color:#10b981">{v.std.toFixed(3)}</strong></td>
+              <td>{v.range.toFixed(2)}</td>
+              <td>{v.cv.toFixed(2)}</td>
+              <td>{v.rounds}</td>
+              <td><code style="font-size:1.1em;color:#4f46e5">{sparkline(v.scores)}</code></td>
+              <td><a href={`${base}/agents/${v.sid}/`}><code>{esc(v.sid.slice(0, 12))}</code></a></td>
             </tr>
           ))}
         </tbody>
@@ -191,9 +177,10 @@ const low = [...records].filter((r) => r.rounds >= 3).sort((a, b) => a.stdScore 
     <section class="agents-session-section">
       <h2>💡 解读</h2>
       <ul>
-        <li>σ > 1.5 的 session 通常意味着 LLM 反馈不稳定 — 看 goal 是否过宽</li>
-        <li>σ < 0.2 的 session 表示 LLM 反馈稳态 — gate 决策有较强一致性</li>
-        <li>与 <a href={`${base}/agents/anomalies/`}>Anomalies</a> 对照 — 异常 round 通常导致 σ 上升</li>
+        <li>σ &lt; 0.3 = 分数稳定(可能已收敛)</li>
+        <li>σ &gt; 0.7 = 分数波动大(可能在震荡 / 受随机性影响)</li>
+        <li>CV = σ/mean 标准化,跨 session 可比</li>
+        <li>对照 <a href={`${base}/agents/round-variance/`}>Round Variance</a> 看分布</li>
       </ul>
     </section>
   </main>
@@ -209,16 +196,5 @@ const low = [...records].filter((r) => r.rounds >= 3).sort((a, b) => a.stdScore 
     color: #4f46e5;
     font-family: ui-monospace, monospace;
     margin: 0 0.3rem;
-  }
-  .agents-sv-flow {
-    background: rgba(0,0,0,0.4);
-    color: #c9d1d9;
-    padding: 0.8rem;
-    border-radius: 4px;
-    font-family: ui-monospace, "JetBrains Mono", monospace;
-    font-size: 0.78rem;
-    line-height: 1.4;
-    overflow-x: auto;
-    white-space: pre;
   }
 </style>
