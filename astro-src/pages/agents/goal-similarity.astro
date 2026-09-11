@@ -1,0 +1,171 @@
+---
+// /agents/goal-similarity.astro — iter #132:goal similarity search
+//
+// 跨 session 看 goal 文本相似度:
+//   - 提取每个 session 的 goal,做简单 bag-of-words 向量化
+//   - 计算 cosine 相似度
+//   - 输出最相似的 pair
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Session { sid: string; goal: string; rounds: number; }
+
+const sessions: Session[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const meta = JSON.parse(await readFile(mp, 'utf8'));
+      const goal: string = meta.goal ?? '';
+      if (!goal || goal.length < 5) continue;
+      let rounds = 0;
+      const rd = join(root, sid, 'rounds');
+      if (existsSync(rd)) {
+        const rfs = await readdir(rd).catch(() => []);
+        rounds = rfs.filter((f) => /^round_\d+\.json$/.test(f)).length;
+      }
+      sessions.push({ sid, goal, rounds });
+    } catch (e) { /* */ }
+  }
+}
+
+const STOP = new Set([
+  'the','a','an','and','or','but','if','to','of','in','on','at','by','from','with','as','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','should','could','may','might','can','this','that','these','those','it','its','their','them','they','we','our','us','you','your','he','she','his','her','i','my','me','also','more','most','some','such','than','too','very','just','only','any','all','each','every','no','not','so','for',
+  'research','study','paper','papers','goal','use','used','using','work','works','approach','approaches','based','via','through','among','about','into','over','under','within','between','before','after','since','until','while','when','where','how','what','which','who','whom','whose',
+  '一个','一些','这个','那个','我们','你们','他们','什么','怎么','哪些','为何','因为','所以','如果','但是','虽然','然而','因此','或者','可以','可能','应该','需要','首先','其次','然后','最后','例如','比如','也就是说','换句话说','总之','综上','所示',
+]);
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s一-鿿]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 2 && !STOP.has(t));
+}
+
+const vectors = sessions.map((s) => {
+  const toks = tokenize(s.goal);
+  const freq: Record<string, number> = {};
+  for (const t of toks) freq[t] = (freq[t] ?? 0) + 1;
+  return { sid: s.sid, goal: s.goal, vec: freq, norm: Math.sqrt(Object.values(freq).reduce((a, b) => a + b * b, 0)) };
+});
+
+function cosine(a: Record<string, number>, an: number, b: Record<string, number>, bn: number): number {
+  if (an === 0 || bn === 0) return 0;
+  let dot = 0;
+  for (const k of Object.keys(a)) {
+    if (k in b) dot += a[k] * b[k];
+  }
+  return dot / (an * bn);
+}
+
+interface Pair { a: string; ag: string; ar: number; b: string; bg: string; br: number; sim: number; }
+const pairs: Pair[] = [];
+// O(n^2/2) — 上限 200 个 session 即可
+const cap = Math.min(vectors.length, 200);
+for (let i = 0; i < cap; i++) {
+  for (let j = i + 1; j < cap; j++) {
+    const sim = cosine(vectors[i].vec, vectors[i].norm, vectors[j].vec, vectors[j].norm);
+    if (sim < 0.15) continue;
+    pairs.push({
+      a: vectors[i].sid, ag: vectors[i].goal, ar: sessions[i].rounds,
+      b: vectors[j].sid, bg: vectors[j].goal, br: sessions[j].rounds,
+      sim,
+    });
+  }
+}
+
+pairs.sort((a, b) => b.sim - a.sim);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Similarity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-similarity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔗 Goal Similarity <span class="muted" style="font-size:0.6em">(iter #132)</span></h1>
+      <p class="agents-sub">
+        跨 session 用 bag-of-words + cosine 相似度找 goal 接近的 pair。
+        帮你在开始新 session 前发现历史相关工作,或者把多个 session 合并成一个大主题。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gs-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>比较对数 (cap 200): <strong>{pairs.length}</strong></span>
+        <span>相似度 ≥ 0.3: <strong>{pairs.filter((p) => p.sim >= 0.3).length}</strong></span>
+        <span>相似度 ≥ 0.5: <strong>{pairs.filter((p) => p.sim >= 0.5).length}</strong></span>
+      </div>
+    </section>
+
+    {pairs.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">没有相似度 ≥ 0.15 的 pair(可能 goals 都太独特,或 session 数太少)。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>🔗 最相似的 pair(Top 30)</h2>
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>sim</th><th>session A</th><th>goal A</th><th>r</th><th>session B</th><th>goal B</th><th>r</th></tr>
+          </thead>
+          <tbody>
+            {pairs.slice(0, 30).map((p) => (
+              <tr>
+                <td><strong style={`color:${p.sim >= 0.5 ? '#10b981' : p.sim >= 0.3 ? '#3b82f6' : '#6b7280'}`}>{p.sim.toFixed(3)}</strong></td>
+                <td><a href={`${base}/agents/${p.a}/`}><code>{esc(p.a.slice(0, 12))}</code></a></td>
+                <td><small>{esc(p.ag.slice(0, 50))}{p.ag.length > 50 ? '…' : ''}</small></td>
+                <td>{p.ar}</td>
+                <td><a href={`${base}/agents/${p.b}/`}><code>{esc(p.b.slice(0, 12))}</code></a></td>
+                <td><small>{esc(p.bg.slice(0, 50))}{p.bg.length > 50 ? '…' : ''}</small></td>
+                <td>{p.br}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>💡 使用建议</h2>
+      <ul>
+        <li>相似度 ≥ 0.5 的 pair 可能在做同一件事,可以考虑合并 / --resume</li>
+        <li>看 mid-range 相似(0.3-0.5),可能共享方法论 / 数据集 / 研究问题</li>
+        <li>用 <a href={`${base}/agents/compare-sessions/`}>Compare Sessions</a> 详细对比高相似度 pair</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
