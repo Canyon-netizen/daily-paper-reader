@@ -1,0 +1,264 @@
+---
+// /agents/milestone.astro — iter #100:百次迭代里程碑页
+//
+// 庆祝整个系统经过 100 次迭代:实时统计所有页面 + 所有 commits +
+// 全部 features 总览,让用户一眼看到"工具有多大"。
+
+import { execSync } from 'node:child_process';
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface MilestoneStats {
+  pages: number;
+  totalLines: number;
+  iterCommits: number;
+  totalCommits: number;
+  firstIter: string | null;
+  lastIter: string | null;
+  features: string[];
+}
+
+function safeExec(cmd: string): string {
+  try { return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }); }
+  catch { return ''; }
+}
+
+// 统计页面数
+const allPages: string[] = [];
+async function countPages(dir: string): Promise<void> {
+  const { readdir } = await import('node:fs/promises');
+  let entries: string[] = [];
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (e.isDirectory()) {
+      await countPages(join(dir, e.name));
+    } else if (e.name.endsWith('.astro')) {
+      const fp = join(dir, e.name);
+      try {
+        const stat = await import('node:fs/promises').then((m) => m.stat(fp));
+        allPages.push(fp);
+        // 不返回 line count,节省 IO
+        void stat;
+      } catch { /* */ }
+    }
+  }
+}
+await countPages(join(process.cwd(), 'astro-src', 'pages', 'agents'));
+
+// 总行数
+let totalLines = 0;
+for (const p of allPages) {
+  try {
+    const raw = await readFile(p, 'utf8');
+    totalLines += raw.split('\n').length;
+  } catch { /* */ }
+}
+
+// commits 统计
+const totalLog = safeExec('git log --oneline');
+const totalCommits = totalLog.split('\n').filter(Boolean).length;
+const iterLog = safeExec('git log --oneline --grep="iter #"');
+const iterLines = iterLog.split('\n').filter(Boolean);
+const iterCommits = iterLines.length;
+const firstIter = iterLines[iterLines.length - 1] ?? null;
+const lastIter = iterLines[0] ?? null;
+
+// Features 总览(从 iter commit subjects 提取)
+const FEATURES = [
+  { iter: 75, name: 'Session 评分(score)', desc: 'evaluator 4 子分 dashboard' },
+  { iter: 76, name: '跨 session 学习(insights)', desc: '全局统计 + 频率聚合' },
+  { iter: 77, name: '每日 standup', desc: 'next actions + 最近 sessions' },
+  { iter: 78, name: '目标模板库(goals)', desc: '5 内置 + localStorage 自定义' },
+  { iter: 79, name: 'Session Brief', desc: '1 页执行摘要 + markdown 复制' },
+  { iter: 80, name: '研究手记(notebook)', desc: '时间倒序 journal 视图' },
+  { iter: 81, name: '活动热力图', desc: 'GitHub-style 365 天活动' },
+  { iter: 82, name: 'Synthesis Diff 浏览器', desc: 'CLI 命令的 UI 版' },
+  { iter: 83, name: 'Session 论文库', desc: '引用次数排序 + arxiv 链接' },
+  { iter: 84, name: 'Session Deliverables', desc: 'Modifier 实际产出' },
+  { iter: 85, name: '评审记录(critiques)', desc: '3 persona 打分 + 文本' },
+  { iter: 86, name: 'About / Onboarding', desc: '一页式系统介绍' },
+  { iter: 87, name: 'Session Stats', desc: 'ASCII 字符柱状图' },
+  { iter: 88, name: 'Round Diff', desc: 'proposals added/removed/shared' },
+  { iter: 89, name: 'Archive by Month', desc: 'filing cabinet 视图' },
+  { iter: 90, name: 'Changelog', desc: '从 git log 生成' },
+  { iter: 91, name: 'Token & Cost', desc: '费用 dashboard' },
+  { iter: 92, name: 'Health Check', desc: 'session issue 扫描' },
+  { iter: 93, name: 'Global arxiv Index', desc: '论文 reverse index' },
+  { iter: 94, name: 'Research Digest', desc: '自动研究简报' },
+  { iter: 95, name: 'Tags', desc: 'session 标签(localStorage)' },
+  { iter: 96, name: 'Notes', desc: 'markdown 笔记 + 导入导出' },
+  { iter: 97, name: 'Activity Feed', desc: '事件 Twitter-style feed' },
+  { iter: 98, name: 'CLI Cheat Sheet', desc: 'per-session 命令清单' },
+  { iter: 99, name: 'Global Syntheses Feed', desc: '跨 session synthesis 流' },
+  { iter: 100, name: 'Milestone 🎉', desc: '庆祝本页' },
+];
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Milestone #100 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone</span>
+    </nav>
+
+    <header class="agents-header agents-milestone-head">
+      <h1>🎉 Milestone #100 <span class="muted" style="font-size:0.6em">· 多智能体研究自动化系统</span></h1>
+      <p class="agents-sub">
+        经过 {iterCommits} 次"feat(agents)" commit,系统已经迭代到 iter #100。
+        本页汇总所有页面、代码量、commits 与 feature 时间线。
+      </p>
+    </header>
+
+    <section class="agents-session-section agents-milestone-numbers">
+      <div class="agents-milestone-stat">
+        <strong>{allPages.length}</strong>
+        <span>.astro pages</span>
+      </div>
+      <div class="agents-milestone-stat">
+        <strong>{totalLines.toLocaleString()}</strong>
+        <span>lines of code</span>
+      </div>
+      <div class="agents-milestone-stat">
+        <strong>{totalCommits}</strong>
+        <span>total commits</span>
+      </div>
+      <div class="agents-milestone-stat">
+        <strong>{iterCommits}</strong>
+        <span>agent iters</span>
+      </div>
+      <div class="agents-milestone-stat agents-milestone-stat-highlight">
+        <strong>26</strong>
+        <span>features shipped</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🗓 首次与最近 iter</h2>
+      <div class="agents-milestone-timeline">
+        {firstIter && (
+          <div class="agents-milestone-timeblock">
+            <strong>📌 起点</strong>
+            <code>{firstIter.split(' ')[0]}</code>
+            <span class="muted">{escapeHtml(firstIter.replace(/^[\w]+ /, ''))}</span>
+          </div>
+        )}
+        {lastIter && (
+          <div class="agents-milestone-timeblock">
+            <strong>🚀 当前位置</strong>
+            <code>{lastIter.split(' ')[0]}</code>
+            <span class="muted">{escapeHtml(lastIter.replace(/^[\w]+ /, ''))}</span>
+          </div>
+        )}
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 Feature 时间线 (#75 → #100)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>iter</th><th>feature</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {FEATURES.map((f) => (
+            <tr>
+              <td>
+                <span class="agents-milestone-iter-tag">#{f.iter}</span>
+              </td>
+              <td><strong>{f.name}</strong></td>
+              <td class="muted">{f.desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 全部入口</h2>
+      <p>
+        <a class="button primary" href={`${base}/agents/`}>📋 控制台</a>
+        <a class="button" href={`${base}/agents/about/`}>🧭 About</a>
+        <a class="button" href={`${base}/agents/digest/`}>📰 Digest</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/changelog/`}>📜 Changelog</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-milestone-head {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(168, 85, 247, 0.1));
+    padding: 1.2rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+  }
+  .agents-milestone-numbers {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.8rem;
+    padding: 0;
+  }
+  .agents-milestone-stat {
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+  }
+  .agents-milestone-stat strong {
+    display: block;
+    font-size: 2.2rem;
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    line-height: 1.1;
+  }
+  .agents-milestone-stat span {
+    font-size: 0.85rem;
+    color: #6b7280;
+  }
+  .agents-milestone-stat-highlight {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(239, 68, 68, 0.1));
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  .agents-milestone-stat-highlight strong {
+    color: #f59e0b;
+  }
+  .agents-milestone-timeline {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .agents-milestone-timeblock {
+    flex: 1;
+    min-width: 280px;
+    background: rgba(255,255,255,0.03);
+    padding: 0.6rem 0.8rem;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .agents-milestone-iter-tag {
+    background: rgba(99, 102, 241, 0.2);
+    color: #4f46e5;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-weight: 600;
+    font-size: 0.85rem;
+    white-space: nowrap;
+  }
+</style>
