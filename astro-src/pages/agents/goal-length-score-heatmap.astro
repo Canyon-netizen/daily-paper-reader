@@ -1,0 +1,198 @@
+---
+// /agents/goal-length-score-heatmap.astro — iter #302:goal length × final score heatmap
+//
+// 2D heatmap: goal length bucket × final score bucket
+//   - 显示每个 cell 的 session 数
+//   - 用 emoji 强度表示密度
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const LENGTH_BUCKETS = [
+  { label: '<30',   min: 0,   max: 30 },
+  { label: '30-80', min: 30,  max: 80 },
+  { label: '80-150',min: 80,  max: 150 },
+  { label: '150-300',min: 150,max: 300 },
+  { label: '300-600',min: 300,max: 600 },
+  { label: '600+',  min: 600, max: 99999 },
+];
+
+const SCORE_BUCKETS = [
+  { label: '<4',     min: 0,  max: 4 },
+  { label: '4-5',    min: 4,  max: 5 },
+  { label: '5-6',    min: 5,  max: 6 },
+  { label: '6-7',    min: 6,  max: 7 },
+  { label: '7-8',    min: 7,  max: 8 },
+  { label: '8+',     min: 8,  max: 99 },
+];
+
+const heatmap: number[][] = SCORE_BUCKETS.map(() => LENGTH_BUCKETS.map(() => 0));
+
+const root = join(process.cwd(), 'archive');
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const len = goal.length;
+
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+    let finalScore = 0;
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${rNums[rNums.length - 1]}.json`), 'utf8'));
+      const arr: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') arr.push(p.total);
+        }
+      }
+      if (arr.length > 0) finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+    } catch (e) { continue; }
+
+    // 定位
+    let lbIdx = -1, sbIdx = -1;
+    for (let i = 0; i < LENGTH_BUCKETS.length; i++) {
+      if (len >= LENGTH_BUCKETS[i].min && len < LENGTH_BUCKETS[i].max) { lbIdx = i; break; }
+    }
+    for (let i = 0; i < SCORE_BUCKETS.length; i++) {
+      if (finalScore >= SCORE_BUCKETS[i].min && finalScore < SCORE_BUCKETS[i].max) { sbIdx = i; break; }
+    }
+    if (lbIdx >= 0 && sbIdx >= 0) heatmap[sbIdx][lbIdx] += 1;
+  }
+}
+
+const max = Math.max(...heatmap.flat(), 1);
+
+function heat(c: number): string {
+  if (c === 0) return '·';
+  const ratio = c / max;
+  if (ratio >= 0.66) return '🟥';
+  if (ratio >= 0.33) return '🟧';
+  if (ratio > 0) return '🟨';
+  return '·';
+}
+function intensity(c: number): string {
+  if (c === 0) return '·';
+  const ratio = c / max;
+  if (ratio >= 0.85) return '█';
+  if (ratio >= 0.66) return '▓';
+  if (ratio >= 0.45) return '▒';
+  if (ratio >= 0.25) return '░';
+  return '·';
+}
+---
+
+<BaseLayout title="Goal Length × Score Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-length-score-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Goal Length × Final Score Heatmap <span class="muted" style="font-size:0.6em">(iter #302)</span></h1>
+      <p class="agents-sub">
+        goal 字符长度桶 × final score 桶 的 2D 分布。越深色 = 该格子 sessions 越多。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🔥 Heatmap (emoji)</h2>
+      <pre class="agents-glsh-flow">
+{'         ' + LENGTH_BUCKETS.map((b) => b.label.padStart(8)).join('')}
+{heatmap.map((row, i) => (
+  `${SCORE_BUCKETS[i].label.padStart(8)} ` + row.map((c) => `${heat(c)}${c.toString().padStart(7)}`).join('')
+)).join('\n')}
+      </pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Heatmap (ascii)</h2>
+      <pre class="agents-glsh-flow">
+{'         ' + LENGTH_BUCKETS.map((b) => b.label.padStart(6)).join(' ')}
+{heatmap.map((row, i) => (
+  `${SCORE_BUCKETS[i].label.padStart(8)} ` + row.map((c) => intensity(c).padStart(7)).join(' ')
+)).join('\n')}
+      </pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细矩阵</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>score \ len</th>
+            {LENGTH_BUCKETS.map((b) => <th>{b.label}</th>)}
+            <th>row total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {heatmap.map((row, i) => {
+            const rowTotal = row.reduce((a, b) => a + b, 0);
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{SCORE_BUCKETS[i].label}</strong></td>
+                {row.map((c) => <td>{c}</td>)}
+                <td><strong>{rowTotal}</strong></td>
+              </tr>
+            );
+          })}
+          <tr style="border-top:2px solid #4f46e5">
+            <td><strong>col total</strong></td>
+            {LENGTH_BUCKETS.map((_, lbIdx) => {
+              const colTotal = heatmap.reduce((s, row) => s + row[lbIdx], 0);
+              return <td><strong>{colTotal}</strong></td>;
+            })}
+            <td><strong>{heatmap.flat().reduce((a, b) => a + b, 0)}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>对角线分布 = goal 长度越长,score 越高(系统能处理复杂需求)</li>
+        <li>水平分布 = 短 goal 也能拿到好 score</li>
+        <li>垂直分布 = 特定 score 桶聚集(系统表现两极化)</li>
+        <li>对照 <a href={`${base}/agents/goal-length-correlation/`}>Goal Length Correlation</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-glsh-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
