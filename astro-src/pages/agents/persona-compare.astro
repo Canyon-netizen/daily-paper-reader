@@ -1,0 +1,260 @@
+---
+// /agents/persona-compare.astro — iter #126:persona comparison dashboard
+//
+// 跨 session 比较 3 个 persona(methodologist / engineer / skeptic):
+//   - 每个 persona 的总打分次数、平均分、标准差
+//   - 每个 persona 最常打高 / 打低的 proposal type
+//   - 3 个 persona 之间分歧最大的 proposals
+//   - 每个 session 各 persona 表现
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const PERSONAS = ['methodologist', 'engineer', 'skeptic'] as const;
+type Persona = typeof PERSONAS[number];
+
+interface PersonaStats {
+  count: number;
+  total: number;
+  sumSq: number;
+  min: number;
+  max: number;
+  scores: number[];
+  byType: Record<string, { count: number; total: number }>;
+}
+
+const stats: Record<Persona, PersonaStats> = {
+  methodologist: { count: 0, total: 0, sumSq: 0, min: 999, max: -999, scores: [], byType: {} },
+  engineer: { count: 0, total: 0, sumSq: 0, min: 999, max: -999, scores: [], byType: {} },
+  skeptic: { count: 0, total: 0, sumSq: 0, min: 999, max: -999, scores: [], byType: {} },
+};
+
+// 分歧:在每个 proposal 收集 3 个 persona 的打分,记录 stddev 最大的
+interface Disagreement {
+  sid: string;
+  round: number;
+  title: string;
+  type: string;
+  methodologist: number;
+  engineer: number;
+  skeptic: number;
+  stddev: number;
+}
+const disagreements: Disagreement[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_(\d+)\.json$/.test(rf)) continue;
+      const roundNum = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const proposals = r.designer?.proposals ?? [];
+        // 每个 persona 的 feedbacks.personas[] 内是按 proposal_index 平铺打分
+        const byPersonaProposal: Record<Persona, Record<number, number>> = {
+          methodologist: {}, engineer: {}, skeptic: {},
+        };
+        for (const persona of r.feedback?.personas ?? []) {
+          const pname: Persona = persona.name ?? persona.persona ?? persona.role ?? 'methodologist';
+          if (!(pname in stats)) continue;
+          for (const pp of persona.proposals ?? []) {
+            const idx = pp.proposal_index ?? pp.index;
+            if (idx == null) continue;
+            const tot = pp.total ?? 0;
+            byPersonaProposal[pname][idx] = tot;
+            const s = stats[pname];
+            s.count += 1;
+            s.total += tot;
+            s.sumSq += tot * tot;
+            if (tot < s.min) s.min = tot;
+            if (tot > s.max) s.max = tot;
+            s.scores.push(tot);
+            const type = proposals[idx]?.type ?? 'unknown';
+            if (!s.byType[type]) s.byType[type] = { count: 0, total: 0 };
+            s.byType[type].count += 1;
+            s.byType[type].total += tot;
+          }
+        }
+        // 分歧:对每个 proposal_idx,如果 3 个 persona 都有打分,计算 stddev
+        for (let i = 0; i < proposals.length; i++) {
+          const m = byPersonaProposal.methodologist[i];
+          const e = byPersonaProposal.engineer[i];
+          const sk = byPersonaProposal.skeptic[i];
+          if (m == null || e == null || sk == null) continue;
+          const mean = (m + e + sk) / 3;
+          const variance = ((m - mean) ** 2 + (e - mean) ** 2 + (sk - mean) ** 2) / 3;
+          const stddev = Math.sqrt(variance);
+          disagreements.push({
+            sid, round: roundNum,
+            title: proposals[i]?.title ?? '(untitled)',
+            type: proposals[i]?.type ?? 'unknown',
+            methodologist: m, engineer: e, skeptic: sk, stddev,
+          });
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+disagreements.sort((a, b) => b.stddev - a.stddev);
+
+const personaSummary = PERSONAS.map((p) => {
+  const s = stats[p];
+  const avg = s.count > 0 ? s.total / s.count : 0;
+  const variance = s.count > 0 ? s.sumSq / s.count - avg * avg : 0;
+  const stddev = Math.sqrt(Math.max(variance, 0));
+  return { name: p, count: s.count, avg, stddev, min: s.min, max: s.max };
+});
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Persona Compare · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-compare</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👥 Persona Compare <span class="muted" style="font-size:0.6em">(iter #126)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 3 个反馈 persona(methodologist / engineer / skeptic)的打分模式:
+        平均分、标准差、最常打高 / 低的 type、彼此分歧最大的 proposals。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局对比</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>persona</th>
+            <th>打分次数</th>
+            <th>平均分</th>
+            <th>stddev</th>
+            <th>min</th>
+            <th>max</th>
+            <th>分布</th>
+          </tr>
+        </thead>
+        <tbody>
+          {personaSummary.map((p) => (
+            <tr>
+              <td><strong>{esc(p.name)}</strong></td>
+              <td>{p.count}</td>
+              <td>
+                <strong style={`color:${p.avg >= 7 ? '#10b981' : p.avg >= 5 ? '#3b82f6' : '#6b7280'}`}>
+                  {p.avg.toFixed(2)}
+                </strong>
+              </td>
+              <td>{p.stddev.toFixed(2)}</td>
+              <td>{p.min === 999 ? '—' : p.min.toFixed(1)}</td>
+              <td>{p.max === -999 ? '—' : p.max.toFixed(1)}</td>
+              <td><code>{bar(p.avg, 10, 20)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    {PERSONAS.map((p) => {
+      const s = stats[p];
+      const typeArr = Object.entries(s.byType)
+        .map(([t, v]) => ({ type: t, count: v.count, avg: v.total / v.count }))
+        .sort((a, b) => b.avg - a.avg);
+      const maxTypeAvg = Math.max(...typeArr.map((t) => t.avg), 1);
+      return (
+        <section class="agents-session-section">
+          <h2>🎭 {p} 按 type 偏好</h2>
+          {typeArr.length === 0 ? (
+            <p class="muted">无数据。</p>
+          ) : (
+            <table class="agents-session-table">
+              <thead>
+                <tr><th>type</th><th>count</th><th>avg score</th><th>分布</th></tr>
+              </thead>
+              <tbody>
+                {typeArr.slice(0, 10).map((t) => (
+                  <tr>
+                    <td><code>{esc(t.type)}</code></td>
+                    <td>{t.count}</td>
+                    <td>{t.avg.toFixed(2)}</td>
+                    <td><code>{bar(t.avg, maxTypeAvg, 20)}</code></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      );
+    })}
+
+    <section class="agents-session-section">
+      <h2>⚡ 分歧最大的 proposals <span class="muted" style="font-size:0.7em">(3 persona stddev 倒序)</span></h2>
+      {disagreements.length === 0 ? (
+        <p class="muted">无足够数据(需要每个 proposal 有 3 个 persona 都打分)。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>title</th><th>type</th><th>methodologist</th><th>engineer</th><th>skeptic</th><th>stddev</th><th>来源</th></tr>
+          </thead>
+          <tbody>
+            {disagreements.slice(0, 30).map((d) => (
+              <tr>
+                <td>{esc(d.title.slice(0, 60))}</td>
+                <td><code>{esc(d.type)}</code></td>
+                <td>{d.methodologist.toFixed(1)}</td>
+                <td>{d.engineer.toFixed(1)}</td>
+                <td>{d.skeptic.toFixed(1)}</td>
+                <td><strong style="color:#ef4444">{d.stddev.toFixed(2)}</strong></td>
+                <td>
+                  <small>
+                    <a href={`${base}/agents/${d.sid}/pipeline/#round-${d.round}`}><code>{esc(d.sid.slice(0, 10))}</code></a>
+                    <span class="muted">r{d.round}</span>
+                  </small>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li><strong>avg 低的 persona</strong> 偏严格,可以作为"质量门"</li>
+        <li><strong>stddev 高的 persona</strong> 不稳定,反馈信号弱</li>
+        <li><strong>分歧 stddev 大的 proposal</strong> 值得人来 review — 3 个 persona 看到的维度不同</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-persona-legend {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+</style>
