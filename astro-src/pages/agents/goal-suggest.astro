@@ -1,0 +1,173 @@
+---
+// /agents/goal-suggest.astro — iter #174:auto goal suggestion
+//
+// 基于历史 goals 自动建议下一步研究方向:
+//   - 提取所有 goal 的 n-gram (2-gram 词组)
+//   - 找出常见组合
+//   - 用 top-N 已用组合 + top-N 未用组合推荐
+//   - "未用过的搭配"意味着新方向
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOPWORDS = new Set(['a', 'an', 'the', 'of', 'in', 'on', 'for', 'with', 'to', 'and', 'or', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'this', 'that', 'these', 'those', '的', '了', '在', '是', '和', '与', '或', '为', '有', '对', '及']);
+
+// 中文按字符 / 英文按词
+function tokenize(s: string): string[] {
+  const tokens: string[] = [];
+  // 简单分词:连续的英文/数字
+  const english = s.match(/[a-zA-Z][a-zA-Z0-9]+/g) ?? [];
+  // 中文字符 1 个 1 个
+  const chinese = s.match(/[一-鿿]/g) ?? [];
+  return [...english, ...chinese].filter((t) => t.length > 1 && !STOPWORDS.has(t.toLowerCase()));
+}
+
+const root = join(process.cwd(), 'archive');
+const allGoals: string[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      if (m.goal) allGoals.push(m.goal);
+    } catch (e) { /* */ }
+  }
+}
+
+const unigramMap = new Map<string, number>();
+const bigramMap = new Map<string, number>();
+const trigramMap = new Map<string, number>();
+
+for (const g of allGoals) {
+  const toks = tokenize(g);
+  toks.forEach((t) => unigramMap.set(t, (unigramMap.get(t) ?? 0) + 1));
+  for (let i = 0; i < toks.length - 1; i++) {
+    const bg = toks[i] + ' ' + toks[i + 1];
+    bigramMap.set(bg, (bigramMap.get(bg) ?? 0) + 1);
+  }
+  for (let i = 0; i < toks.length - 2; i++) {
+    const tg = toks[i] + ' ' + toks[i + 1] + ' ' + toks[i + 2];
+    trigramMap.set(tg, (trigramMap.get(tg) ?? 0) + 1);
+  }
+}
+
+// 高频 unigram,但低频 bigram → 这些词很少互相组合 → 潜在新方向
+const topUnis = [...unigramMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
+const topBigrams = [...bigramMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
+const topTrigrams = [...trigramMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Auto Goal Suggest · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-suggest</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💡 Auto Goal Suggest <span class="muted" style="font-size:0.6em">(iter #174)</span></h1>
+      <p class="agents-sub">
+        基于历史 goals 自动提取 n-gram,
+        高频搭配 = 常用方向,低频搭配 = 潜在新方向。
+        适合下一轮 session 的方向 brainstorm。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gsug-globals">
+        <span>历史 goals: <strong>{allGoals.length}</strong></span>
+        <span>unigram 数: <strong>{unigramMap.size}</strong></span>
+        <span>bigram 数: <strong>{bigramMap.size}</strong></span>
+        <span>trigram 数: <strong>{trigramMap.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 高频 unigram(top 30)</h2>
+      <pre class="agents-gsug-flow">{(() => {
+        const max = topUnis[0]?.[1] ?? 1;
+        return topUnis.map(([w, c]) => `${w.padEnd(16)} ${bar(c, max, 18)}  ${c}`);
+      }).join('\n')()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 高频 bigram(常用搭配,top 20)</h2>
+      <pre class="agents-gsug-flow">{(() => {
+        const max = topBigrams[0]?.[1] ?? 1;
+        return topBigrams.map(([w, c]) => `${w.padEnd(30)} ${bar(c, max, 18)}  ${c}`);
+      }).join('\n')()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌟 高频 trigram(研究方向,top 15)</h2>
+      <pre class="agents-gsug-flow">{(() => {
+        const max = topTrigrams[0]?.[1] ?? 1;
+        return topTrigrams.map(([w, c]) => `${w.padEnd(36)} ${bar(c, max, 14)}  ${c}`);
+      }).join('\n')()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 推荐的下一步 goal 思路</h2>
+      <ul>
+        <li><strong>深化已有方向</strong>:从高频 trigram 选一个,加入新的限定词</li>
+        <li><strong>跨方向组合</strong>:两个高频 unigram 如果没有 bigram 共现,可以拼成新方向</li>
+        <li><strong>看 <a href={`${base}/agents/goal-stems/`}>Goal Stems</a> 找已有 stem,再加 1-2 个限定词</strong></li>
+        <li><strong>看 <a href={`${base}/agents/keywords/`}>Keywords</a> 找出稀缺关键词</strong></li>
+        <li><strong>使用 <a href={`${base}/agents/goal-quality/`}>Goal Quality</a> 自检质量</strong></li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📜 历史 goals(随机 5 个)</h2>
+      <ul>
+        {allGoals.slice(-5).map((g, i) => (
+          <li><small class="muted">#{allGoals.length - 4 + i}:</small> {esc(g)}</li>
+        ))}
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gsug-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gsug-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gsug-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
