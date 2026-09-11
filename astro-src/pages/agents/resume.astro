@@ -1,0 +1,213 @@
+---
+// /agents/resume.astro — iter #134:resume suggestion
+//
+// 跨 session 找"值得继续跑"的 session:
+//   - 分数 = 0.4 · (成熟度反转:越不成熟越值得继续) + 0.3 · (近 30 天活跃) + 0.3 · (低 promotion rate)
+//   - 列出 Top 10 推荐 resume 的 session
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ResumeCandidate {
+  sid: string;
+  goal: string;
+  rounds: number;
+  synthCount: number;
+  promoted: number;
+  totalProposals: number;
+  avgScore: number;
+  lastUpdate: number;
+  score: number;
+  reason: string[];
+}
+
+const candidates: ResumeCandidate[] = [];
+const now = Date.now();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    const rd = join(root, sid, 'rounds');
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(rd)) continue;
+    let goal = '';
+    let lastUpdate = 0;
+    if (existsSync(metaPath)) {
+      try {
+        const m = JSON.parse(await readFile(metaPath, 'utf8'));
+        goal = m.goal ?? '';
+      } catch (e) { /* */ }
+    }
+    let rounds = 0;
+    let promoted = 0;
+    let totalProposals = 0;
+    let totalTokens = 0;
+    const allScores: number[] = [];
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      const fp = join(rd, rf);
+      const st = await stat(fp).catch(() => null);
+      if (st && st.mtimeMs > lastUpdate) lastUpdate = st.mtimeMs;
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      rounds += 1;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        totalTokens += r.feedback?.total_tokens ?? 0;
+        const proposals = r.designer?.proposals ?? [];
+        totalProposals += proposals.length;
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') allScores.push(p.total);
+          }
+        }
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+        }
+      } catch (e) { /* */ }
+    }
+    let synthCount = 0;
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      synthCount = sfs.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+      for (const f of sfs) {
+        const st = await stat(join(sd, f)).catch(() => null);
+        if (st && st.mtimeMs > lastUpdate) lastUpdate = st.mtimeMs;
+      }
+    }
+
+    if (rounds < 2) continue; // 太短,不值得 resume
+
+    // 计算 resume 分数
+    const daysSince = (now - lastUpdate) / 86_400_000;
+    const recency = Math.max(0, 1 - daysSince / 30); // 30 天内活跃
+
+    // 不成熟度:synth < 3 / promoted < 3 → 高
+    const synthRatio = Math.min(1, synthCount / 3);
+    const promoteRatio = totalProposals > 0 ? promoted / totalProposals : 0;
+    const immaturity = (1 - synthRatio) * 0.5 + (1 - promoteRatio) * 0.5;
+
+    // token 预算:便宜的 session 更值得 resume
+    const costScore = totalTokens > 0 ? Math.max(0, 1 - totalTokens / 100_000) : 0.5;
+
+    const score = (immaturity * 0.5 + recency * 0.3 + costScore * 0.2) * 100;
+
+    const reason: string[] = [];
+    if (synthCount < 3) reason.push(`synth 只 ${synthCount} 份`);
+    if (promoteRatio < 0.3 && totalProposals > 0) reason.push(`promote rate 仅 ${(promoteRatio * 100).toFixed(0)}%`);
+    if (recency > 0.7) reason.push('近 30 天活跃');
+    if (daysSince > 7) reason.push(`已停 ${Math.floor(daysSince)} 天`);
+    if (rounds < 5) reason.push(`只跑了 ${rounds} 轮`);
+
+    candidates.push({ sid, goal, rounds, synthCount, promoted, totalProposals, avgScore: allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0, lastUpdate, score, reason });
+  }
+}
+
+candidates.sort((a, b) => b.score - a.score);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtDate(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toISOString().slice(0, 10);
+}
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const sec = Math.floor((now - ts) / 1000);
+  if (sec < 60) return '刚刚';
+  if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)} 小时前`;
+  return `${Math.floor(sec / 86400)} 天前`;
+}
+---
+
+<BaseLayout title="Resume Suggestions · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / resume</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>▶️ Resume Suggestions <span class="muted" style="font-size:0.6em">(iter #134)</span></h1>
+      <p class="agents-sub">
+        跨 session 找"值得继续跑"的:不成熟(synth 少 + promote rate 低)+ 近 30 天活跃 + 历史成本不高。
+        评分 0-100,分越高越推荐 continue。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rs-globals">
+        <span>候选 sessions: <strong>{candidates.length}</strong></span>
+        <span>高推荐 (≥ 60): <strong>{candidates.filter((c) => c.score >= 60).length}</strong></span>
+        <span>中推荐 (30-60): <strong>{candidates.filter((c) => c.score >= 30 && c.score < 60).length}</strong></span>
+        <span>低推荐 (&lt; 30): <strong>{candidates.filter((c) => c.score < 30).length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>▶️ Top 推荐 Resume</h2>
+      {candidates.length === 0 ? (
+        <p class="muted">没有合适的候选(每个 session 都至少 2 个 rounds)。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>分</th><th>session</th><th>goal</th><th>rounds</th><th>synth</th><th>promote rate</th><th>avg</th><th>last update</th><th>原因</th><th>action</th></tr>
+          </thead>
+          <tbody>
+            {candidates.slice(0, 30).map((c) => {
+              const pr = c.totalProposals > 0 ? c.promoted / c.totalProposals : 0;
+              return (
+                <tr>
+                  <td><strong style={`color:${c.score >= 60 ? '#10b981' : c.score >= 30 ? '#3b82f6' : '#6b7280'}`}>{c.score.toFixed(0)}</strong></td>
+                  <td><a href={`${base}/agents/${c.sid}/`}><code>{esc(c.sid.slice(0, 14))}</code></a></td>
+                  <td><small>{esc(c.goal.slice(0, 50))}{c.goal.length > 50 ? '…' : ''}</small></td>
+                  <td>{c.rounds}</td>
+                  <td>{c.synthCount}</td>
+                  <td>{(pr * 100).toFixed(0)}%</td>
+                  <td>{c.avgScore.toFixed(2)}</td>
+                  <td><small>{agoStr(c.lastUpdate)}</small></td>
+                  <td><small>{c.reason.map((r) => '• ' + r).join(' ') || '—'}</small></td>
+                  <td>
+                    <a class="button small" href={`${base}/agents/?resume=${esc(c.sid)}`}>▶️ resume</a>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>resume = 在 <a href={`${base}/agents/`}>控制台</a> 打开 session,点 <strong>▶️ 跑一轮</strong>(designer 会读取之前 rounds 的历史)</li>
+        <li>或者 CLI:<code>npx agents run --resume &lt;sid&gt;</code></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
