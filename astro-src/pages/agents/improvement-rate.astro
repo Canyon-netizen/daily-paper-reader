@@ -1,0 +1,230 @@
+---
+// /agents/improvement-rate.astro — iter #256:round improvement rate analysis
+//
+// 分析 sessions 的 round-to-round 改进率:
+//   - 每个 session 的 round 序列拟合线性 / 指数回归
+//   - 找改进最快的 sessions(slope 最大)
+//   - 找"saturating" sessions(slope → 0)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Session {
+  sid: string;
+  scores: number[];
+  slope: number;
+  intercept: number;
+  r2: number;
+  gainTotal: number;
+  saturating: boolean;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Session[] = [];
+
+function linearRegression(ys: number[]): { slope: number; intercept: number; r2: number } {
+  const n = ys.length;
+  if (n < 2) return { slope: 0, intercept: ys[0] ?? 0, r2: 0 };
+  const xs = ys.map((_, i) => i);
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const slope = dx2 === 0 ? 0 : num / dx2;
+  const intercept = my - slope * mx;
+  const denom = Math.sqrt(dx2 * dy2);
+  const r = denom === 0 ? 0 : num / denom;
+  const r2 = r * r;
+  return { slope, intercept, r2 };
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 4) continue;
+    rNum.sort((a, b) => a - b);
+    const scores: number[] = [];
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 4) continue;
+    if (scores.filter((s) => s > 0).length < 4) continue;
+
+    const reg = linearRegression(scores);
+    sessions.push({
+      sid,
+      scores,
+      slope: reg.slope,
+      intercept: reg.intercept,
+      r2: reg.r2,
+      gainTotal: scores[scores.length - 1] - scores[0],
+      saturating: reg.slope < 0.01 && Math.abs(reg.slope) < 0.05,
+    });
+  }
+}
+
+const total = sessions.length;
+const improving = sessions.filter((s) => s.slope > 0.05);
+const declining = sessions.filter((s) => s.slope < -0.05);
+const saturating = sessions.filter((s) => s.saturating);
+const linear = sessions.filter((s) => s.r2 > 0.7);
+
+// 排序
+const topImprovers = [...sessions].sort((a, b) => b.slope - a.slope).slice(0, 12);
+const topDecliners = [...sessions].sort((a, b) => a.slope - b.slope).slice(0, 8);
+const topLinear = [...sessions].sort((a, b) => b.r2 - a.r2).slice(0, 10);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c));
+}
+function sparkline(values: number[]): string {
+  const blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  if (values.length < 2) return '▅'.repeat(values.length);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min;
+  if (range === 0) return '▅'.repeat(values.length);
+  return values.map((v) => blocks[Math.min(blocks.length - 1, Math.floor(((v - min) / range) * (blocks.length - 1)))]).join('');
+}
+---
+
+<BaseLayout title="Improvement Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / improvement-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📐 Improvement Rate <span class="muted" style="font-size:0.6em">(iter #256)</span></h1>
+      <p class="agents-sub">
+        每个 ≥4 rounds 的 session 拟合线性回归 score vs round_index。
+        slope = 平均每 round 提升幅度;r² = 拟合优度。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ir-globals">
+        <span>可拟合 sessions: <strong>{total}</strong></span>
+        <span>改善中(slope &gt; 0.05): <strong style="color:#10b981">{improving.length}</strong></span>
+        <span>退步中(slope &lt; -0.05): <strong style="color:#ef4444">{declining.length}</strong></span>
+        <span>已饱和(|slope| &lt; 0.01): <strong>{saturating.length}</strong></span>
+        <span>强线性(r² &gt; 0.7): <strong>{linear.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 12 改善最快 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>slope</th><th>r²</th><th>rounds</th><th>sparkline</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topImprovers.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">+{s.slope.toFixed(3)}</strong></td>
+              <td>{s.r2.toFixed(2)}</td>
+              <td>{s.scores.length}</td>
+              <td><code style="font-size:1.1em;color:#4f46e5">{sparkline(s.scores)}</code></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚠️ top 8 退步最快 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>slope</th><th>r²</th><th>rounds</th><th>sparkline</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topDecliners.map((s) => (
+            <tr>
+              <td><strong style="color:#ef4444">{s.slope.toFixed(3)}</strong></td>
+              <td>{s.r2.toFixed(2)}</td>
+              <td>{s.scores.length}</td>
+              <td><code style="font-size:1.1em;color:#4f46e5">{sparkline(s.scores)}</code></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📏 top 10 最线性 sessions(r² &gt; 0.7)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>r²</th><th>slope</th><th>rounds</th><th>sparkline</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topLinear.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">{s.r2.toFixed(2)}</strong></td>
+              <td>{s.slope >= 0 ? '+' : ''}{s.slope.toFixed(3)}</td>
+              <td>{s.scores.length}</td>
+              <td><code style="font-size:1.1em;color:#4f46e5">{sparkline(s.scores)}</code></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>slope &gt; 0.1 = 持续强改进</li>
+        <li>slope ≈ 0 + r² &lt; 0.3 = 随机/已饱和</li>
+        <li>r² &gt; 0.7 = 强线性关系(改进趋势明确)</li>
+        <li>对照 <a href={`${base}/agents/trajectory-classifier/`}>Trajectory Classifier</a> 看分类</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ir-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ir-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
