@@ -1,0 +1,206 @@
+---
+// /agents/round-sequence-pattern.astro — iter #271:round-to-round sequence patterns
+//
+// 跨 session 找常见 round-to-round action 序列模式:
+//   - 把 round_N 的 action 集合编码为字符串
+//   - 找 (round_N_code, round_N+1_code) 转移频次
+//   - top 转移 + lift
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Transition {
+  from: string;
+  to: string;
+  count: number;
+  fromScore: number;
+  toScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const transitionMap = new Map<string, Transition>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    const rounds: { actions: string; score: number }[] = [];
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const acts = Array.from(new Set((r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown'))).sort();
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        rounds.push({
+          actions: acts.length > 0 ? acts.join('+') : '(none)',
+          score: arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0,
+        });
+      } catch (e) { /* */ }
+    }
+    for (let i = 0; i < rounds.length - 1; i++) {
+      const key = `${rounds[i].actions} → ${rounds[i + 1].actions}`;
+      if (!transitionMap.has(key)) {
+        transitionMap.set(key, {
+          from: rounds[i].actions,
+          to: rounds[i + 1].actions,
+          count: 0,
+          fromScore: 0,
+          toScore: 0,
+        });
+      }
+      const t = transitionMap.get(key)!;
+      t.count += 1;
+      t.fromScore += rounds[i].score;
+      t.toScore += rounds[i + 1].score;
+    }
+  }
+}
+
+// 标准化
+for (const t of transitionMap.values()) {
+  t.fromScore /= t.count;
+  t.toScore /= t.count;
+}
+
+const transitions = Array.from(transitionMap.values());
+const topByCount = [...transitions].sort((a, b) => b.count - a.count).slice(0, 20);
+// lift = (to - from) — 越大表示该转移后分数提升大
+const topByLift = [...transitions].filter((t) => t.count >= 2).sort((a, b) => (b.toScore - b.fromScore) - (a.toScore - a.fromScore)).slice(0, 15);
+const topByDecline = [...transitions].filter((t) => t.count >= 2).sort((a, b) => (a.toScore - a.fromScore) - (b.toScore - b.fromScore)).slice(0, 10);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function trunc(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+---
+
+<BaseLayout title="Round Sequence Pattern · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-sequence-pattern</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔁 Round Sequence Pattern <span class="muted" style="font-size:0.6em">(iter #271)</span></h1>
+      <p class="agents-sub">
+        跨 session 的 round_N → round_N+1 action 集合转移统计。
+        "from → to" 代表了典型 workflow 步骤。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rsp-globals">
+        <span>unique transitions: <strong>{transitionMap.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 top 20 最常见转移</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>count</th><th>from → to</th><th>from score</th><th>to score</th><th>Δ</th></tr>
+        </thead>
+        <tbody>
+          {topByCount.map((t) => (
+            <tr>
+              <td>{bar(t.count, topByCount[0].count, 10)} <strong>{t.count}</strong></td>
+              <td><code style="font-size:0.85em">{esc(trunc(t.from, 18))} → {esc(trunc(t.to, 18))}</code></td>
+              <td>{t.fromScore.toFixed(2)}</td>
+              <td><strong>{t.toScore.toFixed(2)}</strong></td>
+              <td><strong style={`color:${(t.toScore - t.fromScore) >= 0 ? '#10b981' : '#ef4444'}`}>{(t.toScore - t.fromScore) >= 0 ? '+' : ''}{(t.toScore - t.fromScore).toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 最大正向 Δ 转移(count ≥ 2)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Δ</th><th>count</th><th>from → to</th></tr>
+        </thead>
+        <tbody>
+          {topByLift.map((t) => (
+            <tr>
+              <td><strong style="color:#10b981">+{(t.toScore - t.fromScore).toFixed(2)}</strong></td>
+              <td>{t.count}</td>
+              <td><code style="font-size:0.85em">{esc(trunc(t.from, 22))} → {esc(trunc(t.to, 22))}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚠️ top 10 退步最大转移</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Δ</th><th>count</th><th>from → to</th></tr>
+        </thead>
+        <tbody>
+          {topByDecline.map((t) => (
+            <tr>
+              <td><strong style="color:#ef4444">{(t.toScore - t.fromScore).toFixed(2)}</strong></td>
+              <td>{t.count}</td>
+              <td><code style="font-size:0.85em">{esc(trunc(t.from, 22))} → {esc(trunc(t.to, 22))}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>Δ &gt; 0 = 该转移后分数上升(改进)</li>
+        <li>Δ &lt; 0 = 该转移后分数下降(退步)</li>
+        <li>count 高 = 系统常用工作流</li>
+        <li>对照 <a href={`${base}/agents/action-sequence/`}>Action Sequence</a> 看单 session 序列</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rsp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rsp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
