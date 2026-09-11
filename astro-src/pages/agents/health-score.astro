@@ -1,0 +1,249 @@
+---
+// /agents/health-score.astro — iter #186:pipeline composite health score
+//
+// 综合 KPI 计算一个 0-100 的 pipeline 健康分:
+//   - 子项:promoted 率 / avg score / abandoned rate / token 节奏 / promoted/round
+//   - 加权平均
+//   - 显示 letter grade (A-F)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Subscore {
+  name: string;
+  score: number; // 0-100
+  weight: number;
+  detail: string;
+}
+
+const root = join(process.cwd(), 'archive');
+const now = Date.now();
+const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
+const ONE_DAY = 24 * 60 * 60 * 1000;
+
+let totalSessions = 0;
+let totalRounds = 0;
+let totalPromoted = 0;
+let totalRejected = 0;
+let totalTokens = 0;
+let activeLast7d = 0;
+let recentPromoted = 0;
+const allScores: number[] = [];
+
+const sessions: { sid: string; rounds: number; mtime: number; promoted: number }[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    totalSessions += 1;
+    let lastMtime = 0;
+    let rounds = 0;
+    let promoted = 0;
+    let rejected = 0;
+    let rmtokens = 0;
+    const rd = join(root, sid, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      const rNum: number[] = [];
+      for (const rf of rfs) {
+        const m = rf.match(/^round_(\d+)\.json$/);
+        if (m) rNum.push(parseInt(m[1], 10));
+      }
+      rNum.sort((a, b) => a - b);
+      for (const ri of rNum) {
+        try {
+          const fp = join(rd, `round_${ri}.json`);
+          const st = await stat(fp);
+          if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs;
+          rounds += 1;
+          const r = JSON.parse(await readFile(fp, 'utf8'));
+          rmtokens += r.feedback?.total_tokens ?? 0;
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') allScores.push(p.total);
+            }
+          }
+          for (const gp of r.gate?.proposals ?? []) {
+            if (gp.category === 'promoted') promoted += 1;
+            if (gp.category === 'rejected') rejected += 1;
+          }
+        } catch (e) { /* */ }
+      }
+    }
+    totalRounds += rounds;
+    totalPromoted += promoted;
+    totalRejected += rejected;
+    totalTokens += rmtokens;
+    if ((now - lastMtime) < SEVEN_DAYS) activeLast7d += 1;
+    if ((now - lastMtime) < ONE_DAY) {
+      // recent promoted/round for activity score
+      recentPromoted += promoted;
+    }
+    sessions.push({ sid, rounds, mtime: lastMtime, promoted });
+  }
+}
+
+const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+const promotedRate = totalRounds > 0 ? totalPromoted / totalRounds : 0;
+const abandoned = sessions.filter((s) => s.rounds < 3 && (now - s.mtime) > SEVEN_DAYS).length;
+const abandonedRate = totalSessions > 0 ? abandoned / totalSessions : 0;
+const activityScore = totalSessions > 0 ? activeLast7d / totalSessions : 0;
+
+// 子项
+const subscores: Subscore[] = [
+  {
+    name: 'avg feedback score',
+    score: Math.min(100, (avgScore / 10) * 100),
+    weight: 25,
+    detail: `平均 ${avgScore.toFixed(2)} / 10`,
+  },
+  {
+    name: 'promoted rate',
+    score: Math.min(100, promotedRate * 100 * 3), // promoted/round 33% = 100 分
+    weight: 25,
+    detail: `${(promotedRate * 100).toFixed(1)}% rounds → promoted`,
+  },
+  {
+    name: 'activity (7d)',
+    score: Math.min(100, activityScore * 100 * 3), // 33% 活跃 = 100
+    weight: 20,
+    detail: `${activeLast7d}/${totalSessions} 活跃(7d)`,
+  },
+  {
+    name: 'low abandonment',
+    score: Math.max(0, 100 - abandonedRate * 100 * 2), // 50% 流产 = 0 分
+    weight: 15,
+    detail: `${abandoned} sessions abandoned (${(abandonedRate * 100).toFixed(1)}%)`,
+  },
+  {
+    name: 'rejection rate (低=好)',
+    score: totalRounds > 0 ? Math.max(0, 100 - (totalRejected / totalRounds) * 100) : 100,
+    weight: 15,
+    detail: totalRounds > 0 ? `${((totalRejected / totalRounds) * 100).toFixed(1)}% rejected` : '—',
+  },
+];
+
+const compositeScore = subscores.reduce((s, sub) => s + sub.score * (sub.weight / 100), 0);
+
+function grade(n: number): { letter: string; color: string } {
+  if (n >= 90) return { letter: 'A', color: '#10b981' };
+  if (n >= 80) return { letter: 'B', color: '#84cc16' };
+  if (n >= 70) return { letter: 'C', color: '#facc15' };
+  if (n >= 60) return { letter: 'D', color: '#f97316' };
+  return { letter: 'F', color: '#ef4444' };
+}
+
+const g = grade(compositeScore);
+
+// 修正 detail "aborted" → 实际是 "abandoned" — typo fix in earlier code
+for (const s of subscores) {
+  if (s.detail.includes('aborted')) {
+    s.detail = s.detail.replace('aborted', 'abandoned');
+  }
+}
+---
+
+<BaseLayout title="Health Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / health-score</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🩺 Pipeline Health Score <span class="muted" style="font-size:0.6em">(iter #186)</span></h1>
+      <p class="agents-sub">
+        综合 KPI 计算的 0-100 pipeline 健康分。
+        加权平均 + letter grade。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 总分</h2>
+      <div class="agents-hs-big" style={`color:${g.color}`}>
+        <div class="agents-hs-letter">{g.letter}</div>
+        <div class="agents-hs-num">{compositeScore.toFixed(1)}<span class="agents-hs-max">/100</span></div>
+      </div>
+      <p class="muted" style="text-align:center"><small>{compositeScore >= 90 ? '✅ Excellent' : compositeScore >= 80 ? '✅ Good' : compositeScore >= 70 ? '⚠️ OK' : compositeScore >= 60 ? '⚠️ Below average' : '🚨 Critical'}</small></p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 子项分解</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>子项</th><th>权重</th><th>分</th><th>详情</th></tr>
+        </thead>
+        <tbody>
+          {subscores.map((s) => (
+            <tr>
+              <td><strong>{s.name}</strong></td>
+              <td>{s.weight}%</td>
+              <td><strong style={s.score >= 70 ? 'color:#10b981' : s.score >= 40 ? 'color:#f59e0b' : 'color:#ef4444'}>{s.score.toFixed(1)}</strong></td>
+              <td><small class="muted">{s.detail}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 关键 KPI</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>指标</th><th>值</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>总 sessions</td><td>{totalSessions}</td></tr>
+          <tr><td>总 rounds</td><td>{totalRounds}</td></tr>
+          <tr><td>总 promoted</td><td>{totalPromoted}</td></tr>
+          <tr><td>promoted/round</td><td>{(promotedRate * 100).toFixed(1)}%</td></tr>
+          <tr><td>avg score</td><td>{avgScore.toFixed(2)}</td></tr>
+          <tr><td>7d 活跃 sessions</td><td>{activeLast7d}</td></tr>
+          <tr><td>abandoned sessions</td><td>{abandoned} ({totalSessions > 0 ? ((abandoned/totalSessions)*100).toFixed(1) : '0'}%)</td></tr>
+          <tr><td>总 tokens</td><td>{totalTokens.toLocaleString()}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>A(90+):系统处于最佳状态 — 可继续推进</li>
+        <li>B(80-89):健康 — 关注具体子项</li>
+        <li>C(70-79):有可改进项 — 看 score &lt; 70 的子项</li>
+        <li>D-F(&lt; 70):需要关注 — 看 <a href={`${base}/agents/health-summary/`}>Health Summary</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-hs-big {
+    text-align: center;
+    padding: 2rem;
+    background: rgba(99, 102, 241, 0.05);
+    border-radius: 8px;
+    margin: 1rem 0;
+  }
+  .agents-hs-letter {
+    font-size: 8rem;
+    font-weight: 900;
+    line-height: 1;
+  }
+  .agents-hs-num {
+    font-size: 2rem;
+    font-weight: bold;
+    margin-top: 0.5rem;
+  }
+  .agents-hs-max {
+    font-size: 1rem;
+    opacity: 0.6;
+  }
+</style>
