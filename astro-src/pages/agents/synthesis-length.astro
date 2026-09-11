@@ -1,0 +1,210 @@
+---
+// /agents/synthesis-length.astro — iter #237:synthesis length distribution
+//
+// 跨 sessions 看 synthesis 文本长度分布:
+//   - chars / words / paragraphs / lines
+//   - 长度分布直方图
+//   - mean / median / max
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SynLength {
+  sid: string;
+  synFile: string;
+  chars: number;
+  words: number;
+  paras: number;
+  lines: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const syns: SynLength[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const sfs = await readdir(sd).catch(() => []);
+    for (const sf of sfs) {
+      if (!sf.endsWith('.md')) continue;
+      try {
+        const txt = await readFile(join(sd, sf), 'utf8');
+        syns.push({
+          sid,
+          synFile: sf,
+          chars: txt.length,
+          words: txt.match(/\S+/g)?.length ?? 0,
+          paras: txt.split(/\n\s*\n/).filter((p) => p.trim().length > 0).length,
+          lines: txt.split('\n').length,
+        });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const total = syns.length;
+const charValues = syns.map((s) => s.chars).sort((a, b) => a - b);
+const wordValues = syns.map((s) => s.words).sort((a, b) => a - b);
+
+const avgChars = total > 0 ? charValues.reduce((a, b) => a + b, 0) / total : 0;
+const medianChars = total > 0 ? charValues[Math.floor(total / 2)] : 0;
+const maxChars = total > 0 ? charValues[charValues.length - 1] : 0;
+const minChars = total > 0 ? charValues[0] : 0;
+
+const avgWords = total > 0 ? wordValues.reduce((a, b) => a + b, 0) / total : 0;
+const medianWords = total > 0 ? wordValues[Math.floor(total / 2)] : 0;
+
+const charBuckets = [
+  { label: '< 500', min: 0, max: 500, count: 0 },
+  { label: '500-1500', min: 500, max: 1500, count: 0 },
+  { label: '1500-3000', min: 1500, max: 3000, count: 0 },
+  { label: '3000-6000', min: 3000, max: 6000, count: 0 },
+  { label: '6000-10000', min: 6000, max: 10000, count: 0 },
+  { label: '> 10000', min: 10000, max: 99999, count: 0 },
+];
+for (const s of syns) {
+  for (const b of charBuckets) {
+    if (s.chars >= b.min && s.chars < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const wordBuckets = [
+  { label: '< 100', min: 0, max: 100, count: 0 },
+  { label: '100-300', min: 100, max: 300, count: 0 },
+  { label: '300-600', min: 300, max: 600, count: 0 },
+  { label: '600-1200', min: 600, max: 1200, count: 0 },
+  { label: '1200-2500', min: 1200, max: 2500, count: 0 },
+  { label: '> 2500', min: 2500, max: 99999, count: 0 },
+];
+for (const s of syns) {
+  for (const b of wordBuckets) {
+    if (s.words >= b.min && s.words < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const topLongest = [...syns].sort((a, b) => b.chars - a.chars).slice(0, 10);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Synthesis Length · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / synthesis-length</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Synthesis Length <span class="muted" style="font-size:0.6em">(iter #237)</span></h1>
+      <p class="agents-sub">
+        跨 sessions 看 synthesis 文本长度分布。
+        chars / words / paragraphs / lines。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sl-globals">
+        <span>总 syntheses: <strong>{total}</strong></span>
+        <span>avg chars: <strong>{avgChars.toFixed(0)}</strong></span>
+        <span>median chars: <strong>{medianChars}</strong></span>
+        <span>min chars: <strong>{minChars}</strong></span>
+        <span>max chars: <strong>{maxChars}</strong></span>
+        <span>avg words: <strong>{avgWords.toFixed(0)}</strong></span>
+        <span>median words: <strong>{medianWords}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 chars 分布</h2>
+      <pre class="agents-sl-flow">{charBuckets.map((b) => {
+        const max = Math.max(...charBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(14)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 words 分布</h2>
+      <pre class="agents-sl-flow">{wordBuckets.map((b) => {
+        const max = Math.max(...wordBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(14)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📏 top 10 最长 syntheses</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>chars</th><th>words</th><th>paras</th><th>lines</th><th>sid</th><th>file</th></tr>
+        </thead>
+        <tbody>
+          {topLongest.map((s) => (
+            <tr>
+              <td><strong>{s.chars}</strong></td>
+              <td>{s.words}</td>
+              <td>{s.paras}</td>
+              <td>{s.lines}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(s.synFile)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>中位数 vs 平均数:右偏 = 部分超长文拉高平均</li>
+        <li>words 用空白切分估算</li>
+        <li>对照 <a href={`${base}/agents/conclusion-quality/`}>Conclusion Quality</a> 看结构化质量</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sl-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sl-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sl-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
