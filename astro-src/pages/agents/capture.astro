@@ -1,0 +1,387 @@
+---
+// /agents/capture.astro — iter #107:quick capture / inbox
+//
+// "灵感收件箱":快速记下任何想法,稍后再分类:
+//   - 文本 + 可选标签
+//   - 时间戳
+//   - 一键转成 session goal
+//   - 标记已处理 / 已删除
+//   - localStorage 存
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="Capture · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / capture</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📥 Capture Inbox <span class="muted" style="font-size:0.6em">(iter #107)</span></h1>
+      <p class="agents-sub">
+        灵感收件箱。快速记下任何想法 / 问题 / 假设 / arxiv id,稍后分类。
+        可以一键转成 session goal(跳到新建 session 页面时预填)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>➕ 快速记录</h2>
+      <div class="agents-cp-form">
+        <textarea id="cp-text" placeholder="想法 / 问题 / 假设 / arxiv id ..." rows="3"></textarea>
+        <input id="cp-tags" placeholder="标签(逗号分隔,eg experiment, llm)" type="text" />
+        <p>
+          <button class="button primary" id="cp-add" type="button">📥 入箱</button>
+          <button class="button small" id="cp-clear-form" type="button">清空</button>
+        </p>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 收件箱统计</h2>
+      <div class="agents-cp-stats">
+        <span>总条目: <strong id="cp-total">0</strong></span>
+        <span>未处理: <strong id="cp-unprocessed">0</strong></span>
+        <span>本周新增: <strong id="cp-week">0</strong></span>
+        <span>有 arxiv id: <strong id="cp-arxiv">0</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 收件箱</h2>
+      <div class="agents-cp-filters">
+        <input id="cp-filter-q" type="text" placeholder="🔍 过滤内容" />
+        <select id="cp-filter-status">
+          <option value="all">全部</option>
+          <option value="unprocessed">未处理</option>
+          <option value="processed">已处理</option>
+          <option value="deleted">已删除</option>
+        </select>
+        <select id="cp-filter-tag">
+          <option value="">所有标签</option>
+        </select>
+      </div>
+      <ul class="agents-cp-list" id="cp-list"></ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📤 数据管理</h2>
+      <p>
+        <button class="button" id="cp-export" type="button">📤 导出 JSON</button>
+        <button class="button" id="cp-import" type="button">📥 导入 JSON</button>
+        <button class="button" id="cp-clear-processed" type="button">🗑️ 清空已处理</button>
+        <button class="button" id="cp-clear-all" type="button">⚠️ 清空全部</button>
+        <input type="file" id="cp-file" hidden accept="application/json" />
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cp-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .agents-cp-form textarea, .agents-cp-form input {
+    padding: 0.5rem 0.7rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-radius: 4px;
+    font-size: 0.92rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .agents-cp-form textarea {
+    font-family: inherit;
+    resize: vertical;
+  }
+  .agents-cp-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .agents-cp-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.2rem;
+  }
+  .agents-cp-filters {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .agents-cp-filters input, .agents-cp-filters select {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+  .agents-cp-filters input { flex: 1; min-width: 200px; }
+  .agents-cp-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-cp-list li {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 3px solid #f59e0b;
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.4rem;
+  }
+  .agents-cp-list li.processed { border-left-color: #10b981; opacity: 0.7; }
+  .agents-cp-list li.deleted { border-left-color: #ef4444; opacity: 0.5; text-decoration: line-through; }
+  .agents-cp-list .agents-cp-text {
+    white-space: pre-wrap;
+    margin: 0.3rem 0;
+    font-size: 0.95rem;
+  }
+  .agents-cp-list .agents-cp-meta {
+    font-size: 0.8rem;
+    color: #6b7280;
+    margin: 0.2rem 0;
+  }
+  .agents-cp-list .agents-cp-tags {
+    display: inline-block;
+    background: rgba(99, 102, 241, 0.2);
+    color: #4f46e5;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    margin-right: 0.3rem;
+  }
+  .agents-cp-list .agents-cp-actions {
+    margin-top: 0.4rem;
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .agents-cp-list .agents-cp-actions button {
+    background: rgba(99, 102, 241, 0.15);
+    color: #4f46e5;
+    border: none;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.78rem;
+  }
+  .agents-cp-list .agents-cp-actions button:hover {
+    background: rgba(99, 102, 241, 0.3);
+  }
+</style>
+
+<script>
+type Capture = {
+  id: string;
+  text: string;
+  tags: string[];
+  status: 'unprocessed' | 'processed' | 'deleted';
+  ts: number;
+};
+
+const KEY = 'agents:capture:v1';
+
+function load(): Capture[] {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as Capture[];
+  } catch { return []; }
+}
+function save(items: Capture[]): void {
+  try { localStorage.setItem(KEY, JSON.stringify(items)); } catch { /* */ }
+}
+function esc(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] ?? c));
+}
+function ago(ts: number): string {
+  if (!ts) return '—';
+  const m = Math.floor((Date.now() - ts) / 60_000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} 天前`;
+  if (d < 30) return `${Math.floor(d / 7)} 周前`;
+  return `${Math.floor(d / 30)} 个月前`;
+}
+function arxivIds(text: string): string[] {
+  return text.match(/\b\d{4}\.\d{4,5}\b/g) ?? [];
+}
+
+function refresh(): void {
+  const all = load();
+  const filterQ = (document.getElementById('cp-filter-q') as HTMLInputElement | null)?.value.toLowerCase() ?? '';
+  const filterStatus = (document.getElementById('cp-filter-status') as HTMLSelectElement | null)?.value ?? 'all';
+  const filterTag = (document.getElementById('cp-filter-tag') as HTMLSelectElement | null)?.value ?? '';
+
+  const filtered = all.filter((c) => {
+    if (filterStatus !== 'all' && c.status !== filterStatus) return false;
+    if (filterTag && !c.tags.includes(filterTag)) return false;
+    if (filterQ && !c.text.toLowerCase().includes(filterQ) && !c.tags.some((t) => t.toLowerCase().includes(filterQ))) return false;
+    return true;
+  });
+
+  // 统计
+  const totalEl = document.getElementById('cp-total');
+  const unprocEl = document.getElementById('cp-unprocessed');
+  const weekEl = document.getElementById('cp-week');
+  const arxivEl = document.getElementById('cp-arxiv');
+  if (totalEl) totalEl.textContent = String(all.length);
+  if (unprocEl) unprocEl.textContent = String(all.filter((c) => c.status === 'unprocessed').length);
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  if (weekEl) weekEl.textContent = String(all.filter((c) => c.ts >= weekAgo).length);
+  if (arxivEl) arxivEl.textContent = String(all.filter((c) => arxivIds(c.text).length > 0).length);
+
+  // 标签列表(用于 select)
+  const tagSet = new Set<string>();
+  for (const c of all) for (const t of c.tags) tagSet.add(t);
+  const tagSelect = document.getElementById('cp-filter-tag') as HTMLSelectElement | null;
+  if (tagSelect) {
+    const cur = tagSelect.value;
+    const opts = ['<option value="">所有标签</option>'].concat(Array.from(tagSet).sort().map((t) => `<option value="${esc(t)}">${esc(t)}</option>`));
+    tagSelect.innerHTML = opts.join('');
+    tagSelect.value = cur;
+  }
+
+  // 列表
+  const list = document.getElementById('cp-list');
+  if (!list) return;
+  if (filtered.length === 0) {
+    list.innerHTML = '<li class="muted" style="text-align:center;">📭 没有匹配的灵感。上面填一条试试。</li>';
+    return;
+  }
+  list.innerHTML = filtered
+    .sort((a, b) => b.ts - a.ts)
+    .map(
+      (c) => `
+      <li class="${esc(c.status)}" data-id="${esc(c.id)}">
+        <div class="agents-cp-text">${esc(c.text)}</div>
+        <div class="agents-cp-meta">
+          ${ago(c.ts)} · <code>${c.id}</code>
+          ${c.tags.map((t) => `<span class="agents-cp-tags">${esc(t)}</span>`).join('')}
+          ${arxivIds(c.text).length ? '· 📑 ' + arxivIds(c.text).map((id) => `<a href="https://arxiv.org/abs/${esc(id)}" target="_blank" rel="noopener">${esc(id)}</a>`).join(', ') : ''}
+        </div>
+        <div class="agents-cp-actions">
+          <button data-act="toggle-processed">${c.status === 'processed' ? '↩️ 未处理' : '✓ 已处理'}</button>
+          <button data-act="use-as-goal">🚀 作为 session goal</button>
+          <button data-act="delete">🗑️ 删除</button>
+          ${c.status === 'deleted' ? '<button data-act="restore">↩️ 恢复</button>' : ''}
+        </div>
+      </li>`,
+    )
+    .join('');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refresh();
+
+  document.getElementById('cp-add')?.addEventListener('click', () => {
+    const text = (document.getElementById('cp-text') as HTMLTextAreaElement | null)?.value.trim();
+    if (!text) return alert('内容不能为空');
+    const tagsRaw = (document.getElementById('cp-tags') as HTMLInputElement | null)?.value ?? '';
+    const tags = tagsRaw.split(',').map((s) => s.trim()).filter(Boolean);
+    const items = load();
+    items.push({
+      id: `cap-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      text,
+      tags,
+      status: 'unprocessed',
+      ts: Date.now(),
+    });
+    save(items);
+    (document.getElementById('cp-text') as HTMLTextAreaElement).value = '';
+    (document.getElementById('cp-tags') as HTMLInputElement).value = '';
+    refresh();
+  });
+
+  document.getElementById('cp-clear-form')?.addEventListener('click', () => {
+    (document.getElementById('cp-text') as HTMLTextAreaElement).value = '';
+    (document.getElementById('cp-tags') as HTMLInputElement).value = '';
+  });
+
+  document.getElementById('cp-filter-q')?.addEventListener('input', refresh);
+  document.getElementById('cp-filter-status')?.addEventListener('change', refresh);
+  document.getElementById('cp-filter-tag')?.addEventListener('change', refresh);
+
+  document.body.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const act = t.dataset.act;
+    const li = t.closest('li');
+    const id = li?.getAttribute('data-id');
+    if (!act || !id) return;
+    const items = load();
+    const c = items.find((x) => x.id === id);
+    if (!c) return;
+    if (act === 'toggle-processed') {
+      c.status = c.status === 'processed' ? 'unprocessed' : 'processed';
+    } else if (act === 'delete') {
+      c.status = 'deleted';
+    } else if (act === 'restore') {
+      c.status = 'unprocessed';
+    } else if (act === 'use-as-goal') {
+      // 跳转到 new-session 页面时预填
+      window.location.href = `/agents/new-session/?goal=${encodeURIComponent(c.text)}`;
+      return;
+    }
+    save(items);
+    refresh();
+  });
+
+  document.getElementById('cp-export')?.addEventListener('click', () => {
+    const data = load();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agents-capture-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  document.getElementById('cp-import')?.addEventListener('click', () => {
+    document.getElementById('cp-file')?.click();
+  });
+  document.getElementById('cp-file')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (Array.isArray(data)) {
+          save(data);
+          refresh();
+          alert('导入成功');
+        } else alert('格式错误');
+      } catch (err) { alert('JSON 解析错误: ' + String(err)); }
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById('cp-clear-processed')?.addEventListener('click', () => {
+    const items = load().filter((c) => c.status !== 'processed');
+    save(items);
+    refresh();
+  });
+
+  document.getElementById('cp-clear-all')?.addEventListener('click', () => {
+    if (!confirm('清空全部 capture?这不可撤销!')) return;
+    localStorage.removeItem(KEY);
+    refresh();
+  });
+});
+</script>

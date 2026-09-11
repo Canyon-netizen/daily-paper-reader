@@ -18,6 +18,10 @@ import '../../styles/agents.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
+// iter #107:支持 ?goal=<text> 预填(从 /agents/capture/ 跳转)
+const goalParam = Astro.url.searchParams.get('goal') ?? '';
+const presetParam = Astro.url.searchParams.get('preset') ?? '';
+
 // ---------------------------------------------------------------------------
 // iter #74 — Smart goal recommender
 //
@@ -321,7 +325,7 @@ function escapeHtml(s: string): string {
   </main>
 </BaseLayout>
 
-<script type="module">
+<script type="module" define:vars={{ initialGoal: goalParam, initialPreset: presetParam }}>
   const base = (document.querySelector('base')?.href || '/').replace(/\/$/, '');
   const $ = (id) => document.getElementById(id);
 
@@ -416,6 +420,17 @@ function escapeHtml(s: string): string {
       applyTemplate(tpl);
     } catch {}
   });
+
+  // iter #107:从 /agents/capture/ 跳转过来的 ?goal= / ?preset= 预填
+  if (initialGoal) {
+    goalEl.value = initialGoal;
+    goalEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    refreshCmd();
+  }
+  if (initialPreset) {
+    presetEl.value = initialPreset;
+    refreshCmd();
+  }
 
   // 任何表单字段变化 → 重生成 cmd
   [goalEl, maxCyclesEl, roundsEl, dirModeEl, presetEl, dryRunEl, immediateEl].forEach((el) => {
