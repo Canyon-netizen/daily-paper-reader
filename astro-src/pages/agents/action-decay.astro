@@ -1,0 +1,193 @@
+---
+// /agents/action-decay.astro — iter #226:refiner action usage decay over time
+//
+// 按 ISO 月份统计各 action 的使用频次:
+//   - 各 action 跨月使用次数变化
+//   - 哪些 action 在增长 vs 衰退
+//   - action 时间序列
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const monthMap = new Map<string, Map<string, number>>(); // month → action → count
+const monthTotals = new Map<string, number>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const month = new Date(st.mtimeMs).toISOString().slice(0, 7); // YYYY-MM
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const applied = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        if (!monthMap.has(month)) monthMap.set(month, new Map());
+        const m = monthMap.get(month)!;
+        for (const a of applied) {
+          m.set(a, (m.get(a) ?? 0) + 1);
+          monthTotals.set(month, (monthTotals.get(month) ?? 0) + 1);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const months = [...monthMap.keys()].sort();
+
+// 收集所有 actions
+const allActions = new Set<string>();
+for (const m of monthMap.values()) {
+  for (const a of m.keys()) allActions.add(a);
+}
+const actions = [...allActions];
+
+// top 12 actions by total
+const actionTotals = new Map<string, number>();
+for (const m of monthMap.values()) {
+  for (const [a, c] of m.entries()) {
+    actionTotals.set(a, (actionTotals.get(a) ?? 0) + c);
+  }
+}
+const topActions = [...actionTotals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map((x) => x[0]);
+
+// 趋势:对每个 action,看其在 months 中的使用频次
+interface ActionTrend {
+  action: string;
+  series: { month: string; count: number; rate: number }[];
+  total: number;
+  trend: number;  // 最近月 - 最早月
+  state: 'rising' | 'stable' | 'declining';
+}
+
+const trends: ActionTrend[] = [];
+for (const a of topActions) {
+  const series: { month: string; count: number; rate: number }[] = [];
+  let total = 0;
+  for (const m of months) {
+    const count = monthMap.get(m)?.get(a) ?? 0;
+    const mTotal = monthTotals.get(m) ?? 1;
+    series.push({ month: m, count, rate: count / mTotal });
+    total += count;
+  }
+  const first = series[0]?.rate ?? 0;
+  const last = series[series.length - 1]?.rate ?? 0;
+  const trend = last - first;
+  const state: 'rising' | 'stable' | 'declining' =
+    trend > 0.05 ? 'rising' :
+    trend < -0.05 ? 'declining' : 'stable';
+  trends.push({ action: a, series, total, trend, state });
+}
+
+trends.sort((a, b) => b.total - a.total);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Action Decay · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-decay</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📉 Action Decay <span class="muted" style="font-size:0.6em">(iter #226)</span></h1>
+      <p class="agents-sub">
+        按月份看每 action 的使用频次变化。
+        rising / stable / declining 反映趋势。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ad-globals">
+        <span>months: <strong>{months.length}</strong></span>
+        <span>unique actions: <strong>{actions.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 12 actions 月度使用率</h2>
+      <pre class="agents-ad-flow">{`${'action'.padEnd(20)} ${months.map((m) => m.slice(5)).join(' ')}  trend
+${'-'.repeat(20 + months.length * 4)}
+${trends.map((t) => {
+  const label = t.action.length > 18 ? t.action.slice(0, 18) + '…' : t.action.padEnd(18);
+  const cells = t.series.map((s) => `${s.rate >= 0.1 ? '█' : s.rate > 0 ? '▒' : ' '} `).join('');
+  const trendSymbol = t.state === 'rising' ? '↑' : t.state === 'declining' ? '↓' : '·';
+  return `${label} ${cells} ${trendSymbol} ${t.trend >= 0 ? '+' : ''}${(t.trend * 100).toFixed(1)}%`;
+}).join('\n')}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 趋势状态</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>total</th><th>trend</th><th>state</th></tr>
+        </thead>
+        <tbody>
+          {trends.map((t) => (
+            <tr>
+              <td><code>{esc(t.action)}</code></td>
+              <td>{t.total}</td>
+              <td>{t.trend >= 0 ? '+' : ''}{(t.trend * 100).toFixed(1)}%</td>
+              <td style={t.state === 'rising' ? 'color:#10b981' : t.state === 'declining' ? 'color:#ef4444' : ''}>{t.state}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rate = 该 action 在该月的使用 / 当月总 action 数</li>
+        <li>rising = 越来越常用;declining = 越来越被弃用</li>
+        <li>对照 <a href={`${base}/agents/refiner-actions/`}>Refiner Actions</a> 看总体频次</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ad-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ad-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ad-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
