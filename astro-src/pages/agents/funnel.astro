@@ -1,0 +1,171 @@
+---
+// /agents/funnel.astro — iter #152:session funnel
+//
+// 全局漏斗可视化:
+//   sessions → (with rounds) → (with syntheses) → (with ≥ 2 syntheses) → (mature / A-grade)
+//
+// 每一步算转化率,显示每层的 session 数。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Stage {
+  name: string;
+  count: number;
+  emoji: string;
+  filter: (s: SessionInfo) => boolean;
+}
+interface SessionInfo {
+  sid: string;
+  rounds: number;
+  synthCount: number;
+  avgScore: number;
+  promoted: number;
+  totalProposals: number;
+}
+
+const allSessions: SessionInfo[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    const rd = join(root, sid, 'rounds');
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(mp)) continue;
+    let rounds = 0;
+    let synthCount = 0;
+    let avgScore = 0;
+    let promoted = 0;
+    let totalProposals = 0;
+    const allScores: number[] = [];
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        rounds += 1;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          totalProposals += (r.designer?.proposals ?? []).length;
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') allScores.push(p.total);
+            }
+          }
+          for (const gp of r.gate?.proposals ?? []) {
+            if (gp.category === 'promoted') promoted += 1;
+          }
+        } catch (e) { /* */ }
+      }
+    }
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      synthCount = sfs.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+    }
+    avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+    allSessions.push({ sid, rounds, synthCount, avgScore, promoted, totalProposals });
+  }
+}
+
+const stages: Stage[] = [
+  { name: '总 sessions', emoji: '📂', count: 0, filter: () => true },
+  { name: '有 ≥ 1 round', emoji: '🔄', count: 0, filter: (s) => s.rounds >= 1 },
+  { name: '有 ≥ 3 rounds', emoji: '⚙️', count: 0, filter: (s) => s.rounds >= 3 },
+  { name: '有 ≥ 1 synthesis', emoji: '📝', count: 0, filter: (s) => s.synthCount >= 1 },
+  { name: '有 ≥ 2 syntheses', emoji: '📚', count: 0, filter: (s) => s.synthCount >= 2 },
+  { name: 'avg score ≥ 6', emoji: '✅', count: 0, filter: (s) => s.avgScore >= 6 && s.avgScore > 0 },
+  { name: 'avg score ≥ 7.5', emoji: '🏆', count: 0, filter: (s) => s.avgScore >= 7.5 },
+  { name: '≥ 1 promoted', emoji: '⭐', count: 0, filter: (s) => s.promoted >= 1 },
+];
+
+for (const st of stages) st.count = allSessions.filter(st.filter).length;
+
+const maxCount = stages[0].count;
+
+function bar(n: number, max: number, width = 30): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function pct(n: number, total: number): string {
+  if (!total) return '0%';
+  return ((n / total) * 100).toFixed(1) + '%';
+}
+---
+
+<BaseLayout title="Session Funnel · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / funnel</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌊 Session Funnel <span class="muted" style="font-size:0.6em">(iter #152)</span></h1>
+      <p class="agents-sub">
+        跨 session 漏斗:从总 sessions → 有 rounds → 有 syntheses → 高分 sessions。
+        每一步的转化率,帮你识别 pipeline 的瓶颈。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 漏斗</h2>
+      <pre class="agents-fn-flow">{stages.map((s, i) => {
+        const barWidth = bar(s.count, maxCount, 30);
+        const convFromPrev = i === 0 ? '100.0%' : pct(s.count, stages[i - 1].count);
+        const convFromTop = pct(s.count, maxCount);
+        return `${s.emoji} ${s.name.padEnd(20)} ${barWidth}  ${String(s.count).padStart(4)}  (top: ${convFromTop}, prev: ${convFromPrev})`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 表格视图</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>阶段</th><th>数量</th><th>占总数</th><th>转化(从上一步)</th><th>柱状</th></tr>
+        </thead>
+        <tbody>
+          {stages.map((s, i) => (
+            <tr>
+              <td>{s.emoji} {s.name}</td>
+              <td>{s.count}</td>
+              <td>{pct(s.count, maxCount)}</td>
+              <td>{i === 0 ? '—' : pct(s.count, stages[i - 1].count)}</td>
+              <td><code>{bar(s.count, maxCount, 16)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>从"有 ≥ 1 synthesis"到"avg score ≥ 7.5"的转化率反映质量门槛</li>
+        <li>如果 "≥ 1 promoted" 转化偏低,说明 gate 太严或 designer 提案质量不足</li>
+        <li>如果 "≥ 3 rounds" 转化偏低,说明很多 session 跑了一轮就放弃 — 看 <a href={`${base}/agents/resume/`}>Resume Suggestions</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-fn-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
