@@ -1,0 +1,202 @@
+---
+// /agents/refiner-actions.astro — iter #166:refiner action frequency
+//
+// 跨 session 看 modifier(精炼器)应用的修改类型频次:
+//   - applied[].action 分布
+//   - per-session 应用次数
+//   - applied 数量 vs promoted 数量的关系
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ActionStat {
+  action: string;
+  count: number;
+  sids: Set<string>;
+}
+
+const actionMap = new Map<string, ActionStat>();
+const perSessionApplied = new Map<string, number>();
+const perSessionPromoted = new Map<string, number>();
+let totalApplied = 0;
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    let sessionApplied = 0;
+    let sessionPromoted = 0;
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const app of r.modifier?.applied ?? []) {
+          const action = app.action ?? app.type ?? 'unknown';
+          if (!actionMap.has(action)) {
+            actionMap.set(action, { action, count: 0, sids: new Set() });
+          }
+          const a = actionMap.get(action)!;
+          a.count += 1;
+          a.sids.add(sid);
+          sessionApplied += 1;
+          totalApplied += 1;
+        }
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') sessionPromoted += 1;
+        }
+      } catch (e) { /* */ }
+    }
+    perSessionApplied.set(sid, sessionApplied);
+    perSessionPromoted.set(sid, sessionPromoted);
+  }
+}
+
+const stats = [...actionMap.values()].sort((a, b) => b.count - a.count);
+const totalActions = stats.length;
+const totalSessions = perSessionApplied.size;
+
+// per-session ratio (applied / promoted)
+const ratios: { sid: string; applied: number; promoted: number; ratio: number }[] = [];
+for (const [sid, applied] of perSessionApplied) {
+  const promoted = perSessionPromoted.get(sid) ?? 0;
+  ratios.push({
+    sid,
+    applied,
+    promoted,
+    ratio: promoted > 0 ? applied / promoted : Infinity,
+  });
+}
+const highRatio = [...ratios].filter((r) => r.promoted >= 1).sort((a, b) => b.ratio - a.ratio).slice(0, 10);
+const lowRatio = [...ratios].filter((r) => r.promoted >= 1).sort((a, b) => a.ratio - b.ratio).slice(0, 10);
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtRatio(n: number): string {
+  if (!isFinite(n)) return '∞';
+  return n.toFixed(2);
+}
+---
+
+<BaseLayout title="Refiner Actions · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / refiner-actions</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔧 Refiner Actions <span class="muted" style="font-size:0.6em">(iter #166)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 modifier 应用了哪些动作 — 哪个 action 最常用,applied/promoted 比例。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ra-globals">
+        <span>总 applied 动作: <strong>{totalApplied}</strong></span>
+        <span>唯一 action 数: <strong>{totalActions}</strong></span>
+        <span>涉及 sessions: <strong>{totalSessions}</strong></span>
+        <span>avg applied/session: <strong>{totalSessions > 0 ? (totalApplied/totalSessions).toFixed(2) : '0'}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎬 action 分布</h2>
+      <pre class="agents-ra-flow">{(() => {
+        const max = Math.max(...stats.map((s) => s.count), 1);
+        return stats.map((s) => {
+          const pct = totalApplied > 0 ? ((s.count / totalApplied) * 100).toFixed(1) : '0';
+          return `${s.action.padEnd(20)} ${bar(s.count, max, 24)}  ${String(s.count).padStart(4)} (${pct}%)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 applied/promoted 比例 — 最高(改了很多却少采纳)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>applied</th><th>promoted</th><th>ratio</th></tr>
+        </thead>
+        <tbody>
+          {highRatio.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.applied}</td>
+              <td>{r.promoted}</td>
+              <td><strong style="color:#ef4444">{fmtRatio(r.ratio)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 applied/promoted 比例 — 最低(精炼高效)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>applied</th><th>promoted</th><th>ratio</th></tr>
+        </thead>
+        <tbody>
+          {lowRatio.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.applied}</td>
+              <td>{r.promoted}</td>
+              <td><strong style="color:#10b981">{fmtRatio(r.ratio)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>如果某 action 占绝大多数 → 检查 prompt,避免过度修改</li>
+        <li>applied/promoted 高(> 5)→ 改的都被 gate 拒,可能是 modifier 激进</li>
+        <li>对照 <a href={`${base}/agents/persona-elo/`}>Persona Elo</a> 看哪种 action 后分数明显上升</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ra-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ra-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ra-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
