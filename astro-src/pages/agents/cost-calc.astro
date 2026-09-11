@@ -1,0 +1,197 @@
+---
+// /agents/cost-calc.astro — iter #144:cost savings calculator
+//
+// 让用户估算"如果用更便宜的 model,能省多少":
+//   - 选择目标 model (opus / sonnet / haiku)
+//   - 计算理论节省的 tokens × 单价
+//   - 历史用量按 session / week 拆分
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// 公开模型价格(USD / 1M tokens,输入+输出合并估算)
+const MODELS = [
+  { id: 'opus', name: 'Claude Opus', input: 15, output: 75, avg: 25 },
+  { id: 'sonnet', name: 'Claude Sonnet', input: 3, output: 15, avg: 6 },
+  { id: 'haiku', name: 'Claude Haiku', input: 0.25, output: 1.25, avg: 0.5 },
+  { id: 'gpt4', name: 'GPT-4 Turbo', input: 10, output: 30, avg: 18 },
+  { id: 'gpt35', name: 'GPT-3.5 Turbo', input: 0.5, output: 1.5, avg: 1 },
+];
+
+const root = join(process.cwd(), 'archive');
+let totalTokens = 0;
+const perSession: { sid: string; tokens: number; goal: string }[] = [];
+const perWeek = new Map<string, number>();
+const perMonth = new Map<string, number>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    let sessionTokens = 0;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const tok = r.feedback?.total_tokens ?? 0;
+        totalTokens += tok;
+        sessionTokens += tok;
+        if (r.started_at) {
+          const d = new Date(r.started_at);
+          const wk = isoWeek(d);
+          perWeek.set(wk, (perWeek.get(wk) ?? 0) + tok);
+          const mo = d.toISOString().slice(0, 7);
+          perMonth.set(mo, (perMonth.get(mo) ?? 0) + tok);
+        }
+      } catch (e) { /* */ }
+    }
+    if (sessionTokens > 0) perSession.push({ sid, tokens: sessionTokens, goal });
+  }
+}
+
+function isoWeek(d: Date): string {
+  const date = new Date(d.getTime());
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + 4 - (date.getDay() || 7));
+  const yearStart = new Date(date.getFullYear(), 0, 1);
+  const wk = Math.ceil(((date.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${date.getFullYear()}-W${String(wk).padStart(2, '0')}`;
+}
+
+perSession.sort((a, b) => b.tokens - a.tokens);
+const topSessions = perSession.slice(0, 20);
+
+function costFor(model: typeof MODELS[number], tokens: number): number {
+  return (tokens / 1_000_000) * model.avg;
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Cost Calculator · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-calc</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💰 Cost Savings Calculator <span class="muted" style="font-size:0.6em">(iter #144)</span></h1>
+      <p class="agents-sub">
+        估算如果切换到不同 model,你已经消耗的 tokens 会值多少钱。
+        价格仅供参考,以各家 model 官网实时为准。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cc-globals">
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>近似 Opus 等价: <strong>${costFor(MODELS[0], totalTokens).toFixed(2)}</strong></span>
+        <span>近似 Sonnet 等价: <strong>${costFor(MODELS[1], totalTokens).toFixed(2)}</strong></span>
+        <span>近似 Haiku 等价: <strong>${costFor(MODELS[2], totalTokens).toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 各 model 对比</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>model</th><th>input $/M</th><th>output $/M</th><th>avg $/M</th><th>历史用量估算</th></tr>
+        </thead>
+        <tbody>
+          {MODELS.map((m) => (
+            <tr>
+              <td><strong>{m.name}</strong></td>
+              <td>${m.input}</td>
+              <td>${m.output}</td>
+              <td>${m.avg}</td>
+              <td><strong style="color:#10b981">${costFor(m, totalTokens).toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 按月拆分</h2>
+      {perMonth.size === 0 ? <p class="muted">无 started_at 数据。</p> : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>month</th><th>tokens</th><th>Opus</th><th>Sonnet</th><th>Haiku</th></tr>
+          </thead>
+          <tbody>
+            {Array.from(perMonth.entries()).sort((a, b) => b[0].localeCompare(a[0])).map(([m, t]) => (
+              <tr>
+                <td><code>{m}</code></td>
+                <td>{t.toLocaleString()}</td>
+                <td>${costFor(MODELS[0], t).toFixed(2)}</td>
+                <td>${costFor(MODELS[1], t).toFixed(2)}</td>
+                <td>${costFor(MODELS[2], t).toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 最烧钱的 20 个 sessions(Opus 估算)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>tokens</th><th>Opus $</th><th>Sonnet $</th><th>Haiku $</th><th>session</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topSessions.map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td>{s.tokens.toLocaleString()}</td>
+              <td>${costFor(MODELS[0], s.tokens).toFixed(2)}</td>
+              <td>${costFor(MODELS[1], s.tokens).toFixed(2)}</td>
+              <td>${costFor(MODELS[2], s.tokens).toFixed(2)}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 14))}</code></a></td>
+              <td><small>{esc((s.goal ?? '').slice(0, 40))}{(s.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>从 Opus 切到 Sonnet,通常省 60-75% 成本(取决于 token 分布)</li>
+        <li>切到 Haiku 省 95%+,但质量下降明显 — 适合 exploration 而非 production</li>
+        <li>对照 <a href={`${base}/agents/settings/`}>Settings</a> 调整默认 model</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
