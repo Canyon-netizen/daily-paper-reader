@@ -1,0 +1,160 @@
+---
+// /agents/round-actions-histogram.astro — iter #281:round actions histogram
+//
+// 每 round 应用了多少 action?直方图 + percentile 统计
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const counts: number[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const acts = new Set<string>();
+        for (const a of (r.modifier?.applied ?? [])) {
+          acts.add(a.action ?? a.type ?? 'unknown');
+        }
+        counts.push(acts.size);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const total = counts.length;
+const sorted = [...counts].sort((a, b) => a - b);
+const avg = total > 0 ? counts.reduce((s, x) => s + x, 0) / total : 0;
+const median = total > 0 ? sorted[Math.floor(total / 2)] : 0;
+const p25 = total > 0 ? sorted[Math.floor(total * 0.25)] : 0;
+const p75 = total > 0 ? sorted[Math.floor(total * 0.75)] : 0;
+const p95 = total > 0 ? sorted[Math.floor(total * 0.95)] : 0;
+const max = total > 0 ? sorted[sorted.length - 1] : 0;
+const min = total > 0 ? sorted[0] : 0;
+
+const buckets = [
+  { label: '0', min: 0, max: 1, count: 0 },
+  { label: '1', min: 1, max: 2, count: 0 },
+  { label: '2', min: 2, max: 3, count: 0 },
+  { label: '3', min: 3, max: 4, count: 0 },
+  { label: '4', min: 4, max: 5, count: 0 },
+  { label: '5', min: 5, max: 6, count: 0 },
+  { label: '6', min: 6, max: 7, count: 0 },
+  { label: '7', min: 7, max: 8, count: 0 },
+  { label: '8', min: 8, max: 9, count: 0 },
+  { label: '9+', min: 9, max: 99999, count: 0 },
+];
+for (const c of counts) {
+  for (const b of buckets) {
+    if (c >= b.min && c < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const maxBucketCount = Math.max(...buckets.map((b) => b.count), 1);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Round Actions Histogram · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-actions-histogram</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Round Actions Histogram <span class="muted" style="font-size:0.6em">(iter #281)</span></h1>
+      <p class="agents-sub">
+        每个 round 应用了多少个 distinct action?直方图 + 百分位。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rah-globals">
+        <span>总 rounds: <strong>{total}</strong></span>
+        <span>avg: <strong>{avg.toFixed(2)}</strong></span>
+        <span>median: <strong>{median}</strong></span>
+        <span>min: <strong>{min}</strong></span>
+        <span>max: <strong>{max}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 直方图</h2>
+      <pre class="agents-rah-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(6)} ${bar(b.count, maxBucketCount, 22)}  ${b.count}  (${((b.count / Math.max(1, total)) * 100).toFixed(1)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 百分位</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>percentile</th><th>actions</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>p25</td><td>{p25}</td></tr>
+          <tr><td>p50(median)</td><td><strong>{median}</strong></td></tr>
+          <tr><td>p75</td><td>{p75}</td></tr>
+          <tr><td>p95</td><td>{p95}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>median ≈ 0-1 = 多数 round modifier 空跑</li>
+        <li>median 2-3 = 常见每次用 2-3 actions</li>
+        <li>p95 &gt; 5 = 偶发批量 action 应用</li>
+        <li>对照 <a href={`${base}/agents/action-set-diversity/`}>Action Set Diversity</a> 看 per-session</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rah-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rah-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rah-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
