@@ -1,0 +1,212 @@
+---
+// /agents/speed.astro — iter #143:round speed analysis
+//
+// 跨 session 看 round 耗时:
+//   - 每个 round 的 duration_ms(从 telemetry 或 finished_at - started_at)
+//   - 全局 mean / median / p90 / p99
+//   - 最快 / 最慢 round Top 20
+//   - 每个 session 的 avg duration(效率 vs 慢)
+//
+// 注意:duration 是 wall-clock time,可能受 LLM API 响应影响。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundSpeed {
+  sid: string;
+  round: number;
+  durationMs: number;
+  tokens: number;
+  tokensPerSec: number;
+  goal: string;
+}
+
+const rounds: RoundSpeed[] = [];
+const sessionAvg: Record<string, { sum: number; count: number; goal: string }> = {};
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_(\d+)\.json$/.test(rf)) continue;
+      const roundNum = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const dur = r.telemetry?.duration_ms ?? ((r.finished_at ?? 0) - (r.started_at ?? 0));
+        if (!dur || dur <= 0) continue;
+        const tokens = r.feedback?.total_tokens ?? 0;
+        rounds.push({
+          sid, round: roundNum,
+          durationMs: dur,
+          tokens,
+          tokensPerSec: dur > 0 ? (tokens / (dur / 1000)) : 0,
+          goal,
+        });
+        if (!sessionAvg[sid]) sessionAvg[sid] = { sum: 0, count: 0, goal };
+        sessionAvg[sid].sum += dur;
+        sessionAvg[sid].count += 1;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function percentile(arr: number[], q: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+}
+
+const durations = rounds.map((r) => r.durationMs);
+const tokensPerSec = rounds.map((r) => r.tokensPerSec);
+
+const stats = {
+  count: rounds.length,
+  min: Math.min(...durations, 0),
+  max: Math.max(...durations, 0),
+  mean: durations.length > 0 ? durations.reduce((a, b) => a + b, 0) / durations.length : 0,
+  median: percentile(durations, 0.5),
+  p90: percentile(durations, 0.9),
+  p99: percentile(durations, 0.99),
+  avgTps: tokensPerSec.length > 0 ? tokensPerSec.reduce((a, b) => a + b, 0) / tokensPerSec.length : 0,
+};
+
+const sortedByDur = [...rounds].sort((a, b) => b.durationMs - a.durationMs);
+const fastest = [...rounds].sort((a, b) => a.durationMs - b.durationMs);
+
+const sessionList = Object.entries(sessionAvg)
+  .map(([sid, v]) => ({ sid, avg: v.sum / v.count, count: v.count, goal: v.goal }))
+  .sort((a, b) => a.avg - b.avg);
+
+function fmtMs(ms: number): string {
+  if (ms < 1000) return Math.round(ms) + ' ms';
+  if (ms < 60_000) return (ms / 1000).toFixed(1) + ' s';
+  return Math.floor(ms / 60_000) + ' min ' + Math.floor((ms % 60_000) / 1000) + ' s';
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Round Speed · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / speed</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏱ Round Speed Analysis <span class="muted" style="font-size:0.6em">(iter #143)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 round 耗时分布。
+        注意:duration 是 wall-clock time,可能受 LLM API 响应影响,不是纯计算时间。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rs2-globals">
+        <span>总 rounds: <strong>{stats.count}</strong></span>
+        <span>min: <strong>{fmtMs(stats.min)}</strong></span>
+        <span>median: <strong>{fmtMs(stats.median)}</strong></span>
+        <span>mean: <strong>{fmtMs(stats.mean)}</strong></span>
+        <span>p90: <strong>{fmtMs(stats.p90)}</strong></span>
+        <span>p99: <strong>{fmtMs(stats.p99)}</strong></span>
+        <span>max: <strong>{fmtMs(stats.max)}</strong></span>
+        <span>avg tokens/s: <strong>{stats.avgTps.toFixed(1)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐢 最慢 rounds (Top 20)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>duration</th><th>tokens</th><th>t/s</th><th>session</th><th>round</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sortedByDur.slice(0, 20).map((r, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><strong style="color:#ef4444">{fmtMs(r.durationMs)}</strong></td>
+              <td>{r.tokens.toLocaleString()}</td>
+              <td>{r.tokensPerSec.toFixed(1)}</td>
+              <td><a href={`${base}/agents/${r.sid}/pipeline/#round-${r.round}`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+              <td>r{r.round}</td>
+              <td><small>{esc((r.goal ?? '').slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐇 最快 rounds (Top 20)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>duration</th><th>tokens</th><th>t/s</th><th>session</th><th>round</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {fastest.slice(0, 20).map((r, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><strong style="color:#10b981">{fmtMs(r.durationMs)}</strong></td>
+              <td>{r.tokens.toLocaleString()}</td>
+              <td>{r.tokensPerSec.toFixed(1)}</td>
+              <td><a href={`${base}/agents/${r.sid}/pipeline/#round-${r.round}`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+              <td>r{r.round}</td>
+              <td><small>{esc((r.goal ?? '').slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 每 session avg duration(快 → 慢)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>avg duration</th><th>rounds</th><th>session</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessionList.slice(0, 30).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><strong style={`color:${s.avg > stats.mean ? '#ef4444' : '#10b981'}`}>{fmtMs(s.avg)}</strong></td>
+              <td>{s.count}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 14))}</code></a></td>
+              <td><small>{esc((s.goal ?? '').slice(0, 50))}{(s.goal ?? '').length > 50 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rs2-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rs2-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
