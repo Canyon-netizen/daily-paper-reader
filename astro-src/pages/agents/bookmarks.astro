@@ -1,0 +1,423 @@
+---
+// /agents/bookmarks.astro — iter #101:saved searches + bookmarks
+//
+// 个人快捷面板,所有数据存 localStorage:
+//   - Saved searches(查询字符串 + 名称 + 类型)
+//   - Bookmarked sessions(快速跳转 + 笔记预览)
+//   - Bookmarked papers(arxiv id + 标题 + 关联 session)
+//   - Quick-launch buttons(常用查询一键触发 search)
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout title="Bookmarks · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / bookmarks</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔖 Bookmarks & Saved Searches <span class="muted" style="font-size:0.6em">(iter #101)</span></h1>
+      <p class="agents-sub">
+        个人快捷面板。所有数据存 localStorage(浏览器本地),不上传服务器。可以:
+        <br />· 收藏常用 session(自动按访问频次排序);
+        <br />· 保存搜索查询(可带过滤条件,一键重新触发);
+        <br />· 收藏 arxiv 论文(自动找到含它的 session);
+        <br />· 快速发起常用查询。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🔍 Saved Searches</h2>
+      <div class="agents-bm-row">
+        <input type="text" id="bm-s-name" placeholder="搜索名(eg '方法综述')" />
+        <input type="text" id="bm-s-q" placeholder="查询内容" />
+        <select id="bm-s-scope">
+          <option value="all">all(全文)</option>
+          <option value="goal">goal</option>
+          <option value="proposal">proposal</option>
+          <option value="critique">critique</option>
+          <option value="synthesis">synthesis</option>
+          <option value="paper">paper</option>
+        </select>
+        <button class="button primary" id="bm-s-save" type="button">💾 保存</button>
+      </div>
+      <ul class="agents-bm-list" id="bm-saved-list"></ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📌 Bookmarked Sessions</h2>
+      <div class="agents-bm-row">
+        <input type="text" id="bm-b-sid" placeholder="session id" />
+        <button class="button primary" id="bm-b-add" type="button">➕ 添加</button>
+        <button class="button small" id="bm-b-track" type="button">👁 自动追踪最近 5 个</button>
+      </div>
+      <ul class="agents-bm-list" id="bm-bookmarks-list"></ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📑 Bookmarked Papers</h2>
+      <div class="agents-bm-row">
+        <input type="text" id="bm-p-id" placeholder="arxiv id (eg 2501.12345)" />
+        <button class="button primary" id="bm-p-add" type="button">➕ 添加</button>
+      </div>
+      <ul class="agents-bm-list" id="bm-papers-list"></ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚡ Quick Launch</h2>
+      <p class="muted"><small>把常用查询变成一键直达按钮。</small></p>
+      <div class="agents-bm-quick-grid" id="bm-quick-grid">
+        <a class="button" href={`${base}/agents/search/?q=experiment`}>🔬 含 experiment 的 session</a>
+        <a class="button" href={`${base}/agents/score/`}>📊 所有 session score</a>
+        <a class="button" href={`${base}/agents/digest/`}>📰 今日 digest</a>
+        <a class="button" href={`${base}/agents/tokens/`}>💸 token dashboard</a>
+        <a class="button" href={`${base}/agents/health/`}>🩺 健康检查</a>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 跨 session insights</a>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🛠 数据管理</h2>
+      <p>
+        <button class="button" id="bm-export" type="button">📤 导出全部 bookmark JSON</button>
+        <button class="button" id="bm-import" type="button">📥 导入 bookmark JSON</button>
+        <button class="button" id="bm-clear" type="button">🗑️ 清空全部</button>
+        <input type="file" id="bm-file" hidden accept="application/json" />
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-bm-row {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.6rem 0;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .agents-bm-row input, .agents-bm-row select {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-radius: 4px;
+    font-size: 0.9rem;
+  }
+  .agents-bm-row input { flex: 1; min-width: 180px; }
+  .agents-bm-list {
+    list-style: none;
+    padding: 0;
+    margin: 0.4rem 0;
+  }
+  .agents-bm-list li {
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.18);
+    border-radius: 4px;
+    padding: 0.5rem 0.7rem;
+    margin-bottom: 0.4rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .agents-bm-list li code {
+    background: rgba(0,0,0,0.3);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.85rem;
+  }
+  .agents-bm-list .agents-bm-del {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.8rem;
+  }
+  .agents-bm-list .agents-bm-run {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.8rem;
+  }
+  .agents-bm-quick-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.5rem;
+  }
+  .agents-bm-empty {
+    color: #6b7280;
+    font-size: 0.85rem;
+    padding: 0.4rem 0;
+  }
+</style>
+
+<script>
+type SearchItem = { name: string; q: string; scope: string; ts: number };
+type BookmarkItem = { sid: string; visits: number; lastVisit: number; note?: string };
+type PaperBookmark = { id: string; ts: number; title?: string };
+
+const KEY_SEARCHES = 'agents:bookmarks:searches';
+const KEY_BOOKMARKS = 'agents:bookmarks:sessions';
+const KEY_PAPERS = 'agents:bookmarks:papers';
+const KEY_TRACK = 'agents:bookmarks:recents';
+
+function load<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch { return fallback; }
+}
+function save(key: string, val: unknown): void {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch { /* */ }
+}
+
+function esc(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] ?? c));
+}
+function ago(ts: number): string {
+  if (!ts) return '—';
+  const m = Math.floor((Date.now() - ts) / 60_000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+}
+
+function renderSearches(): void {
+  const list = document.getElementById('bm-saved-list');
+  if (!list) return;
+  const items = load<SearchItem[]>(KEY_SEARCHES, []);
+  if (items.length === 0) {
+    list.innerHTML = '<li class="agents-bm-empty">还没有 saved search。上面填好"搜索名"+"查询内容"再点 💾 保存。</li>';
+    return;
+  }
+  list.innerHTML = items
+    .sort((a, b) => b.ts - a.ts)
+    .map(
+      (s, i) => `
+      <li data-i="${i}">
+        <span>
+          <strong>${esc(s.name)}</strong>
+          · <code>${esc(s.q)}</code>
+          · scope: <code>${esc(s.scope)}</code>
+          · <small class="muted">${ago(s.ts)}</small>
+        </span>
+        <span>
+          <a class="agents-bm-run" href="/agents/search/?q=${encodeURIComponent(s.q)}&scope=${encodeURIComponent(s.scope)}">▶ 运行</a>
+          <button class="agents-bm-del" data-act="del-search" data-i="${i}">🗑️</button>
+        </span>
+      </li>`,
+    )
+    .join('');
+}
+
+function renderBookmarks(): void {
+  const list = document.getElementById('bm-bookmarks-list');
+  if (!list) return;
+  const items = load<BookmarkItem[]>(KEY_BOOKMARKS, []);
+  if (items.length === 0) {
+    list.innerHTML = '<li class="agents-bm-empty">还没有 bookmark。上面填 session id 然后点 ➕ 添加,或者点 👁 自动追踪最近 5 个。</li>';
+    return;
+  }
+  list.innerHTML = items
+    .sort((a, b) => b.visits - a.visits || b.lastVisit - a.lastVisit)
+    .map(
+      (b, i) => `
+      <li data-i="${i}">
+        <span>
+          <a href="/agents/${b.sid}/"><strong>${esc(b.sid)}</strong></a>
+          · 访问 <code>${b.visits}</code> 次
+          · <small class="muted">最近 ${ago(b.lastVisit)}</small>
+          ${b.note ? '· 💬 ' + esc(b.note) : ''}
+        </span>
+        <span>
+          <button class="agents-bm-run" data-act="visit" data-i="${i}">👁 +1</button>
+          <button class="agents-bm-del" data-act="del-bm" data-i="${i}">🗑️</button>
+        </span>
+      </li>`,
+    )
+    .join('');
+}
+
+function renderPapers(): void {
+  const list = document.getElementById('bm-papers-list');
+  if (!list) return;
+  const items = load<PaperBookmark[]>(KEY_PAPERS, []);
+  if (items.length === 0) {
+    list.innerHTML = '<li class="agents-bm-empty">还没有 paper 收藏。填 arxiv id(如 2501.12345)然后点 ➕ 添加。</li>';
+    return;
+  }
+  list.innerHTML = items
+    .sort((a, b) => b.ts - a.ts)
+    .map(
+      (p, i) => `
+      <li data-i="${i}">
+        <span>
+          <a href="https://arxiv.org/abs/${encodeURIComponent(p.id)}" target="_blank" rel="noopener"><code>${esc(p.id)}</code></a>
+          ${p.title ? '· ' + esc(p.title) : ''}
+          · <small class="muted">${ago(p.ts)}</small>
+        </span>
+        <span>
+          <a class="agents-bm-run" href="/agents/search/?q=${encodeURIComponent(p.id)}">🔍 找 session</a>
+          <button class="agents-bm-del" data-act="del-paper" data-i="${i}">🗑️</button>
+        </span>
+      </li>`,
+    )
+    .join('');
+}
+
+// 绑定事件
+document.addEventListener('DOMContentLoaded', () => {
+  renderSearches();
+  renderBookmarks();
+  renderPapers();
+
+  // 保存 search
+  document.getElementById('bm-s-save')?.addEventListener('click', () => {
+    const name = (document.getElementById('bm-s-name') as HTMLInputElement | null)?.value.trim();
+    const q = (document.getElementById('bm-s-q') as HTMLInputElement | null)?.value.trim();
+    const scope = (document.getElementById('bm-s-scope') as HTMLSelectElement | null)?.value ?? 'all';
+    if (!name || !q) return alert('搜索名 + 查询内容都要填');
+    const items = load<SearchItem[]>(KEY_SEARCHES, []);
+    items.push({ name, q, scope, ts: Date.now() });
+    save(KEY_SEARCHES, items);
+    (document.getElementById('bm-s-name') as HTMLInputElement).value = '';
+    (document.getElementById('bm-s-q') as HTMLInputElement).value = '';
+    renderSearches();
+  });
+
+  // 添加 bookmark
+  document.getElementById('bm-b-add')?.addEventListener('click', () => {
+    const sid = (document.getElementById('bm-b-sid') as HTMLInputElement | null)?.value.trim();
+    if (!sid) return alert('session id 不能为空');
+    const items = load<BookmarkItem[]>(KEY_BOOKMARKS, []);
+    if (items.find((x) => x.sid === sid)) return alert('已存在');
+    items.push({ sid, visits: 1, lastVisit: Date.now() });
+    save(KEY_BOOKMARKS, items);
+    (document.getElementById('bm-b-sid') as HTMLInputElement).value = '';
+    renderBookmarks();
+  });
+
+  // 自动追踪最近 5 个(从 recents 取)
+  document.getElementById('bm-b-track')?.addEventListener('click', () => {
+    const recents = load<{ sid: string; ts: number }[]>(KEY_TRACK, []);
+    if (recents.length === 0) return alert('还没有访问记录;打开任意 session 详情页就会自动记录');
+    const existing = load<BookmarkItem[]>(KEY_BOOKMARKS, []);
+    const merged = [...existing];
+    for (const r of recents.slice(0, 5)) {
+      if (!merged.find((x) => x.sid === r.sid)) {
+        merged.push({ sid: r.sid, visits: 1, lastVisit: r.ts });
+      }
+    }
+    save(KEY_BOOKMARKS, merged);
+    renderBookmarks();
+  });
+
+  // 添加 paper
+  document.getElementById('bm-p-add')?.addEventListener('click', () => {
+    const id = (document.getElementById('bm-p-id') as HTMLInputElement | null)?.value.trim();
+    if (!id) return alert('arxiv id 不能为空');
+    const items = load<PaperBookmark[]>(KEY_PAPERS, []);
+    if (items.find((x) => x.id === id)) return alert('已存在');
+    items.push({ id, ts: Date.now() });
+    save(KEY_PAPERS, items);
+    (document.getElementById('bm-p-id') as HTMLInputElement).value = '';
+    renderPapers();
+  });
+
+  // 列表内点击(删除/访问)
+  document.body.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const act = t.dataset.act;
+    const idx = t.dataset.i;
+    if (!act || idx == null) return;
+    const i = Number(idx);
+    if (act === 'del-search') {
+      const items = load<SearchItem[]>(KEY_SEARCHES, []);
+      items.splice(i, 1);
+      save(KEY_SEARCHES, items);
+      renderSearches();
+    } else if (act === 'del-bm') {
+      const items = load<BookmarkItem[]>(KEY_BOOKMARKS, []);
+      items.splice(i, 1);
+      save(KEY_BOOKMARKS, items);
+      renderBookmarks();
+    } else if (act === 'del-paper') {
+      const items = load<PaperBookmark[]>(KEY_PAPERS, []);
+      items.splice(i, 1);
+      save(KEY_PAPERS, items);
+      renderPapers();
+    } else if (act === 'visit') {
+      const items = load<BookmarkItem[]>(KEY_BOOKMARKS, []);
+      if (items[i]) {
+        items[i].visits += 1;
+        items[i].lastVisit = Date.now();
+      }
+      save(KEY_BOOKMARKS, items);
+      renderBookmarks();
+    }
+  });
+
+  // 导出
+  document.getElementById('bm-export')?.addEventListener('click', () => {
+    const data = {
+      searches: load<SearchItem[]>(KEY_SEARCHES, []),
+      bookmarks: load<BookmarkItem[]>(KEY_BOOKMARKS, []),
+      papers: load<PaperBookmark[]>(KEY_PAPERS, []),
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agents-bookmarks-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // 导入
+  document.getElementById('bm-import')?.addEventListener('click', () => {
+    document.getElementById('bm-file')?.click();
+  });
+  document.getElementById('bm-file')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (Array.isArray(data.searches)) save(KEY_SEARCHES, data.searches);
+        if (Array.isArray(data.bookmarks)) save(KEY_BOOKMARKS, data.bookmarks);
+        if (Array.isArray(data.papers)) save(KEY_PAPERS, data.papers);
+        alert('导入成功');
+        renderSearches(); renderBookmarks(); renderPapers();
+      } catch (err) { alert('JSON 解析错误: ' + String(err)); }
+    };
+    reader.readAsText(file);
+  });
+
+  // 清空
+  document.getElementById('bm-clear')?.addEventListener('click', () => {
+    if (!confirm('清空所有 bookmarks / saved searches / papers?')) return;
+    localStorage.removeItem(KEY_SEARCHES);
+    localStorage.removeItem(KEY_BOOKMARKS);
+    localStorage.removeItem(KEY_PAPERS);
+    renderSearches(); renderBookmarks(); renderPapers();
+  });
+});
+</script>

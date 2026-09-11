@@ -41,6 +41,9 @@ export async function getStaticPaths() {
 
 const { sessionId } = Astro.params;
 
+// 记录本次访问到 localStorage(供 bookmarks 自动追踪)
+// 在浏览器端执行,所以下面用 <script> 块写入 localStorage
+
 // ---------------------------------------------------------------------------
 // Types (mirror RoundRecord; keep optional so old records don't crash)
 // ---------------------------------------------------------------------------
@@ -416,7 +419,7 @@ function joinJsxLinks(els: any[]): any[] {
 
 <BaseLayout title={meta ? `${sessionId} · Session Dashboard` : 'Session Dashboard'}>
   <Navbar />
-  <main class="shell agents-shell">
+  <main class="shell agents-shell" data-sid={sessionId}>
     <nav class="agents-breadcrumb">
       <a href={`${base}/agents/`}>← 多智能体控制台</a>
       <span class="muted"> / </span>
@@ -931,4 +934,23 @@ function joinJsxLinks(els: any[]): any[] {
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     });
   });
+</script>
+
+<script>
+  // 记录本次访问到 localStorage(供 /agents/bookmarks/ 自动追踪)
+  (() => {
+    const KEY = 'agents:bookmarks:recents';
+    try {
+      const sid = document.body.dataset.sid;
+      const raw = localStorage.getItem(KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      const existing = arr.find((x) => x.sid === sid);
+      if (existing) existing.ts = Date.now();
+      else arr.push({ sid, ts: Date.now() });
+      // 只保留最近 20 个
+      arr.sort((a, b) => b.ts - a.ts);
+      if (arr.length > 20) arr.length = 20;
+      localStorage.setItem(KEY, JSON.stringify(arr));
+    } catch { /* */ }
+  })();
 </script>
