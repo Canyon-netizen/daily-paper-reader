@@ -1,0 +1,234 @@
+---
+// /agents/cost-cumulative-curve.astro — iter #255:cumulative cost curve
+//
+// 按时间顺序累加 rounds × tokens,展示累计 token / cost 增长曲线。
+// 同时按 ISO 周聚合,展示 weekly cumulative。
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface Entry {
+  ts: number;
+  tokens: number;
+  cost: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const entries: Entry[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        if (tokens > 0) {
+          entries.push({
+            ts: st.mtimeMs,
+            tokens,
+            cost: (tokens / 1_000_000) * SONNET_PRICE,
+          });
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+entries.sort((a, b) => a.ts - b.ts);
+
+const total = entries.length;
+const totalTokens = entries.reduce((s, e) => s + e.tokens, 0);
+const totalCost = entries.reduce((s, e) => s + e.cost, 0);
+
+// 累计数组
+let cumTokens = 0;
+let cumCost = 0;
+const cumulative = entries.map((e) => {
+  cumTokens += e.tokens;
+  cumCost += e.cost;
+  return { ts: e.ts, cumTokens, cumCost };
+});
+
+// 按 ISO 周聚合 weekly delta + cumulative
+function isoWeek(ms: number): string {
+  const d = new Date(ms);
+  const onejan = new Date(d.getFullYear(), 0, 1);
+  return `${d.getFullYear()}-W${Math.ceil((((d.getTime() - onejan.getTime()) / 86400000) + onejan.getDay() + 1) / 7).toString().padStart(2, '0')}`;
+}
+
+const weekly = new Map<string, { tokens: number; cost: number; rounds: number }>();
+for (const e of entries) {
+  const w = isoWeek(e.ts);
+  if (!weekly.has(w)) weekly.set(w, { tokens: 0, cost: 0, rounds: 0 });
+  const v = weekly.get(w)!;
+  v.tokens += e.tokens;
+  v.cost += e.cost;
+  v.rounds += 1;
+}
+
+const weeklyArr = Array.from(weekly.entries())
+  .map(([week, v]) => ({ week, ...v }))
+  .sort((a, b) => a.week.localeCompare(b.week));
+
+let cumW = 0;
+let cumC = 0;
+const weeklyCum = weeklyArr.map((w) => {
+  cumW += w.tokens;
+  cumC += w.cost;
+  return { week: w.week, deltaTokens: w.tokens, deltaCost: w.cost, rounds: w.rounds, cumTokens: cumW, cumCost: cumC };
+});
+
+// sparkline 数据点
+const lastN = weeklyCum.slice(-20);
+const maxCumTokens = Math.max(...lastN.map((w) => w.cumTokens), 1);
+
+function sparkline(values: number[], width = 30): string {
+  const blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  if (values.length < 2) return '▅'.repeat(width);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min;
+  if (range === 0) return '▅'.repeat(width);
+  return values.map((v) => blocks[Math.min(blocks.length - 1, Math.floor(((v - min) / range) * (blocks.length - 1)))]).join('');
+}
+
+// 找到 cost 翻倍 / 翻 10x 的时间点
+function findMilestone(value: number): string | null {
+  for (const c of cumulative) {
+    if (c.cumCost >= value) return new Date(c.ts).toISOString().slice(0, 10);
+  }
+  return null;
+}
+
+const milestones = [
+  { label: 'cost $1', date: findMilestone(1) },
+  { label: 'cost $5', date: findMilestone(5) },
+  { label: 'cost $10', date: findMilestone(10) },
+  { label: 'cost $50', date: findMilestone(50) },
+  { label: 'cost $100', date: findMilestone(100) },
+];
+
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Cost Cumulative Curve · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-cumulative-curve</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Cost Cumulative Curve <span class="muted" style="font-size:0.6em">(iter #255)</span></h1>
+      <p class="agents-sub">
+        按时间顺序累加 token 成本。weekly delta + cumulative。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ccc-globals">
+        <span>token-bearing rounds: <strong>{total}</strong></span>
+        <span>total tokens: <strong>{fmtTok(totalTokens)}</strong></span>
+        <span>total cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>weeks tracked: <strong>{weeklyArr.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 成本里程碑</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>milestone</th><th>达成日期</th></tr>
+        </thead>
+        <tbody>
+          {milestones.map((m) => (
+            <tr>
+              <td><strong>{m.label}</strong></td>
+              <td>{m.date ?? '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 weekly 累计曲线(最近 20 周)</h2>
+      <pre class="agents-ccc-flow">{lastN.map((w) => {
+        return `${w.week}  cum_tokens=${fmtTok(w.cumTokens).padStart(7)}  cum_cost=$${w.cumCost.toFixed(2).padStart(7)}  delta=$${w.deltaCost.toFixed(2).padStart(6)}  rounds=${w.rounds.toString().padStart(3)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 sparkline(cum_tokens 最近 20 周)</h2>
+      <pre class="agents-ccc-flow">{sparkline(lastN.map((w) => w.cumTokens), 30)}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 weekly delta</h2>
+      <pre class="agents-ccc-flow">{lastN.slice().reverse().map((w) => {
+        const max = Math.max(...lastN.map((x) => x.deltaTokens), 1);
+        return `${w.week}  ${bar(w.deltaTokens, max, 18)}  ${fmtTok(w.deltaTokens)}  $${w.deltaCost.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>累计曲线斜率 = 平均 spend rate</li>
+        <li>斜率突增 = 系统集中跑 / 新 batch 启动</li>
+        <li>斜率平稳 = 常规使用</li>
+        <li>对照 <a href={`${base}/agents/daily-pulse/`}>Daily Pulse</a> 看日级细节</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ccc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ccc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ccc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
