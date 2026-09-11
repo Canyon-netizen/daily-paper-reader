@@ -1,0 +1,186 @@
+---
+// /agents/score-bucket-position.astro — iter #315:score bucket × round position matrix
+//
+// score bucket × round position 的 2D 矩阵(avg score)
+//   - 看 modifier 在第几轮最容易到达高分
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SCORE_BUCKETS = [
+  { label: '0-3',   min: 0, max: 3 },
+  { label: '3-4',   min: 3, max: 4 },
+  { label: '4-5',   min: 4, max: 5 },
+  { label: '5-6',   min: 5, max: 6 },
+  { label: '6-7',   min: 6, max: 7 },
+  { label: '7-8',   min: 7, max: 8 },
+  { label: '8-10',  min: 8, max: 11 },
+];
+
+const matrix: number[][] = [];
+for (let i = 0; i < SCORE_BUCKETS.length; i++) {
+  matrix.push([]);
+}
+const counts: number[][] = matrix.map(() => []);
+
+const root = join(process.cwd(), 'archive');
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    for (let i = 0; i < rNums.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNums[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length === 0) continue;
+        const score = arr.reduce((a, b) => a + b, 0) / arr.length;
+
+        const pos = i + 1;
+        // 找 score bucket
+        let sIdx = -1;
+        for (let j = 0; j < SCORE_BUCKETS.length; j++) {
+          if (score >= SCORE_BUCKETS[j].min && score < SCORE_BUCKETS[j].max) { sIdx = j; break; }
+        }
+        if (sIdx < 0) continue;
+
+        // 确保 matrix 行已扩展
+        while (matrix[sIdx].length <= pos) matrix[sIdx].push(0);
+        while (counts[sIdx].length <= pos) counts[sIdx].push(0);
+        matrix[sIdx][pos] += score;
+        counts[sIdx][pos] += 1;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 算 avg
+const maxPos = Math.max(...matrix.flatMap((row) => row.length), 1);
+const avgMatrix: number[][] = [];
+for (let i = 0; i < matrix.length; i++) {
+  avgMatrix.push([]);
+  for (let j = 0; j < maxPos; j++) {
+    avgMatrix[i].push(counts[i][j] > 0 ? matrix[i][j] / counts[i][j] : 0);
+  }
+}
+
+// 只保留每列至少 5 个样本的位置
+const validPos: number[] = [];
+for (let j = 0; j < maxPos; j++) {
+  let total = 0;
+  for (let i = 0; i < counts.length; i++) total += counts[i][j] ?? 0;
+  if (total >= 3) validPos.push(j);
+}
+
+function heat(c: number): string {
+  if (c === 0) return '·';
+  if (c >= 7) return '🟢';
+  if (c >= 6) return '🟡';
+  if (c >= 5) return '🟠';
+  return '🔴';
+}
+---
+
+<BaseLayout title="Score Bucket × Position · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-bucket-position</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧮 Score Bucket × Round Position <span class="muted" style="font-size:0.6em">(iter #315)</span></h1>
+      <p class="agents-sub">
+        score bucket × round position 矩阵(avg score)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🧮 矩阵(emoji,avg score)</h2>
+      <pre class="agents-sbp-flow">
+{'score \\ R'.padEnd(12)}{validPos.map((p) => `R${(p + 1).toString().padStart(5)}`).join('')}
+{avgMatrix.map((row, i) => {
+  return `${SCORE_BUCKETS[i].label.padEnd(12)}` + validPos.map((j) => {
+    const v = row[j];
+    return `${heat(v)}${v > 0 ? v.toFixed(1).padStart(4) : '   · '}`;
+  }).join('');
+}).join('\n')}
+      </pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细数字(avg score / count)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>score</th>
+            {validPos.map((p) => <th>R{p + 1}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {avgMatrix.map((row, i) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{SCORE_BUCKETS[i].label}</strong></td>
+              {validPos.map((j) => (
+                <td>
+                  {row[j] > 0 ? (
+                    <>
+                      <strong>{row[j].toFixed(2)}</strong>
+                      <small class="muted"> (n={counts[i][j]})</small>
+                    </>
+                  ) : <span class="muted">—</span>}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>每行 = 某个分数区间;每列 = 该分数首次/再次达到的 round position</li>
+        <li>高分集中在早期位置 = 系统快速定位</li>
+        <li>高分集中在后期位置 = 系统需要多轮迭代才能高分</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sbp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
