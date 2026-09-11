@@ -1,0 +1,214 @@
+---
+// /agents/decision-log.astro — iter #183:auto decision log
+//
+// 所有 gate 决策的审计日志:
+//   - 按时间倒序显示所有 promoted / candidate / sketch / rejected 决策
+//   - 包含 score / rationale
+//   - per-session 决策分布
+//   - 决策趋势(per-week)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Decision {
+  sid: string;
+  roundIdx: number;
+  proposalIdx: number;
+  category: string;
+  score: number;
+  rationale: string;
+  mtime: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const decisions: Decision[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+
+    // 建立 best-by-idx map (per round)
+    for (const ri of rNum) {
+      try {
+        const fp = join(rd, `round_${ri}.json`);
+        const st = await stat(fp);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const bestByIdx: Record<number, { score: number; rationale: string }> = {};
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const score = p.total ?? 0;
+            if (!bestByIdx[idx] || score > bestByIdx[idx].score) {
+              bestByIdx[idx] = {
+                score,
+                rationale: p.rationale ?? p.reasoning ?? p.notes ?? '',
+              };
+            }
+          }
+        }
+        for (const gp of r.gate?.proposals ?? []) {
+          const idx = gp.index ?? gp.proposal_index;
+          if (idx == null) continue;
+          const best = bestByIdx[idx] ?? { score: 0, rationale: '' };
+          decisions.push({
+            sid,
+            roundIdx: ri,
+            proposalIdx: idx,
+            category: gp.category ?? 'unknown',
+            score: best.score,
+            rationale: best.rationale.slice(0, 120),
+            mtime: st.mtimeMs,
+          });
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+decisions.sort((a, b) => b.mtime - a.mtime);
+
+const total = decisions.length;
+const cats = ['promoted', 'candidate', 'sketch', 'rejected'];
+const catCounts: Record<string, number> = {};
+for (const c of cats) catCounts[c] = 0;
+for (const d of decisions) {
+  if (cats.includes(d.category)) catCounts[d.category] += 1;
+}
+
+// 按周聚合
+const weekMap = new Map<string, number>();
+for (const d of decisions) {
+  const d2 = new Date(d.mtime);
+  const year = d2.getUTCFullYear();
+  const start = new Date(d2);
+  start.setUTCDate(d2.getUTCDate() - d2.getUTCDay());
+  const wk = start.toISOString().slice(0, 10);
+  weekMap.set(wk, (weekMap.get(wk) ?? 0) + 1);
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtDate(ts: number): string {
+  return new Date(ts).toISOString().slice(0, 16).replace('T', ' ');
+}
+
+const showLimit = 50;
+const recent = decisions.slice(0, showLimit);
+---
+
+<BaseLayout title="Decision Log · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / decision-log</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📜 Decision Log <span class="muted" style="font-size:0.6em">(iter #183)</span></h1>
+      <p class="agents-sub">
+        所有 gate 决策的审计日志。
+        按时间倒序 — 适合回顾最近决策趋势。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dl-globals">
+        <span>总 decisions: <strong>{total}</strong></span>
+        <span>promoted: <strong>{catCounts.promoted}</strong></span>
+        <span>candidate: <strong>{catCounts.candidate}</strong></span>
+        <span>sketch: <strong>{catCounts.sketch}</strong></span>
+        <span>rejected: <strong>{catCounts.rejected}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📜 最近 {showLimit} 条决策</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>时间</th><th>session</th><th>round</th><th>category</th><th>score</th><th>rationale</th></tr>
+        </thead>
+        <tbody>
+          {recent.map((d) => (
+            <tr>
+              <td><small class="muted">{fmtDate(d.mtime)}</small></td>
+              <td><a href={`${base}/agents/${d.sid}/`}><code>{esc(d.sid.slice(0, 12))}</code></a></td>
+              <td>R{d.roundIdx}</td>
+              <td><strong class={`agents-dl-${d.category}`}>{d.category}</strong></td>
+              <td>{d.score.toFixed(1)}</td>
+              <td><small class="muted">{esc(d.rationale)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 按周决策数</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>week start</th><th>decisions</th></tr>
+        </thead>
+        <tbody>
+          {[...weekMap.entries()].sort((a, b) => a[0].localeCompare(b[0])).slice(-12).map(([wk, c]) => (
+            <tr>
+              <td><code>{wk}</code></td>
+              <td><strong>{c}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>被 promoted 但 score &lt; 4 的条目需复核 — 看 <a href={`${base}/agents/score-matrix/`}>Score Matrix</a></li>
+        <li>被 rejected 但 score &gt; 8 的条目需复核 — 可能是 gate 阈值过高</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dl-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dl-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dl-promoted {
+    color: #10b981;
+  }
+  .agents-dl-candidate {
+    color: #3b82f6;
+  }
+  .agents-dl-sketch {
+    color: #f59e0b;
+  }
+  .agents-dl-rejected {
+    color: #ef4444;
+  }
+</style>
