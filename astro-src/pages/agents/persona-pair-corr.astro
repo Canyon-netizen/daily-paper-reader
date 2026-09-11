@@ -1,0 +1,211 @@
+---
+// /agents/persona-pair-corr.astro — iter #272:persona pair correlation
+//
+// 对每对 persona,计算跨所有 rounds 评分的 Pearson 相关:
+//   - r > 0.7 = 高度一致(协同)
+//   - r ≈ 0 = 独立判断
+//   - r < 0 = 反向(罕见)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+// { sid, roundIdx, personaAvgScores: { name: avgScore } }
+interface RoundScores {
+  key: string;  // sid-roundIdx
+  scores: Record<string, number>;
+}
+const allRounds: RoundScores[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const scores: Record<string, number> = {};
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          const arr: number[] = [];
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+          if (arr.length > 0) scores[name] = arr.reduce((a, b) => a + b, 0) / arr.length;
+        }
+        if (Object.keys(scores).length >= 2) {
+          allRounds.push({ key: `${sid}-${rn}`, scores });
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 收集每个 persona 的评分序列
+const personaSeqs = new Map<string, number[]>();
+const allKeys = new Set<string>();
+for (const r of allRounds) {
+  for (const k of Object.keys(r.scores)) {
+    allKeys.add(k);
+  }
+}
+for (const persona of allKeys) {
+  const seq: number[] = [];
+  for (const r of allRounds) {
+    if (typeof r.scores[persona] === 'number') seq.push(r.scores[persona]);
+  }
+  if (seq.length >= 5) personaSeqs.set(persona, seq);
+}
+
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length < 3) return 0;
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? 0 : num / denom;
+}
+
+// 计算 pairwise
+const personas = Array.from(personaSeqs.keys()).sort();
+const pairs: { a: string; b: string; r: number; n: number }[] = [];
+for (let i = 0; i < personas.length; i++) {
+  for (let j = i + 1; j < personas.length; j++) {
+    const xs = personaSeqs.get(personas[i])!;
+    const ys = personaSeqs.get(personas[j])!;
+    const n = Math.min(xs.length, ys.length);
+    const r = pearson(xs, ys);
+    if (n >= 5) pairs.push({ a: personas[i], b: personas[j], r, n });
+  }
+}
+
+const topAgree = [...pairs].sort((a, b) => b.r - a.r).slice(0, 15);
+const topDisagree = [...pairs].sort((a, b) => a.r - b.r).slice(0, 10);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function corrColor(r: number): string {
+  if (r >= 0.7) return '#10b981';
+  if (r >= 0.4) return '#84cc16';
+  if (r >= 0.1) return '#f59e0b';
+  if (r >= -0.1) return '#999';
+  return '#ef4444';
+}
+---
+
+<BaseLayout title="Persona Pair Correlation · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-pair-corr</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🤝 Persona Pair Correlation <span class="muted" style="font-size:0.6em">(iter #272)</span></h1>
+      <p class="agents-sub">
+        每对 persona 跨 rounds 评分的 Pearson 相关。
+        r &gt; 0.7 = 高度协同;r &lt; 0 = 意见相反(罕见)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ppc-globals">
+        <span>总 rounds: <strong>{allRounds.length}</strong></span>
+        <span>personas(≥ 5 评分): <strong>{personaSeqs.size}</strong></span>
+        <span>pairs computed: <strong>{pairs.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🤝 top 15 高度协同 pairs</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>r</th><th>n</th><th>persona A</th><th>persona B</th></tr>
+        </thead>
+        <tbody>
+          {topAgree.map((p) => (
+            <tr>
+              <td>{bar(p.r, 1, 10)} <strong style={`color:${corrColor(p.r)}`}>{p.r.toFixed(3)}</strong></td>
+              <td>{p.n}</td>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🤔 top 10 意见分歧 pairs</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>r</th><th>n</th><th>persona A</th><th>persona B</th></tr>
+        </thead>
+        <tbody>
+          {topDisagree.map((p) => (
+            <tr>
+              <td>{bar(Math.abs(p.r), 1, 10)} <strong style={`color:${corrColor(p.r)}`}>{p.r.toFixed(3)}</strong></td>
+              <td>{p.n}</td>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>r &gt; 0.7 = 强协同,可能评分模式相同</li>
+        <li>r 0.3-0.7 = 中等相关</li>
+        <li>r &lt; 0.3 = 几乎独立判断(更"独立")</li>
+        <li>r &lt; 0 = 反向(罕见)</li>
+        <li>对照 <a href={`${base}/agents/persona-cooccur/`}>Persona Cooccur</a> 看同时出现频率</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ppc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ppc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
