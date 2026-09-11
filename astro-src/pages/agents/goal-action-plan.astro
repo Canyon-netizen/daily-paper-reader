@@ -1,0 +1,247 @@
+---
+// /agents/goal-action-plan.astro — iter #278:goal action plan recommender
+//
+// 基于历史数据,对每种 goal type 推荐 3-step action plan:
+//   - Step 1: 初始 action(在该 type 下出现最频繁)
+//   - Step 2: 第二步(在 Step 1 后最常出现)
+//   - Step 3: 第三步
+// 显示"理想路径"
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['research', 'paper', 'study', 'survey', 'literature', '论文', '研究', '文献', '调研', '综述', '学术'],
+  code: ['code', 'program', 'function', 'implement', 'algorithm', '代码', '实现', '编程', '程序', '函数', '算法'],
+  write: ['write', 'blog', 'essay', 'article', 'report', '撰写', '写作', '文章', '博客', '报告', '作文', '散文'],
+  analyze: ['analyze', 'analysis', 'data', 'dataset', 'statistics', 'anomaly', '分析', '数据', '统计', '异常', '聚类', '回归'],
+  design: ['design', 'architect', 'plan', 'system', 'schema', '设计', '架构', '方案', '系统', '蓝图', '规划'],
+};
+
+function classify(goal: string): string {
+  const lower = goal.toLowerCase();
+  const scores: Record<string, number> = {};
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    let s = 0;
+    for (const kw of kws) {
+      if (lower.includes(kw)) s += 1;
+    }
+    scores[type] = s;
+  }
+  const max = Math.max(...Object.values(scores));
+  if (max === 0) return 'other';
+  for (const [type, s] of Object.entries(scores)) {
+    if (s === max) return type;
+  }
+  return 'other';
+}
+
+interface Plan {
+  type: string;
+  count: number;
+  step1: { action: string; count: number; lift: number } | null;
+  step2: { from: string; to: string; count: number; lift: number } | null;
+  step3: { from: string; to: string; count: number; lift: number } | null;
+  avgFinal: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const typeMap = new Map<string, {
+  count: number;
+  finalSum: number;
+  actionCounts: Map<string, number>;
+  actionScores: Map<string, number[]>;
+  transitions: Map<string, number>;
+}>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    if (!goal) continue;
+    const type = classify(goal);
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+
+    if (!typeMap.has(type)) {
+      typeMap.set(type, {
+        count: 0, finalSum: 0,
+        actionCounts: new Map(), actionScores: new Map(),
+        transitions: new Map(),
+      });
+    }
+    const ts = typeMap.get(type)!;
+    ts.count += 1;
+
+    const rounds: { actions: string; score: number }[] = [];
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const acts = Array.from(new Set((r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown'))).sort();
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        rounds.push({ actions: acts.join('+') || '(none)', score });
+        ts.finalSum += score;
+        for (const a of acts) {
+          ts.actionCounts.set(a, (ts.actionCounts.get(a) ?? 0) + 1);
+          if (!ts.actionScores.has(a)) ts.actionScores.set(a, []);
+          ts.actionScores.get(a)!.push(score);
+        }
+      } catch (e) { /* */ }
+    }
+
+    // transitions
+    for (let i = 0; i < rounds.length - 1; i++) {
+      const key = `${rounds[i].actions} → ${rounds[i + 1].actions}`;
+      ts.transitions.set(key, (ts.transitions.get(key) ?? 0) + 1);
+    }
+  }
+}
+
+// 为每 type 生成 plan
+const plans: Plan[] = [];
+for (const [type, ts] of typeMap) {
+  if (ts.count < 2) continue;
+  // step1: most frequent action
+  const actions = Array.from(ts.actionCounts.entries())
+    .map(([a, c]) => {
+      const scores = ts.actionScores.get(a) ?? [];
+      const avg = scores.length > 0 ? scores.reduce((s, x) => s + x, 0) / scores.length : 0;
+      const overallAvg = ts.finalSum / Math.max(1, ts.count * 5);  // 粗估
+      return { action: a, count: c, avg, lift: avg - overallAvg };
+    })
+    .sort((a, b) => b.count - a.count);
+  const step1 = actions[0] ?? null;
+
+  // step2: transitions from step1.action
+  let step2 = null;
+  let step3 = null;
+  if (step1) {
+    const step1Key = step1.action;
+    const fromTrans = Array.from(ts.transitions.entries())
+      .filter(([k]) => k.startsWith(`${step1Key} → `) || k.startsWith(`(none) → ${step1Key}`))
+      .map(([k, count]) => {
+        const parts = k.split(' → ');
+        const to = parts[parts.length - 1];
+        return { from: step1Key, to, count, lift: 0 };
+      })
+      .sort((a, b) => b.count - a.count);
+    step2 = fromTrans[0] ?? null;
+    if (step2) {
+      const step2Key = step2.to;
+      const fromTrans3 = Array.from(ts.transitions.entries())
+        .filter(([k]) => k.startsWith(`${step2Key} → `))
+        .map(([k, count]) => {
+          const parts = k.split(' → ');
+          const to = parts[parts.length - 1];
+          return { from: step2Key, to, count, lift: 0 };
+        })
+        .sort((a, b) => b.count - a.count);
+      step3 = fromTrans3[0] ?? null;
+    }
+  }
+
+  plans.push({
+    type,
+    count: ts.count,
+    step1,
+    step2,
+    step3,
+    avgFinal: ts.count > 0 ? ts.finalSum / ts.count / 5 : 0,  // 粗估
+  });
+}
+
+plans.sort((a, b) => b.count - a.count);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Action Plan · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-action-plan</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🗺️ Goal Action Plan <span class="muted" style="font-size:0.6em">(iter #278)</span></h1>
+      <p class="agents-sub">
+        对每种 goal type,基于历史数据推荐 3 步 action 路径。
+        step 1 = 高频首 action,step 2/3 = 后续最常见转移。
+      </p>
+    </header>
+
+    {plans.map((p) => (
+      <section class="agents-session-section">
+        <h2>🏷️ {p.type} ({p.count} sessions)</h2>
+        <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;font-size:1.1em;padding:1rem;background:rgba(99,102,241,0.06);border-radius:8px">
+          {p.step1 ? (
+            <>
+              <span style="background:#4f46e5;color:white;padding:0.5rem 1rem;border-radius:6px"><strong>Step 1:</strong> {p.step1.action} <small style="opacity:0.8">({p.step1.count})</small></span>
+              <span style="font-size:1.5em">→</span>
+              {p.step2 ? (
+                <>
+                  <span style="background:#10b981;color:white;padding:0.5rem 1rem;border-radius:6px"><strong>Step 2:</strong> {p.step2.to} <small style="opacity:0.8">({p.step2.count})</small></span>
+                  <span style="font-size:1.5em">→</span>
+                  {p.step3 ? (
+                    <span style="background:#f59e0b;color:white;padding:0.5rem 1rem;border-radius:6px"><strong>Step 3:</strong> {p.step3.to} <small style="opacity:0.8">({p.step3.count})</small></span>
+                  ) : (
+                    <span style="opacity:0.6">(no step 3 data)</span>
+                  )}
+                </>
+              ) : (
+                <span style="opacity:0.6">(no step 2 data)</span>
+              )}
+            </>
+          ) : (
+            <span style="opacity:0.6">(no action data)</span>
+          )}
+        </div>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>step 后数字 = 该 action 在该 type 下被采用次数</li>
+        <li>未必是最优路径,但反映了系统常用做法</li>
+        <li>对照 <a href={`${base}/agents/round-sequence-pattern/`}>Round Sequence Pattern</a> 看转移详情</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-session-section {
+    margin: 1rem 0;
+  }
+</style>
