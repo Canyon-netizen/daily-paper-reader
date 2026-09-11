@@ -1,0 +1,249 @@
+---
+// /agents/maturity.astro — iter #131:session maturity score
+//
+// 给每个 session 打一个综合成熟度分数:
+//   - 30% rounds(数量适中,5-15 最佳)
+//   - 20% syntheses(至少有 1 份)
+//   - 20% feedback diversity(3 个 persona 都活跃)
+//   - 15% promoted count(>= 2 为合格)
+//   - 15% avg score(>= 6 为合格)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Maturity {
+  sid: string;
+  goal: string;
+  rounds: number;
+  synthCount: number;
+  uniquePersonas: Set<string>;
+  promoted: number;
+  avgScore: number;
+  totalTokens: number;
+  maturity: number;
+  grade: string;
+  lastUpdate: number;
+  strengths: string[];
+  weaknesses: string[];
+}
+
+const sessions: Maturity[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(rd)) continue;
+    let goal = '';
+    let lastUpdate = 0;
+    const metaPath = join(root, sid, 'meta.json');
+    if (existsSync(metaPath)) {
+      try {
+        const m = JSON.parse(await readFile(metaPath, 'utf8'));
+        goal = m.goal ?? '';
+        if (m.updated_at) lastUpdate = m.updated_at;
+      } catch (e) { /* */ }
+    }
+
+    let rounds = 0;
+    let promoted = 0;
+    let totalTokens = 0;
+    const personaSet = new Set<string>();
+    const allScores: number[] = [];
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      rounds += 1;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        totalTokens += r.feedback?.total_tokens ?? 0;
+        for (const persona of r.feedback?.personas ?? []) {
+          const pn = persona.name ?? persona.persona ?? persona.role ?? 'unknown';
+          personaSet.add(pn);
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') allScores.push(p.total);
+          }
+        }
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+        }
+      } catch (e) { /* */ }
+    }
+
+    let synthCount = 0;
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      synthCount = sfs.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+      for (const f of sfs) {
+        const st = await import('node:fs/promises').then((m) => m.stat(join(sd, f)).catch(() => null));
+        if (st && (st as any).mtimeMs > lastUpdate) lastUpdate = (st as any).mtimeMs;
+      }
+    }
+
+    if (rounds === 0) continue;
+
+    // 5 个子维度评分 0-1
+    // 1. rounds(5-15 满分,过低/过高扣分)
+    let roundsScore = 0;
+    if (rounds >= 5 && rounds <= 15) roundsScore = 1;
+    else if (rounds < 5) roundsScore = rounds / 5;
+    else roundsScore = Math.max(0, 1 - (rounds - 15) / 15);
+
+    // 2. syntheses(>= 3 满分,1-2 部分,0 零)
+    let synthScore = 0;
+    if (synthCount >= 3) synthScore = 1;
+    else synthScore = synthCount / 3;
+
+    // 3. feedback diversity(3 个 persona 满分)
+    const personaScore = personaSet.size / 3;
+
+    // 4. promoted count(>= 2 满分)
+    let promotedScore = 0;
+    if (promoted >= 2) promotedScore = 1;
+    else promotedScore = promoted / 2;
+
+    // 5. avg score(>= 6 满分)
+    const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+    let avgScoreNorm = avgScore / 10;
+
+    const maturity = (roundsScore * 0.30 + synthScore * 0.20 + personaScore * 0.20 + promotedScore * 0.15 + avgScoreNorm * 0.15) * 100;
+
+    let grade: string;
+    if (maturity >= 80) grade = 'A';
+    else if (maturity >= 65) grade = 'B';
+    else if (maturity >= 50) grade = 'C';
+    else if (maturity >= 35) grade = 'D';
+    else grade = 'F';
+
+    const strengths: string[] = [];
+    const weaknesses: string[] = [];
+    if (roundsScore >= 0.8) strengths.push('轮数充足');
+    else weaknesses.push('轮数偏少');
+    if (synthScore >= 0.8) strengths.push('syntheses 多');
+    else weaknesses.push('syntheses 不足');
+    if (personaScore >= 0.7) strengths.push('3 persona 都有反馈');
+    else weaknesses.push('部分 persona 缺失');
+    if (promotedScore >= 0.8) strengths.push('多个 promoted');
+    else weaknesses.push('promoted 偏少');
+    if (avgScoreNorm >= 0.6) strengths.push('avg score 高');
+    else weaknesses.push('avg score 低');
+
+    sessions.push({
+      sid, goal, rounds, synthCount,
+      uniquePersonas: personaSet,
+      promoted, avgScore, totalTokens,
+      maturity, grade, lastUpdate, strengths, weaknesses,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.maturity - a.maturity);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtDate(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toISOString().slice(0, 10);
+}
+const gradeColor: any = {
+  A: '#10b981', B: '#3b82f6', C: '#f59e0b', D: '#ef4444', F: '#6b7280',
+};
+---
+
+<BaseLayout title="Maturity Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / maturity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎓 Session Maturity Score <span class="muted" style="font-size:0.6em">(iter #131)</span></h1>
+      <p class="agents-sub">
+        综合 5 个维度给每个 session 打成熟度分(0-100):
+        <strong>30%</strong> rounds 数 + <strong>20%</strong> syntheses + <strong>20%</strong> persona diversity + <strong>15%</strong> promoted + <strong>15%</strong> avg score。
+        等级 A(80+) / B / C / D / F(&lt;35)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局分布</h2>
+      <div class="agents-mt-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        {['A', 'B', 'C', 'D', 'F'].map((g) => (
+          <span>等级 {g}: <strong style={`color:${gradeColor[g]}`}>{sessions.filter((s) => s.grade === g).length}</strong></span>
+        ))}
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 排名(按 maturity 倒序)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>等级</th><th>分</th><th>session</th><th>rounds</th><th>synth</th><th>persona</th><th>promoted</th><th>avg score</th><th>tokens</th><th>优势</th><th>劣势</th><th>updated</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 50).map((s) => (
+            <tr>
+              <td><span class="agents-mt-grade" style={`background:${gradeColor[s.grade]}`}>{s.grade}</span></td>
+              <td><strong>{s.maturity.toFixed(0)}</strong></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a>
+                <p class="muted" style="margin:0.1rem 0 0;font-size:0.7rem">{esc((s.goal ?? '').slice(0, 30))}{(s.goal ?? '').length > 30 ? '…' : ''}</p>
+              </td>
+              <td>{s.rounds}</td>
+              <td>{s.synthCount}</td>
+              <td>{s.uniquePersonas.size}/3</td>
+              <td>{s.promoted}</td>
+              <td>{s.avgScore.toFixed(2)}</td>
+              <td><small>{s.totalTokens.toLocaleString()}</small></td>
+              <td><small>{s.strengths.map((x) => '✓ ' + x).join(', ') || '—'}</small></td>
+              <td><small>{s.weaknesses.map((x) => '⚠ ' + x).join(', ') || '—'}</small></td>
+              <td><small>{fmtDate(s.lastUpdate)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 使用建议</h2>
+      <ul>
+        <li><strong>等级 A</strong>:session 已经成熟,适合 <a href={`${base}/agents/export-all/`}>📦 Export All</a> 或发表</li>
+        <li><strong>等级 C-D</strong>:针对 <em>劣势</em> 列,继续跑 rounds 或补 syntheses</li>
+        <li><strong>等级 F</strong>:考虑放弃或 <a href={`${base}/agents/new-session/`}>重新设计 goal</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-mt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-mt-globals strong {
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-mt-grade {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    border-radius: 50%;
+    color: white;
+    font-weight: 700;
+  }
+</style>
