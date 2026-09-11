@@ -1,0 +1,236 @@
+---
+// /agents/persona-coverage.astro — iter #213:persona coverage analysis
+//
+// 跨 session 看 personas 使用情况:
+//   - 每个 persona 出现在多少 sessions 中
+//   - 平均每个 session 使用多少 personas
+//   - 哪些 sessions 只用 1 个 persona(可能过于单一)
+//   - 哪些 sessions 用 3+ personas(多视角)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionPersonas {
+  sid: string;
+  goal: string;
+  personas: Set<string>;
+  rounds: number;
+}
+
+interface PersonaGlobal {
+  name: string;
+  sessions: number;
+  totalUses: number;
+  avgScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionPersonas[] = [];
+const personaGlobal = new Map<string, { sessions: number; totalUses: number; scoreSum: number; scoreCount: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    const sessionPersonas = new Set<string>();
+    let totalRounds = 0;
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        totalRounds += 1;
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          sessionPersonas.add(name);
+          const cur = personaGlobal.get(name) ?? { sessions: 0, totalUses: 0, scoreSum: 0, scoreCount: 0 };
+          cur.totalUses += 1;
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') {
+              cur.scoreSum += p.total;
+              cur.scoreCount += 1;
+            }
+          }
+          personaGlobal.set(name, cur);
+        }
+      } catch (e) { /* */ }
+    }
+    for (const name of sessionPersonas) {
+      const cur = personaGlobal.get(name)!;
+      cur.sessions += 1;
+      personaGlobal.set(name, cur);
+    }
+    sessions.push({ sid, goal, personas: sessionPersonas, rounds: totalRounds });
+  }
+}
+
+const totalSessions = sessions.length;
+const avgPersonasPerSession = sessions.reduce((s, x) => s + x.personas.size, 0) / Math.max(sessions.length, 1);
+
+const personaStats: PersonaGlobal[] = [];
+for (const [name, v] of personaGlobal.entries()) {
+  personaStats.push({
+    name,
+    sessions: v.sessions,
+    totalUses: v.totalUses,
+    avgScore: v.scoreCount > 0 ? v.scoreSum / v.scoreCount : 0,
+  });
+}
+personaStats.sort((a, b) => b.sessions - a.sessions);
+
+// 单一视角 sessions(只用 1 persona)
+const singlePersona = sessions.filter((s) => s.personas.size === 1);
+const multiPersona = sessions.filter((s) => s.personas.size >= 3);
+
+// persona/session 分布
+const buckets = [
+  { label: '1 persona', min: 1, max: 1, count: 0 },
+  { label: '2 personas', min: 2, max: 2, count: 0 },
+  { label: '3 personas', min: 3, max: 3, count: 0 },
+  { label: '4+ personas', min: 4, max: 99, count: 0 },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.personas.size >= b.min && s.personas.size <= b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const underrep = [...personaStats].sort((a, b) => a.sessions - b.sessions).slice(0, 10);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Persona Coverage · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-coverage</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👥 Persona Coverage <span class="muted" style="font-size:0.6em">(iter #213)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 personas 使用覆盖度。
+        高覆盖 = 多视角;低覆盖 = 单一视角风险。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pc-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>avg personas/session: <strong>{avgPersonasPerSession.toFixed(2)}</strong></span>
+        <span>single-persona sessions: <strong>{singlePersona.length}</strong></span>
+        <span>multi (3+) sessions: <strong>{multiPersona.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 persona/session 分布</h2>
+      <pre class="agents-pcv-flow">{buckets.map((b) => {
+        const max = Math.max(...buckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(14)} ${bar(b.count, max, 18)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌟 Personas 排名(按 session 覆盖数)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>sessions</th><th>total uses</th><th>avg score</th></tr>
+        </thead>
+        <tbody>
+          {personaStats.map((p) => (
+            <tr>
+              <td><code>{esc(p.name)}</code></td>
+              <td><strong>{p.sessions}</strong></td>
+              <td>{p.totalUses}</td>
+              <td>{p.avgScore.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🕳️ 欠代表的 personas</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>sessions</th><th>total uses</th></tr>
+        </thead>
+        <tbody>
+          {underrep.map((p) => (
+            <tr>
+              <td><code>{esc(p.name)}</code></td>
+              <td><strong style="color:#f59e0b">{p.sessions}</strong></td>
+              <td>{p.totalUses}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>1 persona = 单一视角,可能存在盲点</li>
+        <li>3+ personas = 多视角但成本高</li>
+        <li>欠代表 personas 应主动启用</li>
+        <li>对照 <a href={`${base}/agents/persona-elo/`}>Persona Elo</a> 看评分排名</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pcv-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
