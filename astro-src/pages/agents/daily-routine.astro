@@ -1,0 +1,221 @@
+---
+// /agents/daily-routine.astro — iter #141:daily routine generator
+//
+// 静态生成的"今日研究流程建议":
+//   - 早晨:看 digest + standup
+//   - 上午:处理 action queue high 项
+//   - 中午:看今日 highlights
+//   - 下午:跑 1 个 session(resume 优先)
+//   - 晚上:导出 / 备份
+//   - 用户可以勾掉已完成步骤(localStorage)
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STEPS = [
+  {
+    time: '08:00',
+    icon: '☀️',
+    title: '早晨 — 同步现状',
+    desc: '看昨日 highlights / 今日常规提醒',
+    actions: [
+      { label: '看昨日 highlights', href: '/agents/daily-highlights/' },
+      { label: '看 standup', href: '/agents/standup/' },
+      { label: '看通知', href: '/agents/notifications/' },
+    ],
+  },
+  {
+    time: '09:00',
+    icon: '🎯',
+    title: '聚焦 — 处理 action queue',
+    desc: '按严重度处理今日 high 项',
+    actions: [
+      { label: '打开 action queue', href: '/agents/action-queue/' },
+      { label: '看 stale sessions', href: '/agents/resume/' },
+    ],
+  },
+  {
+    time: '10:00',
+    icon: '📚',
+    title: '阅读 — Now Reading 队列',
+    desc: '读 1-2 份未读的 synthesis',
+    actions: [
+      { label: '打开 Now Reading', href: '/agents/reading/' },
+    ],
+  },
+  {
+    time: '11:00',
+    icon: '✏️',
+    title: '捕获 — 记录灵感',
+    desc: '把今天想到的点子记下来',
+    actions: [
+      { label: '打开 Capture', href: '/agents/capture/' },
+      { label: '打开 Sticky', href: '/agents/sticky/' },
+    ],
+  },
+  {
+    time: '14:00',
+    icon: '🤖',
+    title: '下午 — 跑 1 个 session',
+    desc: 'resume 之前未完成的,或新建一个',
+    actions: [
+      { label: '看 resume 建议', href: '/agents/resume/' },
+      { label: '新建 session', href: '/agents/new-session/' },
+      { label: 'Auto mode', href: '/agents/auto/' },
+    ],
+  },
+  {
+    time: '15:30',
+    icon: '🔍',
+    title: '反思 — 检查质量',
+    desc: '看今日指标是否健康',
+    actions: [
+      { label: '健康检查', href: '/agents/health/' },
+      { label: 'Round anomalies', href: '/agents/anomalies/' },
+    ],
+  },
+  {
+    time: '17:00',
+    icon: '📊',
+    title: '总结 — 看趋势',
+    desc: '跨 session 趋势 + 成就',
+    actions: [
+      { label: '看趋势', href: '/agents/trends/' },
+      { label: '看成就', href: '/agents/achievements/' },
+    ],
+  },
+  {
+    time: '18:00',
+    icon: '📦',
+    title: '收尾 — 备份 / 导出',
+    desc: '把今日产出备份或导出',
+    actions: [
+      { label: '看 backup', href: '/agents/backup/' },
+      { label: 'Export all', href: '/agents/export-all/' },
+      { label: '看今日 journal', href: '/agents/journal/' },
+    ],
+  },
+];
+---
+
+<BaseLayout title="Daily Routine · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-routine</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🗓 Daily Routine <span class="muted" style="font-size:0.6em">(iter #141)</span></h1>
+      <p class="agents-sub">
+        一份"标准研究流程"的参考时间表。可以勾掉自己完成的步骤(存在 localStorage),
+        也可以完全自定义 — 只是给日常工作一个节奏。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 今日完成度</h2>
+      <div class="agents-dr-progress">
+        <span>完成: <strong id="dr-done-count">0</strong> / {STEPS.reduce((s, x) => s + x.actions.length, 0)} actions</span>
+        <progress id="dr-progress" value="0" max={STEPS.reduce((s, x) => s + x.actions.length, 0)} style="width:200px;margin-left:0.6rem"></progress>
+      </div>
+      <p>
+        <button class="button" id="dr-reset" type="button">🔄 重置今日</button>
+      </p>
+    </section>
+
+    {STEPS.map((step, i) => (
+      <section class="agents-session-section">
+        <h2>{step.icon} {step.time} — {step.title}</h2>
+        <p class="muted">{step.desc}</p>
+        <ol class="agents-dr-actions">
+          {step.actions.map((a) => (
+            <li>
+              <input type="checkbox" class="dr-cb" data-step={i} data-label={a.label} id={`dr-${i}-${a.label}`} />
+              <label for={`dr-${i}-${a.label}`}>
+                <a href={`${base}${a.href}`}>{a.label}</a>
+              </label>
+            </li>
+          ))}
+        </ol>
+      </section>
+    ))}
+  </main>
+</BaseLayout>
+
+<script define:vars={{ totalActions: STEPS.reduce((s, x) => s + x.actions.length, 0) }}>
+const KEY = 'agents:daily-routine:v1';
+const today = new Date().toISOString().slice(0, 10);
+
+function loadDone(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    if (obj.date !== today) return {};
+    return obj.done ?? {};
+  } catch (e) { return {}; }
+}
+function saveDone(done: Record<string, boolean>): void {
+  try {
+    localStorage.setItem(KEY, JSON.stringify({ date: today, done }));
+  } catch (e) { /* */ }
+}
+
+const done = loadDone();
+const cbs = document.querySelectorAll<HTMLInputElement>('.dr-cb');
+let doneCount = 0;
+cbs.forEach((cb) => {
+  const k = cb.dataset.step + ':' + cb.dataset.label;
+  if (done[k]) {
+    cb.checked = true;
+    doneCount += 1;
+  }
+  cb.addEventListener('change', () => {
+    const cur = loadDone();
+    cur[k] = cb.checked;
+    saveDone(cur);
+    updateCount();
+  });
+});
+
+function updateCount(): void {
+  const c = document.querySelectorAll<HTMLInputElement>('.dr-cb:checked').length;
+  const dn = document.getElementById('dr-done-count');
+  const pg = document.getElementById('dr-progress') as HTMLProgressElement | null;
+  if (dn) dn.textContent = String(c);
+  if (pg) pg.value = c;
+}
+updateCount();
+
+document.getElementById('dr-reset')?.addEventListener('click', () => {
+  if (!confirm('重置今日所有勾选?')) return;
+  saveDone({});
+  cbs.forEach((cb) => { cb.checked = false; });
+  updateCount();
+});
+</script>
+
+<style>
+  .agents-dr-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .agents-dr-actions {
+    padding-left: 1.5rem;
+  }
+  .agents-dr-actions li {
+    margin: 0.4rem 0;
+  }
+  .agents-dr-actions input[type=checkbox] {
+    margin-right: 0.4rem;
+  }
+  .agents-dr-actions label {
+    cursor: pointer;
+  }
+</style>
