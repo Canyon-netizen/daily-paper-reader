@@ -1,0 +1,183 @@
+---
+// /agents/score-matrix.astro — iter #154:score × category matrix
+//
+// 跨 session 展示 feedback score 和 gate category 的关联矩阵:
+//   - 行 = score bucket (0-2 / 2-4 / 4-6 / 6-8 / 8-10)
+//   - 列 = gate category (promoted / candidate / sketch / rejected)
+//   - 每格显示该组合的 proposal 数
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const BUCKETS = [
+  { label: '0-2', min: 0, max: 2 },
+  { label: '2-4', min: 2, max: 4 },
+  { label: '4-6', min: 4, max: 6 },
+  { label: '6-8', min: 6, max: 8 },
+  { label: '8-10', min: 8, max: 10.001 },
+];
+const CATS = ['promoted', 'candidate', 'sketch', 'rejected'];
+
+const matrix: number[][] = BUCKETS.map(() => CATS.map(() => 0));
+const rowTotals = BUCKETS.map(() => 0);
+const colTotals = CATS.map(() => 0);
+let total = 0;
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const bestByIdx: Record<number, number> = {};
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const tot = p.total ?? 0;
+            if (!bestByIdx[idx] || tot > bestByIdx[idx]) bestByIdx[idx] = tot;
+          }
+        }
+        const gateByIdx: Record<number, string> = {};
+        for (const gp of r.gate?.proposals ?? []) {
+          const idx = gp.index ?? gp.proposal_index;
+          if (idx == null) continue;
+          gateByIdx[idx] = gp.category ?? 'rejected';
+        }
+        for (const [idxStr, score] of Object.entries(bestByIdx)) {
+          const i = parseInt(idxStr, 10);
+          const cat = gateByIdx[i] ?? 'rejected';
+          const colI = CATS.indexOf(cat);
+          if (colI < 0) continue;
+          const rowI = BUCKETS.findIndex((b) => score >= b.min && score < b.max);
+          if (rowI < 0) continue;
+          matrix[rowI][colI] += 1;
+          rowTotals[rowI] += 1;
+          colTotals[colI] += 1;
+          total += 1;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const max = Math.max(...matrix.flat(), 1);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function intensity(n: number): string {
+  if (n === 0) return 'rgba(99,102,241,0.05)';
+  const ratio = n / max;
+  if (ratio < 0.2) return 'rgba(99,102,241,0.2)';
+  if (ratio < 0.4) return 'rgba(99,102,241,0.4)';
+  if (ratio < 0.6) return 'rgba(99,102,241,0.6)';
+  if (ratio < 0.8) return 'rgba(99,102,241,0.8)';
+  return 'rgba(99,102,241,1)';
+}
+---
+
+<BaseLayout title="Score × Category Matrix · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-matrix</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Score × Category Matrix <span class="muted" style="font-size:0.6em">(iter #154)</span></h1>
+      <p class="agents-sub">
+        跨 session 展示 feedback score bucket 和 gate category 的关联矩阵。
+        行 = best feedback score 分桶,列 = gate 分类(4 个)。
+        颜色越深 = 该组合出现次数越多。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <p>总 proposals: <strong>{total}</strong></p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 矩阵</h2>
+      <table class="agents-sm-matrix">
+        <thead>
+          <tr>
+            <th></th>
+            {CATS.map((c) => (
+              <th>{c}</th>
+            ))}
+            <th>行总计</th>
+          </tr>
+        </thead>
+        <tbody>
+          {BUCKETS.map((b, i) => (
+            <tr>
+              <th>{b.label}</th>
+              {CATS.map((_, j) => (
+                <td style={`background:${intensity(matrix[i][j])}`}>
+                  <strong>{matrix[i][j]}</strong>
+                  <br />
+                  <small>{total > 0 ? ((matrix[i][j] / total) * 100).toFixed(1) : '0'}%</small>
+                </td>
+              ))}
+              <td><strong>{rowTotals[i]}</strong></td>
+            </tr>
+          ))}
+          <tr>
+            <th>列总计</th>
+            {CATS.map((_, j) => (
+              <td><strong>{colTotals[j]}</strong></td>
+            ))}
+            <td><strong>{total}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li><strong>promoted + 8-10</strong>:理想路径 — 高分 proposals 被采纳</li>
+        <li><strong>promoted + 0-4</strong>:异常 — gate 接受了低分,可能是规则 bug</li>
+        <li><strong>rejected + 8-10</strong>:异常 — 高分被拒,看 gate 阈值</li>
+        <li><strong>candidate + 6-8</strong>:可考虑下次提升阈值时纳入 promoted</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sm-matrix {
+    border-collapse: collapse;
+  }
+  .agents-sm-matrix th, .agents-sm-matrix td {
+    padding: 0.5rem 0.8rem;
+    text-align: center;
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    min-width: 80px;
+  }
+  .agents-sm-matrix th {
+    background: rgba(99, 102, 241, 0.1);
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-sm-matrix td strong {
+    font-size: 1.2rem;
+  }
+  .agents-sm-matrix small {
+    color: rgba(255, 255, 255, 0.85);
+  }
+</style>
