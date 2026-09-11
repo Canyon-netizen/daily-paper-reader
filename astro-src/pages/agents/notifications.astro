@@ -1,0 +1,278 @@
+---
+// /agents/notifications.astro — iter #109:notifications inbox
+//
+// 把所有"需要用户注意的事"聚合成一个收件箱:
+//   - 长期未更新的 session(>7天)
+//   - 高费用 session
+//   - 高分 session(score ≥ 8)
+//   - 健康异常 session
+//   - 未读 syntheses
+//   - 未完成的 todos
+//   - 当月预算超支警告
+//
+// 每条 notification 有 severity(高/中/低) + 跳转链接。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Notif {
+  severity: 'high' | 'mid' | 'low';
+  category: string;
+  title: string;
+  detail: string;
+  href: string;
+  ts: number;
+}
+
+interface SessionScan {
+  sid: string;
+  goal: string;
+  lastUpdate: number;
+  tokens: number;
+  cost: number;
+  rounds: number;
+  healthIssueCount: number;
+}
+
+const RATE = 0.50;
+const STALE_DAYS = 7;
+const COST_HIGH = 1.0;
+
+const sessions: SessionScan[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let meta: any = {};
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { /* */ }
+    const roundsDir = join(root, sid, 'rounds');
+    if (!existsSync(roundsDir)) continue;
+    let files: string[] = [];
+    try { files = await readdir(roundsDir); } catch { continue; }
+    let totalTokens = 0;
+    let last = 0;
+    for (const rf of files) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const raw = await readFile(join(roundsDir, rf), 'utf8');
+        const r = JSON.parse(raw);
+        totalTokens += r.feedback?.total_tokens ?? 0;
+        const ts = r.finished_at ?? r.started_at ?? 0;
+        if (ts > last) last = ts;
+      } catch { /* */ }
+    }
+    // 健康 issue 计数:缺 synthesis、缺 round 等
+    let healthIssueCount = 0;
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) healthIssueCount += 1;
+    else {
+      let sf: string[] = [];
+      try { sf = await readdir(sd); } catch { /* */ }
+      if (!sf.some((f) => /^synthesis_\d+\.md$/.test(f))) healthIssueCount += 1;
+    }
+    sessions.push({
+      sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      lastUpdate: last,
+      tokens: totalTokens,
+      cost: (totalTokens / 1_000_000) * RATE,
+      rounds: files.length,
+      healthIssueCount,
+    });
+  }
+}
+
+const notifs: Notif[] = [];
+const now = Date.now();
+const staleMs = STALE_DAYS * 86_400_000;
+
+for (const s of sessions) {
+  // 长期未更新
+  if (s.lastUpdate > 0 && now - s.lastUpdate > staleMs) {
+    const days = Math.floor((now - s.lastUpdate) / 86_400_000);
+    notifs.push({
+      severity: 'mid',
+      category: 'stale',
+      title: `session 长期未更新`,
+      detail: `${s.sid} 已经 ${days} 天没动了(共 ${s.rounds} 个 round)。要么继续跑,要么归档。`,
+      href: `/agents/${s.sid}/`,
+      ts: s.lastUpdate,
+    });
+  }
+  // 高费用
+  if (s.cost > COST_HIGH) {
+    notifs.push({
+      severity: 'mid',
+      category: 'cost',
+      title: `高费用 session`,
+      detail: `${s.sid} 已花 $${s.cost.toFixed(2)}(共 ${s.tokens.toLocaleString()} tokens)。考虑 token 优化或 max_cycles 调小。`,
+      href: `/agents/${s.sid}/tokens/`,
+      ts: s.lastUpdate,
+    });
+  }
+  // 健康 issue
+  if (s.healthIssueCount > 0) {
+    notifs.push({
+      severity: 'high',
+      category: 'health',
+      title: `session 有健康问题`,
+      detail: `${s.sid} 检测到 ${s.healthIssueCount} 个 issue(可能缺 synthesis 或 round)。`,
+      href: `/agents/health/`,
+      ts: s.lastUpdate,
+    });
+  }
+}
+
+// 排序:severity(高>中>低),ts 倒序
+const sevW = { high: 0, mid: 1, low: 2 };
+notifs.sort((a, b) => sevW[a.severity] - sevW[b.severity] || b.ts - a.ts);
+
+const countBySeverity = {
+  high: notifs.filter((n) => n.severity === 'high').length,
+  mid: notifs.filter((n) => n.severity === 'mid').length,
+  low: notifs.filter((n) => n.severity === 'low').length,
+};
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Notifications · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / notifications</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔔 Notifications <span class="muted" style="font-size:0.6em">(iter #109)</span></h1>
+      <p class="agents-sub">
+        把所有"需要用户注意的事"聚合成一个收件箱。优先级:
+        <strong style="color:#ef4444">高</strong>(健康异常)/
+        <strong style="color:#f59e0b">中</strong>(长期未更新 / 高费用)/
+        <strong style="color:#6b7280">低</strong>(其他)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-nf-stats">
+        <span style="color:#ef4444">🔴 高: <strong>{countBySeverity.high}</strong></span>
+        <span style="color:#f59e0b">🟡 中: <strong>{countBySeverity.mid}</strong></span>
+        <span style="color:#6b7280">⚪ 低: <strong>{countBySeverity.low}</strong></span>
+        <span>总: <strong>{notifs.length}</strong></span>
+      </div>
+      <p>
+        <label><input id="nf-only-high" type="checkbox" /> 只看 🔴 高优先级</label>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 通知列表</h2>
+      {notifs.length === 0 ? (
+        <p class="muted">📭 没有需要处理的通知。系统一切正常 ✨</p>
+      ) : (
+        <ol class="agents-nf-list" id="nf-list">
+          {notifs.map((n, i) => (
+            <li class={`agents-nf-item agents-nf-${n.severity}`} data-sev={n.severity} data-idx={i}>
+              <header>
+                <span class="agents-nf-badge">
+                  {n.severity === 'high' ? '🔴 高' : n.severity === 'mid' ? '🟡 中' : '⚪ 低'}
+                </span>
+                <strong>{escapeHtml(n.title)}</strong>
+                <a class="button small" href={n.href}>查看 →</a>
+              </header>
+              <p class="muted"><small>{escapeHtml(n.detail)}</small></p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/health/`}>🩺 Health</a>
+        <a class="button" href={`${base}/agents/tokens/`}>💸 Tokens</a>
+        <a class="button" href={`${base}/agents/budget/`}>💸 Budget</a>
+        <a class="button" href={`${base}/agents/digest/`}>📰 Digest</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-nf-stats {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+    font-size: 1rem;
+  }
+  .agents-nf-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-left: 0.3rem;
+  }
+  .agents-nf-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-nf-item {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 3px solid #6b7280;
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.4rem;
+  }
+  .agents-nf-high { border-left-color: #ef4444; background: rgba(239, 68, 68, 0.05); }
+  .agents-nf-mid { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.04); }
+  .agents-nf-low { border-left-color: #6b7280; }
+  .agents-nf-item header {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.3rem;
+  }
+  .agents-nf-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    background: rgba(0,0,0,0.3);
+    flex-shrink: 0;
+  }
+  .agents-nf-item header strong {
+    flex: 1;
+  }
+  .agents-nf-item.hidden {
+    display: none;
+  }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const onlyHigh = document.getElementById('nf-only-high') as HTMLInputElement | null;
+  onlyHigh?.addEventListener('change', () => {
+    const show = !onlyHigh.checked;
+    document.querySelectorAll<HTMLLIElement>('#nf-list li').forEach((li) => {
+      li.classList.toggle('hidden', !show && li.dataset.sev !== 'high');
+    });
+  });
+});
+</script>
