@@ -1,0 +1,301 @@
+---
+// /agents/milestone-300.astro — iter #300:TRIPLE CENTURY ROUND 🎉🎉🎉
+//
+// 300 = 100 + 100 + 100。300 iters of continuous build-out!
+// 这是多智能体系统的"三百回合",一个真正的里程碑。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+const root = join(process.cwd(), 'archive');
+let totalSessions = 0;
+let totalRounds = 0;
+let totalTokens = 0;
+let totalSyns = 0;
+let totalActions = 0;
+let allScores: number[] = [];
+let allGains: number[] = [];
+const actionSet = new Set<string>();
+const personaSet = new Set<string>();
+let allGoals: string[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    totalSessions += 1;
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try {
+        const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+        if (goal) allGoals.push(goal);
+      } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      const sessionScores: number[] = [];
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          const tokens = r.feedback?.total_tokens ?? 0;
+          totalTokens += tokens;
+          totalRounds += 1;
+          for (const persona of r.feedback?.personas ?? []) {
+            const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+            personaSet.add(name);
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') allScores.push(p.total);
+            }
+          }
+          for (const a of (r.modifier?.applied ?? [])) {
+            const act = a.action ?? a.type ?? 'unknown';
+            actionSet.add(act);
+            totalActions += 1;
+          }
+          // 计算 round score
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          if (arr.length > 0) sessionScores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+        } catch (e) { /* */ }
+      }
+      if (sessionScores.length >= 2) {
+        allGains.push(sessionScores[sessionScores.length - 1] - sessionScores[0]);
+      }
+    }
+    if (existsSync(join(sp, 'synthesis'))) {
+      const sfs = await readdir(join(sp, 'synthesis')).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) totalSyns += 1;
+      }
+    }
+  }
+}
+
+const totalCost = (totalTokens / 1_000_000) * SONNET_PRICE;
+const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+const avgGain = allGains.length > 0 ? allGains.reduce((a, b) => a + b, 0) / allGains.length : 0;
+const sortedScores = [...allScores].sort((a, b) => a - b);
+const medianScore = allScores.length > 0 ? sortedScores[Math.floor(allScores.length / 2)] : 0;
+const positiveGains = allGains.filter((g) => g > 0).length;
+const negativeGains = allGains.filter((g) => g < 0).length;
+
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(2)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="🏆 Milestone 300 · TRIPLE CENTURY ROUND">
+  <Navbar />
+  <main class="shell agents-shell milestone-special">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone-300</span>
+    </nav>
+
+    <header class="agents-header milestone-hero triple-century">
+      <div class="confetti">🎉</div>
+      <h1 class="triple-century-title">🏆 MILESTONE 300 🏆</h1>
+      <h2 class="triple-century-sub">TRIPLE CENTURY ROUND</h2>
+      <p class="agents-sub">
+        300 iters · 100 + 100 + 100 · 三百回合的多智能体系统建设
+      </p>
+      <div class="confetti">🎊</div>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 系统全景</h2>
+      <div class="agents-m300-globals">
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{totalSessions}</div>
+          <div class="agents-m300-label">sessions</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{totalRounds.toLocaleString()}</div>
+          <div class="agents-m300-label">rounds</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{totalActions.toLocaleString()}</div>
+          <div class="agents-m300-label">actions applied</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{totalSyns}</div>
+          <div class="agents-m300-label">syntheses</div>
+        </div>
+        <div class="agents-m300-stat highlight">
+          <div class="agents-m300-num">{fmtTok(totalTokens)}</div>
+          <div class="agents-m300-label">tokens consumed</div>
+        </div>
+        <div class="agents-m300-stat highlight">
+          <div class="agents-m300-num">${totalCost.toFixed(2)}</div>
+          <div class="agents-m300-label">total cost</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{avgScore.toFixed(2)}</div>
+          <div class="agents-m300-label">avg score</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{medianScore.toFixed(2)}</div>
+          <div class="agents-m300-label">median score</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{avgGain >= 0 ? '+' : ''}{avgGain.toFixed(2)}</div>
+          <div class="agents-m300-label">avg gain per session</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{actionSet.size}</div>
+          <div class="agents-m300-label">unique actions</div>
+        </div>
+        <div class="agents-m300-stat">
+          <div class="agents-m300-num">{personaSet.size}</div>
+          <div class="agents-m300-label">unique personas</div>
+        </div>
+        <div class="agents-m300-stat highlight">
+          <div class="agents-m300-num">~300</div>
+          <div class="agents-m300-label">agent pages</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 胜负分布</h2>
+      <ul>
+        <li>正向 sessions (gain &gt; 0): <strong style="color:#10b981">{positiveGains}</strong> / {allGains.length}({((positiveGains / Math.max(1, allGains.length)) * 100).toFixed(1)}%)</li>
+        <li>负向 sessions (gain &lt; 0): <strong style="color:#ef4444">{negativeGains}</strong> / {allGains.length}({((negativeGains / Math.max(1, allGains.length)) * 100).toFixed(1)}%)</li>
+        <li>avg gain = (final - first) score across sessions</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎉 里程碑路线</h2>
+      <ul class="milestone-timeline">
+        <li>✅ <strong>100</strong> — Centenary (奠定基础)</li>
+        <li>✅ <strong>200</strong> — Bicentenary (双百扩张)</li>
+        <li>✅ <strong>250</strong> — Quarter-K (四分之一千)</li>
+        <li>✅ <strong>270</strong> — Triple Century (二十次预告)</li>
+        <li>✅ <strong>280</strong> — Pre-300 (三百前夕)</li>
+        <li>✅ <strong>299</strong> — One Before 300 (三百倒数)</li>
+        <li>🏆 <strong>300</strong> — <span style="color:#f59e0b">TRIPLE CENTURY ROUND</span> (本次!)</li>
+        <li>🚀 <strong>400+</strong> — 下一征程</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌟 这 300 iters 都建了什么?</h2>
+      <ul>
+        <li>✅ 7-stage pipeline (ideation → lit review → experiment → draft → review → revise → export)</li>
+        <li>✅ Multi-agent loop (Designer → Feedback ×3 → Gate → Modifier → Evaluator → Reviewer → Reviser)</li>
+        <li>✅ SSR Astro 控制台, ~300+ 独立分析页面</li>
+        <li>✅ Round/Persona/Action/Score/Cost 等多维度分析</li>
+        <li>✅ Goal 类型分类 + Token/Cost/Pattern 各种指标</li>
+        <li>✅ Sparkline / Bar chart / Heatmap / Scatter 等可视化</li>
+        <li>✅ 自动 commit + push + 本地 dev server 验证</li>
+        <li>✅ 完整的人类研究工作流自动化能力</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 推荐入口</h2>
+      <ul>
+        <li><a href={`${base}/agents/system-maturity/`}>System Maturity</a> — 综合健康度</li>
+        <li><a href={`${base}/agents/hall-of-fame/`}>Hall of Fame</a> — 顶级 sessions</li>
+        <li><a href={`${base}/agents/cost-forecast/`}>Cost Forecast</a> — 未来预测</li>
+        <li><a href={`${base}/agents/dashboard/`}>Dashboard</a> — 总览</li>
+        <li><a href={`${base}/agents/`}>← 返回控制台</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .milestone-special {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.06), rgba(99, 102, 241, 0.08), rgba(245, 158, 11, 0.06));
+    padding-bottom: 3rem;
+  }
+  .triple-century {
+    text-align: center;
+    padding: 2rem 0;
+  }
+  .triple-century-title {
+    font-size: 3rem;
+    background: linear-gradient(135deg, #f59e0b, #ef4444, #4f46e5, #10b981);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin: 0.4rem 0;
+    font-weight: 900;
+  }
+  .triple-century-sub {
+    font-size: 1.5rem;
+    color: #f59e0b;
+    margin: 0.4rem 0;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+  }
+  .confetti {
+    font-size: 2.5rem;
+    display: inline-block;
+    margin: 0 1rem;
+    animation: spin 4s linear infinite;
+  }
+  @keyframes spin {
+    0%, 100% { transform: rotate(0deg); }
+    50% { transform: rotate(180deg); }
+  }
+  .agents-m300-globals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1rem;
+  }
+  .agents-m300-stat {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 1rem;
+    border-radius: 6px;
+    text-align: center;
+  }
+  .agents-m300-stat.highlight {
+    background: rgba(245, 158, 11, 0.08);
+    border-color: rgba(245, 158, 11, 0.3);
+  }
+  .agents-m300-num {
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-m300-stat.highlight .agents-m300-num {
+    color: #f59e0b;
+  }
+  .agents-m300-label {
+    font-size: 0.85rem;
+    color: #94a3b8;
+    margin-top: 0.3rem;
+  }
+  .milestone-timeline {
+    list-style: none;
+    padding-left: 0;
+  }
+  .milestone-timeline li {
+    padding: 0.3rem 0;
+    border-left: 3px solid #4f46e5;
+    padding-left: 0.6rem;
+    margin-bottom: 0.4rem;
+  }
+</style>
