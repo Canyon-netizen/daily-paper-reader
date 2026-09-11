@@ -1,0 +1,261 @@
+---
+// /agents/achievements.astro — iter #136:research achievements
+//
+// 跨 session 检测 milestones(类似游戏成就):
+//   - 第一 / 第十 / 第一百 个 session
+//   - 累计 rounds 突破 100 / 500 / 1000
+//   - 累计 syntheses 突破 50 / 200
+//   - 累计 promoted proposals 突破 10 / 50
+//   - 单 session 跑过 20 rounds
+//   - 写过的总 token 突破 100k / 500k
+//   - 单份 synthesis 超过 5000 字
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Achievement {
+  id: string;
+  name: string;
+  emoji: string;
+  desc: string;
+  current: number;
+  target: number;
+  progress: number;
+  unlocked: boolean;
+  tier: 'bronze' | 'silver' | 'gold' | 'platinum';
+}
+
+const stats = {
+  totalSessions: 0,
+  totalRounds: 0,
+  totalSynth: 0,
+  totalPromoted: 0,
+  totalTokens: 0,
+  maxSessionRounds: 0,
+  maxSynthWords: 0,
+  totalPersonaScores: 0,
+};
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    stats.totalSessions += 1;
+    const rd = join(root, sid, 'rounds');
+    let sessionRounds = 0;
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        sessionRounds += 1;
+        stats.totalRounds += 1;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          stats.totalTokens += r.feedback?.total_tokens ?? 0;
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') stats.totalPersonaScores += 1;
+            }
+          }
+          for (const gp of r.gate?.proposals ?? []) {
+            if (gp.category === 'promoted') stats.totalPromoted += 1;
+          }
+        } catch (e) { /* */ }
+      }
+    }
+    if (sessionRounds > stats.maxSessionRounds) stats.maxSessionRounds = sessionRounds;
+    const sd = join(root, sid, 'synthesis');
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      for (const f of sfs) {
+        if (!/^synthesis_\d+\.md$/.test(f)) continue;
+        stats.totalSynth += 1;
+        const text = await readFile(join(sd, f), 'utf8').catch(() => '');
+        const words = (text.match(/\b[\w'-]+\b/g) ?? []).length;
+        if (words > stats.maxSynthWords) stats.maxSynthWords = words;
+      }
+    }
+  }
+}
+
+function tierFor(target: number): Achievement['tier'] {
+  if (target >= 1000) return 'platinum';
+  if (target >= 500) return 'gold';
+  if (target >= 100) return 'silver';
+  return 'bronze';
+}
+
+function make(id: string, name: string, emoji: string, desc: string, current: number, target: number): Achievement {
+  return {
+    id, name, emoji, desc,
+    current, target,
+    progress: Math.min(1, current / target),
+    unlocked: current >= target,
+    tier: tierFor(target),
+  };
+}
+
+const achs: Achievement[] = [
+  make('sessions-1', 'First Step', '🌱', '完成 1 个 session', stats.totalSessions, 1),
+  make('sessions-10', 'Getting Started', '🌿', '10 个 sessions', stats.totalSessions, 10),
+  make('sessions-50', 'Heavy Researcher', '🌳', '50 个 sessions', stats.totalSessions, 50),
+  make('sessions-100', 'Session Master', '🏆', '100 个 sessions', stats.totalSessions, 100),
+  make('rounds-100', 'Round Centurion', '💯', '100 个 rounds', stats.totalRounds, 100),
+  make('rounds-500', 'Round Veteran', '⚔️', '500 个 rounds', stats.totalRounds, 500),
+  make('rounds-1000', 'Round Lord', '👑', '1000 个 rounds', stats.totalRounds, 1000),
+  make('synth-50', 'Synth Writer', '✍️', '50 份 syntheses', stats.totalSynth, 50),
+  make('synth-200', 'Synth Master', '📚', '200 份 syntheses', stats.totalSynth, 200),
+  make('synth-500', 'Synth Lord', '📖', '500 份 syntheses', stats.totalSynth, 500),
+  make('promoted-10', 'Promoter', '✅', '10 个 promoted proposals', stats.totalPromoted, 10),
+  make('promoted-50', 'Promoter Pro', '🌟', '50 个 promoted proposals', stats.totalPromoted, 50),
+  make('promoted-200', 'Gate Opener', '🚪', '200 个 promoted proposals', stats.totalPromoted, 200),
+  make('tokens-100k', '100K Club', '💸', '累计消耗 100k tokens', stats.totalTokens, 100_000),
+  make('tokens-500k', '500K Club', '💰', '累计消耗 500k tokens', stats.totalTokens, 500_000),
+  make('tokens-1m', 'Token Tycoon', '💎', '累计消耗 1M tokens', stats.totalTokens, 1_000_000),
+  make('session-rounds-20', 'Marathon Runner', '🏃', '单个 session 跑过 20 rounds', stats.maxSessionRounds, 20),
+  make('synth-words-5k', 'Long Writer', '📜', '单份 synthesis 超过 5000 字', stats.maxSynthWords, 5000),
+  make('synth-words-10k', 'Thesis Writer', '📚', '单份 synthesis 超过 10000 字', stats.maxSynthWords, 10_000),
+  make('persona-scores-1000', 'Heavy Feedback', '🎤', '累计 persona 打分 1000 次', stats.totalPersonaScores, 1000),
+];
+
+const unlocked = achs.filter((a) => a.unlocked);
+const locked = achs.filter((a) => !a.unlocked).sort((a, b) => b.progress - a.progress);
+
+const tierColor: any = {
+  bronze: '#cd7f32',
+  silver: '#c0c0c0',
+  gold: '#ffd700',
+  platinum: '#e5e4e2',
+};
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Achievements · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / achievements</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏆 Achievements <span class="muted" style="font-size:0.6em">(iter #136)</span></h1>
+      <p class="agents-sub">
+        跨 session 检测研究 milestone:session 数 / rounds / syntheses / tokens / 单 session 突破。
+        解锁的成就会持续保留,未解锁的显示进度条。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ay-globals">
+        <span>已解锁: <strong>{unlocked.length}</strong> / {achs.length}</span>
+        <span>解锁率: <strong>{(achs.length > 0 ? (unlocked.length / achs.length) * 100 : 0).toFixed(0)}%</strong></span>
+        <span>总 tokens: <strong>{stats.totalTokens.toLocaleString()}</strong></span>
+        <span>总 rounds: <strong>{stats.totalRounds}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎉 已解锁 ({unlocked.length})</h2>
+      {unlocked.length === 0 ? (
+        <p class="muted">还没有解锁任何成就 — 继续跑 session!</p>
+      ) : (
+        <div class="agents-ay-grid">
+          {unlocked.map((a) => (
+            <div class="agents-ay-badge" style={`border-color:${tierColor[a.tier]};background:${tierColor[a.tier]}22`}>
+              <span class="agents-ay-emoji">{a.emoji}</span>
+              <strong>{a.name}</strong>
+              <p class="muted"><small>{a.desc}</small></p>
+              <span class="agents-ay-tier" style={`color:${tierColor[a.tier]}`}>{a.tier.toUpperCase()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔒 未解锁 ({locked.length},按进度排序)</h2>
+      {locked.length === 0 ? (
+        <p class="muted">🎉 全部成就已解锁!</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>成就</th><th>进度</th><th>当前 / 目标</th></tr>
+          </thead>
+          <tbody>
+            {locked.map((a) => (
+              <tr>
+                <td>
+                  <span style="opacity:0.5">{a.emoji}</span>
+                  <strong>{a.name}</strong>
+                  <p class="muted" style="margin:0.1rem 0 0;font-size:0.78rem">{a.desc}</p>
+                </td>
+                <td>
+                  <code>{bar(a.progress, 1, 20)}</code>
+                  <strong>{(a.progress * 100).toFixed(0)}%</strong>
+                </td>
+                <td>
+                  <small>
+                    {a.current.toLocaleString()} / {a.target.toLocaleString()}
+                    <br />
+                    <span style={`color:${tierColor[a.tier]};font-size:0.7rem`}>{a.tier.toUpperCase()}</span>
+                  </small>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ay-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ay-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ay-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.8rem;
+  }
+  .agents-ay-badge {
+    border: 2px solid;
+    border-radius: 8px;
+    padding: 0.8rem;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .agents-ay-emoji {
+    font-size: 2rem;
+  }
+  .agents-ay-tier {
+    position: absolute;
+    top: 0.4rem;
+    right: 0.6rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+</style>
