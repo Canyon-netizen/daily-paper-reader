@@ -1,0 +1,180 @@
+---
+// /agents/action-heatmap.astro — iter #211:refiner action × round position heatmap
+//
+// 2D heatmap:action(行) × round position(列)
+//   - 单元格颜色强度 = 该 action 在该 round position 的应用次数
+//   - 揭示 modifier 的"早期 vs 晚期"策略
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const heatmap = new Map<string, number>(); // key: action|||pos → count
+const actionSet = new Set<string>();
+let maxPos = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const applied = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        const pos = i + 1; // round position (1-indexed)
+        if (pos > maxPos) maxPos = pos;
+        for (const a of applied) {
+          actionSet.add(a);
+          const key = `${a}|||${pos}`;
+          heatmap.set(key, (heatmap.get(key) ?? 0) + 1);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const actions = [...actionSet].sort();
+const positions = Array.from({ length: maxPos }, (_, i) => i + 1);
+
+// 取 max 用于强度
+let maxCount = 0;
+for (const v of heatmap.values()) if (v > maxCount) maxCount = v;
+
+// 渲染
+const blockChars = [' ', '░', '▒', '▓', '█'];
+function block(count: number): string {
+  if (maxCount === 0 || count === 0) return blockChars[0];
+  const ratio = count / maxCount;
+  const idx = Math.min(blockChars.length - 1, Math.floor(ratio * blockChars.length));
+  return blockChars[idx];
+}
+
+// header
+const header = `     ${positions.map((p) => String(p).padStart(3)).join(' ')}`;
+// rows
+const rows = actions.map((a) => {
+  const cells = positions.map((p) => {
+    const v = heatmap.get(`${a}|||${p}`) ?? 0;
+    return `${block(v)}${String(v).padStart(2)}`;
+  });
+  return `${a.padEnd(20)} ${cells.join(' ')}`;
+});
+
+// row totals
+const rowTotals = actions.map((a) => {
+  let s = 0;
+  for (const p of positions) s += heatmap.get(`${a}|||${p}`) ?? 0;
+  return s;
+});
+const colTotals = positions.map((p) => {
+  let s = 0;
+  for (const a of actions) s += heatmap.get(`${a}|||${p}`) ?? 0;
+  return s;
+});
+
+// 顶部 top actions(按 total)
+const topActions = actions.map((a, i) => ({ action: a, total: rowTotals[i] }))
+  .sort((x, y) => y.total - x.total)
+  .slice(0, 12);
+---
+
+<BaseLayout title="Action Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Action Heatmap <span class="muted" style="font-size:0.6em">(iter #211)</span></h1>
+      <p class="agents-sub">
+        Refiner action × round position 二维热力图。
+        颜色深 = 该 action 在该 round 位置应用次数多。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ah-globals">
+        <span>actions 总数: <strong>{actions.length}</strong></span>
+        <span>最大 round pos: <strong>{maxPos}</strong></span>
+        <span>总应用次数: <strong>{[...heatmap.values()].reduce((a, b) => a + b, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 全 action 热力图</h2>
+      <pre class="agents-ah-flow">{`${header}  total
+${'-'.repeat(header.length + 6)}
+${rows.map((r, i) => `${r}  ${String(rowTotals[i]).padStart(4)}`).join('\n')}
+${'-'.repeat(header.length + 6)}
+${'total'.padEnd(20)} ${colTotals.map((t) => String(t).padStart(3)).join(' ')}  ${String(colTotals.reduce((a, b) => a + b, 0)).padStart(4)}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 top 12 actions 热力图(按总次数)</h2>
+      <pre class="agents-ah-flow">{(() => {
+        const subActions = topActions.map((t) => t.action);
+        const headerSub = `     ${positions.map((p) => String(p).padStart(3)).join(' ')}`;
+        const rowsSub = subActions.map((a) => {
+          const cells = positions.map((p) => {
+            const v = heatmap.get(`${a}|||${p}`) ?? 0;
+            return `${block(v)}${String(v).padStart(2)}`;
+          });
+          const total = topActions.find((t) => t.action === a)?.total ?? 0;
+          return `${a.padEnd(20)} ${cells.join(' ')}  ${String(total).padStart(4)}`;
+        });
+        return `${headerSub}  total\n${'-'.repeat(headerSub.length + 6)}\n${rowsSub.join('\n')}`;
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>左侧 block 浅 = 早期少用;右侧深 = 晚期常用</li>
+        <li>round position = 该 action 在其 session 中是第 N 个 round</li>
+        <li>对照 <a href={`${base}/agents/refiner-effects/`}>Refiner Effects</a> 看 action 效果</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ah-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ah-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ah-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
