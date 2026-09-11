@@ -1,0 +1,188 @@
+---
+// /agents/goal-refiner.astro — iter #196:goal evolution history
+//
+// 跨 session 看 goal 在 rounds 间的演化:
+//   - 首轮 goal vs 末轮 goal(如果有不同)
+//   - goal change 频次分布
+//   - "演化型" sessions(goal 在 rounds 间变化)
+
+// 注:当前 round.json 中通常没有 goal 字段(goal 来自 meta.json)
+// 这里以"round 长度"作为代理指标:多轮 rounds 表示在持续演化
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Evolution {
+  sid: string;
+  goal: string;
+  metaMtime: number;
+  firstRoundMtime: number;
+  lastRoundMtime: number;
+  rounds: number;
+  roundsMtimeSpan: number; // 末轮 - 首轮
+  ageDays: number; // 距首次 round 的天数
+  evolutionIntensity: number; // rounds / ageDays
+}
+
+const root = join(process.cwd(), 'archive');
+const records: Evolution[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    let metaMtime = 0;
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try {
+        const st = await stat(mp);
+        metaMtime = st.mtimeMs;
+        goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length === 0) continue;
+    let firstRoundMtime = 0;
+    let lastRoundMtime = 0;
+    for (const ri of rNum) {
+      try {
+        const st = await stat(join(rd, `round_${ri}.json`));
+        if (firstRoundMtime === 0 || st.mtimeMs < firstRoundMtime) firstRoundMtime = st.mtimeMs;
+        if (st.mtimeMs > lastRoundMtime) lastRoundMtime = st.mtimeMs;
+      } catch (e) { /* */ }
+    }
+    const ageDays = Math.max((lastRoundMtime - firstRoundMtime) / (24 * 60 * 60 * 1000), 0.1);
+    const evolutionIntensity = rNum.length / ageDays;
+    records.push({
+      sid, goal, metaMtime,
+      firstRoundMtime,
+      lastRoundMtime,
+      rounds: rNum.length,
+      roundsMtimeSpan: lastRoundMtime - firstRoundMtime,
+      ageDays,
+      evolutionIntensity,
+    });
+  }
+}
+
+const total = records.length;
+const avgIntensity = records.length > 0 ? records.reduce((s, r) => s + r.evolutionIntensity, 0) / records.length : 0;
+const evolving = records.filter((r) => r.rounds >= 3).length;
+const stagnant = records.filter((r) => r.rounds === 1).length;
+
+const highEvolution = [...records].sort((a, b) => b.evolutionIntensity - a.evolutionIntensity).slice(0, 15);
+const lowEvolution = [...records].filter((r) => r.rounds >= 2).sort((a, b) => a.evolutionIntensity - b.evolutionIntensity).slice(0, 15);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Refiner History · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-refiner</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌱 Goal Refiner History <span class="muted" style="font-size:0.6em">(iter #196)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 goal 演化强度(rounds 数 vs 时间跨度)。
+        高演化 = 深度迭代,低 = 静态。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gr-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>avg evolution: <strong>{avgIntensity.toFixed(2)} rounds/day</strong></span>
+        <span>高演化 (≥ 3 rounds): <strong>{evolving}</strong></span>
+        <span>stagnant (1 round): <strong>{stagnant}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 高演化 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>age</th><th>rounds/day</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {highEvolution.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td>{r.ageDays.toFixed(1)}d</td>
+              <td><strong>{r.evolutionIntensity.toFixed(2)}</strong></td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐢 top 15 低演化 sessions(≥ 2 rounds)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>age</th><th>rounds/day</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {lowEvolution.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td>{r.ageDays.toFixed(1)}d</td>
+              <td>{r.evolutionIntensity.toFixed(3)}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rounds/day &gt; 1 = cron 实时触发,频繁迭代</li>
+        <li>rounds/day &lt; 0.1 = 长期人工推进,慢节奏</li>
+        <li>对照 <a href={`${base}/agents/session-refresh/`}>Session Refresh</a> 看刷新率</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
