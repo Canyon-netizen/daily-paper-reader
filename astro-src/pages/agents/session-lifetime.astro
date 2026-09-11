@@ -1,0 +1,241 @@
+---
+// /agents/session-lifetime.astro — iter #263:session lifetime distribution
+//
+// 每个 session 的"生命期":从第一个 round mtime 到最后一个 round mtime。
+// 分桶:burst(< 1h) / short(1-24h) / medium(1-7d) / long(> 7d)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Lifetime {
+  sid: string;
+  goal: string;
+  lifetimeMs: number;
+  rounds: number;
+  bucket: string;
+  firstScore: number;
+  finalScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const lifetimes: Lifetime[] = [];
+
+const BUCKETS = [
+  { label: 'burst (< 1h)', min: 0, max: 3600 * 1000 },
+  { label: 'short (1-24h)', min: 3600 * 1000, max: 24 * 3600 * 1000 },
+  { label: 'medium (1-7d)', min: 24 * 3600 * 1000, max: 7 * 24 * 3600 * 1000 },
+  { label: 'long (7-30d)', min: 7 * 24 * 3600 * 1000, max: 30 * 24 * 3600 * 1000 },
+  { label: 'epic (> 30d)', min: 30 * 24 * 3600 * 1000, max: 99999 * 24 * 3600 * 1000 },
+];
+
+function bucketize(ms: number): string {
+  for (const b of BUCKETS) {
+    if (ms >= b.min && ms < b.max) return b.label;
+  }
+  return 'unknown';
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+
+    let firstTs = 0;
+    let lastTs = 0;
+    let firstScore = 0;
+    let finalScore = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const fp = join(rd, `round_${rNum[i]}.json`);
+        const st = await stat(fp);
+        if (i === 0) firstTs = st.mtimeMs;
+        lastTs = st.mtimeMs;
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          if (i === rNum.length - 1) finalScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    const lifetimeMs = lastTs - firstTs;
+    lifetimes.push({
+      sid, goal,
+      lifetimeMs,
+      rounds: rNum.length,
+      bucket: bucketize(lifetimeMs),
+      firstScore, finalScore,
+    });
+  }
+}
+
+const total = lifetimes.length;
+const bucketDist: Record<string, number> = {};
+for (const l of lifetimes) bucketDist[l.bucket] = (bucketDist[l.bucket] ?? 0) + 1;
+
+const sortedBuckets = BUCKETS.map((b) => ({ label: b.label, count: bucketDist[b.label] ?? 0 }));
+
+// avg gain / rounds per bucket
+const bucketStats = BUCKETS.map((b) => {
+  const list = lifetimes.filter((l) => l.bucket === b.label);
+  const count = list.length;
+  const avgRounds = count > 0 ? list.reduce((s, x) => s + x.rounds, 0) / count : 0;
+  const avgGain = count > 0 ? list.reduce((s, x) => s + (x.finalScore - x.firstScore), 0) / count : 0;
+  const avgFinal = count > 0 ? list.reduce((s, x) => s + x.finalScore, 0) / count : 0;
+  return { label: b.label, count, avgRounds, avgGain, avgFinal };
+});
+
+// top longest sessions
+const topLong = [...lifetimes].sort((a, b) => b.lifetimeMs - a.lifetimeMs).slice(0, 10);
+
+function formatLifetime(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 24 * 3_600_000) return `${(ms / 3_600_000).toFixed(1)}h`;
+  return `${(ms / (24 * 3_600_000)).toFixed(1)}d`;
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Session Lifetime · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-lifetime</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏳ Session Lifetime <span class="muted" style="font-size:0.6em">(iter #263)</span></h1>
+      <p class="agents-sub">
+        每个 session 从首次 round 到末次 round 的时间跨度。
+        burst = 单次完成;epic = 持续数月。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-slt-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 lifetime 分桶</h2>
+      <pre class="agents-slt-flow">{sortedBuckets.map((b) => {
+        const max = Math.max(...sortedBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(20)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 per-bucket stats</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>bucket</th><th>count</th><th>avg rounds</th><th>avg gain</th><th>avg final</th></tr>
+        </thead>
+        <tbody>
+          {bucketStats.map((b) => (
+            <tr>
+              <td><strong>{b.label}</strong></td>
+              <td>{b.count}</td>
+              <td>{b.avgRounds.toFixed(1)}</td>
+              <td><strong style={`color:${b.avgGain >= 0 ? '#10b981' : '#ef4444'}`}>{b.avgGain >= 0 ? '+' : ''}{b.avgGain.toFixed(2)}</strong></td>
+              <td>{b.avgFinal.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 top 10 最长寿 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>lifetime</th><th>rounds</th><th>final</th><th>goal</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topLong.map((l) => (
+            <tr>
+              <td><strong>{formatLifetime(l.lifetimeMs)}</strong></td>
+              <td>{l.rounds}</td>
+              <td>{l.finalScore.toFixed(2)}</td>
+              <td><small class="muted">{esc(l.goal.slice(0, 35))}{(l.goal ?? '').length > 35 ? '…' : ''}</small></td>
+              <td><a href={`${base}/agents/${l.sid}/`}><code>{esc(l.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>burst 占多数 = 系统自动化,batch 跑任务</li>
+        <li>long/epic 占多数 = 用户在长期间隔思考</li>
+        <li>对照 <a href={`${base}/agents/session-aging-curve/`}>Aging Curve</a> 看 age 分桶</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-slt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-slt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-slt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
