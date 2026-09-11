@@ -180,7 +180,7 @@ const nextIdx = siblingIdxs.find((n) => n > myIdx);
 
 <BaseLayout title={meta.title ? `${meta.title} · Synthesis #${myIdx}` : `Synthesis #${myIdx}`}>
   <Navbar />
-  <main class="shell agents-shell">
+  <main class="shell agents-shell" data-sid={sessionId} data-idx={paddedIdx}>
     <nav class="agents-breadcrumb">
       <a href={`${base}/agents/`}>← 多智能体控制台</a>
       <span class="muted"> / </span>
@@ -256,3 +256,43 @@ const nextIdx = siblingIdxs.find((n) => n > myIdx);
     )}
   </main>
 </BaseLayout>
+
+<script>
+  // iter #104:auto-track scroll progress for reading queue
+  (() => {
+    const KEY = 'agents:reading:v1';
+    const sid = document.body.dataset.sid;
+    const idx = document.body.dataset.idx;
+    if (!sid || !idx) return;
+    let raf: number | null = null;
+    let lastSent = 0;
+    function track(): void {
+      const doc = document.documentElement;
+      const scrolled = window.scrollY + window.innerHeight;
+      const total = doc.scrollHeight;
+      const progress = total > 0 ? Math.min(1, scrolled / total) : 0;
+      const now = Date.now();
+      if (now - lastSent < 1500) return; // 节流:每 1.5s 最多一次
+      lastSent = now;
+      try {
+        const raw = localStorage.getItem(KEY);
+        const obj = raw ? JSON.parse(raw) : { read: {}, progress: {}, lastVisited: {} };
+        const key = `${sid}/${idx}`;
+        obj.progress = obj.progress ?? {};
+        obj.lastVisited = obj.lastVisited ?? {};
+        obj.progress[key] = progress;
+        obj.lastVisited[key] = now;
+        if (progress > 0.95) obj.read = obj.read ?? {}, obj.read[key] = true;
+        localStorage.setItem(KEY, JSON.stringify(obj));
+      } catch { /* */ }
+    }
+    function onScroll(): void {
+      if (raf != null) return;
+      raf = window.requestAnimationFrame(() => { track(); raf = null; });
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('load', track);
+    // 立即触发一次(记录访问)
+    track();
+  })();
+</script>
