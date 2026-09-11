@@ -1,0 +1,196 @@
+---
+// /agents/delta-magnitude.astro — iter #235:round delta magnitude histogram
+//
+// 跨所有 session 看相邻 round 间 score Δ 的大小分布:
+//   - |Δ| 分桶
+//   - positive vs negative 分开看
+//   - 典型跳变幅度
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const deltas: number[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length < 2) continue;
+    const scores: number[] = [];
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        scores.push(getAvg(r));
+      } catch (e) { /* */ }
+    }
+    for (let i = 1; i < scores.length; i++) {
+      deltas.push(scores[i] - scores[i - 1]);
+    }
+  }
+}
+
+const total = deltas.length;
+const positive = deltas.filter((d) => d > 0);
+const negative = deltas.filter((d) => d < 0);
+const neutral = deltas.filter((d) => d === 0);
+
+const absDeltas = deltas.map(Math.abs).sort((a, b) => a - b);
+const avgAbs = total > 0 ? absDeltas.reduce((a, b) => a + b, 0) / total : 0;
+const medianAbs = total > 0 ? absDeltas[Math.floor(total / 2)] : 0;
+const p90 = total > 0 ? absDeltas[Math.floor(total * 0.9)] : 0;
+const p99 = total > 0 ? absDeltas[Math.floor(total * 0.99)] : 0;
+const maxAbs = total > 0 ? absDeltas[absDeltas.length - 1] : 0;
+
+// 分桶
+const buckets = [
+  { label: '|Δ| < 0.1', min: 0, max: 0.1, count: 0 },
+  { label: '0.1 ≤ |Δ| < 0.3', min: 0.1, max: 0.3, count: 0 },
+  { label: '0.3 ≤ |Δ| < 0.5', min: 0.3, max: 0.5, count: 0 },
+  { label: '0.5 ≤ |Δ| < 1.0', min: 0.5, max: 1.0, count: 0 },
+  { label: '1.0 ≤ |Δ| < 2.0', min: 1.0, max: 2.0, count: 0 },
+  { label: '|Δ| ≥ 2.0', min: 2.0, max: 999, count: 0 },
+];
+
+for (const d of absDeltas) {
+  for (const b of buckets) {
+    if (d >= b.min && d < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+// positive vs negative 分布
+const posNegBuckets = [
+  { label: 'Δ ≤ -2.0', min: -999, max: -2.0, count: 0, color: '#ef4444' },
+  { label: '-2.0 < Δ ≤ -1.0', min: -2.0, max: -1.0, count: 0, color: '#ef4444' },
+  { label: '-1.0 < Δ ≤ -0.5', min: -1.0, max: -0.5, count: 0, color: '#fb923c' },
+  { label: '-0.5 < Δ < 0', min: -0.5, max: 0, count: 0, color: '#fbbf24' },
+  { label: 'Δ = 0', min: 0, max: 0.01, count: 0, color: '#94a3b8' },
+  { label: '0 < Δ < 0.5', min: 0.01, max: 0.5, count: 0, color: '#86efac' },
+  { label: '0.5 ≤ Δ < 1.0', min: 0.5, max: 1.0, count: 0, color: '#4ade80' },
+  { label: '1.0 ≤ Δ < 2.0', min: 1.0, max: 2.0, count: 0, color: '#22c55e' },
+  { label: 'Δ ≥ 2.0', min: 2.0, max: 999, count: 0, color: '#10b981' },
+];
+for (const d of deltas) {
+  for (const b of posNegBuckets) {
+    if (d >= b.min && d < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Delta Magnitude · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / delta-magnitude</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Delta Magnitude <span class="muted" style="font-size:0.6em">(iter #235)</span></h1>
+      <p class="agents-sub">
+        跨所有 session 看相邻 round 间 score Δ 的绝对值分布。
+        揭示典型跳变幅度。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dm-globals">
+        <span>总 transitions: <strong>{total}</strong></span>
+        <span>positive: <strong style="color:#10b981">{positive.length}</strong> ({total > 0 ? ((positive.length/total)*100).toFixed(1) : '0'}%)</span>
+        <span>negative: <strong style="color:#ef4444">{negative.length}</strong> ({total > 0 ? ((negative.length/total)*100).toFixed(1) : '0'}%)</span>
+        <span>neutral: <strong>{neutral.length}</strong></span>
+        <span>avg |Δ|: <strong>{avgAbs.toFixed(3)}</strong></span>
+        <span>median |Δ|: <strong>{medianAbs.toFixed(2)}</strong></span>
+        <span>p90 |Δ|: <strong>{p90.toFixed(2)}</strong></span>
+        <span>p99 |Δ|: <strong>{p99.toFixed(2)}</strong></span>
+        <span>max |Δ|: <strong>{maxAbs.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 |Δ| 分布</h2>
+      <pre class="agents-dm-flow">{buckets.map((b) => {
+        const max = Math.max(...buckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(20)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 signed Δ 分布(positive / negative)</h2>
+      <pre class="agents-dm-flow">{posNegBuckets.map((b) => {
+        const max = Math.max(...posNegBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(18)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>|Δ| 中位数 = 典型一跳</li>
+        <li>p90 / p99 = 长尾 outlier</li>
+        <li>对照 <a href={`${base}/agents/round-jump/`}>Round Jump</a> 看单 round 大跳</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dm-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dm-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dm-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
