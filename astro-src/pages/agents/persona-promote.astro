@@ -1,0 +1,174 @@
+---
+// /agents/persona-promote.astro — iter #192:per-persona promotion rate
+//
+// 跨 session 看每个 persona 的 promoted 比例:
+//   - 每个 persona 总 proposals 数
+//   - 每个 persona promoted 数(取 bestByIdx 对应的 gate category)
+//   - promote rate = promoted / total
+//   - "puppet master" persona(高 promote rate)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaPromo {
+  name: string;
+  totalProposals: number;
+  promoted: number;
+  rejected: number;
+  candidate: number;
+  sketch: number;
+  rate: number; // promoted / total
+  avgScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, PersonaPromo>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        // 先取 bestByIdx
+        const bestByIdx: Record<number, { score: number; persona: string }> = {};
+        for (const persona of r.feedback?.personas ?? []) {
+          const pname = persona.name ?? persona.role ?? persona.id ?? 'unknown';
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const tot = p.total ?? 0;
+            if (!bestByIdx[idx] || tot > bestByIdx[idx].score) {
+              bestByIdx[idx] = { score: tot, persona: pname };
+            }
+          }
+        }
+        // gate
+        for (const gp of r.gate?.proposals ?? []) {
+          const idx = gp.index ?? gp.proposal_index;
+          if (idx == null) continue;
+          const best = bestByIdx[idx];
+          if (!best) continue;
+          const pname = best.persona;
+          if (!personaMap.has(pname)) {
+            personaMap.set(pname, {
+              name: pname,
+              totalProposals: 0,
+              promoted: 0,
+              rejected: 0,
+              candidate: 0,
+              sketch: 0,
+              rate: 0,
+              avgScore: 0,
+            });
+          }
+          const pp = personaMap.get(pname)!;
+          pp.totalProposals += 1;
+          if (gp.category === 'promoted') pp.promoted += 1;
+          if (gp.category === 'rejected') pp.rejected += 1;
+          if (gp.category === 'candidate') pp.candidate += 1;
+          if (gp.category === 'sketch') pp.sketch += 1;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const stats = [...personaMap.values()];
+for (const s of stats) {
+  s.rate = s.totalProposals > 0 ? s.promoted / s.totalProposals : 0;
+}
+stats.sort((a, b) => b.rate - a.rate);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Persona Promote Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-promote</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Persona Promote Rate <span class="muted" style="font-size:0.6em">(iter #192)</span></h1>
+      <p class="agents-sub">
+        跨 session 看每个 persona 的 promoted 比例。
+        高 rate = 该 persona 的高评分 proposals 容易被采纳。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>total</th><th>prom</th><th>cand</th><th>sketch</th><th>rej</th><th>rate</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((s) => (
+            <tr>
+              <td><code>{s.name}</code></td>
+              <td>{s.totalProposals}</td>
+              <td><strong style="color:#10b981">{s.promoted}</strong></td>
+              <td>{s.candidate}</td>
+              <td>{s.sketch}</td>
+              <td style="color:#ef4444">{s.rejected}</td>
+              <td><strong style={s.rate >= 0.4 ? 'color:#10b981' : s.rate >= 0.2 ? 'color:#f59e0b' : 'color:#ef4444'}>{s.rate >= 0 ? '' : ''}{(s.rate * 100).toFixed(1)}%</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 rate 可视化</h2>
+      <pre class="agents-pp-flow">{stats.map((s) => {
+        const pct = s.rate * 100;
+        return `${s.name.padEnd(20)} ${bar(pct, 100, 20)}  ${pct.toFixed(1)}% (${s.promoted}/${s.totalProposals})`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rate &gt; 50% = 该 persona 是"傀儡大师" — gate 几乎都采纳</li>
+        <li>rate &lt; 10% = 该 persona 评分高但被 gate 拒,可能是 gate 与 persona 不一致</li>
+        <li>对照 <a href={`${base}/agents/persona-elo/`}>Persona Elo</a> 看分数分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
