@@ -1,0 +1,194 @@
+---
+// /agents/convergence-index.astro — iter #215:round convergence index
+//
+// 衡量每个 session 的 score 收敛速度:
+//   - avg |Δ| per transition = 收敛指数
+//   - 收敛指数低 = 快速稳定
+//   - 收敛指数高 = 持续震荡
+//   - 看每 session 的 max |Δ|,最终 |Δ|
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionConvergence {
+  sid: string;
+  goal: string;
+  rounds: number;
+  scores: number[];
+  avgAbsDelta: number;
+  maxAbsDelta: number;
+  finalAbsDelta: number;
+  convergence: number;  // 1 - (avgAbsDelta / 10),越高越收敛
+  converged: boolean;    // final |Δ| < 0.3
+}
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionConvergence[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 3) continue;
+    rNum.sort((a, b) => a - b);
+    const scores: number[] = [];
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        scores.push(getAvg(r));
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 3) continue;
+    const deltas: number[] = [];
+    for (let i = 1; i < scores.length; i++) deltas.push(scores[i] - scores[i - 1]);
+    const absDeltas = deltas.map(Math.abs);
+    const avgAbsDelta = absDeltas.reduce((a, b) => a + b, 0) / absDeltas.length;
+    const maxAbsDelta = Math.max(...absDeltas);
+    const finalAbsDelta = absDeltas[absDeltas.length - 1];
+    sessions.push({
+      sid, goal, rounds: scores.length, scores,
+      avgAbsDelta, maxAbsDelta, finalAbsDelta,
+      convergence: Math.max(0, 1 - avgAbsDelta / 5),
+      converged: finalAbsDelta < 0.3,
+    });
+  }
+}
+
+const total = sessions.length;
+const converged = sessions.filter((s) => s.converged).length;
+const avgConvergence = sessions.reduce((s, x) => s + x.convergence, 0) / Math.max(sessions.length, 1);
+const avgFinalDelta = sessions.reduce((s, x) => s + x.finalAbsDelta, 0) / Math.max(sessions.length, 1);
+
+const topConverged = [...sessions].sort((a, b) => a.avgAbsDelta - b.avgAbsDelta).slice(0, 15);
+const topVolatile = [...sessions].sort((a, b) => b.avgAbsDelta - a.avgAbsDelta).slice(0, 15);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Convergence Index · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / convergence-index</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Convergence Index <span class="muted" style="font-size:0.6em">(iter #215)</span></h1>
+      <p class="agents-sub">
+        每 session 的 score 收敛速度。
+        convergence = 1 - avg|Δ|/5,越高越快稳定。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ci-globals">
+        <span>总 sessions (≥ 3 rounds): <strong>{total}</strong></span>
+        <span>已收敛 (final |Δ| &lt; 0.3): <strong style="color:#10b981">{converged}</strong></span>
+        <span>avg convergence: <strong>{avgConvergence.toFixed(2)}</strong></span>
+        <span>avg final |Δ|: <strong>{avgFinalDelta.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 top 15 最收敛 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>avg |Δ|</th><th>max |Δ|</th><th>final |Δ|</th><th>conv</th><th>sid</th><th>rounds</th></tr>
+        </thead>
+        <tbody>
+          {topConverged.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">{s.avgAbsDelta.toFixed(3)}</strong></td>
+              <td>{s.maxAbsDelta.toFixed(2)}</td>
+              <td>{s.finalAbsDelta.toFixed(3)}</td>
+              <td>{s.convergence.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td>{s.rounds}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌊 top 15 最震荡 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>avg |Δ|</th><th>max |Δ|</th><th>final |Δ|</th><th>conv</th><th>sid</th><th>rounds</th></tr>
+        </thead>
+        <tbody>
+          {topVolatile.map((s) => (
+            <tr>
+              <td><strong style="color:#ef4444">{s.avgAbsDelta.toFixed(2)}</strong></td>
+              <td>{s.maxAbsDelta.toFixed(2)}</td>
+              <td>{s.finalAbsDelta.toFixed(2)}</td>
+              <td>{s.convergence.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td>{s.rounds}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>converged = final |Δ| &lt; 0.3(模型稳定)</li>
+        <li>avg |Δ| &lt; 0.5 = 高效迭代</li>
+        <li>avg |Δ| &gt; 2.0 = 反复震荡,可能 feedback 信号冲突</li>
+        <li>对照 <a href={`${base}/agents/round-jump/`}>Round Jump</a> 看单 round 大跳变</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ci-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ci-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
