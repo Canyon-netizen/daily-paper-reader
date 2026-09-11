@@ -1,0 +1,220 @@
+---
+// /agents/refiner-effects.astro — iter #191:refiner effect on score
+//
+// 跨 session 看每个 refiner action 类型对应的 score Δ:
+//   - 每种 action 出现前后的平均 score 变化
+//   - top 最有帮助 / top 伤害最大的 actions
+//   - 仅看 promoted 前最后一轮
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ActionEffect {
+  action: string;
+  occurrences: number;
+  totalDelta: number;
+  avgDelta: number;
+  positiveDeltas: number;
+  negativeDeltas: number;
+  zeroDeltas: number;
+}
+
+interface RoundScore {
+  sid: string;
+  roundIdx: number;
+  appliedActions: string[];
+  avgScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const roundScores: RoundScore[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const avgScore = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        const appliedActions = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        roundScores.push({ sid, roundIdx: ri, appliedActions, avgScore });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 计算每个 action 的 Δ
+const actionEffects = new Map<string, ActionEffect>();
+for (let i = 1; i < roundScores.length; i++) {
+  const prev = roundScores[i - 1];
+  const curr = roundScores[i];
+  const delta = curr.avgScore - prev.avgScore;
+  for (const action of curr.appliedActions) {
+    if (!actionEffects.has(action)) {
+      actionEffects.set(action, {
+        action,
+        occurrences: 0,
+        totalDelta: 0,
+        avgDelta: 0,
+        positiveDeltas: 0,
+        negativeDeltas: 0,
+        zeroDeltas: 0,
+      });
+    }
+    const e = actionEffects.get(action)!;
+    e.occurrences += 1;
+    e.totalDelta += delta;
+    if (delta > 0.05) e.positiveDeltas += 1;
+    else if (delta < -0.05) e.negativeDeltas += 1;
+    else e.zeroDeltas += 1;
+  }
+}
+
+const stats = [...actionEffects.values()];
+for (const s of stats) {
+  s.avgDelta = s.occurrences > 0 ? s.totalDelta / s.occurrences : 0;
+}
+stats.sort((a, b) => b.avgDelta - a.avgDelta);
+
+const topHelpful = stats.filter((s) => s.occurrences >= 2).slice(0, 10);
+const topHarmful = [...stats].filter((s) => s.occurrences >= 2).sort((a, b) => a.avgDelta - b.avgDelta).slice(0, 10);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Refiner Effects · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / refiner-effects</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧪 Refiner Effects <span class="muted" style="font-size:0.6em">(iter #191)</span></h1>
+      <p class="agents-sub">
+        跨 session 看每种 modification 的 score 影响。
+        最有帮助 vs 最有伤害的 actions。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-re-globals">
+        <span>总 rounds: <strong>{roundScores.length}</strong></span>
+        <span>action 类型数: <strong>{stats.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 10 最有帮助 actions(avg Δ ≥ 0.05)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>occurrences</th><th>avg Δ</th><th>+Δ</th><th>−Δ</th><th>~0</th></tr>
+        </thead>
+        <tbody>
+          {topHelpful.map((s) => (
+            <tr>
+              <td><code>{s.action}</code></td>
+              <td>{s.occurrences}</td>
+              <td><strong style="color:#10b981">+{s.avgDelta.toFixed(3)}</strong></td>
+              <td>{s.positiveDeltas}</td>
+              <td>{s.negativeDeltas}</td>
+              <td>{s.zeroDeltas}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 top 10 最伤害 actions(avg Δ ≤ -0.05)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>occurrences</th><th>avg Δ</th><th>+Δ</th><th>−Δ</th><th>~0</th></tr>
+        </thead>
+        <tbody>
+          {topHarmful.map((s) => (
+            <tr>
+              <td><code>{s.action}</code></td>
+              <td>{s.occurrences}</td>
+              <td><strong style="color:#ef4444">{s.avgDelta.toFixed(3)}</strong></td>
+              <td>{s.positiveDeltas}</td>
+              <td>{s.negativeDeltas}</td>
+              <td>{s.zeroDeltas}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 所有 actions avg Δ</h2>
+      <pre class="agents-re-flow">{(() => {
+        const max = Math.max(...stats.map((s) => Math.abs(s.avgDelta)), 1);
+        return stats.map((s) => {
+          const pct = (s.positiveDeltas / s.occurrences) * 100;
+          return `${s.action.padEnd(18)} ${bar(Math.abs(s.avgDelta), max, 14)}  ${s.avgDelta >= 0 ? '+' : ''}${s.avgDelta.toFixed(3)} (${pct.toFixed(0)}% positive)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg Δ &gt; 0.3 的 actions = 真有效,优先用</li>
+        <li>avg Δ &lt; -0.1 的 actions = 慎用,可能 modifier prompt 偏激</li>
+        <li>对照 <a href={`${base}/agents/refiner-actions/`}>Refiner Actions</a> 看频次</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-re-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-re-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-re-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
