@@ -1,0 +1,169 @@
+---
+// /agents/daily-score-trend.astro — iter #224:daily avg final score trend
+//
+// 每日跨 session 的 avg final score 时间序列:
+//   - 每日平均分
+//   - 7 日滚动平均
+//   - 最佳 / 最差日
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface DayStat {
+  date: string;
+  avgScore: number;
+  count: number;
+  sessions: number;
+}
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const dayMap = new Map<string, { scores: number[]; sids: Set<string> }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    const last = rNum[rNum.length - 1];
+    try {
+      const fp = join(rd, `round_${last}.json`);
+      const r = JSON.parse(await readFile(fp, 'utf8'));
+      const st = await stat(fp);
+      const dateStr = new Date(st.mtimeMs).toISOString().slice(0, 10);
+      const score = getAvg(r);
+      if (score === 0) continue;
+      const cur = dayMap.get(dateStr) ?? { scores: [], sids: new Set<string>() };
+      cur.scores.push(score);
+      cur.sids.add(sid);
+      dayMap.set(dateStr, cur);
+    } catch (e) { /* */ }
+  }
+}
+
+const days: DayStat[] = [...dayMap.entries()].map(([date, v]) => ({
+  date,
+  avgScore: v.scores.reduce((a, b) => a + b, 0) / v.scores.length,
+  count: v.scores.length,
+  sessions: v.sids.size,
+})).sort((a, b) => a.date.localeCompare(b.date));
+
+// 7-day rolling avg
+const rolling: { date: string; avg: number }[] = [];
+for (let i = 0; i < days.length; i++) {
+  const window = days.slice(Math.max(0, i - 6), i + 1);
+  const sum = window.reduce((s, d) => s + d.avgScore, 0);
+  rolling.push({ date: days[i].date, avg: sum / window.length });
+}
+
+const overallAvg = days.length > 0 ? days.reduce((s, d) => s + d.avgScore, 0) / days.length : 0;
+const bestDay = days.reduce((b, d) => (d.avgScore > b.avgScore ? d : b), { date: '', avgScore: 0 } as DayStat);
+const worstDay = days.reduce((b, d) => (d.avgScore < b.avgScore ? d : b), { date: '', avgScore: 99 } as DayStat);
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Daily Score Trend · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-score-trend</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Daily Score Trend <span class="muted" style="font-size:0.6em">(iter #224)</span></h1>
+      <p class="agents-sub">
+        每日跨 session 的平均 final score 时间序列。
+        看整体质量趋势。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dst-globals">
+        <span>总天数: <strong>{days.length}</strong></span>
+        <span>overall avg: <strong>{overallAvg.toFixed(2)}</strong></span>
+        <span>best day: <strong style="color:#10b981">{bestDay.date} ({bestDay.avgScore.toFixed(2)})</strong></span>
+        <span>worst day: <strong style="color:#ef4444">{worstDay.date} ({worstDay.avgScore.toFixed(2)})</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 最近 30 天</h2>
+      <pre class="agents-dst-flow">{days.slice(-30).map((d) => {
+        return `${d.date} ${bar(d.avgScore, 10, 16)}  ${d.avgScore.toFixed(2)} (${d.sessions} sess)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 7 日滚动平均</h2>
+      <pre class="agents-dst-flow">{rolling.slice(-30).map((r) => {
+        return `${r.date} ${bar(r.avg, 10, 16)}  ${r.avg.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rolling avg 上升 = 整体质量提升</li>
+        <li>rolling avg 平稳 = 稳定状态</li>
+        <li>对照 <a href={`${base}/agents/score-bucket-evo/`}>Score Bucket Evolution</a> 看分布变化</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dst-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dst-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dst-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
