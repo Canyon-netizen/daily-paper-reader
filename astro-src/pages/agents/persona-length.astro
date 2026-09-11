@@ -1,0 +1,168 @@
+---
+// /agents/persona-length.astro — iter #178:per-persona feedback length
+//
+// 每个 persona 的 critique 文本长度统计:
+//   - 字符数 / 词数 / 平均段落数
+//   - 总长度 / 平均长度
+//   - 最长 critique 例子
+//   - 长度 vs score 相关性(粗略)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaLen {
+  name: string;
+  totalCritiques: number;
+  totalChars: number;
+  totalWords: number;
+  avgChars: number;
+  avgWords: number;
+  longestSample: { chars: number; preview: string; sid: string; roundIdx: number } | null;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, PersonaLen>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const pname = persona.name ?? persona.role ?? persona.id ?? 'unknown';
+          if (!personaMap.has(pname)) {
+            personaMap.set(pname, {
+              name: pname,
+              totalCritiques: 0,
+              totalChars: 0,
+              totalWords: 0,
+              avgChars: 0,
+              avgWords: 0,
+              longestSample: null,
+            });
+          }
+          const p = personaMap.get(pname)!;
+          const critique = String(persona.critique ?? persona.feedback ?? persona.reasoning ?? '');
+          if (!critique) continue;
+          p.totalCritiques += 1;
+          p.totalChars += critique.length;
+          const words = (critique.match(/[\w一-鿿]+/g) ?? []).length;
+          p.totalWords += words;
+          if (!p.longestSample || critique.length > p.longestSample.chars) {
+            p.longestSample = {
+              chars: critique.length,
+              preview: critique.slice(0, 200),
+              sid,
+              roundIdx: ri,
+            };
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const stats = [...personaMap.values()];
+for (const p of stats) {
+  p.avgChars = p.totalCritiques > 0 ? p.totalChars / p.totalCritiques : 0;
+  p.avgWords = p.totalCritiques > 0 ? p.totalWords / p.totalCritiques : 0;
+}
+stats.sort((a, b) => b.avgChars - a.avgChars);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Persona Critique Length · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-length</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Persona Critique Length <span class="muted" style="font-size:0.6em">(iter #178)</span></h1>
+      <p class="agents-sub">
+        每个 persona 的 critique 文本长度统计。
+        谁啰嗦谁简洁 — 影响 round token 消耗。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>critiques 数</th><th>总 chars</th><th>总 words</th><th>avg chars</th><th>avg words</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((p) => (
+            <tr>
+              <td><code>{esc(p.name)}</code></td>
+              <td>{p.totalCritiques}</td>
+              <td>{p.totalChars.toLocaleString()}</td>
+              <td>{p.totalWords.toLocaleString()}</td>
+              <td><strong>{p.avgChars.toFixed(0)}</strong></td>
+              <td>{p.avgWords.toFixed(1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📏 最长 critique 例子</h2>
+      {stats.map((p) => p.longestSample && (
+        <details class="agents-pl-sample">
+          <summary>
+            <strong>{esc(p.name)}</strong> · 最长 <strong>{p.longestSample.chars}</strong> chars · 来自 R{p.longestSample.roundIdx}
+          </summary>
+          <p><small class="muted">{esc(p.longestSample.preview)}…</small></p>
+        </details>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg chars 高的 persona = 更详细反馈 → round 消耗更多 token</li>
+        <li>如果某 persona 长度过长,可在 prompt 中加 "limit to N words" 限制</li>
+        <li>对照 <a href={`${base}/agents/persona-elo/`}>Persona Elo</a> 看长度与 score 的关系</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pl-sample {
+    background: rgba(99, 102, 241, 0.05);
+    border-left: 3px solid rgba(99, 102, 241, 0.4);
+    padding: 0.6rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+  }
+  .agents-pl-sample summary {
+    cursor: pointer;
+  }
+  .agents-pl-sample p {
+    margin: 0.4rem 0 0;
+    padding-left: 0.6rem;
+  }
+</style>
