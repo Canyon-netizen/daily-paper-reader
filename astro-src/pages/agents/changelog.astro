@@ -1,0 +1,215 @@
+---
+// /agents/changelog.astro — iter #90:recent build changelog
+//
+// 显示最近一批 iters(从 git log 读 commit),让用户看到"系统最近
+// 加了什么功能"。每条 commit 标题 + 简介 + 跳转链接。
+// 用户可以从这里发现新页面 / 跟踪升级。
+
+import { execSync } from 'node:child_process';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface IterEntry {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  body: string;
+  iterNum: number | null;
+  isAgentFeature: boolean;
+  filesChanged: number;
+}
+
+function safeExec(cmd: string): string {
+  try { return execSync(cmd, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }); }
+  catch { return ''; }
+}
+
+let entries: IterEntry[] = [];
+try {
+  const log = safeExec('git log -n 30 --pretty=format:"%H|%s|%b"');
+  const lines = log.split('\n').filter(Boolean);
+  for (const line of lines) {
+    const [hash, subject, body] = line.split('|');
+    if (!hash || !subject) continue;
+    const shortHash = hash.slice(0, 7);
+    // 提取 iter 编号
+    const m = subject.match(/iter\s*#?(\d+)/i);
+    const iterNum = m ? Number(m[1]) : null;
+    const isAgentFeature = subject.startsWith('feat(agents)');
+    // 文件改动数(从 commit hash 反查)
+    const stat = safeExec(`git show --stat --format="" ${hash}`);
+    const fileLines = stat.split('\n').filter((l) => l.includes('|')).length;
+    entries.push({
+      hash, shortHash, subject, body: body || '',
+      iterNum, isAgentFeature, filesChanged: fileLines,
+    });
+  }
+} catch { /* */ }
+
+const totalFiles = entries.reduce((a, e) => a + e.filesChanged, 0);
+const agentIters = entries.filter((e) => e.isAgentFeature).length;
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Changelog · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / changelog</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📜 Changelog <span class="muted" style="font-size:0.6em">(iter #90)</span></h1>
+      <p class="agents-sub">
+        最近 30 个 commit 的快速预览,聚焦多智能体功能(iters)。每条带 commit hash + 文件改动数。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-cl-stats">
+        <span><strong>{entries.length}</strong> commits</span>
+        <span><strong>{agentIters}</strong> agent iters</span>
+        <span><strong>{totalFiles}</strong> files changed</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🆕 最近 iters (agent 功能)</h2>
+      {entries.filter((e) => e.isAgentFeature).length === 0 ? (
+        <p class="muted">还没有 agent 相关的 commit。</p>
+      ) : (
+        <ol class="agents-cl-list">
+          {entries.filter((e) => e.isAgentFeature).map((e) => (
+            <li class="agents-cl-item">
+              <header class="agents-cl-head">
+                {e.iterNum != null && (
+                  <span class="agents-cl-iter">#{e.iterNum}</span>
+                )}
+                <strong>{escapeHtml(e.subject)}</strong>
+              </header>
+              {e.body && (
+                <pre class="agents-cl-body">{escapeHtml(e.body.trim())}</pre>
+              )}
+              <p class="muted">
+                <small>
+                  <code>{e.shortHash}</code>
+                  {' · '}{e.filesChanged} file{e.filesChanged !== 1 ? 's' : ''} changed
+                  {' · '}<a href={`https://github.com/Canyon-netizen/daily-paper-reader/commit/${e.hash}`} target="_blank" rel="noopener">view on GitHub →</a>
+                </small>
+              </p>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 全部 commits (混合)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>hash</th>
+            <th>title</th>
+            <th>files</th>
+            <th>kind</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map((e) => (
+            <tr>
+              <td><code>{e.shortHash}</code></td>
+              <td>
+                {e.iterNum != null && <span class="agents-cl-iter-small">#{e.iterNum}</span>}
+                {' '}{escapeHtml(e.subject)}
+              </td>
+              <td>{e.filesChanged}</td>
+              <td>
+                {e.isAgentFeature ? <span class="badge badge-high">agents</span> : <span class="muted">{escapeHtml(e.subject.split('(')[1]?.split(')')[0] ?? 'other')}</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/about/`}>🧭 About</a>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cl-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-cl-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-cl-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-cl-item {
+    background: rgba(99, 102, 241, 0.06);
+    border-left: 3px solid #4f46e5;
+    border-radius: 4px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.6rem;
+  }
+  .agents-cl-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+    flex-wrap: wrap;
+  }
+  .agents-cl-iter {
+    background: rgba(99, 102, 241, 0.2);
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    font-weight: 600;
+    padding: 0.1rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+  }
+  .agents-cl-iter-small {
+    background: rgba(99, 102, 241, 0.15);
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    font-weight: 600;
+    padding: 0.05rem 0.3rem;
+    border-radius: 3px;
+    font-size: 0.78rem;
+  }
+  .agents-cl-body {
+    background: rgba(0,0,0,0.2);
+    padding: 0.4rem 0.6rem;
+    border-radius: 3px;
+    margin: 0.4rem 0;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #d1d5db;
+  }
+</style>
