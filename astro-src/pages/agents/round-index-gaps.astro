@@ -1,0 +1,170 @@
+---
+// /agents/round-index-gaps.astro — iter #258:round index gap detector
+//
+// 扫描每个 session 的 round index 序列,找出有 gap 的 sessions。
+// 也统计 round 数 vs archive 中的最大 index。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface GapInfo {
+  sid: string;
+  expected: number[];  // 缺失的 round indices
+  indices: number[];
+  maxIdx: number;
+  count: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const gapSessions: GapInfo[] = [];
+let allSessionsCount = 0;
+let withGaps = 0;
+let totalMissing = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const indices: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) indices.push(parseInt(m[1], 10));
+    }
+    if (indices.length === 0) continue;
+    allSessionsCount += 1;
+    indices.sort((a, b) => a - b);
+    const expected: number[] = [];
+    for (let i = indices[0]; i <= indices[indices.length - 1]; i++) {
+      if (!indices.includes(i)) expected.push(i);
+    }
+    if (expected.length > 0) {
+      withGaps += 1;
+      totalMissing += expected.length;
+      gapSessions.push({
+        sid,
+        expected,
+        indices,
+        maxIdx: indices[indices.length - 1],
+        count: indices.length,
+      });
+    }
+  }
+}
+
+gapSessions.sort((a, b) => b.expected.length - a.expected.length);
+const topGaps = gapSessions.slice(0, 20);
+
+// 缺失 index 整体统计
+const missingIndexFreq = new Map<number, number>();
+for (const g of gapSessions) {
+  for (const e of g.expected) {
+    missingIndexFreq.set(e, (missingIndexFreq.get(e) ?? 0) + 1);
+  }
+}
+const sortedMissing = Array.from(missingIndexFreq.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Round Index Gaps · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-index-gaps</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔍 Round Index Gaps <span class="muted" style="font-size:0.6em">(iter #258)</span></h1>
+      <p class="agents-sub">
+        检测 session 内 round_N.json 序列中的"空洞"。
+        gap = 删除 / 重编号 / 跳过。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rig-globals">
+        <span>总 sessions(有 rounds): <strong>{allSessionsCount}</strong></span>
+        <span>有 gap: <strong style="color:#f59e0b">{withGaps}</strong></span>
+        <span>总 missing: <strong>{totalMissing}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 top 20 gap 最大 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>missing</th><th>present</th><th>missing indices</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topGaps.map((g) => (
+            <tr>
+              <td><strong style="color:#f59e0b">{g.expected.length}</strong></td>
+              <td>{g.count}</td>
+              <td><code style="font-size:0.85em">{esc(g.expected.slice(0, 20).join(', '))}{(g.expected.length > 20 ? ` +${g.expected.length - 20}` : '')}</code></td>
+              <td><a href={`${base}/agents/${g.sid}/`}><code>{esc(g.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 高频缺失 index</h2>
+      <pre class="agents-rig-flow">{sortedMissing.map(([idx, count]) => {
+        const max = sortedMissing[0][1];
+        return `R${idx.toString().padStart(3)}  ${bar(count, max, 18)}  ${count} sessions`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>缺失 = round_N.json 文件不存在(被删除 / 失败保存)</li>
+        <li>常见缺失 R0,R1 可能因起始编号不同(从 R0 或 R1 开始)</li>
+        <li>对照 <a href={`${base}/agents/round-cadence/`}>Round Cadence</a> 看时间间隔</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rig-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rig-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rig-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
