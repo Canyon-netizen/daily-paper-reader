@@ -1,0 +1,168 @@
+---
+// /agents/day-of-week.astro — iter #279:day of week activity distribution
+//
+// 跨所有 sessions/rounds 看每周几最活跃:
+//   - 按 Monday-Sunday 聚合 rounds / tokens / sessions
+//   - 按 weekday 索引:0=Sun, 1=Mon, ..., 6=Sat
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+interface DayInfo {
+  idx: number;
+  name: string;
+  rounds: number;
+  tokens: number;
+  cost: number;
+  sessions: Set<string>;
+}
+
+const days: DayInfo[] = DAY_NAMES.map((name, idx) => ({
+  idx, name, rounds: 0, tokens: 0, cost: 0, sessions: new Set<string>(),
+}));
+
+const root = join(process.cwd(), 'archive');
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const day = new Date(st.mtimeMs).getUTCDay();
+        const d = days[day];
+        d.rounds += 1;
+        d.sessions.add(sid);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        d.tokens += tokens;
+        d.cost += (tokens / 1_000_000) * SONNET_PRICE;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const totalRounds = days.reduce((s, d) => s + d.rounds, 0);
+const totalCost = days.reduce((s, d) => s + d.cost, 0);
+const maxRounds = Math.max(...days.map((d) => d.rounds), 1);
+
+const peakDay = days.reduce((best, d) => d.rounds > best.rounds ? d : best, days[0]);
+const minDay = days.reduce((low, d) => d.rounds < low.rounds ? d : low, days[0]);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Day of Week · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / day-of-week</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Day of Week <span class="muted" style="font-size:0.6em">(iter #279)</span></h1>
+      <p class="agents-sub">
+        按一周七天的 round 活动分布。
+        0=Sun, 1=Mon, ..., 6=Sat(UTC)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dow-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>总 cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>峰值: <strong style="color:#10b981">{peakDay.name}</strong>({peakDay.rounds} rounds)</span>
+        <span>低谷: <strong style="color:#ef4444">{minDay.name}</strong>({minDay.rounds} rounds)</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 rounds 按 weekday</h2>
+      <pre class="agents-dow-flow">{days.map((d) => {
+        return `${d.name}  ${bar(d.rounds, maxRounds, 22)}  ${d.rounds}  (${((d.rounds / Math.max(1, totalRounds)) * 100).toFixed(1)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>day</th><th>rounds</th><th>sessions</th><th>tokens</th><th>cost</th><th>avg tokens / round</th></tr>
+        </thead>
+        <tbody>
+          {days.map((d) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{d.name}</strong></td>
+              <td><strong>{d.rounds}</strong></td>
+              <td>{d.sessions.size}</td>
+              <td>{fmtTok(d.tokens)}</td>
+              <td>${d.cost.toFixed(2)}</td>
+              <td>{fmtTok(d.rounds > 0 ? d.tokens / d.rounds : 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>平日 vs 周末 = 工作模式 vs 闲时</li>
+        <li>如周一/周二高峰 = 用户工作日开始规划</li>
+        <li>如周末高峰 = 用户业余时间做研究</li>
+        <li>对照 <a href={`${base}/agents/daily-pulse/`}>Daily Pulse</a> 看日级</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dow-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dow-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dow-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
