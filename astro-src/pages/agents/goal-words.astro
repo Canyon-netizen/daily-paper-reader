@@ -1,0 +1,157 @@
+---
+// /agents/goal-words.astro — iter #228:goal word frequency distribution
+//
+// 跨所有 sessions 分析 goal 文本中常见词:
+//   - 移除 stopwords 后
+//   - 统计 word / bigram 频次
+//   - top 30 keywords
+//   - 中英文混合处理
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of',
+  'with', 'by', 'from', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could',
+  'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you',
+  'he', 'she', 'it', 'we', 'they', 'what', 'which', 'who', 'when', 'where', 'why',
+  'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some',
+  'such', 'no', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very',
+  '一个', '一些', '什么', '怎么', '怎样', '我们', '你们', '他们', '以及', '或者',
+  '但是', '因为', '所以', '如果', '这个', '那个', '这些', '那些', '是否',
+  '可以', '可能', '应该', '已经', '正在', '需要', '使用', '通过', '进行',
+  '实现', '构建', '生成', '设计', '开发', '研究', '分析', '关于', '中',
+  '上', '下', '里', '为', '于', '是', '的', '了', '在', '和', '有',
+  '基于', '通过', '用于', '一种', '并', '与', '等', '其', '从而', '此外',
+  '因此', '然而', '即', '如', '等等', '怎样', '如何', '什么',
+]);
+
+function tokenize(goal: string): string[] {
+  const text = (goal ?? '').toLowerCase();
+  const words = text.match(/[a-z0-9一-鿿]+/g) ?? [];
+  const tokens: string[] = [];
+  for (const w of words) {
+    if (w.length < 2) continue;
+    if (STOPWORDS.has(w)) continue;
+    if (/^[一-鿿]+$/.test(w) && w.length > 1) {
+      // 中文 bigrams
+      for (let i = 0; i < w.length - 1; i++) tokens.push(w.slice(i, i + 2));
+    } else {
+      tokens.push(w);
+    }
+  }
+  return tokens;
+}
+
+const root = join(process.cwd(), 'archive');
+const wordMap = new Map<string, number>();
+let totalGoals = 0;
+let totalTokens = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      if (!goal || goal.length < 5) continue;
+      totalGoals += 1;
+      const tokens = tokenize(goal);
+      totalTokens += tokens.length;
+      for (const t of tokens) {
+        wordMap.set(t, (wordMap.get(t) ?? 0) + 1);
+      }
+    } catch (e) { /* */ }
+  }
+}
+
+const topWords = [...wordMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40);
+const uniqueWords = wordMap.size;
+const ttr = totalTokens > 0 ? uniqueWords / totalTokens : 0; // type-token ratio
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Words · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-words</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔤 Goal Words <span class="muted" style="font-size:0.6em">(iter #228)</span></h1>
+      <p class="agents-sub">
+        跨 session goal 文本中的高频关键词。
+        英文整词 + 中文 bigram,去除 stopwords。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gw-globals">
+        <span>总 goals: <strong>{totalGoals}</strong></span>
+        <span>总 tokens: <strong>{totalTokens}</strong></span>
+        <span>unique words: <strong>{uniqueWords}</strong></span>
+        <span>type-token ratio: <strong>{ttr.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 top 40 keywords</h2>
+      <pre class="agents-gw-flow">{topWords.map(([w, c]) => {
+        const label = w.length > 18 ? w.slice(0, 18) + '…' : w.padEnd(18);
+        return `${label} ${bar(c, topWords[0][1], 22)}  ${c}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>TTR(类型-标记比)= unique / total,越高 = 词汇越多样</li>
+        <li>高频词揭示常用研究方向</li>
+        <li>对照 <a href={`${base}/agents/goal-similarity/`}>Goal Similarity</a> 看 session 间相似</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gw-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gw-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gw-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
