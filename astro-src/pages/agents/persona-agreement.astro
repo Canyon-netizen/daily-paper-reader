@@ -1,0 +1,222 @@
+---
+// /agents/persona-agreement.astro — iter #204:persona pair voting agreement
+//
+// 任意两个 persona 对同一轮 proposals 评分的相关性:
+//   - Pearson r(分数相关性)
+//   - 平均分差
+//   - 共同评分的 proposal 数
+// 高 r = 评分方向一致;低 r = 评分分歧
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundScores {
+  sid: string;
+  roundIdx: number;
+  // key: persona name → array of scores
+  byPersona: Map<string, number[]>;
+}
+
+const root = join(process.cwd(), 'archive');
+const rounds: RoundScores[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        const byPersona = new Map<string, number[]>();
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          const scores: number[] = [];
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') scores.push(p.total);
+          }
+          byPersona.set(name, scores);
+        }
+        if (byPersona.size >= 2) rounds.push({ sid, roundIdx: ri, byPersona });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// collect all persona names
+const allPersonas = new Set<string>();
+for (const r of rounds) {
+  for (const name of r.byPersona.keys()) allPersonas.add(name);
+}
+const personas = [...allPersonas];
+
+// 对每个 pair 算 correlation + avg diff
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length < 3 || xs.length !== ys.length) return 0;
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? 0 : num / denom;
+}
+
+interface PairStat {
+  a: string;
+  b: string;
+  r: number;
+  sharedRounds: number;
+  avgDiff: number;
+}
+
+const pairMap = new Map<string, PairStat>();
+for (const r of rounds) {
+  const names = [...r.byPersona.keys()];
+  // 取前 K 个 proposal(假设各 persona 评相同 proposals,按 index 对齐)
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const A = r.byPersona.get(names[i])!;
+      const B = r.byPersona.get(names[j])!;
+      const k = Math.min(A.length, B.length);
+      if (k < 2) continue;
+      const aSlice = A.slice(0, k);
+      const bSlice = B.slice(0, k);
+      const corr = pearson(aSlice, bSlice);
+      const avgDiff = aSlice.reduce((s, x, idx) => s + Math.abs(x - bSlice[idx]), 0) / k;
+      const key = `${names[i]}|||${names[j]}`;
+      const cur = pairMap.get(key) ?? { a: names[i], b: names[j], r: 0, sharedRounds: 0, avgDiff: 0 };
+      cur.r += corr;
+      cur.sharedRounds += 1;
+      cur.avgDiff += avgDiff;
+      pairMap.set(key, cur);
+    }
+  }
+}
+
+const pairs: PairStat[] = [];
+for (const p of pairMap.values()) {
+  if (p.sharedRounds < 2) continue;
+  pairs.push({
+    ...p,
+    r: p.r / p.sharedRounds,
+    avgDiff: p.avgDiff / p.sharedRounds,
+  });
+}
+pairs.sort((x, y) => y.r - x.r);
+
+const topAgree = pairs.slice(0, 15);
+const topDisagree = [...pairs].sort((x, y) => x.r - y.r).slice(0, 15);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Persona Agreement · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-agreement</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🤝 Persona Agreement <span class="muted" style="font-size:0.6em">(iter #204)</span></h1>
+      <p class="agents-sub">
+        两两 persona 对同一轮 proposals 评分的 Pearson 相关系数。
+        r 高 = 一致;r 低(负) = 反向。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pa-globals">
+        <span>personas: <strong>{personas.length}</strong></span>
+        <span>总 pairs (≥ 2 shared): <strong>{pairs.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🤝 top 15 最一致 pairs</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>A</th><th>B</th><th>r</th><th>shared rounds</th><th>avg |diff|</th></tr>
+        </thead>
+        <tbody>
+          {topAgree.map((p) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td><strong style="color:#10b981">{p.r.toFixed(3)}</strong></td>
+              <td>{p.sharedRounds}</td>
+              <td>{p.avgDiff.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚔️ top 15 最分歧 pairs</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>A</th><th>B</th><th>r</th><th>shared rounds</th><th>avg |diff|</th></tr>
+        </thead>
+        <tbody>
+          {topDisagree.map((p) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td><strong style="color:#ef4444">{p.r.toFixed(3)}</strong></td>
+              <td>{p.sharedRounds}</td>
+              <td>{p.avgDiff.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>r &gt; 0.7 = 高度一致(可能冗余)</li>
+        <li>r &lt; 0 = 反向(罕见但说明对立视角)</li>
+        <li>avg |diff| = 平均分差(越小越一致)</li>
+        <li>对照 <a href={`${base}/agents/persona-elo/`}>Persona Elo</a> 看 ELO 排名</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pa-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pa-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
