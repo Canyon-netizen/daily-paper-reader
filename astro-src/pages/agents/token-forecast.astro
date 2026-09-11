@@ -1,0 +1,194 @@
+---
+// /agents/token-forecast.astro — iter #185:token burn forecast
+//
+// 基于历史的线性回归预测下个月 token 消耗:
+//   - 按天聚合 token
+//   - 简单线性回归 y = a*x + b
+//   - 预测 next 30 天
+//   - 警告:超出预算时显示红色
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const ONE_DAY = 24 * 60 * 60 * 1000;
+const dayMap = new Map<string, number>();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const st = await stat(join(rd, rf));
+        const d = new Date(st.mtimeMs);
+        const k = d.toISOString().slice(0, 10);
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        dayMap.set(k, (dayMap.get(k) ?? 0) + (r.feedback?.total_tokens ?? 0));
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 排序
+const sortedDays = [...dayMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+const xs = sortedDays.map((_, i) => i);
+const ys = sortedDays.map(([, v]) => v);
+
+// 简单线性回归
+function linreg(x: number[], y: number[]): { slope: number; intercept: number } {
+  const n = x.length;
+  if (n === 0) return { slope: 0, intercept: 0 };
+  const xSum = x.reduce((a, b) => a + b, 0);
+  const ySum = y.reduce((a, b) => a + b, 0);
+  const xySum = x.reduce((s, xi, i) => s + xi * y[i], 0);
+  const xxSum = x.reduce((s, xi) => s + xi * xi, 0);
+  const slope = (n * xySum - xSum * ySum) / (n * xxSum - xSum * xSum);
+  const intercept = (ySum - slope * xSum) / n;
+  return { slope, intercept };
+}
+
+const reg = linreg(xs, ys);
+const totalTokens = ys.reduce((s, v) => s + v, 0);
+const meanDaily = totalTokens / Math.max(ys.length, 1);
+
+// 预测 next 30 天
+const startX = xs.length;
+const forecast: { date: string; tokens: number }[] = [];
+const today = new Date();
+for (let i = 1; i <= 30; i++) {
+  const pred = Math.max(0, Math.round(reg.slope * (startX + i) + reg.intercept));
+  const d = new Date(today.getTime() + i * ONE_DAY);
+  forecast.push({ date: d.toISOString().slice(0, 10), tokens: pred });
+}
+const forecastTotal = forecast.reduce((s, f) => s + f.tokens, 0);
+
+// 假设月度预算 $50 = 8.33M tokens(Sonnet)
+const BUDGET_TOKENS = 50_000_000 * (1 / 6); // 50/6 per M ≈ 8.33M
+const SONNET_PRICE = 6;
+const forecastCost = (forecastTotal / 1_000_000) * SONNET_PRICE;
+
+function fmtNum(n: number): string {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return n.toString();
+}
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Token Forecast · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / token-forecast</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Token Forecast <span class="muted" style="font-size:0.6em">(iter #185)</span></h1>
+      <p class="agents-sub">
+        基于历史的线性回归预测下 30 天 token 消耗。
+        适合预算预警。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-tf-globals">
+        <span>历史天数: <strong>{sortedDays.length}</strong></span>
+        <span>总 tokens: <strong>{fmtNum(totalTokens)}</strong></span>
+        <span>日均: <strong>{fmtNum(meanDaily)}</strong></span>
+        <span>线性回归 slope: <strong>{reg.slope >= 0 ? '+' : ''}{fmtNum(reg.slope)}/day</strong></span>
+        <span>intercept: <strong>{fmtNum(reg.intercept)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔮 预测下 30 天</h2>
+      <div class="agents-tf-forecast">
+        <strong>预计 token 消耗: <span class="agents-tf-total">{fmtNum(forecastTotal)}</span></strong>
+        <br />
+        <strong>估算成本 (Sonnet): ${forecastCost.toFixed(2)}</strong>
+        {forecastTotal > BUDGET_TOKENS && (
+          <p class="agents-tf-warn">⚠️ 超出 $50 月预算 ($50 ≈ {fmtNum(BUDGET_TOKENS)} tokens)</p>
+        )}
+      </div>
+      <pre class="agents-tf-flow">{forecast.map((f, i) => {
+        const max = Math.max(...forecast.map((x) => x.tokens), 1);
+        return `${f.date.slice(5)} ${bar(f.tokens, max, 14)}  ${String(f.tokens).padStart(8)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📜 最近 30 天实际(参考)</h2>
+      <pre class="agents-tf-flow">{sortedDays.slice(-30).map(([d, t]) => {
+        const max = Math.max(...sortedDays.slice(-30).map(([, v]) => v), 1);
+        return `${d.slice(5)} ${bar(t, max, 14)}  ${String(t).padStart(8)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>slope &gt; 0 = 用量在增长,需关注</li>
+        <li>slope &lt; 0 = 用量在下降,可能 cron 减少</li>
+        <li>预测 &gt; 预算 → 启用 <a href={`${base}/agents/cost-calc/`}>Cost Calculator</a> 换 model</li>
+        <li>对照 <a href={`${base}/agents/daily-burn/`}>Daily Burn</a> 看历史柱状</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-tf-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-tf-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-tf-forecast {
+    background: rgba(99, 102, 241, 0.05);
+    border-left: 4px solid rgba(99, 102, 241, 0.5);
+    padding: 1rem;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+  }
+  .agents-tf-total {
+    color: #4f46e5;
+    font-size: 1.4rem;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-tf-warn {
+    color: #ef4444;
+    font-weight: bold;
+    margin: 0.5rem 0 0;
+  }
+  .agents-tf-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
