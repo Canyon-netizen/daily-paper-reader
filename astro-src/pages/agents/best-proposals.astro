@@ -1,0 +1,193 @@
+---
+// /agents/best-proposals.astro — iter #120:best proposals leaderboard
+//
+// 跨 session 收集所有 proposal(从 round_*.json 的 designer + feedback),
+// 按 best feedback score 排序,展示前 50 名。
+//   - 显示 title / type / rationale 摘要 / 最高分 / 来自哪个 session / 哪个 round
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Proposal {
+  title: string;
+  type: string;
+  rationale: string;
+  bestScore: number;
+  avgScore: number;
+  totalPersonas: number;
+  category: string;
+  sessionId: string;
+  round: number;
+}
+
+const proposals: Proposal[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_(\d+)\.json$/.test(rf)) continue;
+      const roundNum = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const dProposals = r.designer?.proposals ?? [];
+        const fbPersonas = r.feedback?.personas ?? [];
+        const fbByProposal: any = {};
+        for (const persona of fbPersonas) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            if (!fbByProposal[idx]) fbByProposal[idx] = [];
+            fbByProposal[idx].push(p.total ?? 0);
+          }
+        }
+        const gateByIndex: any = {};
+        for (const gp of r.gate?.proposals ?? []) {
+          const idx = gp.index ?? gp.proposal_index;
+          if (idx == null) continue;
+          gateByIndex[idx] = gp.category ?? 'rejected';
+        }
+        dProposals.forEach((p: any, i: number) => {
+          const scores: number[] = fbByProposal[i] ?? [];
+          const best = scores.length > 0 ? Math.max(...scores) : 0;
+          const avg = scores.length > 0 ? scores.reduce((a: number, b: number) => a + b, 0) / scores.length : 0;
+          proposals.push({
+            title: p.title ?? '(untitled)',
+            type: p.type ?? 'unknown',
+            rationale: p.rationale ?? '',
+            bestScore: best,
+            avgScore: avg,
+            totalPersonas: scores.length,
+            category: gateByIndex[i] ?? 'unknown',
+            sessionId: sid,
+            round: roundNum,
+          });
+        });
+      } catch (e) { /* skip */ }
+    }
+  }
+}
+
+proposals.sort((a, b) => b.bestScore - a.bestScore);
+
+const top = proposals.slice(0, 50);
+const totalWithFeedback = proposals.filter((p) => p.bestScore > 0).length;
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+const catColor: any = {
+  promoted: '#10b981', candidate: '#3b82f6', sketch: '#f59e0b', rejected: '#ef4444', unknown: '#6b7280',
+};
+---
+
+<BaseLayout title="Best Proposals · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / best-proposals</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏆 Best Proposals <span class="muted" style="font-size:0.6em">(iter #120)</span></h1>
+      <p class="agents-sub">
+        跨 session 跨 round 收集所有 proposal,按最高 feedback score 排序。
+        显示前 50 名,可快速找到历史上最成功的提案,作为下一轮设计的参考。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 概览</h2>
+      <div class="agents-bp-globals">
+        <span>总 proposals: <strong>{proposals.length}</strong></span>
+        <span>有 feedback 的: <strong>{totalWithFeedback}</strong></span>
+        <span>满分 (10): <strong>{proposals.filter((p) => p.bestScore >= 10).length}</strong></span>
+        <span>高分 (≥ 8): <strong>{proposals.filter((p) => p.bestScore >= 8 && p.bestScore < 10).length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🥇 Top 50</h2>
+      {top.length === 0 ? (
+        <p class="muted">还没有 proposal 数据。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>title</th>
+              <th>type</th>
+              <th>best</th>
+              <th>avg</th>
+              <th>personas</th>
+              <th>category</th>
+              <th>来源</th>
+            </tr>
+          </thead>
+          <tbody>
+            {top.map((p, i) => (
+              <tr>
+                <td>{i + 1}</td>
+                <td><strong>{esc(p.title)}</strong>
+                  {p.rationale && <p class="muted" style="margin:0.2rem 0 0;font-size:0.78rem">{esc(p.rationale.slice(0, 120))}{p.rationale.length > 120 ? '…' : ''}</p>}
+                </td>
+                <td><code>{esc(p.type)}</code></td>
+                <td><strong style={`color:${p.bestScore >= 8 ? '#10b981' : p.bestScore >= 6 ? '#3b82f6' : '#6b7280'}`}>{p.bestScore.toFixed(1)}</strong></td>
+                <td>{p.avgScore.toFixed(1)}</td>
+                <td>{p.totalPersonas}</td>
+                <td><span class="agents-bp-cat" style={`background:${catColor[p.category]}`}>{esc(p.category)}</span></td>
+                <td>
+                  <small>
+                    <a href={`${base}/agents/${p.sessionId}/pipeline/#round-${p.round}`}><code>{esc(p.sessionId.slice(0, 10))}</code></a>
+                    <span class="muted">r{p.round}</span>
+                  </small>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 使用建议</h2>
+      <ul>
+        <li>看 <strong>best score ≥ 8</strong> 的 proposal,模仿它们的标题 / rationale 写作风格</li>
+        <li>按 <strong>type</strong> 分组,看哪些 type 平均分最高(比如 "experiment" 可能比 "speculation" 评分高)</li>
+        <li>把高分 proposal 作为 <a href={`${base}/agents/capture/`}>📥 Capture</a> 或 <a href={`${base}/agents/todos/`}>✅ Todos</a> 的下一步</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-bp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-bp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-bp-cat {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    color: white;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+</style>
