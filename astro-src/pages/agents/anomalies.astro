@@ -1,0 +1,238 @@
+---
+// /agents/anomalies.astro — iter #127:round anomaly detector
+//
+// 跨 session 用 z-score 找异常 rounds(feedback 异常高 / 低)
+//   - 计算每个 round 的 avg best score
+//   - 全局 mean / stddev
+//   - z-score > 2 = 高分异常
+//   - z-score < -2 = 低分异常
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundScore {
+  sid: string;
+  round: number;
+  avgBest: number;
+  bestScore: number;
+  tokens: number;
+  promoted: number;
+  rejected: number;
+  goal: string;
+}
+
+const allRounds: RoundScore[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const metaPath = join(root, sid, 'meta.json');
+    if (existsSync(metaPath)) {
+      try { goal = JSON.parse(await readFile(metaPath, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_(\d+)\.json$/.test(rf)) continue;
+      const roundNum = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const proposals = r.designer?.proposals ?? [];
+        const bestByIdx: Record<number, number> = {};
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const tot = p.total ?? 0;
+            if (!bestByIdx[idx] || tot > bestByIdx[idx]) bestByIdx[idx] = tot;
+          }
+        }
+        const scores = Object.values(bestByIdx);
+        if (scores.length === 0) continue;
+        const avgBest = scores.reduce((a, b) => a + b, 0) / scores.length;
+        const bestScore = Math.max(...scores);
+        const tokens = r.feedback?.total_tokens ?? 0;
+        let promoted = 0, rejected = 0;
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+          else if (gp.category === 'rejected') rejected += 1;
+        }
+        allRounds.push({ sid, round: roundNum, avgBest, bestScore, tokens, promoted, rejected, goal });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 计算 z-score
+const scores = allRounds.map((r) => r.avgBest);
+const mean = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+const variance = scores.length > 0 ? scores.reduce((s, v) => s + (v - mean) ** 2, 0) / scores.length : 0;
+const stddev = Math.sqrt(variance);
+
+const withZ = allRounds.map((r) => ({
+  ...r,
+  z: stddev > 0 ? (r.avgBest - mean) / stddev : 0,
+}));
+const highAnomalies = withZ.filter((r) => r.z >= 1.5).sort((a, b) => b.z - a.z);
+const lowAnomalies = withZ.filter((r) => r.z <= -1.5).sort((a, b) => a.z - b.z);
+
+// z-score histogram
+const zBuckets = [
+  { label: 'z ≤ -2     ', min: -999, max: -2, count: 0 },
+  { label: '-2 < z ≤ -1', min: -2, max: -1, count: 0 },
+  { label: '-1 < z ≤  0', min: -1, max: 0, count: 0 },
+  { label: ' 0 < z ≤  1', min: 0, max: 1, count: 0 },
+  { label: ' 1 < z ≤  2', min: 1, max: 2, count: 0 },
+  { label: 'z > 2      ', min: 2, max: 999, count: 0 },
+];
+for (const r of withZ) {
+  for (const b of zBuckets) {
+    if (r.z > b.min && r.z <= b.max) { b.count += 1; break; }
+  }
+}
+const zMaxC = Math.max(...zBuckets.map((b) => b.count));
+function zBar(n: number, max: number, width = 30): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+const zHistogramText = zBuckets.map((b) => `${b.label} ${zBar(b.count, zMaxC)}  ${String(b.count).padStart(4)}`).join('\n');
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function zColor(z: number): string {
+  if (z >= 2) return '#10b981';
+  if (z >= 1) return '#3b82f6';
+  if (z >= -1) return '#6b7280';
+  if (z >= -2) return '#f59e0b';
+  return '#ef4444';
+}
+---
+
+<BaseLayout title="Round Anomalies · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / anomalies</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🚨 Round Anomaly Detector <span class="muted" style="font-size:0.6em">(iter #127)</span></h1>
+      <p class="agents-sub">
+        用 z-score 找跨 session 异常 rounds。
+        偏离全局均值 ≥ 1.5 个标准差 = 异常高分(可能挖到宝)或异常低分(可能 prompt 失效)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-an-globals">
+        <span>总 rounds: <strong>{allRounds.length}</strong></span>
+        <span>avg score: <strong>{mean.toFixed(2)}</strong></span>
+        <span>stddev: <strong>{stddev.toFixed(2)}</strong></span>
+        <span>高分异常 (z ≥ 1.5): <strong>{highAnomalies.length}</strong></span>
+        <span>低分异常 (z ≤ -1.5): <strong>{lowAnomalies.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⬆️ 高分异常(z ≥ 1.5,按 z 倒序)</h2>
+      {highAnomalies.length === 0 ? (
+        <p class="muted">没有高分异常。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>z</th><th>avg best</th><th>best</th><th>promoted</th><th>rejected</th><th>tokens</th><th>session</th><th>goal</th></tr>
+          </thead>
+          <tbody>
+            {highAnomalies.slice(0, 30).map((r) => (
+              <tr>
+                <td><strong style={`color:${zColor(r.z)}`}>+{r.z.toFixed(2)}</strong></td>
+                <td>{r.avgBest.toFixed(2)}</td>
+                <td>{r.bestScore.toFixed(1)}</td>
+                <td>{r.promoted}</td>
+                <td>{r.rejected}</td>
+                <td><small>{r.tokens.toLocaleString()}</small></td>
+                <td>
+                  <a href={`${base}/agents/${r.sid}/pipeline/#round-${r.round}`}><code>{esc(r.sid.slice(0, 12))}</code></a>
+                  <small class="muted">r{r.round}</small>
+                </td>
+                <td><small>{esc((r.goal ?? '').slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⬇️ 低分异常(z ≤ -1.5,按 z 升序)</h2>
+      {lowAnomalies.length === 0 ? (
+        <p class="muted">没有低分异常。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>z</th><th>avg best</th><th>best</th><th>promoted</th><th>rejected</th><th>tokens</th><th>session</th><th>goal</th></tr>
+          </thead>
+          <tbody>
+            {lowAnomalies.slice(0, 30).map((r) => (
+              <tr>
+                <td><strong style={`color:${zColor(r.z)}`}>{r.z.toFixed(2)}</strong></td>
+                <td>{r.avgBest.toFixed(2)}</td>
+                <td>{r.bestScore.toFixed(1)}</td>
+                <td>{r.promoted}</td>
+                <td>{r.rejected}</td>
+                <td><small>{r.tokens.toLocaleString()}</small></td>
+                <td>
+                  <a href={`${base}/agents/${r.sid}/pipeline/#round-${r.round}`}><code>{esc(r.sid.slice(0, 12))}</code></a>
+                  <small class="muted">r{r.round}</small>
+                </td>
+                <td><small>{esc((r.goal ?? '').slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 z-score 分布(全部 rounds)</h2>
+      <pre class="agents-an-flow">{zHistogramText}</pre>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-an-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-an-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-an-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
