@@ -1,0 +1,170 @@
+---
+// /agents/component-timeline.astro — iter #176:pipeline component timeline
+//
+// 显示每个 pipeline 组件(designer / feedback / gate / modifier)
+// 首次使用 / 最后使用时间 / 调用次数:
+//   - 每个组件的 mtime 范围
+//   - 调用频次直方图
+//   - 是否所有 round 都覆盖全部组件
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ComponentStats {
+  name: string;
+  emoji: string;
+  presenceCount: number;
+  firstMtime: number;
+  lastMtime: number;
+}
+
+const components: ComponentStats[] = [
+  { name: 'designer', emoji: '🎨', presenceCount: 0, firstMtime: 0, lastMtime: 0 },
+  { name: 'feedback', emoji: '🗣️', presenceCount: 0, firstMtime: 0, lastMtime: 0 },
+  { name: 'gate', emoji: '🚧', presenceCount: 0, firstMtime: 0, lastMtime: 0 },
+  { name: 'modifier', emoji: '🔧', presenceCount: 0, firstMtime: 0, lastMtime: 0 },
+  { name: 'reviewer', emoji: '📝', presenceCount: 0, firstMtime: 0, lastMtime: 0 },
+  { name: 'reviser', emoji: '✏️', presenceCount: 0, firstMtime: 0, lastMtime: 0 },
+];
+
+let totalRounds = 0;
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const ts = st.mtimeMs;
+        totalRounds += 1;
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        for (const c of components) {
+          if (r[c.name] != null) {
+            c.presenceCount += 1;
+            if (c.firstMtime === 0 || ts < c.firstMtime) c.firstMtime = ts;
+            if (ts > c.lastMtime) c.lastMtime = ts;
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function fmtDate(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toISOString().slice(0, 10);
+}
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Component Timeline · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / component-timeline</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏱️ Component Timeline <span class="muted" style="font-size:0.6em">(iter #176)</span></h1>
+      <p class="agents-sub">
+        显示每个 pipeline 组件(designer / feedback / gate / modifier / reviewer / reviser)
+        的首次 / 最后使用时间 + 出现次数。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ct-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>组件数: <strong>{components.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🧩 组件覆盖</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>组件</th><th>出现 rounds</th><th>覆盖率</th><th>首次</th><th>最后</th><th>跨度</th></tr>
+        </thead>
+        <tbody>
+          {components.map((c) => {
+            const coverage = totalRounds > 0 ? ((c.presenceCount / totalRounds) * 100).toFixed(1) : '0';
+            const span = c.firstMtime > 0 && c.lastMtime > 0 ? Math.floor((c.lastMtime - c.firstMtime) / (24 * 60 * 60 * 1000)) : 0;
+            return (
+              <tr>
+                <td>{c.emoji} <code>{c.name}</code></td>
+                <td>{c.presenceCount}</td>
+                <td><strong>{coverage}%</strong></td>
+                <td>{fmtDate(c.firstMtime)}</td>
+                <td>{fmtDate(c.lastMtime)}</td>
+                <td>{span >= 0 ? `${span}d` : '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 覆盖分布柱状</h2>
+      <pre class="agents-ct-flow">{(() => {
+        const max = totalRounds || 1;
+        return components.map((c) => {
+          const pct = ((c.presenceCount / max) * 100).toFixed(1);
+          return `${c.emoji} ${c.name.padEnd(10)} ${bar(c.presenceCount, max, 24)}  ${String(c.presenceCount).padStart(4)}/${max} (${pct}%)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>任何组件覆盖率 &lt; 100% = 部分 rounds 未启用该组件 — 看是否遗漏</li>
+        <li>跨度短 = 组件只用于近期,可能最近才加入</li>
+        <li>对照 <a href={`${base}/agents/pipeline-trace/`}>Pipeline Trace</a> 看每个 session 的实际流</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ct-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ct-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ct-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
