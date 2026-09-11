@@ -1,0 +1,355 @@
+---
+// /agents/[sessionId]/critiques.astro — iter #85:browse all feedback critiques
+//
+// 把每个 round 的 feedback.critiques[] 平铺,展示:
+//   - proposal_id + 关联标题
+//   - 3 个 persona 的打分(methodologist / engineer / skeptic)
+//   - total + critique 文本
+//   - round 号 + 时间戳
+// 用户可看到"评审组对每个 proposal 的具体意见",帮助理解为什么被 promote/reject。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    if (existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+
+let meta: any = null;
+try { meta = JSON.parse(await readFile(join(sessionDir, 'meta.json'), 'utf8')); } catch { /* */ }
+
+let rounds: any[] = [];
+try {
+  const files = (await readdir(join(sessionDir, 'rounds')))
+    .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+  rounds = await Promise.all(files.map(async (f) => {
+    try { return JSON.parse(await readFile(join(sessionDir, 'rounds', f), 'utf8')); }
+    catch { return null; }
+  })).then((arr) => arr.filter(Boolean));
+} catch { /* */ }
+
+// proposal_id → title / type / gate status 映射
+const proposalMap = new Map<string, { title: string; type: string; round: number; gateStatus: string }>();
+for (const r of rounds) {
+  const gate = r?.gate ?? {};
+  const promoted = new Set(Array.isArray(gate.promoted) ? gate.promoted : []);
+  const candidate = new Set(Array.isArray(gate.candidate) ? gate.candidate : []);
+  const sketch = new Set(Array.isArray(gate.sketch) ? gate.sketch : []);
+  const rejected = new Set(Array.isArray(gate.rejected) ? gate.rejected : []);
+
+  for (const p of (r?.designer?.proposals ?? [])) {
+    if (!p?.proposal_id) continue;
+    let status = 'unknown';
+    if (promoted.has(p.proposal_id)) status = 'promoted';
+    else if (candidate.has(p.proposal_id)) status = 'candidate';
+    else if (sketch.has(p.proposal_id)) status = 'sketch';
+    else if (rejected.has(p.proposal_id)) status = 'rejected';
+    proposalMap.set(p.proposal_id, {
+      title: p?.title ?? '',
+      type: p?.type ?? '',
+      round: r.round,
+      gateStatus: status,
+    });
+  }
+}
+
+interface CritiqueEntry {
+  round: number;
+  roundFinishedAt: number;
+  proposal_id: string;
+  proposalTitle: string;
+  proposalType: string;
+  gateStatus: string;
+  methodologist: number | null;
+  engineer: number | null;
+  skeptic: number | null;
+  total: number;
+  critique: string;
+}
+
+const entries: CritiqueEntry[] = [];
+for (const r of rounds) {
+  for (const c of (r?.feedback?.critiques ?? [])) {
+    if (!c?.proposal_id) continue;
+    const p = proposalMap.get(c.proposal_id) ?? { title: '', type: '', round: r.round, gateStatus: 'unknown' };
+    entries.push({
+      round: r.round,
+      roundFinishedAt: Number(r?.finished_at ?? 0),
+      proposal_id: c.proposal_id,
+      proposalTitle: p.title,
+      proposalType: p.type,
+      gateStatus: p.gateStatus,
+      methodologist: typeof c?.scores?.methodologist === 'number' ? c.scores.methodologist : null,
+      engineer: typeof c?.scores?.engineer === 'number' ? c.scores.engineer : null,
+      skeptic: typeof c?.scores?.skeptic === 'number' ? c.scores.skeptic : null,
+      total: typeof c?.total === 'number' ? c.total : 0,
+      critique: typeof c?.critique === 'string' ? c.critique : '',
+    });
+  }
+}
+
+// 按 total 倒序
+entries.sort((a, b) => b.total - a.total);
+
+// persona 平均分
+function avg(field: 'methodologist' | 'engineer' | 'skeptic'): number {
+  const vals = entries.map((e) => e[field]).filter((v): v is number => v != null);
+  if (vals.length === 0) return 0;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+const avgM = avg('methodologist');
+const avgE = avg('engineer');
+const avgS = avg('skeptic');
+const avgT = entries.length > 0 ? entries.reduce((a, e) => a + e.total, 0) / entries.length : 0;
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function scoreClass(n: number): string {
+  if (n >= 8) return 'high';
+  if (n >= 6) return 'mid';
+  return 'low';
+}
+
+function gateClass(s: string): string {
+  return `agents-gate-${s}`;
+}
+
+function fmt(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString();
+}
+---
+
+<BaseLayout title={`Critiques · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>critiques</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👀 Session 评审记录 · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #85 · 所有 round 的 <code>feedback.critiques[]</code>,展示 3 个 persona(methodologist / engineer / skeptic)的打分 + 评审文本。
+        按 total 倒序,gate 决定用色块标出。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 评审统计</h2>
+      <div class="agents-cr-stats">
+        <span><strong>{entries.length}</strong> critiques 总数</span>
+        <span class={scoreClass(avgM)}><strong>{avgM.toFixed(2)}</strong> methodologist</span>
+        <span class={scoreClass(avgE)}><strong>{avgE.toFixed(2)}</strong> engineer</span>
+        <span class={scoreClass(avgS)}><strong>{avgS.toFixed(2)}</strong> skeptic</span>
+        <span class={scoreClass(avgT)}><strong>{avgT.toFixed(2)}</strong> avg total</span>
+      </div>
+    </section>
+
+    {entries.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">该 session 还没有任何 critique(可能用了 dry-run 模式)。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>📋 全部 critique (按 total 倒序)</h2>
+        <ol class="agents-cr-list">
+          {entries.map((e) => (
+            <li class="agents-cr-item">
+              <header class="agents-cr-head">
+                <span class={`agents-cr-gate ${gateClass(e.gateStatus)}`} title={`gate: ${e.gateStatus}`}>
+                  {e.gateStatus}
+                </span>
+                <span class="muted">
+                  round <a href={`${base}/agents/${sessionId}/${String(e.round).padStart(3, '0')}/`}>#{e.round}</a>
+                  · {fmt(e.roundFinishedAt)}
+                </span>
+              </header>
+              <p class="agents-cr-proposal">
+                {e.proposalTitle
+                  ? <strong>{escapeHtml(e.proposalTitle)}</strong>
+                  : <span class="muted"><em>(未找到 proposal {escapeHtml(e.proposal_id)})</em></span>}
+                {e.proposalType && <code class="agents-cr-type">{escapeHtml(e.proposalType)}</code>}
+                <code class="muted" style="margin-left:0.5rem">{escapeHtml(e.proposal_id)}</code>
+              </p>
+              <div class="agents-cr-scores">
+                <span class={`agents-cr-score ${e.methodologist != null ? scoreClass(e.methodologist) : 'muted'}`}>
+                  <small>methodologist</small>
+                  <strong>{e.methodologist ?? '—'}</strong>
+                </span>
+                <span class={`agents-cr-score ${e.engineer != null ? scoreClass(e.engineer) : 'muted'}`}>
+                  <small>engineer</small>
+                  <strong>{e.engineer ?? '—'}</strong>
+                </span>
+                <span class={`agents-cr-score ${e.skeptic != null ? scoreClass(e.skeptic) : 'muted'}`}>
+                  <small>skeptic</small>
+                  <strong>{e.skeptic ?? '—'}</strong>
+                </span>
+                <span class={`agents-cr-total ${scoreClass(e.total)}`}>
+                  <small>total</small>
+                  <strong>{e.total.toFixed(1)}</strong>
+                </span>
+              </div>
+              {e.critique && (
+                <p class="agents-cr-text">
+                  <em>"{escapeHtml(e.critique)}"</em>
+                </p>
+              )}
+            </li>
+          ))}
+        </ol>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>← Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/timeline/`}>📜 Timeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/deliverables/`}>🛠 Deliverables</a>
+        <a class="button" href={`${base}/agents/${sessionId}/score/`}>📊 Score</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cr-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-cr-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.3rem;
+  }
+  .agents-cr-stats .high strong { color: #10b981; }
+  .agents-cr-stats .mid strong { color: #f59e0b; }
+  .agents-cr-stats .low strong { color: #ef4444; }
+  .agents-cr-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-cr-item {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.5rem;
+  }
+  .agents-cr-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-bottom: 0.4rem;
+  }
+  .agents-cr-gate {
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-family: ui-monospace, monospace;
+    text-transform: uppercase;
+  }
+  .agents-gate-promoted { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+  .agents-gate-candidate { background: rgba(99, 102, 241, 0.2); color: #4f46e5; }
+  .agents-gate-sketch { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+  .agents-gate-rejected { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+  .agents-gate-unknown { background: rgba(107, 114, 128, 0.2); color: #6b7280; }
+  .agents-cr-proposal {
+    margin: 0.4rem 0;
+    font-size: 0.92rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .agents-cr-type {
+    font-size: 0.78rem;
+    padding: 0.1rem 0.4rem;
+    background: rgba(0,0,0,0.2);
+    border-radius: 4px;
+  }
+  .agents-cr-scores {
+    display: flex;
+    gap: 0.5rem;
+    margin: 0.4rem 0;
+    flex-wrap: wrap;
+  }
+  .agents-cr-score {
+    background: rgba(255,255,255,0.05);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    text-align: center;
+    min-width: 70px;
+  }
+  .agents-cr-score small {
+    display: block;
+    font-size: 0.7rem;
+    color: #6b7280;
+  }
+  .agents-cr-score strong {
+    font-size: 1rem;
+    color: #6b7280;
+  }
+  .agents-cr-score.high strong { color: #10b981; }
+  .agents-cr-score.mid strong { color: #f59e0b; }
+  .agents-cr-score.low strong { color: #ef4444; }
+  .agents-cr-total {
+    background: rgba(99, 102, 241, 0.15);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    text-align: center;
+    min-width: 80px;
+  }
+  .agents-cr-total small {
+    display: block;
+    font-size: 0.7rem;
+    color: #6b7280;
+  }
+  .agents-cr-total strong {
+    font-size: 1.1rem;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-cr-total.high strong { color: #10b981; }
+  .agents-cr-total.mid strong { color: #f59e0b; }
+  .agents-cr-total.low strong { color: #ef4444; }
+  .agents-cr-text {
+    margin: 0.4rem 0 0;
+    font-size: 0.88rem;
+    color: #4b5563;
+    border-left: 2px solid rgba(99, 102, 241, 0.3);
+    padding-left: 0.6rem;
+  }
+</style>
