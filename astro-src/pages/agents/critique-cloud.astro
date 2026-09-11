@@ -1,0 +1,154 @@
+---
+// /agents/critique-cloud.astro — iter #147:critique text cloud
+//
+// 跨 session 从 feedback.critique 文本提取高频词:
+//   - 每个 persona 单独 cloud(methodologist / engineer / skeptic)
+//   - 全局 cloud
+//   - 显示哪些 critique 模式高频出现
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOP = new Set([
+  'the','a','an','and','or','but','if','to','of','in','on','at','by','from','with','as','is','are','was','were','be','been','have','has','had','this','that','it','its','for','our','we','us','they','their','they','i','my','me','you','your','he','she','his','her','also','more','most','some','than','too','very','just','only','any','all','each','every','no','not','so',
+  'this','that','these','those','will','would','should','could','may','might','can','must',
+  '一个','一些','这个','那个','我们','你们','他们','什么','怎么','可以','可能','需要','应该','但是','因为','所以','如果','虽然','然而','因此','或者','例如','比如',
+]);
+
+interface CloudEntry { term: string; count: number; }
+const globalFreq = new Map<string, number>();
+const byPersona: Record<string, Map<string, number>> = {
+  methodologist: new Map(), engineer: new Map(), skeptic: new Map(), unknown: new Map(),
+};
+
+const root = join(process.cwd(), 'archive');
+let totalCritiques = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.name ?? persona.persona ?? persona.role ?? 'unknown';
+          const text = persona.critique ?? persona.review ?? persona.feedback ?? persona.text ?? '';
+          if (typeof text !== 'string' || text.length < 10) continue;
+          totalCritiques += 1;
+          const cleaned = text.replace(/```[\s\S]*?```/g, ' ').replace(/[#*_~>|]/g, ' ').replace(/[.,;:!?'"()\[\]{}\/\\\-]/g, ' ').toLowerCase();
+          const tokens = cleaned.split(/\s+/).filter((t) => t.length >= 4 && !STOP.has(t) && !/^\d+$/.test(t));
+          const seen = new Set<string>();
+          for (const t of tokens) {
+            if (seen.has(t)) continue; // 每个 critique 内去重
+            seen.add(t);
+            globalFreq.set(t, (globalFreq.get(t) ?? 0) + 1);
+            if (!byPersona[name]) byPersona[name] = new Map();
+            byPersona[name].set(t, (byPersona[name].get(t) ?? 0) + 1);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function topN(map: Map<string, number>, n: number): CloudEntry[] {
+  return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([term, count]) => ({ term, count }));
+}
+
+const topGlobal = topN(globalFreq, 50);
+const personaClouds = Object.entries(byPersona)
+  .filter(([_, m]) => m.size > 0)
+  .map(([name, m]) => ({ name, entries: topN(m, 20) }))
+  .sort((a, b) => b.entries.length - a.entries.length);
+
+function bar(n: number, max: number, width = 30): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Critique Cloud · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / critique-cloud</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💬 Critique Word Cloud <span class="muted" style="font-size:0.6em">(iter #147)</span></h1>
+      <p class="agents-sub">
+        跨 session 从 feedback 的 critique 文本提取高频词。
+        看 3 个 persona 经常用什么词来批评/评价 proposals,作为 prompt 调整的依据。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cc2-globals">
+        <span>总 critiques: <strong>{totalCritiques}</strong></span>
+        <span>全局唯一词: <strong>{globalFreq.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>☁️ 全局 Top 50</h2>
+      {topGlobal.length === 0 ? (
+        <p class="muted">还没有 critique 文本(可能 system 没存 critique 字段)。</p>
+      ) : (
+        <pre class="agents-cc2-flow">{topGlobal.map((e, i) => `${String(i + 1).padStart(3)} ${e.term.padEnd(20)} ${bar(e.count, topGlobal[0].count, 30)}  ${e.count}`).join('\n')}</pre>
+      )}
+    </section>
+
+    {personaClouds.map((p) => (
+      <section class="agents-session-section">
+        <h2>🎭 {p.name} Top 20</h2>
+        <pre class="agents-cc2-flow">{p.entries.map((e, i) => `${String(i + 1).padStart(3)} ${e.term.padEnd(20)} ${bar(e.count, p.entries[0].count, 30)}  ${e.count}`).join('\n')}</pre>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频词反映 persona 的"思维模式" — 比如 methodologist 经常说 "coverage"、"alignment"</li>
+        <li>如果某个高频词过多,可能是 prompt 重复 — 考虑让 persona 多样化</li>
+        <li>对比 3 个 persona 的 top 词差异,可以发现它们的视角差异</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cc2-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cc2-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cc2-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.82rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
