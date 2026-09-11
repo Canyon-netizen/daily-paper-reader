@@ -1,0 +1,241 @@
+---
+// /agents/goal-cycle.astro — iter #187:goal cycle time
+//
+// 跨 session 看"周期"(从 session 创建到首个 promoted 的时间):
+//   - 平均周期
+//   - 周期分布直方图
+//   - top 10 最快/最慢
+//   - 周期 vs promoted 关系
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Cycle {
+  sid: string;
+  goal: string;
+  metaMtime: number;
+  firstPromMtime: number;
+  cycleMs: number;
+  cycleRounds: number; // 几轮后才有第一个 promoted
+  promoted: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const records: Cycle[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let metaMtime = 0;
+    try {
+      const st = await stat(mp);
+      metaMtime = st.mtimeMs;
+      goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+    } catch (e) { /* */ }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length === 0) continue;
+    let firstPromMtime = 0;
+    let firstPromRound = 0;
+    let totalProm = 0;
+    for (const ri of rNum) {
+      try {
+        const fp = join(rd, `round_${ri}.json`);
+        const st = await stat(fp);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') {
+            totalProm += 1;
+            if (firstPromMtime === 0) {
+              firstPromMtime = st.mtimeMs;
+              firstPromRound = ri;
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+    if (firstPromMtime > 0) {
+      records.push({
+        sid, goal,
+        metaMtime,
+        firstPromMtime,
+        cycleMs: firstPromMtime - metaMtime,
+        cycleRounds: firstPromRound,
+        promoted: totalProm,
+      });
+    }
+  }
+}
+
+const total = records.length;
+const sorted = [...records].sort((a, b) => a.cycleMs - b.cycleMs);
+const avgCycle = records.length > 0 ? records.reduce((s, r) => s + r.cycleMs, 0) / records.length : 0;
+const medianCycle = (() => {
+  if (records.length === 0) return 0;
+  const sortedMs = records.map((r) => r.cycleMs).sort((a, b) => a - b);
+  const mid = Math.floor(sortedMs.length / 2);
+  return sortedMs.length % 2 ? sortedMs[mid] : (sortedMs[mid - 1] + sortedMs[mid]) / 2;
+})();
+
+const ONE_HOUR = 60 * 60 * 1000;
+const ONE_DAY = ONE_HOUR * 24;
+
+// 直方图
+const buckets = [
+  { label: '< 1 hour ', min: 0, max: ONE_HOUR, count: 0 },
+  { label: '1-6 hour ', min: ONE_HOUR, max: 6 * ONE_HOUR, count: 0 },
+  { label: '6-24 hour', min: 6 * ONE_HOUR, max: ONE_DAY, count: 0 },
+  { label: '1-7 days ', min: ONE_DAY, max: 7 * ONE_DAY, count: 0 },
+  { label: '> 7 days ', min: 7 * ONE_DAY, max: 999 * ONE_DAY, count: 0 },
+];
+for (const r of records) {
+  for (const b of buckets) {
+    if (r.cycleMs >= b.min && r.cycleMs < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+const maxBucket = Math.max(...buckets.map((b) => b.count), 1);
+
+const fastest = sorted.slice(0, 10);
+const slowest = [...records].sort((a, b) => b.cycleMs - a.cycleMs).slice(0, 10);
+
+function fmtCycle(ms: number): string {
+  if (ms < 60 * 1000) return Math.round(ms / 1000) + 's';
+  if (ms < ONE_HOUR) return Math.round(ms / (60 * 1000)) + 'm';
+  if (ms < ONE_DAY) return Math.round(ms / ONE_HOUR) + 'h';
+  return (ms / ONE_DAY).toFixed(1) + 'd';
+}
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Cycle Time · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-cycle</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏰ Goal Cycle Time <span class="muted" style="font-size:0.6em">(iter #187)</span></h1>
+      <p class="agents-sub">
+        跨 session 看"周期"(meta 创建 → 首个 promoted 的时间)。
+        短 = 快产出;长 = 深度迭代。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gc-globals">
+        <span>总 sessions (有 promoted): <strong>{total}</strong></span>
+        <span>avg cycle: <strong>{fmtCycle(avgCycle)}</strong></span>
+        <span>median: <strong>{fmtCycle(medianCycle)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 周期分布</h2>
+      <pre class="agents-gc-flow">{buckets.map((b) => {
+        return `${b.label} ${bar(b.count, maxBucket, 24)}  ${String(b.count).padStart(4)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚡ top 10 最快 cycles</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>cycle</th><th>轮</th><th>promoted</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {fastest.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td><strong>{fmtCycle(r.cycleMs)}</strong></td>
+              <td>R{r.cycleRounds}</td>
+              <td>{r.promoted}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐢 top 10 最慢 cycles</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>cycle</th><th>轮</th><th>promoted</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {slowest.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td><strong>{fmtCycle(r.cycleMs)}</strong></td>
+              <td>R{r.cycleRounds}</td>
+              <td>{r.promoted}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>cycle &lt; 1 hour 通常是 LLM 一次过(quality 可能不高)</li>
+        <li>cycle &gt; 7 days 通常意味着多轮迭代,质量更可能好</li>
+        <li>对照 <a href={`${base}/agents/promotion-velocity/`}>Promotion Velocity</a> 看 round 维度</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
