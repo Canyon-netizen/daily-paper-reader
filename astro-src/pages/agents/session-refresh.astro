@@ -1,0 +1,222 @@
+---
+// /agents/session-refresh.astro — iter #179:session refresh rate
+//
+// 跨 session 看"刷新率"(每 session 的 rounds/天):
+//   - 平均 round/天
+//   - "高频更新" sessions(> 3 rounds/day)
+//   - "低频更新" sessions(< 0.5 rounds/day)
+//   - 整体刷新率分布
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Refresh {
+  sid: string;
+  goal: string;
+  rounds: number;
+  spanDays: number;
+  ratePerDay: number; // rounds / day
+  status: 'high' | 'medium' | 'low' | 'single' | 'zero';
+}
+
+const root = join(process.cwd(), 'archive');
+const records: Refresh[] = [];
+const now = Date.now();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    let firstMtime = 0;
+    let lastMtime = 0;
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+      try {
+        const st = await stat(join(rd, rf));
+        if (firstMtime === 0 || st.mtimeMs < firstMtime) firstMtime = st.mtimeMs;
+        if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs;
+      } catch (e) { /* */ }
+    }
+    if (rNum.length === 0) continue;
+    const spanMs = lastMtime - firstMtime;
+    const spanDays = spanMs > 0 ? spanMs / (24 * 60 * 60 * 1000) : 0;
+    const ratePerDay = spanDays > 0 ? rNum.length / spanDays : (rNum.length > 0 ? Infinity : 0);
+
+    let status: Refresh['status'] = 'medium';
+    if (rNum.length === 0) status = 'zero';
+    else if (ratePerDay >= 3) status = 'high';
+    else if (ratePerDay >= 0.5) status = 'medium';
+    else if (rNum.length === 1) status = 'single';
+    else status = 'low';
+
+    records.push({
+      sid, goal,
+      rounds: rNum.length,
+      spanDays,
+      ratePerDay,
+      status,
+    });
+  }
+}
+
+// 直方图
+const buckets = [
+  { label: '0 (single)', min: 0, max: 0.0001, count: 0 },
+  { label: '0-0.5/day ', min: 0.0001, max: 0.5, count: 0 },
+  { label: '0.5-1/day ', min: 0.5, max: 1, count: 0 },
+  { label: '1-3/day   ', min: 1, max: 3, count: 0 },
+  { label: '> 3/day   ', min: 3, max: Infinity, count: 0 },
+];
+for (const r of records) {
+  for (const b of buckets) {
+    if (r.ratePerDay >= b.min && r.ratePerDay < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+const maxBucket = Math.max(...buckets.map((b) => b.count), 1);
+
+const finite = records.filter((r) => isFinite(r.ratePerDay));
+const avgRate = finite.length > 0 ? finite.reduce((s, r) => s + r.ratePerDay, 0) / finite.length : 0;
+const high = records.filter((r) => r.status === 'high').slice(0, 10);
+const low = records.filter((r) => r.status === 'low').slice(0, 10);
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtRate(n: number): string {
+  if (!isFinite(n)) return '∞';
+  if (n >= 1) return n.toFixed(2);
+  return n.toFixed(3);
+}
+---
+
+<BaseLayout title="Session Refresh Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-refresh</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔄 Session Refresh Rate <span class="muted" style="font-size:0.6em">(iter #179)</span></h1>
+      <p class="agents-sub">
+        跨 session 看"刷新率"(rounds/天)。
+        高 = 实时跑,低 = 间歇性。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sr-globals">
+        <span>总 sessions: <strong>{records.length}</strong></span>
+        <span>avg rate (finite): <strong>{fmtRate(avgRate)}/day</strong></span>
+        <span>high (≥ 3/day): <strong>{records.filter((r) => r.status === 'high').length}</strong></span>
+        <span>low (&lt; 0.5/day): <strong>{records.filter((r) => r.status === 'low').length}</strong></span>
+        <span>single: <strong>{records.filter((r) => r.status === 'single').length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 刷新率分桶</h2>
+      <pre class="agents-sr-flow">{buckets.map((b) => {
+        return `${b.label} ${bar(b.count, maxBucket, 24)}  ${String(b.count).padStart(4)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 10 高频刷新 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>span</th><th>rate/day</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {high.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td>{r.spanDays.toFixed(2)}d</td>
+              <td><strong>{fmtRate(r.ratePerDay)}</strong></td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐌 top 10 低频刷新 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>span</th><th>rate/day</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {low.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td>{r.spanDays.toFixed(2)}d</td>
+              <td>{fmtRate(r.ratePerDay)}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rate &gt; 3/day 通常意味着 cron 实时触发,看 <a href={`${base}/agents/daily-map/`}>Daily Map</a></li>
+        <li>rate &lt; 0.5/day 表示手动更新,可考虑 <a href={`${base}/agents/resume/`}>Resume</a></li>
+        <li>对照 <a href={`${base}/agents/round-density/`}>Round Density</a> 看每轮产 proposal 数</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
