@@ -1,0 +1,145 @@
+---
+// /agents/round-hour.astro — iter #214:round creation hour-of-day distribution
+//
+// 看 round 在一天中哪个时段创建最多:
+//   - 24 小时分布
+//   - 区分 weekday / weekend
+//   - 高峰时段识别
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const hourCounts = new Array(24).fill(0);
+const hourWeekday = new Array(24).fill(0);
+const hourWeekend = new Array(24).fill(0);
+let totalRounds = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const st = await stat(join(rd, rf));
+        const h = new Date(st.mtimeMs).getHours();
+        const dow = new Date(st.mtimeMs).getDay();
+        hourCounts[h] += 1;
+        totalRounds += 1;
+        if (dow === 0 || dow === 6) hourWeekend[h] += 1;
+        else hourWeekday[h] += 1;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const maxCount = Math.max(...hourCounts, 1);
+
+// 找高峰时段(连续 3 小时平均最高的)
+let peakStart = 0;
+let peakAvg = 0;
+for (let i = 0; i < 24; i++) {
+  const h0 = hourCounts[i];
+  const h1 = hourCounts[(i + 1) % 24];
+  const h2 = hourCounts[(i + 2) % 24];
+  const avg = (h0 + h1 + h2) / 3;
+  if (avg > peakAvg) {
+    peakAvg = avg;
+    peakStart = i;
+  }
+}
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Round Hour Distribution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-hour</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🕐 Round Hour Distribution <span class="muted" style="font-size:0.6em">(iter #214)</span></h1>
+      <p class="agents-sub">
+        按 24 小时统计 round 创建时间。
+        揭示 cron / 用户活跃时段。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rh-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>peak 时段: <strong>{peakStart}:00 - {(peakStart + 3) % 24}:00</strong> (avg {peakAvg.toFixed(1)}/h)</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 24h 分布</h2>
+      <pre class="agents-rh-flow">{hourCounts.map((c, i) => {
+        const label = `${String(i).padStart(2)}:00`;
+        return `${label} ${bar(c, maxCount, 22)}  ${String(c).padStart(4)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 weekday vs weekend</h2>
+      <pre class="agents-rh-flow">{hourCounts.map((_, i) => {
+        const w = hourWeekday[i];
+        const e = hourWeekend[i];
+        const wMax = Math.max(...hourWeekday, 1);
+        const eMax = Math.max(...hourWeekend, 1);
+        const label = `${String(i).padStart(2)}:00`;
+        return `${label}  wd ${bar(w, wMax, 12)}  ${String(w).padStart(3)} | we ${bar(e, eMax, 12)}  ${String(e).padStart(3)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高峰时段 = 系统最忙</li>
+        <li>weekend vs weekday 区分自动 vs 手动</li>
+        <li>对照 <a href={`${base}/agents/daily-map/`}>Daily Map</a> 看 weekday × hour</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rh-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
