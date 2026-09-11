@@ -1,0 +1,188 @@
+---
+// /agents/daily-cost-sparkline.astro — iter #267:daily cost sparkline (60 days)
+//
+// 最近 60 天每日 cost,以连续 sparkline 形式展示(一行)
+// + 异常高 cost 日标记
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+const ONE_DAY = 24 * 60 * 60 * 1000;
+
+const root = join(process.cwd(), 'archive');
+const dailyCosts = new Map<string, number>();
+const dailyRounds = new Map<string, number>();
+
+function dayKey(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        const cost = (tokens / 1_000_000) * SONNET_PRICE;
+        const k = dayKey(st.mtimeMs);
+        dailyCosts.set(k, (dailyCosts.get(k) ?? 0) + cost);
+        dailyRounds.set(k, (dailyRounds.get(k) ?? 0) + 1);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 生成最近 60 天
+const today = new Date();
+today.setUTCHours(0, 0, 0, 0);
+const days: { date: string; cost: number; rounds: number }[] = [];
+for (let i = 59; i >= 0; i--) {
+  const d = new Date(today.getTime() - i * ONE_DAY);
+  const key = d.toISOString().slice(0, 10);
+  days.push({ date: key, cost: dailyCosts.get(key) ?? 0, rounds: dailyRounds.get(key) ?? 0 });
+}
+
+const total = days.reduce((s, d) => s + d.cost, 0);
+const activeDays = days.filter((d) => d.cost > 0).length;
+const maxCost = Math.max(...days.map((d) => d.cost), 0.001);
+const avgActive = activeDays > 0 ? total / activeDays : 0;
+const peak = days.reduce((best, d) => d.cost > best.cost ? d : best, days[0]);
+
+// 多 sparkline
+function sparkline(values: number[]): string {
+  const blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  if (values.length < 2) return '▅';
+  const max = Math.max(...values, 0.001);
+  return values.map((v) => {
+    if (v === 0) return ' ';
+    return blocks[Math.min(blocks.length - 1, Math.floor((v / max) * (blocks.length - 1)))];
+  }).join('');
+}
+
+// 高 cost 日(> 2x avg active)
+const spikes = days.filter((d) => d.cost > 2 * avgActive && d.cost > 0.5).sort((a, b) => b.cost - a.cost);
+
+function fmtCost(c: number): string {
+  return `$${c.toFixed(2)}`;
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Daily Cost Sparkline · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-cost-sparkline</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⚡ Daily Cost Sparkline <span class="muted" style="font-size:0.6em">(iter #267)</span></h1>
+      <p class="agents-sub">
+        最近 60 天每日 cost 的连续 sparkline。每个字符代表一天。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dcs-globals">
+        <span>60d 总 cost: <strong>{fmtCost(total)}</strong></span>
+        <span>活跃天数: <strong>{activeDays}</strong> / 60</span>
+        <span>活跃日均 cost: <strong>{fmtCost(avgActive)}</strong></span>
+        <span>峰值日: <strong>{peak.date}</strong>({fmtCost(peak.cost)})</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 cost sparkline(60 天)</h2>
+      <pre class="agents-dcs-flow">{sparkline(days.map((d) => d.cost))}</pre>
+      <p class="muted" style="font-size:0.85em">
+        最近一天在最右。每字符对应一天;空格表示该天无 cost;高度 ∝ cost。
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 rounds sparkline(60 天)</h2>
+      <pre class="agents-dcs-flow">{sparkline(days.map((d) => d.rounds))}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 双线 sparkline(cost + rounds,堆叠)</h2>
+      <pre class="agents-dcs-flow">{days.map((d) => {
+        const cBlock = Math.round((d.cost / maxCost) * 10);
+        return `${d.date}  ${'█'.repeat(cBlock)}${' '.repeat(10 - cBlock)}  $${d.cost.toFixed(2).padStart(6)}  R${d.rounds.toString().padStart(3)}`;
+      }).slice(-30).join('\n')}</pre>
+      <p class="muted" style="font-size:0.85em">最近 30 天详情</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚡ cost 突增日(&gt; 2x 平均)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>date</th><th>cost</th><th>rounds</th><th>cost / round</th></tr>
+        </thead>
+        <tbody>
+          {spikes.slice(0, 15).map((s) => (
+            <tr>
+              <td><code>{esc(s.date)}</code></td>
+              <td><strong style="color:#f59e0b">{fmtCost(s.cost)}</strong></td>
+              <td>{s.rounds}</td>
+              <td>${(s.cost / Math.max(1, s.rounds)).toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>sparkline 越长 = 越近期;空格 = 0 cost</li>
+        <li>突增日通常意味着批量跑 / 大型 session</li>
+        <li>对照 <a href={`${base}/agents/daily-pulse/`}>Daily Pulse</a> 看详细日级</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dcs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dcs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dcs-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 1.2rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
