@@ -1,0 +1,173 @@
+---
+// /agents/cost-by-action.astro — iter #316:cost per action type
+//
+// 各 action 总消耗的 cost 排行:
+//   - 找出系统最贵的 action
+//   - 列出 top 15 高 cost actions
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface ActionCost {
+  action: string;
+  count: number;
+  totalCost: number;
+  totalTokens: number;
+  avgCost: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const actionMap = new Map<string, { count: number; cost: number; tokens: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        const cost = (tokens / 1_000_000) * SONNET_PRICE;
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!actionMap.has(act)) actionMap.set(act, { count: 0, cost: 0, tokens: 0 });
+          const entry = actionMap.get(act)!;
+          entry.count += 1;
+          entry.cost += cost;
+          entry.tokens += tokens;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const arr: ActionCost[] = [...actionMap.entries()]
+  .map(([action, info]) => ({
+    action,
+    count: info.count,
+    totalCost: info.cost,
+    totalTokens: info.tokens,
+    avgCost: info.count > 0 ? info.cost / info.count : 0,
+  }))
+  .sort((a, b) => b.totalCost - a.totalCost);
+
+const total = arr.reduce((s, a) => s + a.totalCost, 0);
+const maxCost = Math.max(...arr.map((a) => a.totalCost), 1);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(2)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Cost by Action · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-by-action</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸 Cost by Action <span class="muted" style="font-size:0.6em">(iter #316)</span></h1>
+      <p class="agents-sub">
+        各 action 的总消耗 cost 排行。看出哪些 action 是"烧钱大户"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cba-globals">
+        <span>unique actions: <strong>{arr.length}</strong></span>
+        <span>总 cost: <strong>${total.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 Top 15 高 cost actions</h2>
+      <pre class="agents-cba-flow">{arr.slice(0, 15).map((a) => {
+        return `${a.action.padEnd(30)} ${bar(a.totalCost, maxCost, 22)}  $${a.totalCost.toFixed(2)}  (${a.count}×)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细(全部 actions)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>action</th><th>count</th><th>total cost</th><th>avg cost</th><th>total tokens</th><th>% of total</th></tr>
+        </thead>
+        <tbody>
+          {arr.slice(0, 30).map((a, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{a.count}</td>
+              <td><strong>${a.totalCost.toFixed(2)}</strong></td>
+              <td>${a.avgCost.toFixed(3)}</td>
+              <td>{fmtTok(a.totalTokens)}</td>
+              <td>{((a.totalCost / Math.max(0.01, total)) * 100).toFixed(1)}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>cost 高但 count 低 = 单次成本极高(可能复杂 LLM 调用)</li>
+        <li>cost 高且 count 高 = 高频高成本 action(优化重点)</li>
+        <li>% of total 高的 = 占整体预算大头</li>
+        <li>对照 <a href={`${base}/agents/action-usage-trend/`}>Action Usage Trend</a></li>
+        <li>对照 <a href={`${base}/agents/action-distribution-entropy/`}>Action Distribution Entropy</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cba-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cba-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cba-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
