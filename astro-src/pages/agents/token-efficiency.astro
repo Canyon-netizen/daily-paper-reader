@@ -1,0 +1,190 @@
+---
+// /agents/token-efficiency.astro — iter #164:token efficiency
+//
+// 跨 session 看 token 使用效率:
+//   - tokens per promoted proposal
+//   - tokens per round
+//   - per-session tokens/promoted (高效率 = 低值)
+//   - per-session tokens/round
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface EffRecord {
+  sid: string;
+  goal: string;
+  totalTokens: number;
+  totalRounds: number;
+  promoted: number;
+  costPerProm: number; // 0 if no promoted
+  costPerRound: number;
+  efficiency: number; // promoted / rounds
+}
+
+const records: EffRecord[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length === 0) continue;
+    let totalTokens = 0;
+    let promoted = 0;
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        totalTokens += r.feedback?.total_tokens ?? 0;
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+        }
+      } catch (e) { /* */ }
+    }
+    records.push({
+      sid, goal,
+      totalTokens,
+      totalRounds: rNum.length,
+      promoted,
+      costPerProm: promoted > 0 ? totalTokens / promoted : Infinity,
+      costPerRound: totalTokens / rNum.length,
+      efficiency: promoted / rNum.length,
+    });
+  }
+}
+
+const totalTokens = records.reduce((s, r) => s + r.totalTokens, 0);
+const totalProm = records.reduce((s, r) => s + r.promoted, 0);
+const totalRounds = records.reduce((s, r) => s + r.totalRounds, 0);
+const overallTokPerProm = totalProm > 0 ? totalTokens / totalProm : 0;
+
+// top 10 efficient (lowest costPerProm, ≥1 promoted)
+const efficient = records
+  .filter((r) => r.promoted >= 1 && isFinite(r.costPerProm))
+  .sort((a, b) => a.costPerProm - b.costPerProm)
+  .slice(0, 10);
+const expensive = records
+  .filter((r) => r.promoted >= 1 && isFinite(r.costPerProm))
+  .sort((a, b) => b.costPerProm - a.costPerProm)
+  .slice(0, 10);
+
+function fmtNum(n: number): string {
+  if (!isFinite(n)) return '∞';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return n.toFixed(0);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Token Efficiency · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / token-efficiency</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸 Token Efficiency <span class="muted" style="font-size:0.6em">(iter #164)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 token 使用效率。
+        tokens/promoted 越低 = 越省钱;promoted/round 越高 = 越高效。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-te-globals">
+        <span>总 sessions: <strong>{records.length}</strong></span>
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>总 promoted: <strong>{totalProm}</strong></span>
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>avg tokens/prom: <strong>{fmtNum(overallTokPerProm)}</strong></span>
+        <span>avg tokens/round: <strong>{fmtNum(totalTokens / Math.max(totalRounds, 1))}</strong></span>
+        <span>overall prom/round: <strong>{(totalProm / Math.max(totalRounds, 1)).toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💎 top 10 最省 tokens/promoted</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>promoted</th><th>tokens</th><th>tokens/prom</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {efficient.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.promoted}</td>
+              <td>{r.totalTokens.toLocaleString()}</td>
+              <td><strong style="color:#10b981">{fmtNum(r.costPerProm)}</strong></td>
+              <td><small class="muted">{esc(r.goal.slice(0, 50))}{(r.goal ?? '').length > 50 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 top 10 最耗 tokens/promoted</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>promoted</th><th>tokens</th><th>tokens/prom</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {expensive.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.promoted}</td>
+              <td>{r.totalTokens.toLocaleString()}</td>
+              <td><strong style="color:#ef4444">{fmtNum(r.costPerProm)}</strong></td>
+              <td><small class="muted">{esc(r.goal.slice(0, 50))}{(r.goal ?? '').length > 50 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>tokens/promoted 异常高 → 可能是 goal 太宽,看 <a href={`${base}/agents/goal-quality/`}>Goal Quality</a></li>
+        <li>对比 <a href={`${base}/agents/cost-calc/`}>Cost Calculator</a> 看是否能换 model 节省</li>
+        <li>对比 <a href={`${base}/agents/promotion-velocity/`}>Promotion Velocity</a> — 高效 sessions 通常 promotion 出现早</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-te-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-te-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
