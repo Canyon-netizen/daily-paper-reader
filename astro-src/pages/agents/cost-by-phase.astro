@@ -1,0 +1,180 @@
+---
+// /agents/cost-by-phase.astro — iter #184:cost by pipeline phase
+//
+// 按 pipeline 阶段(feedback)拆分 token 消耗:
+//   - feedback 调用次数(per round)
+//   - total_tokens 总和
+//   - 估算成本
+//   - per-session 最高 feedback 调用
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PhaseStat {
+  phase: string;
+  emoji: string;
+  totalTokens: number;
+  callCount: number;
+  sids: Set<string>;
+}
+
+// 我们目前能可靠度量的就是 feedback.total_tokens
+// 其它 phase 只能以"presence"为标记
+const phases: PhaseStat[] = [
+  { phase: 'designer', emoji: '🎨', totalTokens: 0, callCount: 0, sids: new Set() },
+  { phase: 'feedback', emoji: '🗣️', totalTokens: 0, callCount: 0, sids: new Set() },
+  { phase: 'gate', emoji: '🚧', totalTokens: 0, callCount: 0, sids: new Set() },
+  { phase: 'modifier', emoji: '🔧', totalTokens: 0, callCount: 0, sids: new Set() },
+  { phase: 'reviewer', emoji: '📝', totalTokens: 0, callCount: 0, sids: new Set() },
+  { phase: 'reviser', emoji: '✏️', totalTokens: 0, callCount: 0, sids: new Set() },
+];
+
+const root = join(process.cwd(), 'archive');
+let totalRounds = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        totalRounds += 1;
+        const tok = r.feedback?.total_tokens ?? 0;
+        for (const p of phases) {
+          if (r[p.phase] != null) {
+            p.callCount += 1;
+            p.sids.add(sid);
+            if (p.phase === 'feedback') {
+              p.totalTokens += tok;
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const SONNET_PRICE = 6;
+const totalTokens = phases.find((p) => p.phase === 'feedback')?.totalTokens ?? 0;
+const feedbackCost = (totalTokens / 1_000_000) * SONNET_PRICE;
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmtNum(n: number): string {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return n.toString();
+}
+---
+
+<BaseLayout title="Cost By Phase · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-by-phase</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Cost By Phase <span class="muted" style="font-size:0.6em">(iter #184)</span></h1>
+      <p class="agents-sub">
+        按 pipeline 阶段拆分调用次数和 token 消耗。
+        注意:目前只有 feedback.total_tokens 可靠,其它 phase 以 presence 计。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cp-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>feedback 总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>估算成本: <strong>${feedbackCost.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🧩 阶段覆盖</h2>
+      <pre class="agents-cp-flow">{(() => {
+        const max = Math.max(...phases.map((p) => p.callCount), 1);
+        return phases.map((p) => {
+          const pct = totalRounds > 0 ? ((p.callCount / totalRounds) * 100).toFixed(1) : '0';
+          return `${p.emoji} ${p.phase.padEnd(10)} ${bar(p.callCount, max, 24)}  ${String(p.callCount).padStart(4)}/${totalRounds} (${pct}%)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细指标</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>phase</th><th>调用 rounds</th><th>覆盖</th><th>涉及 sessions</th><th>tokens</th></tr>
+        </thead>
+        <tbody>
+          {phases.map((p) => {
+            const pct = totalRounds > 0 ? ((p.callCount / totalRounds) * 100).toFixed(1) : '0';
+            return (
+              <tr>
+                <td>{p.emoji} <code>{p.phase}</code></td>
+                <td>{p.callCount}</td>
+                <td>{pct}%</td>
+                <td>{p.sids.size}</td>
+                <td>{p.phase === 'feedback' ? p.totalTokens.toLocaleString() : '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>feedback 是 token 主要消耗者 — 可换 haiku 节省 5x</li>
+        <li>对比 <a href={`${base}/agents/llm-usage/`}>LLM Usage</a> 看具体 model</li>
+        <li>对比 <a href={`${base}/agents/round-cost-hist/`}>Round Cost Hist</a> 看 round 维度</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
