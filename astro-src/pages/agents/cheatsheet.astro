@@ -1,0 +1,190 @@
+---
+// /agents/cheatsheet.astro — iter #140:workflow cheatsheet
+//
+// 把所有常用 CLI 命令 + 关键概念 / 链接印成一张可打印的 cheatsheet:
+//   - npx agents * 全命令
+//   - 文件结构
+//   - localStorage keys
+//   - 7-stage pipeline 概述
+//   - 常用快捷链接
+
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// 尝试从 package.json 提取 scripts
+let pkgScripts: Record<string, string> = {};
+try {
+  const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
+  pkgScripts = pkg.scripts ?? {};
+} catch (e) { /* */ }
+
+// 列出 src/agents/bin/ 下的所有 mjs 文件,推断命令
+const binDir = join(process.cwd(), 'src/agents/bin');
+const cmds: { name: string; file: string; help: string }[] = [];
+if (existsSync(binDir)) {
+  for (const f of readdirSync(binDir)) {
+    if (!f.endsWith('.mjs')) continue;
+    const cmd = f.replace(/\.mjs$/, '');
+    let help = '';
+    try {
+      const content = readFileSync(join(binDir, f), 'utf8');
+      const match = content.match(/^#\s*(.+)/m);
+      if (match) help = match[1];
+    } catch (e) { /* */ }
+    cmds.push({ name: cmd, file: f, help });
+  }
+}
+
+const localStorageKeys = [
+  { key: 'agents:settings:v1', desc: '全局设置(LLM / 费用率 / 主题)' },
+  { key: 'agents:bookmarks:v1', desc: '收藏的 search / session / paper' },
+  { key: 'agents:tags:v1', desc: 'session 标签' },
+  { key: 'agents:notes:v1', desc: 'session 笔记' },
+  { key: 'agents:reading:v1', desc: 'Now Reading 队列' },
+  { key: 'agents:pinned:v1', desc: '钉选 session 顺序' },
+  { key: 'agents:todos:v1', desc: '跨 session todos' },
+  { key: 'agents:capture:v1', desc: '灵感收件箱' },
+  { key: 'agents:notifications:v1', desc: '通知已读状态' },
+  { key: 'agents:budget:v1', desc: '月度预算' },
+  { key: 'agents:sticky:v1', desc: '浮动便签内容' },
+  { key: 'agents:sticky:pos:v1', desc: '便签位置' },
+  { key: 'agents:sticky:min:v1', desc: '便签最小化状态' },
+  { key: 'agents:sticky:open:v1', desc: '便签是否打开' },
+  { key: 'agents:tour:v1', desc: '引导 tour 完成状态' },
+];
+---
+
+<BaseLayout title="Workflow Cheatsheet · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cheatsheet</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📋 Workflow Cheatsheet <span class="muted" style="font-size:0.6em">(iter #140)</span></h1>
+      <p class="agents-sub">
+        一页打印所有常用命令 / 路径 / localStorage keys / 7-stage pipeline。
+        用 Ctrl/Cmd+P 选 "Save as PDF" 可以印成纸质卡片。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🚀 npm scripts</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>script</th><th>command</th></tr>
+        </thead>
+        <tbody>
+          {Object.entries(pkgScripts).slice(0, 30).map(([name, cmd]) => (
+            <tr>
+              <td><code>npm run {name}</code></td>
+              <td><small><code>{cmd}</code></small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🤖 agents CLI 命令</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>命令</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {cmds.map((c) => (
+            <tr>
+              <td><code>npx agents {c.name}</code></td>
+              <td><small>{c.help || c.file}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🗂 文件结构</h2>
+      <pre class="agents-cs-flow">
+archive/
+  &lt;sid&gt;/
+    meta.json                # session 元信息(goal / 状态)
+    rounds/
+      round_001.json         # 每次 round 的完整状态
+      round_002.json
+    synthesis/
+      synthesis_001.md       # 最终输出 markdown
+    deliverables/            # modifier 写入的产物
+  .claude/skills/agents/     # 多智能体 skill markdown
+  astro-src/pages/agents/    # 所有 Astro 页面
+      </pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔄 7-Stage Pipeline</h2>
+      <ol>
+        <li><strong>Designer</strong> — 提出 N 个 proposal(title / type / rationale)</li>
+        <li><strong>Feedback</strong> — 3 个 persona(methodologist / engineer / skeptic)各自打分</li>
+        <li><strong>Gate</strong> — 按 total 分类:promoted / candidate / sketch / rejected</li>
+        <li><strong>Modifier</strong> — 对 promoted proposal 写入 deliverables</li>
+        <li><strong>Evaluator</strong> — 计算 coverage / alignment / consistency / synthesisCoverage(无 LLM)</li>
+        <li><strong>Reviewer</strong> — 读 synthesis + critiques 出审稿意见</li>
+        <li><strong>Reviser</strong> — 根据审稿意见修改 synthesis</li>
+      </ol>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔑 localStorage keys</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>key</th><th>用途</th></tr>
+        </thead>
+        <tbody>
+          {localStorageKeys.map((k) => (
+            <tr>
+              <td><code>{k.key}</code></td>
+              <td><small>{k.desc}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 关键链接</h2>
+      <ul>
+        <li>🛡 <a href={`${base}/agents/`}>控制台</a></li>
+        <li>🆕 <a href={`${base}/agents/new-session/`}>新 session</a></li>
+        <li>🤖 <a href={`${base}/agents/auto/`}>Auto mode</a></li>
+        <li>📦 <a href={`${base}/agents/export-all/`}>Export all</a></li>
+        <li>🩺 <a href={`${base}/agents/health/`}>Health check</a></li>
+        <li>🏆 <a href={`${base}/agents/achievements/`}>Achievements</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cs-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  @media print {
+    .agents-breadcrumb, nav, .navbar { display: none; }
+    body { background: white !important; color: black !important; }
+    .agents-session-section { page-break-inside: avoid; }
+  }
+</style>
