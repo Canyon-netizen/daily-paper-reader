@@ -1,0 +1,218 @@
+---
+// /agents/action-trigram.astro — iter #248:action trigram templates
+//
+// 在同一 round 内(action 序列)找常见 3-gram / 2-gram 模式:
+//   - 把 action 排序后取 n-gram(组合视为无序)
+//   - 统计频率
+//   - 输出 top 模板
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const bigramCounts = new Map<string, number>();
+const trigramCounts = new Map<string, number>();
+const allRoundScores: number[] = [];
+const comboScores = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const actions = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const roundAvg = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        if (roundAvg > 0) allRoundScores.push(roundAvg);
+
+        // unique + sort
+        const uniq = Array.from(new Set(actions)).sort();
+        if (uniq.length < 2) continue;
+
+        // bigrams
+        for (let i = 0; i < uniq.length - 1; i++) {
+          const bg = `${uniq[i]} + ${uniq[i + 1]}`;
+          bigramCounts.set(bg, (bigramCounts.get(bg) ?? 0) + 1);
+          if (!comboScores.has(bg)) comboScores.set(bg, []);
+          comboScores.get(bg)!.push(roundAvg);
+        }
+        // trigrams
+        for (let i = 0; i < uniq.length - 2; i++) {
+          const tg = `${uniq[i]} + ${uniq[i + 1]} + ${uniq[i + 2]}`;
+          trigramCounts.set(tg, (trigramCounts.get(tg) ?? 0) + 1);
+          if (!comboScores.has(tg)) comboScores.set(tg, []);
+          comboScores.get(tg)!.push(roundAvg);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const globalAvg = allRoundScores.length > 0 ? allRoundScores.reduce((a, b) => a + b, 0) / allRoundScores.length : 0;
+
+interface ComboStat {
+  combo: string;
+  count: number;
+  avg: number;
+  lift: number;
+}
+function statsFor(map: Map<string, number>): ComboStat[] {
+  return Array.from(map.entries()).map(([combo, count]) => {
+    const scores = comboScores.get(combo) ?? [];
+    const avg = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    return { combo, count, avg, lift: globalAvg > 0 ? avg - globalAvg : 0 };
+  });
+}
+
+const bigramStats = statsFor(bigramCounts);
+const trigramStats = statsFor(trigramCounts);
+
+const topBigramsByCount = [...bigramStats].sort((a, b) => b.count - a.count).slice(0, 15);
+const topBigramsByLift = [...bigramStats].filter((s) => s.count >= 2).sort((a, b) => b.lift - a.lift).slice(0, 15);
+const topTrigramsByCount = [...trigramStats].sort((a, b) => b.count - a.count).slice(0, 15);
+const topTrigramsByLift = [...trigramStats].filter((s) => s.count >= 2).sort((a, b) => b.lift - a.lift).slice(0, 15);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Action Trigram · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-trigram</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔣 Action Trigram Templates <span class="muted" style="font-size:0.6em">(iter #248)</span></h1>
+      <p class="agents-sub">
+        同一 round 内 action 组合的 2-gram / 3-gram 模式(按字典序排序后取 n-gram)。
+        高频 = 系统常用模板;高 lift = 模板下分数高。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-at-globals">
+        <span>global avg score: <strong>{globalAvg.toFixed(2)}</strong></span>
+        <span>unique bigrams: <strong>{bigramCounts.size}</strong></span>
+        <span>unique trigrams: <strong>{trigramCounts.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 top 15 高频 2-gram</h2>
+      <pre class="agents-at-flow">{topBigramsByCount.map((c) => {
+        const max = topBigramsByCount[0].count;
+        return `${c.combo.padEnd(48)} ${bar(c.count, max, 14)}  ${c.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 高 lift 2-gram(count ≥ 2)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>combo</th><th>count</th><th>avg score</th><th>lift</th></tr>
+        </thead>
+        <tbody>
+          {topBigramsByLift.map((c) => (
+            <tr>
+              <td><code>{esc(c.combo)}</code></td>
+              <td>{c.count}</td>
+              <td><strong>{c.avg.toFixed(2)}</strong></td>
+              <td><strong style={`color:${c.lift >= 0 ? '#10b981' : '#ef4444'}`}>{c.lift >= 0 ? '+' : ''}{c.lift.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 top 15 高频 3-gram</h2>
+      <pre class="agents-at-flow">{topTrigramsByCount.map((c) => {
+        const max = topTrigramsByCount[0].count;
+        return `${c.combo.padEnd(64)} ${bar(c.count, max, 12)}  ${c.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 高 lift 3-gram(count ≥ 2)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>combo</th><th>count</th><th>avg score</th><th>lift</th></tr>
+        </thead>
+        <tbody>
+          {topTrigramsByLift.map((c) => (
+            <tr>
+              <td><code>{esc(c.combo)}</code></td>
+              <td>{c.count}</td>
+              <td><strong>{c.avg.toFixed(2)}</strong></td>
+              <td><strong style={`color:${c.lift >= 0 ? '#10b981' : '#ef4444'}`}>{c.lift >= 0 ? '+' : ''}{c.lift.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频组合 = 系统常用模板(可作为预设)</li>
+        <li>高 lift 组合 = 在该组合下分数明显高于均值</li>
+        <li>3-gram 的样本量小,谨慎解读</li>
+        <li>对照 <a href={`${base}/agents/action-pair-synergy/`}>Action Pair Synergy</a> 看 2-gram 共现矩阵</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-at-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-at-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-at-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
