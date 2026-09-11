@@ -1,0 +1,170 @@
+---
+// /agents/modifier-decision-by-position.astro — iter #298:modifier decision by round position
+//
+// 每 round position 的 modifier 决策统计:
+//   - 常见 action 数
+//   - top 3 actions at this position
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PositionInfo {
+  position: number;
+  count: number;
+  actionCounts: number[];
+  avgActions: number;
+  actionMap: Map<string, number>;
+  topActions: { action: string; count: number; pct: number }[];
+}
+
+const root = join(process.cwd(), 'archive');
+const positionMap = new Map<number, PositionInfo>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    for (let i = 0; i < rNums.length; i++) {
+      const pos = i + 1;
+      if (!positionMap.has(pos)) {
+        positionMap.set(pos, {
+          position: pos, count: 0,
+          actionCounts: [], actionMap: new Map(),
+          avgActions: 0, topActions: [],
+        });
+      }
+      const p = positionMap.get(pos)!;
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNums[i]}.json`), 'utf8'));
+        const acts: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          acts.push(a.action ?? a.type ?? 'unknown');
+        }
+        p.count += 1;
+        p.actionCounts.push(acts.length);
+        for (const a of acts) {
+          p.actionMap.set(a, (p.actionMap.get(a) ?? 0) + 1);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const positions = [...positionMap.values()].sort((a, b) => a.position - b.position);
+for (const p of positions) {
+  p.avgActions = p.actionCounts.length > 0
+    ? p.actionCounts.reduce((a, b) => a + b, 0) / p.actionCounts.length
+    : 0;
+  p.topActions = [...p.actionMap.entries()]
+    .map(([action, count]) => ({ action, count, pct: (count / Math.max(1, p.count)) * 100 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Modifier Decision by Position · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / modifier-decision-by-position</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Modifier Decision by Position <span class="muted" style="font-size:0.6em">(iter #298)</span></h1>
+      <p class="agents-sub">
+        每 round position 上 modifier 的决策:常见 action 数量 + top 3 actions。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 各 position 的 modifier 决策</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>R#</th><th>次数</th><th>avg actions</th><th>top 1</th><th>top 2</th><th>top 3</th></tr>
+        </thead>
+        <tbody>
+          {positions.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">R{p.position}</strong></td>
+              <td>{p.count}</td>
+              <td><strong>{p.avgActions.toFixed(2)}</strong></td>
+              <td>
+                {p.topActions[0] ? (
+                  <><code>{esc(p.topActions[0].action)}</code> <small>({p.topActions[0].pct.toFixed(0)}%)</small></>
+                ) : <span class="muted">—</span>}
+              </td>
+              <td>
+                {p.topActions[1] ? (
+                  <><code>{esc(p.topActions[1].action)}</code> <small>({p.topActions[1].pct.toFixed(0)}%)</small></>
+                ) : <span class="muted">—</span>}
+              </td>
+              <td>
+                {p.topActions[2] ? (
+                  <><code>{esc(p.topActions[2].action)}</code> <small>({p.topActions[2].pct.toFixed(0)}%)</small></>
+                ) : <span class="muted">—</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 各 position 详细 top 3</h2>
+      {positions.slice(0, 8).map((p) => (
+        <div style="margin-bottom:0.7rem">
+          <h3 style="margin:0.4rem 0;color:#4f46e5">R{p.position} (n={p.count})</h3>
+          <table class="agents-session-table">
+            <thead>
+              <tr><th>action</th><th>count</th><th>%</th></tr>
+            </thead>
+            <tbody>
+              {p.topActions.map((a) => (
+                <tr>
+                  <td><code>{esc(a.action)}</code></td>
+                  <td>{a.count}</td>
+                  <td>{a.pct.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg actions 随 position 变化 = modifier 的"节奏"</li>
+        <li>top 1 占比高 = 该位置高度倾向某 action</li>
+        <li>R1 vs R-N = 早期 vs 后期 modifier 策略差异</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+</style>
