@@ -1,0 +1,182 @@
+---
+// /agents/goal-stems.astro — iter #163:goal stem prefix clustering
+//
+// 按 goal 前 N 字(2-4-grams)聚类 sessions,找出反复出现的研究方向:
+//   - 提取所有 goal 文本的 3-gram 起始段
+//   - 计数每个 stem
+//   - 显示 top 30 stems
+//   - 每个 stem 列出代表 sessions
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface StemGroup {
+  stem: string;
+  count: number;
+  sids: string[];
+  goals: string[];
+}
+
+const root = join(process.cwd(), 'archive');
+const sessionMap: { sid: string; goal: string }[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      const goal = m.goal ?? '';
+      if (goal.length > 0) sessionMap.push({ sid, goal });
+    } catch (e) { /* */ }
+  }
+}
+
+// 提取 3-gram 起始词(中文:头 6 字;英文:头 3 词)
+// 用空格分词,取前 3 个词;若全部 3 字及以下则用前 6 字
+function stemOf(goal: string): string {
+  const words = goal.trim().split(/\s+/).slice(0, 3).join(' ');
+  if (words.length < 6) return goal.slice(0, 6);
+  return words.slice(0, 30);
+}
+
+const stemMap = new Map<string, StemGroup>();
+for (const { sid, goal } of sessionMap) {
+  const stem = stemOf(goal);
+  if (!stemMap.has(stem)) {
+    stemMap.set(stem, { stem, count: 0, sids: [], goals: [] });
+  }
+  const g = stemMap.get(stem)!;
+  g.count += 1;
+  g.sids.push(sid);
+  g.goals.push(goal);
+}
+
+const allStems = [...stemMap.values()].sort((a, b) => b.count - a.count);
+const totalGoals = sessionMap.length;
+const multiCount = allStems.filter((s) => s.count > 1).reduce((s, g) => s + g.count, 0);
+const uniqueStems = allStems.length;
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Stems · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-stems</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌱 Goal Stems <span class="muted" style="font-size:0.6em">(iter #163)</span></h1>
+      <p class="agents-sub">
+        按 goal 起始 stem 聚类 sessions。
+        找出反复出现的研究方向 — 同一 stem 多次出现意味着该方向是关注的重点。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gs-globals">
+        <span>总 sessions: <strong>{totalGoals}</strong></span>
+        <span>unique stems: <strong>{uniqueStems}</strong></span>
+        <span>multi-count sessions (stem 出现 ≥ 2 次): <strong>{multiCount}</strong> ({totalGoals > 0 ? ((multiCount/totalGoals)*100).toFixed(1) : '0'}%)</span>
+        <span>覆盖比: <strong>{totalGoals > 0 ? ((multiCount/totalGoals)*100).toFixed(1) : '0'}%</strong> sessions 属于某个重复方向</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌿 top 30 stems</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>stem</th><th>count</th><th>bar</th><th>代表 sessions</th></tr>
+        </thead>
+        <tbody>
+          {allStems.slice(0, 30).map((s) => {
+            const max = allStems[0]?.count ?? 1;
+            return (
+              <tr>
+                <td><code>{esc(s.stem)}</code></td>
+                <td><strong>{s.count}</strong></td>
+                <td><code style="font-size:0.78rem">{bar(s.count, max, 16)}</code></td>
+                <td>
+                  <small class="muted">
+                    {s.sids.slice(0, 3).map((sid) => (
+                      <a href={`${base}/agents/${sid}/`}>{esc(sid.slice(0, 10))}</a>
+                    )).reduce((acc, x, i) => i === 0 ? [x] : [...acc, ', ', x], [] as any[])}
+                    {s.sids.length > 3 ? ` +${s.sids.length - 3}` : ''}
+                  </small>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 多 session stems 的 goal 详情</h2>
+      {allStems.filter((s) => s.count >= 2).slice(0, 10).map((s) => (
+        <details class="agents-gs-cluster">
+          <summary><strong>{esc(s.stem)}</strong> · {s.count} sessions</summary>
+          <ul>
+            {s.sids.map((sid, i) => (
+              <li>
+                <a href={`${base}/agents/${sid}/`}><code>{esc(sid.slice(0, 14))}</code></a>
+                <small class="muted"> — {esc(s.goals[i])}</small>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>top stems 反映你最常研究的几个方向 — 可考虑把它们拆为长期 project</li>
+        <li>unique stems 比例高 → 研究方向多样</li>
+        <li>对照 <a href={`${base}/agents/keywords/`}>Keywords</a> 看更高维的关键词分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gs-cluster {
+    background: rgba(99, 102, 241, 0.05);
+    border-left: 3px solid rgba(99, 102, 241, 0.4);
+    padding: 0.6rem;
+    margin-bottom: 0.6rem;
+    border-radius: 4px;
+  }
+  .agents-gs-cluster ul {
+    margin: 0.4rem 0 0;
+    padding-left: 1.2rem;
+  }
+</style>
