@@ -1,0 +1,187 @@
+---
+// /agents/persona-reliability.astro — iter #146:persona reliability
+//
+// 跨 session 衡量每个 persona 的"可靠性":
+//   - 同一 session 内相同 proposal 的评分一致性(inverse of stddev)
+//   - 跨 session 的 avg score variance(是不是有的 session 给高有的给低)
+//   - 检测 persona 是否在某些 session 中行为异常
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const PERSONAS = ['methodologist', 'engineer', 'skeptic'] as const;
+type Persona = typeof PERSONAS[number];
+
+interface ReliabilityStat {
+  persona: Persona;
+  totalScores: number;
+  sessionCount: number;
+  globalAvg: number;
+  globalStddev: number;
+  perSessionStddevAvg: number;
+  proposalConsistency: number; // 0-1,越高越一致
+}
+
+const stats: Record<Persona, { scores: number[]; perSession: Record<string, number[]> }> = {
+  methodologist: { scores: [], perSession: {} },
+  engineer: { scores: [], perSession: {} },
+  skeptic: { scores: [], perSession: {} },
+};
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const pn: Persona = persona.name ?? persona.persona ?? persona.role ?? 'methodologist';
+          if (!(pn in stats)) continue;
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') {
+              stats[pn].scores.push(p.total);
+              if (!stats[pn].perSession[sid]) stats[pn].perSession[sid] = [];
+              stats[pn].perSession[sid].push(p.total);
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function mean(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
+}
+function stddev(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const m = mean(arr);
+  return Math.sqrt(arr.reduce((s, x) => s + (x - m) ** 2, 0) / arr.length);
+}
+
+const reliability: ReliabilityStat[] = PERSONAS.map((p) => {
+  const s = stats[p];
+  const sessionStddevs = Object.values(s.perSession).filter((arr) => arr.length >= 2).map((arr) => stddev(arr));
+  const perSessionStddevAvg = sessionStddevs.length > 0 ? mean(sessionStddevs) : 0;
+  // consistency:0-1,stddev 越低越高
+  const proposalConsistency = Math.max(0, 1 - perSessionStddevAvg / 5);
+  return {
+    persona: p,
+    totalScores: s.scores.length,
+    sessionCount: Object.keys(s.perSession).length,
+    globalAvg: mean(s.scores),
+    globalStddev: stddev(s.scores),
+    perSessionStddevAvg,
+    proposalConsistency,
+  };
+});
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Persona Reliability · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-reliability</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Persona Reliability <span class="muted" style="font-size:0.6em">(iter #146)</span></h1>
+      <p class="agents-sub">
+        衡量每个 persona 的"可靠性":
+        <strong>proposal consistency</strong> = 同一 session 内对相同 proposal 评分的 stddev(越低越一致)。
+        适合判断哪个 persona 的反馈信号最稳定。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局对比</h2>
+      <table class="agents-pr-globals">
+        <thead>
+          <tr>
+            <th>persona</th>
+            <th>总打分次数</th>
+            <th>涉及 sessions</th>
+            <th>global avg</th>
+            <th>global stddev</th>
+            <th>per-session stddev avg</th>
+            <th>consistency (0-1)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {reliability.map((r) => (
+            <tr>
+              <td><strong>{r.persona}</strong></td>
+              <td>{r.totalScores}</td>
+              <td>{r.sessionCount}</td>
+              <td>{r.globalAvg.toFixed(2)}</td>
+              <td>{r.globalStddev.toFixed(2)}</td>
+              <td>{r.perSessionStddevAvg.toFixed(2)}</td>
+              <td>
+                <code>{bar(r.proposalConsistency, 1, 16)}</code>
+                <strong style={`color:${r.proposalConsistency >= 0.7 ? '#10b981' : r.proposalConsistency >= 0.5 ? '#f59e0b' : '#ef4444'}`}>
+                  {(r.proposalConsistency * 100).toFixed(0)}%
+                </strong>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 ASCII 视图</h2>
+      <pre class="agents-pr-flow">{reliability.map((r) => {
+        return `${r.persona.padEnd(15)} consistency: ${bar(r.proposalConsistency, 1, 24)}  ${(r.proposalConsistency * 100).toFixed(0)}%  (stddev avg: ${r.perSessionStddevAvg.toFixed(2)})`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li><strong>consistency ≥ 70%</strong>:persona 反馈信号稳定,信任度高</li>
+        <li><strong>consistency &lt; 50%</strong>:persona 行为不稳定,反馈可能不可靠</li>
+        <li>低 consistency 可能是 prompt 不够明确,可以调整对应 persona 的 system prompt</li>
+        <li>对照 <a href={`${base}/agents/persona-drift/`}>Persona Drift</a> 看趋势是否在改善</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pr-globals {
+    width: 100%;
+  }
+  .agents-pr-globals td {
+    font-family: ui-monospace, monospace;
+  }
+  .agents-pr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
