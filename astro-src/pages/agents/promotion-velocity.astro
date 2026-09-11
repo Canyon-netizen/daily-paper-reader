@@ -1,0 +1,201 @@
+---
+// /agents/promotion-velocity.astro — iter #159:promotion velocity
+//
+// 跨 session 看"首个 promoted"出现的轮次:
+//   - 直方图: round_index 1, 2, 3... 的 session 数
+//   - 平均首 promotion 轮数
+//   - "slow starters"(跑了 ≥ 5 轮还没 promotion)
+//   - "instant winners"(r1 就有 promoted)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface VelocityRecord {
+  sid: string;
+  goal: string;
+  firstPromRound: number | null; // null = 从未 promoted
+  totalRounds: number;
+  totalPromoted: number;
+}
+
+const records: VelocityRecord[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length === 0) continue;
+    const maxR = Math.max(...rNum);
+    let firstPromRound: number | null = null;
+    let totalPromoted = 0;
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') {
+            totalPromoted += 1;
+            if (firstPromRound == null) firstPromRound = ri;
+          }
+        }
+      } catch (e) { /* */ }
+    }
+    records.push({
+      sid, goal,
+      firstPromRound,
+      totalRounds: maxR,
+      totalPromoted,
+    });
+  }
+}
+
+const totalSessions = records.length;
+const instantWinners = records.filter((r) => r.firstPromRound === 1).length;
+const slowStarters = records.filter((r) => r.totalRounds >= 5 && (r.firstPromRound == null || r.firstPromRound >= 5)).length;
+const noPromotion = records.filter((r) => r.firstPromRound == null).length;
+
+const maxRounds = Math.max(...records.map((r) => r.totalRounds), 1);
+
+// 直方图:每轮成为"首个 promoted 轮"的计数
+const distCounts: number[] = [];
+for (let i = 0; i < maxRounds; i++) distCounts.push(0);
+for (const r of records) {
+  if (r.firstPromRound != null && r.firstPromRound >= 1 && r.firstPromRound <= maxRounds) {
+    distCounts[r.firstPromRound - 1] += 1;
+  }
+}
+
+// 平均首 promotion 轮
+const promotedRecords = records.filter((r) => r.firstPromRound != null);
+const avgFirst = promotedRecords.length > 0 ? promotedRecords.reduce((s, r) => s + (r.firstPromRound ?? 0), 0) / promotedRecords.length : 0;
+const medianFirst = (() => {
+  if (promotedRecords.length === 0) return 0;
+  const sorted = promotedRecords.map((r) => r.firstPromRound ?? 0).sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+})();
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+
+// slow starters 表
+const slow = records
+  .filter((r) => r.firstPromRound == null || r.firstPromRound >= 5)
+  .sort((a, b) => b.totalRounds - a.totalRounds)
+  .slice(0, 20);
+---
+
+<BaseLayout title="Promotion Velocity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / promotion-velocity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🚀 Promotion Velocity <span class="muted" style="font-size:0.6em">(iter #159)</span></h1>
+      <p class="agents-sub">
+        跨 session 看"首个 promoted"出现得有多快。
+        R1 就有 = 即时赢家;≥ R5 还没 = 慢热 session。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pv-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>instant winners (R1): <strong>{instantWinners}</strong> ({totalSessions > 0 ? ((instantWinners/totalSessions)*100).toFixed(1) : '0'}%)</span>
+        <span>no promotion: <strong>{noPromotion}</strong></span>
+        <span>avg first-prom round: <strong>{avgFirst.toFixed(2)}</strong></span>
+        <span>median first-prom: <strong>{medianFirst}</strong></span>
+        <span>slow starters (≥R5): <strong>{slowStarters}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 首 promotion 轮次分布</h2>
+      <pre class="agents-pv-flow">{distCounts.map((c, i) => {
+        const max = Math.max(...distCounts, 1);
+        return `R${String(i + 1).padStart(2)} ${bar(c, max, 24)}  ${String(c).padStart(4)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐢 慢热 sessions(top 20)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>总轮数</th><th>首 promotion 轮</th><th>promoted 总数</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {slow.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.totalRounds}</td>
+              <td>{r.firstPromRound == null ? '—' : 'R' + r.firstPromRound}</td>
+              <td>{r.totalPromoted}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 50))}{(r.goal ?? '').length > 50 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>平均首 promotion 轮小 = gate + designer 配合紧密</li>
+        <li>no promotion 偏多 → gate 阈值过高,看 <a href={`${base}/agents/gate-throughput/`}>Gate Throughput</a></li>
+        <li>instant winners 比例高可能意味 gate 阈值过低</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pv-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pv-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pv-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
