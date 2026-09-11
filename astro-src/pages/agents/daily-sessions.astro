@@ -1,0 +1,162 @@
+---
+// /agents/daily-sessions.astro — iter #175:new sessions per day
+//
+// 显示每天创建的新 session 数(基于 meta.json 创建时间):
+//   - 柱状图: 每日新 session 数(近 60 天)
+//   - 月度聚合
+//   - 持续天数 / 平均间隔
+//   - "高潮期"(连续高创建量)识别
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const dayMap = new Map<string, number>();
+const monthMap = new Map<string, number>();
+let totalSessions = 0;
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    totalSessions += 1;
+    try {
+      const st = await stat(mp);
+      const d = new Date(st.mtimeMs);
+      const dayKey = d.toISOString().slice(0, 10);
+      const monthKey = d.toISOString().slice(0, 7);
+      dayMap.set(dayKey, (dayMap.get(dayKey) ?? 0) + 1);
+      monthMap.set(monthKey, (monthMap.get(monthKey) ?? 0) + 1);
+    } catch (e) { /* */ }
+  }
+}
+
+const today = new Date().toISOString().slice(0, 10);
+const startDate = new Date();
+startDate.setUTCDate(startDate.getUTCDate() - 59);
+const startKey = startDate.toISOString().slice(0, 10);
+
+const DAYS = 60;
+const padded: { date: string; count: number }[] = [];
+for (let i = 0; i < DAYS; i++) {
+  const d = new Date(startDate);
+  d.setUTCDate(d.getUTCDate() + i);
+  const k = d.toISOString().slice(0, 10);
+  padded.push({ date: k, count: dayMap.get(k) ?? 0 });
+}
+const recentTotal = padded.reduce((s, p) => s + p.count, 0);
+const maxDay = padded.reduce((m, p) => Math.max(m, p.count), 0);
+
+// 月度
+const sortedMonths = [...monthMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+// 持续天数 + 间隔
+const activeDays = [...dayMap.keys()].sort();
+const totalActiveDays = activeDays.length;
+const avgInterval = activeDays.length > 1 ? (() => {
+  const last = new Date(activeDays[activeDays.length - 1]).getTime();
+  const first = new Date(activeDays[0]).getTime();
+  return (last - first) / (activeDays.length - 1) / (24 * 60 * 60 * 1000);
+})() : 0;
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Daily Sessions · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-sessions</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📆 Daily Sessions <span class="muted" style="font-size:0.6em">(iter #175)</span></h1>
+      <p class="agents-sub">
+        显示每天创建的新 session 数(基于 meta.json 创建时间)。
+        适合看研究节奏 — 高潮期 vs 静默期。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ds-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>近 60 天新创建: <strong>{recentTotal}</strong></span>
+        <span>总活跃天数: <strong>{totalActiveDays}</strong></span>
+        <span>平均间隔: <strong>{avgInterval.toFixed(1)} 天</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 近 60 天(每日柱状)</h2>
+      <pre class="agents-ds-flow">{padded.map((d) => {
+        const lbl = d.date.slice(5);
+        return `${lbl} ${bar(d.count, maxDay, 18)}  ${String(d.count).padStart(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 月度聚合</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>月份</th><th>新 sessions</th></tr>
+        </thead>
+        <tbody>
+          {sortedMonths.slice(-12).map(([m, c]) => (
+            <tr>
+              <td><code>{m}</code></td>
+              <td><strong>{c}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>连续多天 0 = 静默期,考虑恢复节奏</li>
+        <li>连续多天 ≥ 3 = 高潮期,注意 token 预算</li>
+        <li>对照 <a href={`${base}/agents/daily-burn/`}>Daily Burn</a> 看 token 节奏</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ds-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ds-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ds-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+</style>
