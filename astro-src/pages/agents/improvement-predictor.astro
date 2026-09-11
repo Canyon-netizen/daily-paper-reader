@@ -1,0 +1,226 @@
+---
+// /agents/improvement-predictor.astro — iter #194:round improvement predictor
+//
+// 分析过去 rounds 中"促进改善"的特征:
+//   - 改善前 (Δ > 0.3) 的 rounds 共同特征
+//   - 退化前 (Δ < -0.3) 的 rounds 共同特征
+//   - 高 / 低 score rounds 的特性
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundTransition {
+  sid: string;
+  roundIdx: number;
+  prevScore: number;
+  newScore: number;
+  delta: number;
+  prevApplied: string[];
+  prevPromoted: number;
+  prevRejected: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const transitions: RoundTransition[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    const scores: { idx: number; score: number; applied: string[]; promoted: number; rejected: number }[] = [];
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const avgScore = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        let promoted = 0, rejected = 0;
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+          if (gp.category === 'rejected') rejected += 1;
+        }
+        const applied = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        scores.push({ idx: ri, score: avgScore, applied, promoted, rejected });
+      } catch (e) { /* */ }
+    }
+    for (let i = 1; i < scores.length; i++) {
+      transitions.push({
+        sid,
+        roundIdx: scores[i].idx,
+        prevScore: scores[i - 1].score,
+        newScore: scores[i].score,
+        delta: scores[i].score - scores[i - 1].score,
+        prevApplied: scores[i - 1].applied,
+        prevPromoted: scores[i - 1].promoted,
+        prevRejected: scores[i - 1].rejected,
+      });
+    }
+  }
+}
+
+const improving = transitions.filter((t) => t.delta > 0.3);
+const declining = transitions.filter((t) => t.delta < -0.3);
+const stable = transitions.filter((t) => t.delta >= -0.3 && t.delta <= 0.3);
+
+const total = transitions.length;
+
+// 改善前 rounds 的特征
+const improveAvgPromoted = improving.length > 0 ? improving.reduce((s, t) => s + t.prevPromoted, 0) / improving.length : 0;
+const improveAvgRejected = improving.length > 0 ? improving.reduce((s, t) => s + t.prevRejected, 0) / improving.length : 0;
+const improveAvgPrevScore = improving.length > 0 ? improving.reduce((s, t) => s + t.prevScore, 0) / improving.length : 0;
+const declineAvgPromoted = declining.length > 0 ? declining.reduce((s, t) => s + t.prevPromoted, 0) / declining.length : 0;
+const declineAvgRejected = declining.length > 0 ? declining.reduce((s, t) => s + t.prevRejected, 0) / declining.length : 0;
+const declineAvgPrevScore = declining.length > 0 ? declining.reduce((s, t) => s + t.prevScore, 0) / declining.length : 0;
+
+// 改善前 rounds 应用的 action 频次
+const improveActionMap = new Map<string, number>();
+for (const t of improving) {
+  for (const a of t.prevApplied) {
+    improveActionMap.set(a, (improveActionMap.get(a) ?? 0) + 1);
+  }
+}
+const declineActionMap = new Map<string, number>();
+for (const t of declining) {
+  for (const a of t.prevApplied) {
+    declineActionMap.set(a, (declineActionMap.get(a) ?? 0) + 1);
+  }
+}
+
+const improveActions = [...improveActionMap.entries()].sort((a, b) => b[1] - a[1]);
+const declineActions = [...declineActionMap.entries()].sort((a, b) => b[1] - a[1]);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Improvement Predictor · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / improvement-predictor</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔮 Improvement Predictor <span class="muted" style="font-size:0.6em">(iter #194)</span></h1>
+      <p class="agents-sub">
+        分析过去改善 / 退化的 rounds,找出"促成改善"的特征。
+        基于历史决策训练简单规则。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ip-globals">
+        <span>总 transitions: <strong>{total}</strong></span>
+        <span>改善 (Δ &gt; 0.3): <strong style="color:#10b981">{improving.length}</strong> ({total > 0 ? ((improving.length/total)*100).toFixed(1) : '0'}%)</span>
+        <span>退化 (Δ &lt; -0.3): <strong style="color:#ef4444">{declining.length}</strong> ({total > 0 ? ((declining.length/total)*100).toFixed(1) : '0'}%)</span>
+        <span>稳定: <strong>{stable.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 改善前 rounds 特征</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>特征</th><th>avg</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>前 score</td><td>{improveAvgPrevScore.toFixed(2)}</td></tr>
+          <tr><td>前 promoted 数</td><td>{improveAvgPromoted.toFixed(2)}</td></tr>
+          <tr><td>前 rejected 数</td><td>{improveAvgRejected.toFixed(2)}</td></tr>
+          <tr><td>应用 actions 数 (avg)</td><td>{improving.length > 0 ? (improving.reduce((s, t) => s + t.prevApplied.length, 0) / improving.length).toFixed(2) : '0'}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 退化前 rounds 特征</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>特征</th><th>avg</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>前 score</td><td>{declineAvgPrevScore.toFixed(2)}</td></tr>
+          <tr><td>前 promoted 数</td><td>{declineAvgPromoted.toFixed(2)}</td></tr>
+          <tr><td>前 rejected 数</td><td>{declineAvgRejected.toFixed(2)}</td></tr>
+          <tr><td>应用 actions 数 (avg)</td><td>{declining.length > 0 ? (declining.reduce((s, t) => s + t.prevApplied.length, 0) / declining.length).toFixed(2) : '0'}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 改善前常应用的 actions</h2>
+      <pre class="agents-ip-flow">{(() => {
+        const max = Math.max(...improveActions.map(([, c]) => c), 1);
+        return improveActions.slice(0, 15).map(([a, c]) => {
+          return `${a.padEnd(20)} ${bar(c, max, 18)}  ${c} (${((c/improving.length)*100).toFixed(0)}%)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 退化前常应用的 actions</h2>
+      <pre class="agents-ip-flow">{(() => {
+        const max = Math.max(...declineActions.map(([, c]) => c), 1);
+        return declineActions.slice(0, 15).map(([a, c]) => {
+          return `${a.padEnd(20)} ${bar(c, max, 18)}  ${c} (${((c/declining.length)*100).toFixed(0)}%)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>改善前 promoted 数高 → gate 接受多,modifier 才有素材</li>
+        <li>退化前 rejected 数高 → gate 过严,modifier 无法修复</li>
+        <li>对照 <a href={`${base}/agents/refiner-effects/`}>Refiner Effects</a> 看每个 action 的 Δ</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ip-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ip-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ip-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
