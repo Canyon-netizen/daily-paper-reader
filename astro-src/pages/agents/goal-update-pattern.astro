@@ -1,0 +1,187 @@
+---
+// /agents/goal-update-pattern.astro — iter #238:meta.json update pattern
+//
+// 跨 session 看 meta.json 是否被多次更新:
+//   - mtime 历史(简化为最近 stat 时间)
+//   - 平均 age of meta vs latest round
+//   - 哪些 sessions meta 滞后于 last round
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+interface UpdateInfo {
+  sid: string;
+  goal: string;
+  metaMtime: number;
+  lastRoundMtime: number;
+  ageDays: number;
+  metaLag: number;  // lastRound - meta in ms; positive = last round 后 meta 未更新
+  rounds: number;
+}
+const records: UpdateInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let metaMtime = 0;
+    let goal = '';
+    try {
+      const st = await stat(mp);
+      metaMtime = st.mtimeMs;
+      goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+    } catch (e) { continue; }
+    let lastRoundMtime = 0;
+    let rounds = 0;
+    const rd = join(root, sid, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        try {
+          const st = await stat(join(rd, rf));
+          if (st.mtimeMs > lastRoundMtime) lastRoundMtime = st.mtimeMs;
+          rounds += 1;
+        } catch (e) { /* */ }
+      }
+    }
+    const ageDays = (Date.now() - Math.max(metaMtime, lastRoundMtime)) / (24 * 60 * 60 * 1000);
+    const metaLag = lastRoundMtime - metaMtime;
+    records.push({
+      sid, goal, metaMtime, lastRoundMtime, ageDays, metaLag, rounds,
+    });
+  }
+}
+
+// 排序 by last activity desc
+records.sort((a, b) => Math.max(b.metaMtime, b.lastRoundMtime) - Math.max(a.metaMtime, a.lastRoundMtime));
+
+const total = records.length;
+// metaLag 分桶(只看 rounds >= 2 的)
+const withRounds = records.filter((r) => r.rounds >= 2);
+const metaCurrent = withRounds.filter((r) => r.metaLag <= 60 * 1000).length;  // 1 min 内更新过
+const metaStale = withRounds.filter((r) => r.metaLag > 60 * 60 * 1000).length;  // 1h 后未更新
+const metaVeryStale = withRounds.filter((r) => r.metaLag > 24 * 60 * 60 * 1000).length;  // 1d+
+
+const topMetaStale = [...withRounds].sort((a, b) => b.metaLag - a.metaLag).slice(0, 15);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function formatTime(ms: number): string {
+  if (!ms) return '-';
+  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+}
+function formatLag(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 60 * 60_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 24 * 60 * 60_000) return `${Math.round(ms / (60 * 60_000))}h`;
+  return `${Math.round(ms / (24 * 60 * 60_000))}d`;
+}
+---
+
+<BaseLayout title="Goal Update Pattern · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-update-pattern</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📝 Goal Update Pattern <span class="muted" style="font-size:0.6em">(iter #238)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 meta.json 是否与最后 round 同步更新。
+        metaLag = lastRound mtime - meta mtime。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gup-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>≥ 2 rounds: <strong>{withRounds.length}</strong></span>
+        <span>meta 同步更新(&lt; 1m): <strong style="color:#10b981">{metaCurrent}</strong></span>
+        <span>meta 滞后 &gt; 1h: <strong style="color:#f59e0b">{metaStale}</strong></span>
+        <span>meta 滞后 &gt; 1d: <strong style="color:#ef4444">{metaVeryStale}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 sessions 状态(rounds ≥ 2)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>meta mtime</th><th>last round</th><th>metaLag</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {records.filter((r) => r.rounds >= 2).slice(0, 50).map((r) => (
+            <tr class={r.metaLag > 24 * 60 * 60 * 1000 ? 'gup-very-stale' : r.metaLag > 60 * 60 * 1000 ? 'gup-stale' : ''}>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td><small>{formatTime(r.metaMtime)}</small></td>
+              <td><small>{formatTime(r.lastRoundMtime)}</small></td>
+              <td>{formatLag(r.metaLag)}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 30))}{(r.goal ?? '').length > 30 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 top 15 metaLag 最大</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>metaLag</th><th>sid</th><th>rounds</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topMetaStale.map((r) => (
+            <tr>
+              <td><strong>{formatLag(r.metaLag)}</strong></td>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 12))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>meta 同步 &lt; 1m = 通常 round 创建时同时更新 meta</li>
+        <li>meta 滞后 &gt; 1d = goal 与最新 round 内容可能不再匹配</li>
+        <li>对照 <a href={`${base}/agents/goal-refiner/`}>Goal Refiner</a> 看 goal 演化</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gup-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gup-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  tr.gup-very-stale td { background: rgba(239, 68, 68, 0.1); }
+  tr.gup-stale td { background: rgba(245, 158, 11, 0.1); }
+</style>
