@@ -1,0 +1,201 @@
+---
+// /agents/stagnation-runs.astro — iter #293:stagnation run finder
+//
+// 最长的"完全没动" rounds 串 — score 变化 < 0.05 的连续轮次
+//   - 列出所有 ≥2 轮的停滞串
+//   - 平均每 session 的停滞次数
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface StagnationRun {
+  sid: string;
+  goal: string;
+  startIdx: number;
+  endIdx: number;
+  length: number;
+  score: number;
+}
+
+const STAG_THRESHOLD = 0.05;
+
+const root = join(process.cwd(), 'archive');
+const allRuns: StagnationRun[] = [];
+const sessionStagCount: { sid: string; goal: string; stagCount: number; totalRounds: number }[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 3) continue;
+
+    let stagCount = 0;
+    let i = 0;
+    while (i < scores.length - 1) {
+      let j = i + 1;
+      while (j < scores.length && Math.abs(scores[j] - scores[i]) < STAG_THRESHOLD) {
+        j += 1;
+      }
+      const length = j - i;
+      if (length >= 2) {
+        allRuns.push({
+          sid, goal,
+          startIdx: i,
+          endIdx: j - 1,
+          length,
+          score: scores[i],
+        });
+        stagCount += 1;
+      }
+      i = j;
+    }
+    if (stagCount > 0) {
+      sessionStagCount.push({ sid, goal, stagCount, totalRounds: scores.length });
+    }
+  }
+}
+
+allRuns.sort((a, b) => b.length - a.length);
+
+const totalRuns = allRuns.length;
+const longestRun = allRuns.reduce((m, r) => Math.max(m, r.length), 0);
+const avgLength = totalRuns > 0 ? allRuns.reduce((s, r) => s + r.length, 0) / totalRuns : 0;
+const sessionsAffected = sessionStagCount.length;
+const totalSessions = (await readdir(root).catch(() => [])).length;
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Stagnation Runs · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / stagnation-runs</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧊 Stagnation Runs <span class="muted" style="font-size:0.6em">(iter #293)</span></h1>
+      <p class="agents-sub">
+        连续 ≥2 轮 score 变化 &lt; {STAG_THRESHOLD} 的停滞串。
+        检测 modifier 在哪一段完全没改进。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sr-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>受影响: <strong style="color:#ef4444">{sessionsAffected}</strong>({((sessionsAffected / Math.max(1, totalSessions)) * 100).toFixed(1)}%)</span>
+        <span>总停滞串: <strong>{totalRuns}</strong></span>
+        <span>最长: <strong>{longestRun}</strong> 轮</span>
+        <span>avg 长: <strong>{avgLength.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🧊 Top 20 最长停滞串</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>length</th><th>start</th><th>end</th><th>score</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {allRuns.slice(0, 20).map((r, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 10))}</code></a></td>
+              <td><strong style="color:#ef4444">{r.length}</strong></td>
+              <td>R{r.startIdx + 1}</td>
+              <td>R{r.endIdx + 1}</td>
+              <td>{r.score.toFixed(2)}</td>
+              <td><small class="muted">{esc((r.goal ?? '').slice(0, 30))}{(r.goal ?? '').length > 30 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 sessions 停滞频次</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>stag count</th><th>rounds</th><th>% stagnant</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {[...sessionStagCount].sort((a, b) => b.stagCount - a.stagCount).slice(0, 15).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><strong>{s.stagCount}</strong></td>
+              <td>{s.totalRounds}</td>
+              <td>{((s.stagCount / s.totalRounds) * 100).toFixed(0)}%</td>
+              <td><small class="muted">{esc((s.goal ?? '').slice(0, 30))}{(s.goal ?? '').length > 30 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>长停滞串 = 系统在某段完全没找到改进方向</li>
+        <li>stag count 高 = 用户场景下 modifier 多轮无作为</li>
+        <li>对照 <a href={`${base}/agents/score-plateau-detector/`}>Score Plateau Detector</a>(更长阈值)</li>
+        <li>对照 <a href={`${base}/agents/improvement-pattern-cluster/`}>Pattern Cluster</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
