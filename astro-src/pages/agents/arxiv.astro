@@ -1,0 +1,239 @@
+---
+// /agents/arxiv.astro — iter #93:global arxiv reverse index
+//
+// 扫所有 session 的 evidence.paperIds[],聚合引用次数,展示:
+//   - 全局 unique arxiv ID 数
+//   - 高频论文(≥2 sessions 引用)
+//   - 表格:arxiv / sessions 引用次数 / 首次 / 最近出现
+//   - 点击 arxiv → 在 sessions 列里看每个 session 的引用情况
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PaperInfo {
+  arxivId: string;
+  citedBySessions: Set<string>;
+  citedByRounds: number;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  proposalTitles: Set<string>;
+  proposalTypes: Set<string>;
+}
+
+const paperMap = new Map<string, PaperInfo>();
+const sessionsWithMeta: Set<string> = new Set();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const dir = join(root, sid);
+    if (!existsSync(join(dir, 'meta.json'))) continue;
+    sessionsWithMeta.add(sid);
+
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      for (const f of files) {
+        try {
+          const r = JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8'));
+          const fa = Number(r?.finished_at ?? 0);
+          for (const p of (r?.designer?.proposals ?? [])) {
+            const title = String(p?.title ?? '');
+            const type = String(p?.type ?? '');
+            for (const id of (p?.evidence?.paperIds ?? [])) {
+              let info = paperMap.get(id);
+              if (!info) {
+                info = {
+                  arxivId: id,
+                  citedBySessions: new Set(),
+                  citedByRounds: 0,
+                  firstSeenAt: fa,
+                  lastSeenAt: fa,
+                  proposalTitles: new Set(),
+                  proposalTypes: new Set(),
+                };
+                paperMap.set(id, info);
+              }
+              info.citedBySessions.add(sid);
+              info.citedByRounds++;
+              if (fa > 0 && (info.firstSeenAt === 0 || fa < info.firstSeenAt)) info.firstSeenAt = fa;
+              if (fa > 0 && fa > info.lastSeenAt) info.lastSeenAt = fa;
+              if (title) info.proposalTitles.add(title);
+              if (type) info.proposalTypes.add(type);
+            }
+          }
+        } catch { /* */ }
+      }
+    } catch { /* */ }
+  }
+}
+
+// 排序:按 sessions 数 desc,然后 rounds
+const papers = [...paperMap.values()].sort((a, b) => {
+  const sessDiff = b.citedBySessions.size - a.citedBySessions.size;
+  if (sessDiff !== 0) return sessDiff;
+  return b.citedByRounds - a.citedByRounds;
+});
+
+const totalPapers = papers.length;
+const totalRefs = papers.reduce((a, p) => a + p.citedByRounds, 0);
+const multiSession = papers.filter((p) => p.citedBySessions.size >= 2).length;
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function fmt(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleDateString();
+}
+---
+
+<BaseLayout title="Global arxiv Index · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / arxiv</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📑 Global arxiv Index <span class="muted" style="font-size:0.6em">(iter #93)</span></h1>
+      <p class="agents-sub">
+        所有 session 的 <code>evidence.paperIds[]</code> 全局聚合。按 "被多少 session 引用" 排序,
+        跨 session 发现"大家都在研究的论文"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-arxiv-stats">
+        <span><strong>{totalPapers}</strong> unique arxiv IDs</span>
+        <span><strong>{totalRefs}</strong> 总引用次数</span>
+        <span><strong>{multiSession}</strong> 多 session 引用 (≥2)</span>
+        <span><strong>{sessionsWithMeta.size}</strong> sessions 扫过</span>
+      </div>
+    </section>
+
+    {papers.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">archive/ 下没有 session 引用任何 arxiv 论文。</p>
+      </section>
+    ) : (
+      <>
+        {papers.filter((p) => p.citedBySessions.size >= 2).length > 0 && (
+          <section class="agents-session-section">
+            <h2>🔥 多 session 引用 (≥2 sessions)</h2>
+            <p class="agents-arxiv-cloud">
+              {papers.filter((p) => p.citedBySessions.size >= 2).slice(0, 20).map((p) => (
+                <a class={`agents-arxiv-chip agents-arxiv-chip-${p.citedBySessions.size >= 4 ? 'very-hot' : p.citedBySessions.size >= 3 ? 'hot' : 'warm'}`}
+                   href={`https://arxiv.org/abs/${p.arxivId}`}
+                   target="_blank"
+                   rel="noopener"
+                   title={`${p.citedBySessions.size} sessions, ${p.citedByRounds} rounds`}>
+                  {p.arxivId} <small>×{p.citedBySessions.size}</small>
+                </a>
+              ))}
+            </p>
+          </section>
+        )}
+
+        <section class="agents-session-section">
+          <h2>📋 全部论文 (按跨 session 引用排序)</h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr>
+                <th>arxiv</th>
+                <th>sessions</th>
+                <th>rounds</th>
+                <th>首次</th>
+                <th>最近</th>
+                <th>关联 proposal 类型</th>
+                <th>关联 sessions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {papers.map((p) => (
+                <tr>
+                  <td>
+                    <a href={`https://arxiv.org/abs/${p.arxivId}`} target="_blank" rel="noopener">
+                      <code>{p.arxivId}</code>
+                    </a>
+                  </td>
+                  <td>
+                    <strong class={`agents-arxiv-cite-l${p.citedBySessions.size >= 4 ? '4' : p.citedBySessions.size >= 3 ? '3' : p.citedBySessions.size >= 2 ? '2' : '1'}`}>
+                      {p.citedBySessions.size}
+                    </strong>
+                  </td>
+                  <td>{p.citedByRounds}</td>
+                  <td><small>{fmt(p.firstSeenAt)}</small></td>
+                  <td><small>{fmt(p.lastSeenAt)}</small></td>
+                  <td>
+                    <small>{[...p.proposalTypes].slice(0, 3).map((t) => <code>{escapeHtml(t)}</code>).reduce((a: any, b: any, i: number) => i === 0 ? [b] : [...a, ' ', b], [])}</small>
+                  </td>
+                  <td>
+                    <small>
+                      {[...p.citedBySessions].slice(0, 3).map((sid) => (
+                        <a class="agents-arxiv-session-chip" href={`${base}/agents/${sid}/papers/?focus=${p.arxivId}`}>
+                          <code>{sid.slice(0, 12)}</code>
+                        </a>
+                      ))}
+                      {p.citedBySessions.size > 3 && <span class="muted">+{p.citedBySessions.size - 3}</span>}
+                    </small>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/heatmap/`}>🔥 Heatmap</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-arxiv-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-arxiv-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-arxiv-cite-l1 { color: #6b7280; }
+  .agents-arxiv-cite-l2 { color: #f59e0b; }
+  .agents-arxiv-cite-l3 { color: #ef4444; }
+  .agents-arxiv-cite-l4 { color: #b91c1c; font-size: 1.1em; }
+  .agents-arxiv-session-chip {
+    display: inline-block;
+    margin: 0 0.2rem 0.2rem 0;
+    padding: 0.1rem 0.4rem;
+    background: rgba(99, 102, 241, 0.12);
+    color: #4f46e5;
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 0.78rem;
+  }
+  .agents-arxiv-session-chip:hover { background: rgba(99, 102, 241, 0.25); }
+</style>
