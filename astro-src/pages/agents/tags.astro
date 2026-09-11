@@ -1,0 +1,349 @@
+---
+// /agents/tags.astro — iter #95:session tags (browser-localStorage)
+//
+// 让用户给 session 加 tag,存储在浏览器 localStorage:
+//   - 每个 tag → Set<sid>
+//   - 每个 sid → Set<tag>
+// 作用:
+//   - 在 /agents/ 上看到自己加的 tags
+//   - 按 tag 过滤 sessions
+//   - 跨 session 分类管理
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionEntry {
+  sid: string;
+  goal: string;
+  createdAt: number;
+}
+
+const sessions: SessionEntry[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const d = join(root, sid);
+    if (!existsSync(join(d, 'meta.json'))) continue;
+    try {
+      const meta = JSON.parse(await readFile(join(d, 'meta.json'), 'utf8'));
+      sessions.push({
+        sid,
+        goal: typeof meta.goal === 'string' ? meta.goal : '',
+        createdAt: Number(meta.created_at ?? 0),
+      });
+    } catch { /* */ }
+  }
+}
+
+sessions.sort((a, b) => b.createdAt - a.createdAt);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Session Tags · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / tags</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏷️ Session Tags <span class="muted" style="font-size:0.6em">(iter #95)</span></h1>
+      <p class="agents-sub">
+        给 session 打 tag,存在浏览器 localStorage。打开本页可批量管理 tag,
+        在每个 session 详情页也可以加 tag(基于 sid 自动注入按钮)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📂 全部 sessions ({sessions.length})</h2>
+      <p class="muted">
+        在每行右侧输入框输入 tag(逗号分隔多个),回车保存。
+        点 tag chip 移除。数据存 <code>localStorage['dpr_agents_tags_v1']</code>。
+      </p>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>Session</th>
+            <th>Goal</th>
+            <th>Tags</th>
+          </tr>
+        </thead>
+        <tbody id="agents-tags-tbody">
+          {sessions.map((s) => (
+            <tr data-sid={s.sid}>
+              <td>
+                <a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a>
+              </td>
+              <td>
+                <small>{escapeHtml(s.goal.length > 60 ? s.goal.slice(0, 59) + '…' : s.goal)}</small>
+              </td>
+              <td>
+                <span class="agents-tag-chips"></span>
+                <input type="text" class="agents-tag-input" placeholder="+ tag..." />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 按 tag 过滤</h2>
+      <p class="muted">选择 1 个或多个 tag,筛选匹配的 sessions。</p>
+      <p id="agents-tag-filter-status" class="muted">所有 sessions</p>
+      <div id="agents-tag-results"></div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/goals/`}>📚 Goals</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  const STORAGE_KEY = 'dpr_agents_tags_v1';
+
+  function loadTags(): Record<string, string[]> {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return {};
+      const obj = JSON.parse(raw);
+      return typeof obj === 'object' && obj !== null ? obj : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveTags(tags: Record<string, string[]>) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tags));
+  }
+
+  function escapeHtml(s: string): string {
+    return s.replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c] ?? c));
+  }
+
+  function renderRow(sid: string, chipsContainer: HTMLElement, tags: string[]) {
+    chipsContainer.innerHTML = '';
+    for (const t of tags) {
+      const chip = document.createElement('span');
+      chip.className = 'agents-tag-chip';
+      chip.innerHTML = `${escapeHtml(t)} <button type="button" class="agents-tag-x">×</button>`;
+      chip.querySelector('.agents-tag-x')?.addEventListener('click', () => {
+        const all = loadTags();
+        all[sid] = (all[sid] ?? []).filter((x) => x !== t);
+        if (all[sid].length === 0) delete all[sid];
+        saveTags(all);
+        renderAll();
+      });
+      chipsContainer.appendChild(chip);
+    }
+  }
+
+  function renderAll() {
+    const all = loadTags();
+    const tbody = document.getElementById('agents-tags-tbody');
+    if (!tbody) return;
+    tbody.querySelectorAll('tr[data-sid]').forEach((tr) => {
+      const sid = tr.getAttribute('data-sid') ?? '';
+      const chipsContainer = tr.querySelector('.agents-tag-chips') as HTMLElement | null;
+      if (chipsContainer) renderRow(sid, chipsContainer, all[sid] ?? []);
+    });
+    renderTagIndex(all);
+  }
+
+  function renderTagIndex(all: Record<string, string[]>) {
+    // tag → Set<sid>
+    const tagMap = new Map<string, Set<string>>();
+    for (const [sid, tags] of Object.entries(all)) {
+      for (const t of tags) {
+        if (!tagMap.has(t)) tagMap.set(t, new Set());
+        tagMap.get(t)!.add(sid);
+      }
+    }
+
+    // 渲染 tag 索引 + 过滤区
+    const filterStatus = document.getElementById('agents-tag-filter-status');
+    const results = document.getElementById('agents-tag-results');
+    if (!filterStatus || !results) return;
+
+    const tagList = [...tagMap.entries()].sort((a, b) => b[1].size - a[1].size);
+    if (tagList.length === 0) {
+      filterStatus.textContent = '所有 sessions(还没有任何 tag)';
+      results.innerHTML = '';
+      return;
+    }
+
+    const activeTags = new Set<string>(
+      [...document.querySelectorAll<HTMLElement>('.agents-tag-index-chip.active')]
+        .map((e) => e.dataset.tag ?? '').filter(Boolean),
+    );
+
+    filterStatus.innerHTML =
+      `${tagList.length} 个 tag · ` +
+      (activeTags.size > 0
+        ? `当前过滤: ${[...activeTags].map((t) => `<code>${escapeHtml(t)}</code>`).join(', ')} · <button id="agents-tag-clear" class="button small">清空过滤</button>`
+        : '点击 tag chip 进行过滤');
+
+    // 渲染 tag chip 行
+    const tagRow = document.createElement('p');
+    tagRow.innerHTML = tagList.map(([t, sids]) =>
+      `<span class="agents-tag-index-chip ${activeTags.has(t) ? 'active' : ''}" data-tag="${escapeHtml(t)}" title="${sids.size} sessions">${escapeHtml(t)} <small>×${sids.size}</small></span>`
+    ).join(' ');
+    results.innerHTML = '';
+    results.appendChild(tagRow);
+
+    // 计算 filtered sids
+    let filteredSids: Set<string> | null = null;
+    if (activeTags.size > 0) {
+      filteredSids = new Set();
+      for (const t of activeTags) {
+        const sids = tagMap.get(t);
+        if (sids) {
+          if (filteredSids.size === 0) sids.forEach((s) => filteredSids!.add(s));
+          else for (const s of filteredSids) if (!sids.has(s)) filteredSids.delete(s);
+        }
+      }
+    }
+
+    if (filteredSids !== null) {
+      const list = document.createElement('ul');
+      list.className = 'agents-tag-results-list';
+      if (filteredSids.size === 0) {
+        list.innerHTML = '<li class="muted">没有匹配的 sessions。</li>';
+      } else {
+        for (const sid of filteredSids) {
+          const li = document.createElement('li');
+          li.innerHTML = `<a href="${location.pathname.replace(/\/tags\/?$/, '/')}${sid}/"><code>${sid}</code></a>`;
+          list.appendChild(li);
+        }
+      }
+      results.appendChild(list);
+    }
+
+    // 绑定事件
+    document.getElementById('agents-tag-clear')?.addEventListener('click', () => {
+      document.querySelectorAll('.agents-tag-index-chip.active').forEach((el) => el.classList.remove('active'));
+      renderTagIndex(all);
+    });
+    tagRow.querySelectorAll<HTMLElement>('.agents-tag-index-chip').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        chip.classList.toggle('active');
+        renderTagIndex(all);
+      });
+    });
+  }
+
+  // 绑定输入框
+  document.querySelectorAll<HTMLInputElement>('.agents-tag-input').forEach((input) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const tr = input.closest('tr[data-sid]');
+      if (!tr) return;
+      const sid = tr.getAttribute('data-sid') ?? '';
+      const newTags = (input.value || '').split(',').map((t) => t.trim()).filter(Boolean);
+      if (newTags.length === 0) return;
+      const all = loadTags();
+      const existing = new Set(all[sid] ?? []);
+      for (const t of newTags) existing.add(t);
+      all[sid] = [...existing];
+      saveTags(all);
+      input.value = '';
+      renderAll();
+    });
+  });
+
+  // 初始化
+  renderAll();
+</script>
+
+<style>
+  .agents-tag-input {
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: transparent;
+    border-radius: 4px;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.78rem;
+    width: 120px;
+    margin-left: 0.3rem;
+  }
+  .agents-tag-chips {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+  }
+  .agents-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.1rem 0.4rem;
+    background: rgba(99, 102, 241, 0.15);
+    color: #4f46e5;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-tag-x {
+    background: none;
+    border: none;
+    color: #ef4444;
+    cursor: pointer;
+    padding: 0;
+    font-size: 1rem;
+    line-height: 1;
+  }
+  .agents-tag-index-chip {
+    display: inline-block;
+    padding: 0.3rem 0.6rem;
+    margin: 0 0.3rem 0.4rem 0;
+    background: rgba(107, 114, 128, 0.12);
+    color: #4b5563;
+    border-radius: 12px;
+    font-family: ui-monospace, monospace;
+    font-size: 0.85rem;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .agents-tag-index-chip:hover {
+    background: rgba(99, 102, 241, 0.18);
+    color: #4f46e5;
+  }
+  .agents-tag-index-chip.active {
+    background: rgba(99, 102, 241, 0.25);
+    color: #4f46e5;
+    border-color: #4f46e5;
+  }
+  .agents-tag-index-chip small {
+    opacity: 0.7;
+    font-size: 0.75em;
+  }
+  .agents-tag-results-list {
+    list-style: none;
+    padding: 0.3rem 0;
+    margin: 0.4rem 0;
+  }
+  .agents-tag-results-list li {
+    padding: 0.25rem 0;
+    border-bottom: 1px dashed rgba(255,255,255,0.08);
+  }
+</style>
