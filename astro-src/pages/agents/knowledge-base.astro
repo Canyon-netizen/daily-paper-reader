@@ -1,0 +1,189 @@
+---
+// /agents/knowledge-base.astro — iter #153:cross-session knowledge base
+//
+// 聚合所有 synthesis 文件成一个可搜索的"知识库":
+//   - 全文搜索(title + content)
+//   - 按 session 分组
+//   - 显示每个 synthesis 的字数 / 摘要 / 时间
+//   - 一键跳转到对应 session
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface KBEntry {
+  sid: string;
+  idx: number;
+  title: string;
+  preview: string;
+  wordCount: number;
+  mtime: number;
+  goal: string;
+}
+
+const entries: KBEntry[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const sfs = await readdir(sd).catch(() => []);
+    for (const f of sfs) {
+      if (!/^synthesis_(\d+)\.md$/.test(f)) continue;
+      const idx = parseInt(f.match(/synthesis_(\d+)/)?.[1] ?? '0', 10);
+      const fp = join(sd, f);
+      const st = await stat(fp).catch(() => null);
+      const text = await readFile(fp, 'utf8').catch(() => '');
+      // 提取 title (# 开头的第一行)
+      let title = f;
+      for (const line of text.split('\n')) {
+        if (line.startsWith('# ')) { title = line.slice(2).trim(); break; }
+      }
+      // 预览:前 200 字符(去掉 markdown)
+      const preview = text
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/[#*_~>|]/g, ' ')
+        .replace(/!?\[[^\]]*\]\([^)]+\)/g, ' ')
+        .replace(/\n+/g, ' ')
+        .trim()
+        .slice(0, 200);
+      const words = (text.match(/\b[\w'-]+\b/g) ?? []).length;
+      entries.push({ sid, idx, title, preview, wordCount: words, mtime: st?.mtimeMs ?? 0, goal });
+    }
+  }
+}
+
+entries.sort((a, b) => b.mtime - a.mtime);
+
+const totalWords = entries.reduce((s, e) => s + e.wordCount, 0);
+const totalSessions = new Set(entries.map((e) => e.sid)).size;
+
+function fmtDate(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toISOString().slice(0, 10);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Knowledge Base · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / knowledge-base</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📚 Knowledge Base <span class="muted" style="font-size:0.6em">(iter #153)</span></h1>
+      <p class="agents-sub">
+        跨 session 聚合所有 syntheses 成一个可搜索的"个人知识库"。
+        总计 {entries.length} 份 / {totalWords.toLocaleString()} 字,来自 {totalSessions} 个 session。
+        在下方输入关键词即可全文搜索。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-kb-globals">
+        <span>总 syntheses: <strong>{entries.length}</strong></span>
+        <span>来自 sessions: <strong>{totalSessions}</strong></span>
+        <span>总字数: <strong>{totalWords.toLocaleString()}</strong></span>
+        <span>平均字数: <strong>{entries.length > 0 ? Math.round(totalWords / entries.length).toLocaleString() : 0}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔍 搜索</h2>
+      <input id="kb-search" type="search" placeholder="搜索 title / 内容 / goal …" style="width:100%;padding:0.6rem;border-radius:4px;border:1px solid rgba(99,102,241,0.3);background:rgba(99,102,241,0.05);color:inherit;font-family:inherit" />
+      <p class="muted"><small>实时过滤下方结果。</small></p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 结果(<span id="kb-count">{entries.length}</span>)</h2>
+      <ul class="agents-kb-list" id="kb-results">
+        {entries.map((e) => (
+          <li class="agents-kb-entry"
+              data-text={`${e.title} ${e.preview} ${e.goal}`.toLowerCase()}>
+            <div>
+              <a href={`${base}/agents/${e.sid}/synthesis/${String(e.idx).padStart(3, '0')}/`}>
+                <strong>{esc(e.title)}</strong>
+              </a>
+              <span class="muted">
+                <small> · {e.wordCount.toLocaleString()} 字 · {fmtDate(e.mtime)}</small>
+              </span>
+            </div>
+            <p class="muted"><small>{esc(e.preview)}…</small></p>
+            <p>
+              <small class="muted">goal: {esc((e.goal ?? '').slice(0, 60))}{(e.goal ?? '').length > 60 ? '…' : ''}</small>
+              · <a href={`${base}/agents/${e.sid}/`}><code>{esc(e.sid.slice(0, 12))}</code></a>
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+const search = document.getElementById('kb-search') as HTMLInputElement | null;
+const countEl = document.getElementById('kb-count');
+const entries = document.querySelectorAll<HTMLElement>('.agents-kb-entry');
+
+function filter(): void {
+  if (!search) return;
+  const q = search.value.toLowerCase().trim();
+  let shown = 0;
+  entries.forEach((el) => {
+    const text = el.getAttribute('data-text') ?? '';
+    if (q === '' || text.includes(q)) {
+      el.style.display = '';
+      shown += 1;
+    } else {
+      el.style.display = 'none';
+    }
+  });
+  if (countEl) countEl.textContent = String(shown);
+}
+
+search?.addEventListener('input', filter);
+</script>
+
+<style>
+  .agents-kb-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-kb-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-kb-list {
+    list-style: none;
+    padding: 0;
+  }
+  .agents-kb-entry {
+    background: rgba(99, 102, 241, 0.05);
+    border-left: 3px solid rgba(99, 102, 241, 0.4);
+    padding: 0.8rem;
+    margin-bottom: 0.6rem;
+    border-radius: 4px;
+  }
+  .agents-kb-entry p {
+    margin: 0.2rem 0;
+  }
+</style>
