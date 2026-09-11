@@ -1,0 +1,259 @@
+---
+// /agents/trends.astro — iter #113:cross-session trends
+//
+// 时间序列视图:
+//   - 过去 N 天的 token / cost / round 数 / synthesis 数
+//   - 每天的 sessions 累计
+//   - proposal 类型频率随时间漂移
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const RATE = 0.50;
+
+interface DayRow {
+  date: string;
+  tokens: number;
+  cost: number;
+  rounds: number;
+  syntheses: number;
+  sessions: number;
+  proposals: number;
+  applied: number;
+  types: Record<string, number>;
+}
+
+const dayMap = new Map<string, DayRow>();
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+
+    // rounds
+    const roundsDir = join(root, sid, 'rounds');
+    if (existsSync(roundsDir)) {
+      let rfs: string[] = [];
+      try { rfs = await readdir(roundsDir); } catch { /* */ }
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        let raw: any = null;
+        try { raw = JSON.parse(await readFile(join(roundsDir, rf), 'utf8')); } catch { continue; }
+        const ts = raw.started_at ?? 0;
+        if (!ts) continue;
+        const date = new Date(ts).toISOString().slice(0, 10);
+        const tokens = raw.feedback?.total_tokens ?? 0;
+        const proposals = raw.designer?.proposals ?? [];
+        const applied = raw.modifier?.applied ?? [];
+        const types: Record<string, number> = {};
+        for (const p of proposals) {
+          const t = p.type ?? 'unknown';
+          types[t] = (types[t] ?? 0) + 1;
+        }
+        const cur = dayMap.get(date) ?? { date, tokens: 0, cost: 0, rounds: 0, syntheses: 0, sessions: 0, proposals: 0, applied: 0, types: {} };
+        cur.tokens += tokens;
+        cur.cost += (tokens / 1_000_000) * RATE;
+        cur.rounds += 1;
+        cur.proposals += proposals.length;
+        cur.applied += applied.length;
+        cur.sessions += 1;
+        for (const [t, c] of Object.entries(types)) cur.types[t] = (cur.types[t] ?? 0) + c;
+        dayMap.set(date, cur);
+      }
+    }
+
+    // syntheses
+    const synthDir = join(root, sid, 'synthesis');
+    if (existsSync(synthDir)) {
+      let sfs: string[] = [];
+      try { sfs = await readdir(synthDir); } catch { /* */ }
+      for (const sf of sfs) {
+        if (!/^synthesis_\d+\.md$/.test(sf)) continue;
+        let sStat: any = null;
+        try {
+          sStat = await import('node:fs/promises').then((m) => m.stat(join(synthDir, sf)));
+        } catch { continue; }
+        const date = new Date(sStat.mtimeMs).toISOString().slice(0, 10);
+        const cur = dayMap.get(date) ?? { date, tokens: 0, cost: 0, rounds: 0, syntheses: 0, sessions: 0, proposals: 0, applied: 0, types: {} };
+        cur.syntheses += 1;
+        dayMap.set(date, cur);
+      }
+    }
+  }
+}
+
+const sortedDays = Array.from(dayMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+// 计算累计 / 累计成本
+let cumTokens = 0;
+let cumRounds = 0;
+let cumSyn = 0;
+const cumulative = sortedDays.map((d) => {
+  cumTokens += d.tokens;
+  cumRounds += d.rounds;
+  cumSyn += d.syntheses;
+  return { date: d.date, cumTokens, cumRounds, cumSyn, cost: d.cost };
+});
+
+// ASCII chart helper
+function asciiBar(value: number, max: number, width: number = 30): string {
+  if (max === 0) return '░'.repeat(width);
+  const len = Math.round((value / max) * width);
+  return '█'.repeat(len) + '░'.repeat(width - len);
+}
+
+function fmt$(n: number): string {
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
+}
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+const maxTokens = Math.max(...sortedDays.map((d) => d.tokens), 1);
+const maxRounds = Math.max(...sortedDays.map((d) => d.rounds), 1);
+const maxProposals = Math.max(...sortedDays.map((d) => d.proposals), 1);
+const maxCost = Math.max(...sortedDays.map((d) => d.cost), 1);
+
+// Type frequency trend
+const typeTotals: Record<string, number> = {};
+for (const d of sortedDays) for (const [t, c] of Object.entries(d.types)) typeTotals[t] = (typeTotals[t] ?? 0) + c;
+const sortedTypes = Object.entries(typeTotals).sort((a, b) => b[1] - a[1]).slice(0, 8);
+---
+
+<BaseLayout title="Trends · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / trends</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Cross-Session Trends <span class="muted" style="font-size:0.6em">(iter #113)</span></h1>
+      <p class="agents-sub">
+        时间序列视图。看 token / round / proposal / synthesis 随时间的分布。
+        用 ASCII 字符柱状图展示,无需图表库。
+      </p>
+    </header>
+
+    {sortedDays.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">还没有任何时间序列数据。跑至少 1 个 session 才能看到趋势。</p>
+      </section>
+    ) : (
+      <>
+        <section class="agents-session-section">
+          <h2>📊 每日 token</h2>
+          <pre class="agents-td-chart">{sortedDays.map((d) => `${d.date} │ ${asciiBar(d.tokens, maxTokens)} │ ${d.tokens.toLocaleString().padStart(8)}`).join('\n')}</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📊 每日费用</h2>
+          <pre class="agents-td-chart">{sortedDays.map((d) => `${d.date} │ ${asciiBar(d.cost, maxCost)} │ ${fmt$(d.cost).padStart(8)}`).join('\n')}</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📊 每日 rounds</h2>
+          <pre class="agents-td-chart">{sortedDays.map((d) => `${d.date} │ ${asciiBar(d.rounds, maxRounds)} │ ${String(d.rounds).padStart(3)}`).join('\n')}</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📊 每日 proposals</h2>
+          <pre class="agents-td-chart">{sortedDays.map((d) => `${d.date} │ ${asciiBar(d.proposals, maxProposals)} │ ${String(d.proposals).padStart(3)}`).join('\n')}</pre>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📈 累计曲线</h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr><th>date</th><th>累计 tokens</th><th>累计 rounds</th><th>累计 syntheses</th></tr>
+            </thead>
+            <tbody>
+              {cumulative.map((c) => (
+                <tr>
+                  <td><code>{c.date}</code></td>
+                  <td>{c.cumTokens.toLocaleString()}</td>
+                  <td>{c.cumRounds}</td>
+                  <td>{c.cumSyn}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🏷️ Proposal 类型频率(累计)</h2>
+          <table class="agents-session-table">
+            <thead><tr><th>type</th><th>出现次数</th><th>占比</th></tr></thead>
+            <tbody>
+              {sortedTypes.map(([t, c]) => (
+                <tr>
+                  <td><code>{escapeHtml(t)}</code></td>
+                  <td>{c}</td>
+                  <td>{((c / (Object.values(typeTotals).reduce((s, n) => s + n, 0))) * 100).toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📋 完整数据表</h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr>
+                <th>date</th>
+                <th>tokens</th>
+                <th>cost</th>
+                <th>rounds</th>
+                <th>proposals</th>
+                <th>applied</th>
+                <th>syntheses</th>
+                <th>sessions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedDays.map((d) => (
+                <tr>
+                  <td><code>{d.date}</code></td>
+                  <td>{d.tokens.toLocaleString()}</td>
+                  <td>{fmt$(d.cost)}</td>
+                  <td>{d.rounds}</td>
+                  <td>{d.proposals}</td>
+                  <td>{d.applied}</td>
+                  <td>{d.syntheses}</td>
+                  <td>{d.sessions}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      </>
+    )}
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-td-chart {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+</style>
