@@ -1,0 +1,191 @@
+---
+// /agents/goal-length-distribution.astro — iter #284:goal length distribution
+//
+// goals 字符长度的分布(直方图 + 桶 + 关联 final score):
+//   - <50 tiny, 50-100 short, 100-200 medium, 200-500 long, 500+ extreme
+//   - 每个桶的平均 final score
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Bucket {
+  label: string;
+  range: string;
+  min: number;
+  max: number;
+  count: number;
+  scores: number[];
+  avgScore: number;
+}
+
+const buckets: Bucket[] = [
+  { label: 'tiny',   range: '<50',     min: 0,   max: 50,  count: 0, scores: [], avgScore: 0 },
+  { label: 'short',  range: '50-100',  min: 50,  max: 100, count: 0, scores: [], avgScore: 0 },
+  { label: 'medium', range: '100-200', min: 100, max: 200, count: 0, scores: [], avgScore: 0 },
+  { label: 'long',   range: '200-500', min: 200, max: 500, count: 0, scores: [], avgScore: 0 },
+  { label: 'extreme',range: '500+',    min: 500, max: 99999, count: 0, scores: [], avgScore: 0 },
+];
+
+const root = join(process.cwd(), 'archive');
+const allLens: number[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const len = goal.length;
+    allLens.push(len);
+
+    // 计算 final score
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+    let finalScore = 0;
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${rNums[rNums.length - 1]}.json`), 'utf8'));
+      const arr: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') arr.push(p.total);
+        }
+      }
+      if (arr.length > 0) finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+    } catch (e) { continue; }
+
+    for (const b of buckets) {
+      if (len >= b.min && len < b.max) {
+        b.count += 1;
+        if (finalScore > 0) b.scores.push(finalScore);
+        break;
+      }
+    }
+  }
+}
+
+for (const b of buckets) {
+  b.avgScore = b.scores.length > 0 ? b.scores.reduce((a, x) => a + x, 0) / b.scores.length : 0;
+}
+
+const total = allLens.length;
+const avgLen = total > 0 ? allLens.reduce((a, b) => a + b, 0) / total : 0;
+const sorted = [...total > 0 ? allLens : []].sort((a, b) => a - b);
+const median = total > 0 ? sorted[Math.floor(total / 2)] : 0;
+const maxLen = total > 0 ? sorted[sorted.length - 1] : 0;
+const minLen = total > 0 ? sorted[0] : 0;
+
+const maxBucketCount = Math.max(...buckets.map((b) => b.count), 1);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Goal Length Distribution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-length-distribution</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Goal Length Distribution <span class="muted" style="font-size:0.6em">(iter #284)</span></h1>
+      <p class="agents-sub">
+        所有 goal 字符串的字符长度分布 + 各长度桶的 final score。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gld-globals">
+        <span>总 goals: <strong>{total}</strong></span>
+        <span>avg len: <strong>{avgLen.toFixed(0)}</strong> chars</span>
+        <span>median: <strong>{median}</strong></span>
+        <span>min: <strong>{minLen}</strong></span>
+        <span>max: <strong>{maxLen}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 长度桶分布</h2>
+      <pre class="agents-gld-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(10)} ${b.range.padEnd(8)} ${bar(b.count, maxBucketCount, 22)}  ${b.count}  (${((b.count / Math.max(1, total)) * 100).toFixed(1)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 各长度桶 final score</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>length bucket</th><th>range</th><th>sessions</th><th>avg final score</th></tr>
+        </thead>
+        <tbody>
+          {buckets.map((b) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{b.label}</strong></td>
+              <td>{b.range}</td>
+              <td>{b.count}</td>
+              <td>{b.avgScore > 0 ? <strong>{b.avgScore.toFixed(2)}</strong> : <span class="muted">—</span>}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>tiny (&lt;50): 太简短的 goal,可能缺乏上下文</li>
+        <li>medium (100-200): 最常见的清晰定义</li>
+        <li>long / extreme: 通常含很多细节要求</li>
+        <li>avg score 高的桶 = 用户更容易成功的 goal 类型</li>
+        <li>对照 <a href={`${base}/agents/goal-length-correlation/`}>Goal Length Correlation</a> 看具体相关性</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gld-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gld-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gld-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
