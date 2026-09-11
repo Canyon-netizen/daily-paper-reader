@@ -1,0 +1,184 @@
+---
+// /agents/daily-map.astro — iter #158:day-of-week × hour-of-day heatmap
+//
+// 跨 session 看工作活跃时间分布:
+//   - 行 = 星期 (Mon-Sun)
+//   - 列 = 小时 (0-23)
+//   - 每格 = 该 (weekday, hour) 组合下产生了多少 round JSON
+//
+// 帮助理解最常工作的时间段。
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const grid: number[][] = [];
+for (let i = 0; i < 7; i++) grid.push(new Array(24).fill(0));
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const st = await stat(join(rd, rf));
+        const d = new Date(st.mtimeMs);
+        // 0=Sun, 1=Mon, ..., 6=Sat — 转换为 Mon=0
+        const jsDay = d.getUTCDay();
+        const mondayIdx = jsDay === 0 ? 6 : jsDay - 1;
+        const hour = d.getUTCHours();
+        grid[mondayIdx][hour] += 1;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+let max = 0;
+let total = 0;
+let peakHour = -1;
+let peakDay = -1;
+for (let d = 0; d < 7; d++) {
+  for (let h = 0; h < 24; h++) {
+    if (grid[d][h] > max) {
+      max = grid[d][h];
+      peakDay = d;
+      peakHour = h;
+    }
+    total += grid[d][h];
+  }
+}
+
+const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function heat(n: number, max: number): string {
+  if (n === 0) return '·';
+  const ratio = n / max;
+  if (ratio < 0.2) return '░';
+  if (ratio < 0.4) return '▒';
+  if (ratio < 0.6) return '▓';
+  if (ratio < 0.8) return '█';
+  return '▊';
+}
+
+// 时间段聚合
+let mSum = 0, aSum = 0, eSum = 0, nSum = 0;
+for (let d = 0; d < 7; d++) {
+  for (let h = 0; h < 24; h++) {
+    const v = grid[d][h];
+    if (h >= 6 && h < 12) mSum += v;
+    else if (h >= 12 && h < 18) aSum += v;
+    else if (h >= 18 && h < 24) eSum += v;
+    else nSum += v;
+  }
+}
+
+// weekday vs weekend
+let weekdayTotal = 0, weekendTotal = 0;
+for (let d = 0; d < 5; d++) {
+  weekdayTotal += grid[d].reduce((a, b) => a + b, 0);
+}
+for (let d = 5; d < 7; d++) {
+  weekendTotal += grid[d].reduce((a, b) => a + b, 0);
+}
+
+// pre-compute heatmap text in frontmatter to avoid JSX parsing issues
+const headerLine1 = '      ' + Array.from({ length: 24 }, (_, h) => String(h % 10)).join('');
+const headerLine2 = '      ' + Array.from({ length: 24 }, (_, h) => (h < 10 ? '0' : '1')).join('');
+const bodyLines: string[] = [headerLine1, headerLine2];
+for (let d = 0; d < 7; d++) {
+  const row = grid[d].map((v) => heat(v, max)).join('');
+  const rowTotal = grid[d].reduce((a, b) => a + b, 0);
+  bodyLines.push(`${days[d]} |${row}| ${String(rowTotal).padStart(4)}`);
+}
+const heatmapText = bodyLines.join('\n');
+---
+
+<BaseLayout title="Daily Activity Map · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-map</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🕒 Daily Activity Map <span class="muted" style="font-size:0.6em">(iter #158)</span></h1>
+      <p class="agents-sub">
+        跨 session 按 (weekday, hour) 二维热力图,显示什么时候最常写 round JSON。
+        行 = Mon-Sun,列 = 0-23 时(UTC)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dm-globals">
+        <span>总 rounds: <strong>{total}</strong></span>
+        <span>峰值: <strong>{days[peakDay]} {peakHour}:00 UTC</strong> ({max} 个)</span>
+        <span>morning(6-12): <strong>{mSum}</strong></span>
+        <span>afternoon(12-18): <strong>{aSum}</strong></span>
+        <span>evening(18-24): <strong>{eSum}</strong></span>
+        <span>night(0-6): <strong>{nSum}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 热力图</h2>
+      <pre class="agents-dm-grid">{heatmapText}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 weekday vs weekend</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>段</th><th>rounds</th><th>占比</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>weekday (Mon-Fri)</td><td>{weekdayTotal}</td><td>{total > 0 ? ((weekdayTotal / total) * 100).toFixed(1) : '0'}%</td></tr>
+          <tr><td>weekend (Sat-Sun)</td><td>{weekendTotal}</td><td>{total > 0 ? ((weekendTotal / total) * 100).toFixed(1) : '0'}%</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>注意峰值时段 = 你的"高效时间" — 适合启动新 session</li>
+        <li>如果 evening/night 比例异常高,说明可能是 cron 触发而非手动</li>
+        <li>对照 <a href={`${base}/agents/streak/`}>Streak</a> 看每天活跃度</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dm-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dm-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dm-grid {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
