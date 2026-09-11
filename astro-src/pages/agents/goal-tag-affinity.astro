@@ -1,0 +1,164 @@
+---
+// /agents/goal-tag-affinity.astro — iter #181:goal-tag affinity matrix
+//
+// 跨 session 看 goal 中常出现的词对(affinity):
+//   - 提取 unigram 词袋
+//   - 共现矩阵(2 个词在同一个 goal 中)
+//   - top pairs
+//   - 频率柱状
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOP = new Set([
+  'a', 'an', 'the', 'of', 'in', 'on', 'for', 'with', 'to', 'and', 'or', 'is', 'are', 'was', 'were', 'be', 'been',
+  'this', 'that', 'these', 'those', 'it', 'as', 'at', 'by', 'from', 'i', 'you', 'we', 'they', 'use', 'using',
+  '的', '了', '在', '是', '和', '与', '或', '为', '有', '对', '及', '一', '不', '也', '就', '都', '而', '但',
+]);
+
+function tokenize(s: string): string[] {
+  const tokens: string[] = [];
+  const english = (s.match(/[a-zA-Z][a-zA-Z0-9-]+/g) ?? []).filter((t) => t.length >= 3 && !STOP.has(t.toLowerCase()));
+  const chinese = s.match(/[一-鿿]{2,}/g) ?? [];
+  return [...english.map((t) => t.toLowerCase()), ...chinese].filter((t) => !STOP.has(t.toLowerCase()));
+}
+
+const root = join(process.cwd(), 'archive');
+const goals: string[][] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      if (m.goal) goals.push(tokenize(m.goal));
+    } catch (e) { /* */ }
+  }
+}
+
+const unigramMap = new Map<string, number>();
+const pairMap = new Map<string, number>();
+const totalGoals = goals.length;
+
+for (const toks of goals) {
+  const set = new Set(toks);
+  for (const t of set) {
+    unigramMap.set(t, (unigramMap.get(t) ?? 0) + 1);
+  }
+  const arr = [...set];
+  for (let i = 0; i < arr.length; i++) {
+    for (let j = i + 1; j < arr.length; j++) {
+      const pair = arr[i] < arr[j] ? `${arr[i]}|${arr[j]}` : `${arr[j]}|${arr[i]}`;
+      pairMap.set(pair, (pairMap.get(pair) ?? 0) + 1);
+    }
+  }
+}
+
+// top 30 unigrams + top 30 pairs
+const topUnis = [...unigramMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
+const topPairs = [...pairMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Goal Tag Affinity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-tag-affinity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔗 Goal Tag Affinity <span class="muted" style="font-size:0.6em">(iter #181)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 goal 中常一起出现的词对。
+        高频词对 = 主题紧密相关。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gta-globals">
+        <span>总 goals: <strong>{totalGoals}</strong></span>
+        <span>unique unigrams: <strong>{unigramMap.size}</strong></span>
+        <span>unique pairs: <strong>{pairMap.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 top 30 unigram 词袋</h2>
+      <pre class="agents-gta-flow">{(() => {
+        const max = topUnis[0]?.[1] ?? 1;
+        return topUnis.map(([w, c]) => `${w.padEnd(16)} ${bar(c, max, 18)}  ${c}`);
+      }).join('\n')()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 top 30 共现词对</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>词对</th><th>共现 goals</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {topPairs.map(([pair, count]) => {
+            const [a, b] = pair.split('|');
+            const max = topPairs[0]?.[1] ?? 1;
+            return (
+              <tr>
+                <td><code>{a}</code> ↔ <code>{b}</code></td>
+                <td><strong>{count}</strong></td>
+                <td><code style="font-size:0.78rem">{bar(count, max, 16)}</code></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频词对 = 你研究的主题紧密相关 — 可作为长期 project 主题</li>
+        <li>低频共现高 unigram 频次 = 词很少组合,可考虑引入新方向</li>
+        <li>对照 <a href={`${base}/agents/goal-stems/`}>Goal Stems</a> 看长 stem 视角</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gta-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gta-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gta-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
