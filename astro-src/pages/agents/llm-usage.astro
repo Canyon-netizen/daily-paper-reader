@@ -1,0 +1,180 @@
+---
+// /agents/llm-usage.astro — iter #165:LLM model usage tracking
+//
+// 跨 session 看 LLM 使用情况:
+//   - 每个模型调用次数
+//   - 每个模型总 tokens
+//   - 每个模型总花费(估算)
+//   - per-session 用过哪些模型
+//   - 分布柱状图
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ModelStat {
+  model: string;
+  calls: number;
+  tokens: number;
+  estimatedCost: number; // USD
+  sids: Set<string>;
+}
+
+// 估算每 1M token 成本
+const PRICING: Record<string, number> = {
+  'haiku': 0.8,
+  'sonnet': 6,
+  'opus': 30,
+  'gpt-4o-mini': 0.3,
+  'gpt-4o': 7.5,
+  'gpt-4-turbo': 10,
+  'gpt-3.5-turbo': 0.5,
+  'gemini-1.5-flash': 0.2,
+  'gemini-1.5-pro': 3.5,
+};
+
+function priceFor(model: string): number {
+  const l = model.toLowerCase();
+  for (const k of Object.keys(PRICING)) {
+    if (l.includes(k)) return PRICING[k];
+  }
+  return 6; // default = sonnet
+}
+
+const modelMap = new Map<string, ModelStat>();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const fb = r.feedback ?? {};
+        const tot = fb.total_tokens ?? 0;
+        const model = fb.model ?? 'unknown';
+        if (!modelMap.has(model)) {
+          modelMap.set(model, { model, calls: 0, tokens: 0, estimatedCost: 0, sids: new Set() });
+        }
+        const m = modelMap.get(model)!;
+        m.calls += 1;
+        m.tokens += tot;
+        m.estimatedCost += (tot / 1_000_000) * priceFor(model);
+        m.sids.add(sid);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const stats = [...modelMap.values()].sort((a, b) => b.tokens - a.tokens);
+const totalCalls = stats.reduce((s, m) => s + m.calls, 0);
+const totalTokens = stats.reduce((s, m) => s + m.tokens, 0);
+const totalCost = stats.reduce((s, m) => s + m.estimatedCost, 0);
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="LLM Usage · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / llm-usage</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🤖 LLM Usage <span class="muted" style="font-size:0.6em">(iter #165)</span></h1>
+      <p class="agents-sub">
+        跨 session 看每个 LLM 模型的调用次数 / tokens / 估算成本。
+        帮助识别模型使用模式和潜在节省机会。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-lu-globals">
+        <span>已记录调用: <strong>{totalCalls}</strong></span>
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>估算总成本: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>模型数: <strong>{stats.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🤖 模型分布</h2>
+      <pre class="agents-lu-flow">{(() => {
+        const maxTok = Math.max(...stats.map((s) => s.tokens), 1);
+        return stats.map((m) => {
+          const pct = totalTokens > 0 ? ((m.tokens / totalTokens) * 100).toFixed(1) : '0';
+          return `${m.model.padEnd(28)} ${bar(m.tokens, maxTok, 24)}  ${m.tokens.toLocaleString().padStart(10)} tokens (${pct}%)`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细指标</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>model</th><th>calls</th><th>tokens</th><th>估算 $</th><th>用于 sessions</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((m) => (
+            <tr>
+              <td><code>{m.model}</code></td>
+              <td>{m.calls}</td>
+              <td>{m.tokens.toLocaleString()}</td>
+              <td>${m.estimatedCost.toFixed(2)}</td>
+              <td>{m.sids.size}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>如果有高 tokens 但低成本 model(如 haiku),说明大量 prompt 已下沉</li>
+        <li>纯 opus / gpt-4-turbo session 偏多 → 看 <a href={`${base}/agents/cost-calc/`}>Cost Calculator</a> 考虑换 haiku/sonnet 节省</li>
+        <li>对比 <a href={`${base}/agents/daily-burn/`}>Daily Burn</a> 看每天 token 节奏</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-lu-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-lu-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-lu-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
