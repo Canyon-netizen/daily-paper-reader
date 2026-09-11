@@ -1,0 +1,187 @@
+---
+// /agents/persona-action-matrix.astro — iter #225:persona × outcome matrix
+//
+// 矩阵:persona (rows) × outcome (cols)
+// 单元格 = 该 persona 的 proposal 中,各 outcome 的次数
+// outcome:promoted / rejected / deferred / applied
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaOutcome {
+  name: string;
+  promoted: number;
+  rejected: number;
+  deferred: number;
+  total: number;
+  appliedFromPromoted: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, { promoted: number; rejected: number; deferred: number; other: number; total: number; appliedFromPromoted: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        // 收集每 round 中各 persona 的 proposal indices
+        const personaProposals = new Map<string, number[]>();
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          if (!personaProposals.has(name)) personaProposals.set(name, []);
+          personaProposals.get(name)!.push(persona.proposals?.length ?? 0);
+        }
+        // gate proposals 包含 proposal text / persona
+        for (const gp of r.gate?.proposals ?? []) {
+          const cat = gp.category ?? 'unknown';
+          const persona = gp.persona ?? gp.author ?? 'unknown';
+          const cur = personaMap.get(persona) ?? { promoted: 0, rejected: 0, deferred: 0, other: 0, total: 0, appliedFromPromoted: 0 };
+          cur.total += 1;
+          if (cat === 'promoted') cur.promoted += 1;
+          else if (cat === 'rejected') cur.rejected += 1;
+          else if (cat === 'deferred') cur.deferred += 1;
+          else cur.other += 1;
+          personaMap.set(persona, cur);
+        }
+        // applied:从 gate.promoted 中来(简化假设:每 round applied 数量 ≤ promoted 数量)
+        const appliedCount = (r.modifier?.applied ?? []).length;
+        if (appliedCount > 0 && r.gate?.proposals) {
+          const promotedList = (r.gate.proposals as any[]).filter((gp) => gp.category === 'promoted');
+          // 简化:把 applied 平均分配给 promoted 的 personas
+          for (const gp of promotedList) {
+            const persona = gp.persona ?? gp.author ?? 'unknown';
+            const cur = personaMap.get(persona);
+            if (cur) cur.appliedFromPromoted += 1 / Math.max(promotedList.length, 1);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const personas: PersonaOutcome[] = [];
+for (const [name, v] of personaMap.entries()) {
+  personas.push({
+    name,
+    promoted: v.promoted,
+    rejected: v.rejected,
+    deferred: v.deferred,
+    total: v.total,
+    appliedFromPromoted: v.appliedFromPromoted,
+  });
+}
+personas.sort((a, b) => b.total - a.total);
+const top = personas.slice(0, 15);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Persona × Outcome Matrix · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-action-matrix</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧬 Persona × Outcome Matrix <span class="muted" style="font-size:0.6em">(iter #225)</span></h1>
+      <p class="agents-sub">
+        各 persona 的 proposal 在 gate 的结局分布。
+        高 promote % + applied = 该 persona 的 proposal 真正有价值。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pam-globals">
+        <span>personas: <strong>{personas.length}</strong></span>
+        <span>总 proposals in gate: <strong>{personas.reduce((s, p) => s + p.total, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 top 15 personas 矩阵</h2>
+      <pre class="agents-pam-flow">{`persona           promoted    rejected    deferred   total
+${'-'.repeat(60)}
+${top.map((p) => {
+  const name = p.name.length > 18 ? p.name.slice(0, 18) + '…' : p.name.padEnd(18);
+  return `${name} ${bar(p.promoted, Math.max(...top.map(x => x.total), 1), 8)} ${String(p.promoted).padStart(3)}  ${bar(p.rejected, Math.max(...top.map(x => x.total), 1), 8)} ${String(p.rejected).padStart(3)}  ${bar(p.deferred, Math.max(...top.map(x => x.total), 1), 8)} ${String(p.deferred).padStart(3)}  ${String(p.total).padStart(4)}`;
+}).join('\n')}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>promote %</th><th>applied (估)</th><th>promoted</th><th>rejected</th><th>deferred</th><th>total</th></tr>
+        </thead>
+        <tbody>
+          {top.map((p) => (
+            <tr>
+              <td><code>{esc(p.name)}</code></td>
+              <td><strong>{p.total > 0 ? ((p.promoted / p.total) * 100).toFixed(0) : '0'}%</strong></td>
+              <td>{p.appliedFromPromoted.toFixed(1)}</td>
+              <td>{p.promoted}</td>
+              <td>{p.rejected}</td>
+              <td>{p.deferred}</td>
+              <td>{p.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>promote % = 该 persona 被 gate 接受的比例</li>
+        <li>applied (估) ≈ applied 数按 promoted 平均分配</li>
+        <li>对照 <a href={`${base}/agents/persona-promote/`}>Persona Promote</a> 看更精确分析</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pam-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pam-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pam-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
