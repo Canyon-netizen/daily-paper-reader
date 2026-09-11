@@ -1,0 +1,183 @@
+---
+// /agents/goal-topic-jaccard-cluster.astro — iter #295:goal topic Jaccard cluster
+//
+// 用 Jaccard 相似度给 goals 简单聚类:
+//   - 抽取每个 goal 的 token (Chinese 2-gram + English word)
+//   - 两两算 Jaccard
+//   - 阈值 ≥ 0.3 = 相似,聚成簇
+//   - 输出 top 10 大簇
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOPWORDS = new Set([
+  '的', '了', '和', '是', '在', '我', '你', '他', '她', '它', '们', '这', '那',
+  'a', 'an', 'the', 'and', 'or', 'but', 'is', 'are', 'was', 'for', 'to', 'of',
+]);
+
+function tokenize(s: string): Set<string> {
+  const tokens = new Set<string>();
+  // 中文 2-gram
+  const chinese = s.match(/[一-鿿]+/g) ?? [];
+  for (const c of chinese) {
+    for (let i = 0; i < c.length - 1; i++) {
+      const gram = c.slice(i, i + 2);
+      if (!STOPWORDS.has(gram)) tokens.add(gram);
+    }
+  }
+  // English words
+  const eng = s.toLowerCase().match(/[a-z][a-z0-9]+/g) ?? [];
+  for (const w of eng) {
+    if (w.length >= 2 && !STOPWORDS.has(w)) tokens.add(w);
+  }
+  return tokens;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter += 1;
+  const uni = a.size + b.size - inter;
+  return uni === 0 ? 0 : inter / uni;
+}
+
+const root = join(process.cwd(), 'archive');
+const goals: { sid: string; goal: string; tokens: Set<string> }[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      if (goal) goals.push({ sid, goal, tokens: tokenize(goal) });
+    } catch (e) { /* */ }
+  }
+}
+
+const JAC_THRESHOLD = 0.3;
+
+// Union-Find 简易聚类
+const parent: number[] = goals.map((_, i) => i);
+function find(i: number): number {
+  while (parent[i] !== i) {
+    parent[i] = parent[parent[i]];
+    i = parent[i];
+  }
+  return i;
+}
+function union(a: number, b: number) {
+  const ra = find(a), rb = find(b);
+  if (ra !== rb) parent[ra] = rb;
+}
+
+// 限制 O(n²) 计算只在小规模时使用 — 500 个 goal 限制
+const N = Math.min(goals.length, 500);
+for (let i = 0; i < N; i++) {
+  for (let j = i + 1; j < N; j++) {
+    const sim = jaccard(goals[i].tokens, goals[j].tokens);
+    if (sim >= JAC_THRESHOLD) union(i, j);
+  }
+}
+
+// 收集簇
+const clusterMap = new Map<number, number[]>();
+for (let i = 0; i < N; i++) {
+  const r = find(i);
+  if (!clusterMap.has(r)) clusterMap.set(r, []);
+  clusterMap.get(r)!.push(i);
+}
+
+const clusters = [...clusterMap.values()]
+  .map((idxs) => ({
+    size: idxs.length,
+    sids: idxs.map((i) => goals[i].sid),
+    goals: idxs.slice(0, 3).map((i) => goals[i].goal),
+  }))
+  .filter((c) => c.size >= 2)
+  .sort((a, b) => b.size - a.size);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Topic Jaccard Cluster · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-topic-jaccard-cluster</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌐 Goal Topic Jaccard Cluster <span class="muted" style="font-size:0.6em">(iter #295)</span></h1>
+      <p class="agents-sub">
+        用 Jaccard ≥ {JAC_THRESHOLD} 给 goals 简单聚类。Chinese 2-gram + English word tokenization。
+        仅对前 {N} 个 goal 计算避免 O(n²) 爆炸。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gtjc-globals">
+        <span>总 goals: <strong>{goals.length}</strong></span>
+        <span>聚类目标: <strong>{N}</strong></span>
+        <span>簇数: <strong>{clusters.length}</strong></span>
+        <span>≥2 的簇: <strong>{clusters.filter((c) => c.size >= 2).length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌐 Top 15 大簇</h2>
+      {clusters.slice(0, 15).map((c, i) => (
+        <div style="border-left:3px solid #4f46e5;padding:0.5rem 0.8rem;margin-bottom:0.5rem;background:rgba(255,255,255,0.02);border-radius:4px">
+          <div style="display:flex;gap:0.8rem;align-items:baseline;flex-wrap:wrap">
+            <strong style="color:#10b981">#{i + 1}</strong>
+            <span>size <strong style="color:#4f46e5">{c.size}</strong></span>
+            <small class="muted">— 包含 {c.size} 个 session</small>
+          </div>
+          <ul style="margin:0.4rem 0 0;padding-left:1.2rem">
+            {c.goals.map((g) => (
+              <li><small>{esc(g.slice(0, 100))}{g.length > 100 ? '…' : ''}</small></li>
+            ))}
+            {c.size > 3 && <li><small class="muted">…+{c.size - 3} more</small></li>}
+          </ul>
+        </div>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>大簇 = 用户反复提相同主题的需求</li>
+        <li>多小簇 = 用户场景多样化</li>
+        <li>Jaccard 阈值高 → 簇更紧但更碎</li>
+        <li>对照 <a href={`${base}/agents/goal-similar-pairs/`}>Goal Similar Pairs</a> 看 pairwise</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtjc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtjc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
