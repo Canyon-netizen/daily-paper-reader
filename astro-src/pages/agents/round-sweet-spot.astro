@@ -1,0 +1,171 @@
+---
+// /agents/round-sweet-spot.astro — iter #227:round number sweet spot
+//
+// 找"最佳 round 数":每 round position 的 avg score
+//   - 通常 round 3-5 是峰值
+//   - 早期 round 还在 warming up
+//   - 后期 round 可能 diminishing returns
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const positionMap = new Map<number, number[]>(); // position → scores
+let maxPosition = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (let i = 0; i < rNum.length; i++) {
+      const pos = i + 1;
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const avg = getAvg(r);
+        if (avg === 0) continue;
+        if (pos > maxPosition) maxPosition = pos;
+        if (!positionMap.has(pos)) positionMap.set(pos, []);
+        positionMap.get(pos)!.push(avg);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const positions: { pos: number; count: number; avgScore: number; minScore: number; maxScore: number }[] = [];
+for (let p = 1; p <= maxPosition; p++) {
+  const scores = positionMap.get(p) ?? [];
+  if (scores.length === 0) continue;
+  positions.push({
+    pos: p,
+    count: scores.length,
+    avgScore: scores.reduce((a, b) => a + b, 0) / scores.length,
+    minScore: Math.min(...scores),
+    maxScore: Math.max(...scores),
+  });
+}
+
+// 找 peak
+const peak = positions.reduce((m, p) => (p.avgScore > m.avgScore ? p : m), { pos: 0, avgScore: 0 } as any);
+const totalSessions = positions.reduce((s, p) => Math.max(s, p.count), 0); // 取最大 count 作为估计
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Round Sweet Spot · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-sweet-spot</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Round Sweet Spot <span class="muted" style="font-size:0.6em">(iter #227)</span></h1>
+      <p class="agents-sub">
+        每 round position 的 avg score 分布。
+        找"最佳迭代轮数"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rss-globals">
+        <span>max position: <strong>{maxPosition}</strong></span>
+        <span>peak position: <strong style="color:#10b981">R{peak.pos} ({peak.avgScore.toFixed(2)})</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Round position × avg score</h2>
+      <pre class="agents-rss-flow">{`${positions.map((p) => {
+        return `R${String(p.pos).padStart(2)} ${bar(p.avgScore, 10, 22)}  ${p.avgScore.toFixed(2)}  (n=${p.count})`;
+      }).join('\n')}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>round</th><th>count</th><th>avg</th><th>min</th><th>max</th></tr>
+        </thead>
+        <tbody>
+          {positions.map((p) => (
+            <tr class={p.pos === peak.pos ? 'rss-peak' : ''}>
+              <td><strong>R{p.pos}</strong></td>
+              <td>{p.count}</td>
+              <td><strong>{p.avgScore.toFixed(2)}</strong></td>
+              <td>{p.minScore.toFixed(2)}</td>
+              <td>{p.maxScore.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>peak = avg score 最高的 round position</li>
+        <li>若 peak 在 R3-R5 = 通常 sweet spot</li>
+        <li>peak 之后 avg 下降 = diminishing returns</li>
+        <li>对照 <a href={`${base}/agents/convergence-index/`}>Convergence Index</a> 看收敛</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rss-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rss-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rss-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  tr.rss-peak td { background: rgba(99, 102, 241, 0.2); }
+</style>
