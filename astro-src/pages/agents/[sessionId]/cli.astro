@@ -1,0 +1,214 @@
+---
+// /agents/[sessionId]/cli.astro — iter #98:CLI cheat-sheet for current session
+//
+// 列出针对当前 session 的所有可用 CLI 命令,带说明 + 一键复制。
+// 包括:继续跑 / 导出 / 编译 / diff / 评分 / 状态 等。
+
+import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const { readdir } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    if (existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+
+let meta: any = null;
+try { meta = JSON.parse(await readFile(join(process.cwd(), 'archive', sessionId, 'meta.json'), 'utf8')); } catch { /* */ }
+
+const COMMANDS = [
+  {
+    category: '▶️ 继续迭代',
+    cmds: [
+      { label: '继续跑 1 round(默认)', cmd: `node astro-src/scripts/agents-run.mjs --session ${sessionId} --rounds 1`, desc: '跑 1 round,沿用 meta.json 里的 preset 与 max_cycles。' },
+      { label: '继续跑 3 round', cmd: `node astro-src/scripts/agents-run.mjs --session ${sessionId} --rounds 3`, desc: '连跑 3 round。' },
+      { label: '继续跑(dry-run,无 LLM)', cmd: `node astro-src/scripts/agents-run.mjs --session ${sessionId} --rounds 1 --dry-run`, desc: '不调真实 LLM,只跑 stub,验证 pipeline。' },
+      { label: '带 --resume 跑(避免重复 proposal)', cmd: `node astro-src/scripts/agents-run.mjs --session ${sessionId} --rounds 1 --resume`, desc: '把前几轮的 proposals 喂给 Designer,降低重复。' },
+    ],
+  },
+  {
+    category: '📊 检查状态',
+    cmds: [
+      { label: '查看 session 状态(text)', cmd: `node astro-src/scripts/agents-run.mjs --session ${sessionId} --status`, desc: '打印 session 摘要,无 LLM,无写入。' },
+      { label: '查看状态(JSON)', cmd: `node astro-src/scripts/agents-run.mjs --session ${sessionId} --status --json`, desc: '机器可读的 session 摘要。' },
+      { label: '查看前 10 round 详情', cmd: `node astro-src/scripts/agents-run.mjs --session ${sessionId} --status --last 10`, desc: '详细展开最近 10 rounds。' },
+    ],
+  },
+  {
+    category: '🔍 Diff / 对比',
+    cmds: [
+      { label: '导出 rounds diff(markdown)', cmd: `node astro-src/scripts/agents-run.mjs --diff rounds --session ${sessionId}`, desc: '输出相邻 rounds 的 proposal diff 到 stdout。' },
+      { label: '导出 synthesis diff(text)', cmd: `node astro-src/scripts/agents-run.mjs --diff-syntheses --session ${sessionId}`, desc: '对比所有 synthesis 文件,输出差异到 stdout。' },
+      { label: '导出 synthesis diff(JSON)', cmd: `node astro-src/scripts/agents-run.mjs --diff-syntheses --session ${sessionId} --json`, desc: '机器可读的 synthesis diff。' },
+      { label: '浏览器 diff', cmd: `open /agents/${sessionId}/diff/`, desc: '在浏览器看 round diff (iter #88)。' },
+      { label: '浏览器 synthesis diff', cmd: `open /agents/${sessionId}/synthesis/diff/`, desc: '在浏览器看 synthesis diff (iter #82)。' },
+    ],
+  },
+  {
+    category: '📦 导出',
+    cmds: [
+      { label: '导出 markdown bundle', cmd: `node astro-src/scripts/agents-run.mjs --export-md --session ${sessionId}`, desc: '写到 archive/<sid>/export.md(整 session 1 文件)。' },
+      { label: '导出 JSON bundle', cmd: `node astro-src/scripts/agents-run.mjs --export-bundle --session ${sessionId}`, desc: '导出一个完整 JSON(可被 --import 恢复)。' },
+      { label: 'JSON bundle 到 stdout', cmd: `node astro-src/scripts/agents-run.mjs --export-bundle --session ${sessionId} --json`, desc: '打印 JSON bundle 到 stdout(方便管道)。' },
+      { label: '浏览器导出页', cmd: `open /agents/${sessionId}/export/`, desc: '在浏览器下载 bundle 文件 (iter #58)。' },
+    ],
+  },
+  {
+    category: '📄 装配 paper',
+    cmds: [
+      { label: '装配 paper 到 ./paper-output/', cmd: `node astro-src/scripts/agents-run.mjs --compile-paper --session ${sessionId}`, desc: '产出 paper.md + paper.tex,整篇可提交论文草稿。' },
+      { label: '装配 paper 到指定目录', cmd: `node astro-src/scripts/agents-run.mjs --compile-paper ./out --session ${sessionId}`, desc: '写到自定义目录。' },
+      { label: '浏览器 compile 入口', cmd: `open /agents/${sessionId}/compile/`, desc: '在浏览器看 compile 进度 + 下载。' },
+    ],
+  },
+  {
+    category: '🧪 评分 & 诊断',
+    cmds: [
+      { label: '跑 evaluator(只输出 JSON)', cmd: `node astro-src/scripts/agents-run.mjs --eval --session ${sessionId}`, desc: '计算 4 子分 + overall,无 LLM。' },
+      { label: '浏览器 score 入口', cmd: `open /agents/${sessionId}/score/`, desc: '在浏览器看 score dashboard (iter #75)。' },
+      { label: '浏览器 health 诊断', cmd: `open /agents/health/`, desc: '扫所有 session 的 issue (iter #92)。' },
+    ],
+  },
+  {
+    category: '🗑️ 删除 / 复制',
+    cmds: [
+      { label: '删除 session(移到回收站)', cmd: `node astro-src/scripts/agents-run.mjs --delete --session ${sessionId}`, desc: '移到 .trash/,30 天后自动清理。' },
+      { label: '复制 session', cmd: `node astro-src/scripts/agents-run.mjs --duplicate ${sessionId} <new-sid>`, desc: '把当前 session 的所有 rounds 复制到 new-sid。' },
+    ],
+  },
+];
+---
+
+<BaseLayout title={`CLI · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>cli</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⌨️ CLI Cheat Sheet · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #98 · 这个 session 相关的所有常用 CLI 命令,带说明 + 一键复制按钮。
+        适合贴到终端或脚本里跑。
+      </p>
+    </header>
+
+    {meta?.goal && (
+      <section class="agents-session-section">
+        <p class="muted">
+          <strong>当前 goal:</strong> {String(meta.goal).slice(0, 200)}{String(meta.goal).length > 200 ? '…' : ''}
+        </p>
+      </section>
+    )}
+
+    {COMMANDS.map((cat) => (
+      <section class="agents-session-section">
+        <h2>{cat.category}</h2>
+        <div class="agents-cli-list">
+          {cat.cmds.map((c, i) => (
+            <article class="agents-cli-item">
+              <header>
+                <strong>{c.label}</strong>
+                <button type="button" class="button small agents-cli-copy" data-cmd={c.cmd}>
+                  📋 复制
+                </button>
+              </header>
+              <p class="muted"><small>{c.desc}</small></p>
+              <pre class="agents-cli-cmd" data-cmd={c.cmd}>{c.cmd}</pre>
+            </article>
+          ))}
+        </div>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>← Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/brief/`}>📋 Brief</a>
+        <a class="button" href={`${base}/agents/${sessionId}/score/`}>📊 Score</a>
+        <a class="button" href={`${base}/agents/about/`}>🧭 About</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cli-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+  .agents-cli-item {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+  }
+  .agents-cli-item header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.3rem;
+    gap: 0.5rem;
+  }
+  .agents-cli-item header strong {
+    font-size: 0.95rem;
+  }
+  .agents-cli-item p {
+    margin: 0.2rem 0 0.5rem;
+  }
+  .agents-cli-cmd {
+    background: rgba(0,0,0,0.3);
+    padding: 0.5rem 0.7rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #10b981;
+    margin: 0;
+  }
+  .agents-cli-copy {
+    flex-shrink: 0;
+  }
+</style>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.agents-cli-copy').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const cmd = btn.getAttribute('data-cmd') ?? '';
+      navigator.clipboard?.writeText(cmd).then(
+        () => {
+          const orig = btn.textContent;
+          btn.textContent = '✅ 已复制';
+          setTimeout(() => { btn.textContent = orig; }, 1500);
+        },
+        (e) => console.warn('[cli] copy failed:', e),
+      );
+    });
+  });
+</script>
