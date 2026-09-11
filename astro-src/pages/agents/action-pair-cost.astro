@@ -1,0 +1,172 @@
+---
+// /agents/action-pair-cost.astro — iter #318:action pair combined cost
+//
+// 经常一起出现的 action 对的 avg cost:
+//   - 找出高频 action 对
+//   - 看哪些 action 组合"贵"
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface PairInfo {
+  a: string;
+  b: string;
+  count: number;
+  totalCost: number;
+  avgCost: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const pairMap = new Map<string, PairInfo>();
+const actionCounts = new Map<string, number>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        const cost = (tokens / 1_000_000) * SONNET_PRICE;
+        const acts: string[] = [];
+        const seen = new Set<string>();
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!seen.has(act)) {
+            seen.add(act);
+            acts.push(act);
+          }
+        }
+        for (const a of acts) {
+          actionCounts.set(a, (actionCounts.get(a) ?? 0) + 1);
+        }
+        for (let i = 0; i < acts.length; i++) {
+          for (let j = i + 1; j < acts.length; j++) {
+            const sortedPair = [acts[i], acts[j]].sort();
+            const key = `${sortedPair[0]}||${sortedPair[1]}`;
+            if (!pairMap.has(key)) {
+              pairMap.set(key, { a: sortedPair[0], b: sortedPair[1], count: 0, totalCost: 0, avgCost: 0 });
+            }
+            const p = pairMap.get(key)!;
+            p.count += 1;
+            p.totalCost += cost;
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+for (const p of pairMap.values()) {
+  p.avgCost = p.count > 0 ? p.totalCost / p.count : 0;
+}
+
+const arr = [...pairMap.values()].sort((a, b) => b.totalCost - a.totalCost);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Pair Cost · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-pair-cost</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸 Action Pair Cost <span class="muted" style="font-size:0.6em">(iter #318)</span></h1>
+      <p class="agents-sub">
+        经常一起出现的 action 对的 cost 累计排行。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-apc-globals">
+        <span>unique actions: <strong>{actionCounts.size}</strong></span>
+        <span>unique pairs: <strong>{arr.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 Top 15 高 cost action 对</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>action A</th><th>action B</th><th>count</th><th>total cost</th><th>avg cost</th></tr>
+        </thead>
+        <tbody>
+          {arr.slice(0, 15).map((p, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td>{p.count}</td>
+              <td><strong>${p.totalCost.toFixed(2)}</strong></td>
+              <td>${p.avgCost.toFixed(3)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 高频 action 对(出现 ≥5 次)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action A</th><th>action B</th><th>count</th><th>total cost</th><th>avg cost</th></tr>
+        </thead>
+        <tbody>
+          {[...arr].filter((p) => p.count >= 5).sort((a, b) => b.count - a.count).slice(0, 25).map((p, i) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td><strong>{p.count}</strong></td>
+              <td>${p.totalCost.toFixed(2)}</td>
+              <td>${p.avgCost.toFixed(3)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>total cost 高的对 = 系统经常一起应用,累计花费高</li>
+        <li>avg cost 高的对 = 单次组合较贵</li>
+        <li>count 高的对 = 系统稳定的工作模式</li>
+        <li>对照 <a href={`${base}/agents/action-pair-synergy/`}>Action Pair Synergy</a></li>
+        <li>对照 <a href={`${base}/agents/cost-by-action/`}>Cost by Action</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-apc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-apc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
