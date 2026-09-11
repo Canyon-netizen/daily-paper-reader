@@ -1,0 +1,273 @@
+---
+// /agents/cost-vs-score.astro — iter #130:cost vs score analysis
+//
+// 跨 session 分析 token 成本 vs feedback score 关系:
+//   - ASCII 散点图(每个 session 一个点)
+//   - 计算 Pearson 相关系数
+//   - 按 quadrant 分组(high-cost-low-score 是浪费)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionPoint {
+  sid: string;
+  goal: string;
+  tokens: number;
+  avgBest: number;
+  rounds: number;
+  promoted: number;
+}
+
+const points: SessionPoint[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    let goal = '';
+    const metaPath = join(root, sid, 'meta.json');
+    if (existsSync(metaPath)) {
+      try { goal = JSON.parse(await readFile(metaPath, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    let totalTokens = 0;
+    const allBestScores: number[] = [];
+    let promoted = 0;
+    let rounds = 0;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      rounds += 1;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        totalTokens += r.feedback?.total_tokens ?? 0;
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            const tot = p.total ?? 0;
+            allBestScores.push(tot);
+          }
+        }
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+        }
+      } catch (e) { /* */ }
+    }
+    if (allBestScores.length === 0) continue;
+    const avgBest = allBestScores.reduce((a, b) => a + b, 0) / allBestScores.length;
+    points.push({ sid, goal, tokens: totalTokens, avgBest, rounds, promoted });
+  }
+}
+
+// Pearson correlation
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length !== ys.length || xs.length < 2) return 0;
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    dx += (xs[i] - mx) ** 2;
+    dy += (ys[i] - my) ** 2;
+  }
+  const denom = Math.sqrt(dx * dy);
+  return denom > 0 ? num / denom : 0;
+}
+
+const tokens = points.map((p) => p.tokens);
+const scores = points.map((p) => p.avgBest);
+const corr = pearson(tokens, scores);
+
+// Median for quadrant split
+const sortedTokens = [...tokens].sort((a, b) => a - b);
+const sortedScores = [...scores].sort((a, b) => a - b);
+const medTokens = sortedTokens[Math.floor(sortedTokens.length / 2)] ?? 0;
+const medScore = sortedScores[Math.floor(sortedScores.length / 2)] ?? 0;
+
+const quadrant = {
+  wasteful: points.filter((p) => p.tokens > medTokens && p.avgBest < medScore).length,  // 高 token 低分
+  lucky: points.filter((p) => p.tokens < medTokens && p.avgBest > medScore).length,      // 低 token 高分
+  expensive: points.filter((p) => p.tokens > medTokens && p.avgBest > medScore).length,  // 高 token 高分
+  cheap: points.filter((p) => p.tokens < medTokens && p.avgBest < medScore).length,      // 低 token 低分
+};
+
+// ASCII scatter 40x20
+const W = 40, H = 20;
+const maxTok = Math.max(...tokens, 1);
+const minTok = Math.min(...tokens, 0);
+const grid: string[][] = Array.from({ length: H }, () => Array(W).fill(' '));
+// grid axes
+const yAxisX = 3;
+for (let y = 0; y < H; y++) grid[y][yAxisX] = '│';
+const xAxisY = H - 2;
+for (let x = yAxisX; x < W; x++) grid[xAxisY][x] = '─';
+grid[xAxisY][yAxisX] = '┼';
+
+// Plot points
+for (const p of points) {
+  const x = yAxisX + 1 + Math.round(((p.tokens - minTok) / (maxTok - minTok || 1)) * (W - yAxisX - 2));
+  const y = Math.round((1 - p.avgBest / 10) * (H - 3));
+  const cx = Math.min(W - 1, Math.max(0, x));
+  const cy = Math.min(H - 1, Math.max(0, y));
+  grid[cy][cx] = p.promoted > 0 ? '●' : '○';
+}
+
+let asciiPlot = '';
+for (let y = 0; y < H; y++) {
+  asciiPlot += grid[y].join('') + '\n';
+}
+asciiPlot += ' 0                                                  ' + (maxTok.toLocaleString()) + ' tokens\n';
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Cost vs Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-vs-score</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸📊 Cost vs Score <span class="muted" style="font-size:0.6em">(iter #130)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 token 成本和 feedback score 的关系。
+        ● = 至少 1 个 promoted proposal,○ = 没有 promoted。
+        中位数线把图分成 4 个象限,帮你识别浪费 / 黄金 session。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cs-globals">
+        <span>总 sessions: <strong>{points.length}</strong></span>
+        <span>Pearson 相关系数: <strong style={`color:${corr > 0.3 ? '#10b981' : corr < -0.3 ? '#ef4444' : '#6b7280'}`}>{corr.toFixed(3)}</strong></span>
+        <span>中位 tokens: <strong>{medTokens.toLocaleString()}</strong></span>
+        <span>中位 score: <strong>{medScore.toFixed(2)}</strong></span>
+      </div>
+      <p>
+        相关系数 &gt; 0.3 表示正相关(花得越多分越高),&lt; -0.3 表示负相关(花得多反而分低)。
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 Quadrant 分组</h2>
+      <div class="agents-cs-quadrants">
+        <div class="agents-cs-quad agents-cs-quad-wasteful">
+          <span class="agents-cs-quad-label">💸 浪费</span>
+          <span class="agents-cs-quad-count">{quadrant.wasteful}</span>
+          <span class="muted"><small>高 token · 低分</small></span>
+        </div>
+        <div class="agents-cs-quad agents-cs-quad-lucky">
+          <span class="agents-cs-quad-label">⭐ 黄金</span>
+          <span class="agents-cs-quad-count">{quadrant.lucky}</span>
+          <span class="muted"><small>低 token · 高分</small></span>
+        </div>
+        <div class="agents-cs-quad agents-cs-quad-expensive">
+          <span class="agents-cs-quad-label">🏆 高投入</span>
+          <span class="agents-cs-quad-count">{quadrant.expensive}</span>
+          <span class="muted"><small>高 token · 高分</small></span>
+        </div>
+        <div class="agents-cs-quad agents-cs-quad-cheap">
+          <span class="agents-cs-quad-label">🪙 低投入</span>
+          <span class="agents-cs-quad-count">{quadrant.cheap}</span>
+          <span class="muted"><small>低 token · 低分</small></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 ASCII 散点图</h2>
+      <pre class="agents-cs-plot">{asciiPlot}</pre>
+      <p class="muted"><small>Y 轴:score (0 在顶, 10 在底) · X 轴:tokens (左低右高) · ● promoted, ○ 无 promoted</small></p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 完整数据</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>session</th><th>tokens</th><th>avg score</th><th>rounds</th><th>promoted</th><th>goal</th><th>quadrant</th></tr>
+        </thead>
+        <tbody>
+          {[...points].sort((a, b) => b.tokens - a.tokens).slice(0, 30).map((p) => {
+            let quad = '';
+            if (p.tokens > medTokens && p.avgBest < medScore) quad = '💸 wasteful';
+            else if (p.tokens < medTokens && p.avgBest > medScore) quad = '⭐ lucky';
+            else if (p.tokens > medTokens && p.avgBest > medScore) quad = '🏆 expensive';
+            else quad = '🪙 cheap';
+            return (
+              <tr>
+                <td><a href={`${base}/agents/${p.sid}/`}><code>{esc(p.sid.slice(0, 16))}</code></a></td>
+                <td>{p.tokens.toLocaleString()}</td>
+                <td><strong style={`color:${p.avgBest >= 7 ? '#10b981' : p.avgBest >= 5 ? '#3b82f6' : '#6b7280'}`}>{p.avgBest.toFixed(2)}</strong></td>
+                <td>{p.rounds}</td>
+                <td>{p.promoted}</td>
+                <td><small>{esc((p.goal ?? '').slice(0, 30))}{(p.goal ?? '').length > 30 ? '…' : ''}</small></td>
+                <td><small>{quad}</small></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cs-quadrants {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.6rem;
+  }
+  .agents-cs-quad {
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    padding: 0.8rem;
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .agents-cs-quad-label {
+    font-size: 0.9rem;
+  }
+  .agents-cs-quad-count {
+    font-size: 1.8rem;
+    font-weight: 700;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-cs-quad-wasteful { background: rgba(239, 68, 68, 0.08); border-color: rgba(239, 68, 68, 0.3); }
+  .agents-cs-quad-lucky { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.3); }
+  .agents-cs-quad-expensive { background: rgba(99, 102, 241, 0.08); border-color: rgba(99, 102, 241, 0.3); }
+  .agents-cs-quad-cheap { background: rgba(107, 114, 128, 0.08); border-color: rgba(107, 114, 128, 0.3); }
+  .agents-cs-plot {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.75rem;
+    line-height: 1;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
