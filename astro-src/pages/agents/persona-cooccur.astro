@@ -1,0 +1,186 @@
+---
+// /agents/persona-cooccur.astro — iter #229:persona co-occurrence matrix
+//
+// 跨所有 rounds,统计哪两个 persona 经常出现在同一 round:
+//   - co-occurrence pair 频次
+//   - 单独出现次数
+//   - 揭示"评审团组合"
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaCoStat {
+  a: string;
+  b: string;
+  count: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const pairMap = new Map<string, number>();
+const soloCount = new Map<string, number>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        const names: string[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          names.push(name);
+        }
+        if (names.length === 1) {
+          const n = names[0];
+          soloCount.set(n, (soloCount.get(n) ?? 0) + 1);
+        }
+        const uniq = [...new Set(names)] as string[];
+        for (let i = 0; i < uniq.length; i++) {
+          for (let j = i + 1; j < uniq.length; j++) {
+            const key = `${uniq[i]}|||${uniq[j]}`;
+            pairMap.set(key, (pairMap.get(key) ?? 0) + 1);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const pairs: PersonaCoStat[] = [];
+for (const [key, count] of pairMap.entries()) {
+  const [a, b] = key.split('|||');
+  pairs.push({ a, b, count });
+}
+pairs.sort((x, y) => y.count - x.count);
+
+const topPairs = pairs.slice(0, 20);
+
+// 单独出现 top
+const topSolo = [...soloCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Persona Co-occurrence · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-cooccur</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👥 Persona Co-occurrence <span class="muted" style="font-size:0.6em">(iter #229)</span></h1>
+      <p class="agents-sub">
+        跨 rounds 统计哪两个 persona 经常出现在同一 round。
+        高频 pair = 典型评审团组合。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pcc-globals">
+        <span>总 pairs: <strong>{pairs.length}</strong></span>
+        <span>单独出现 sessions: <strong>{[...soloCount.values()].reduce((a, b) => a + b, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 top 20 persona pair</h2>
+      <pre class="agents-pcc-flow">{topPairs.map((p) => {
+        const labelA = p.a.length > 16 ? p.a.slice(0, 16) + '…' : p.a.padEnd(16);
+        const labelB = p.b.length > 16 ? p.b.slice(0, 16) + '…' : p.b.padEnd(16);
+        return `${labelA} + ${labelB}  ${bar(p.count, topPairs[0]?.count ?? 1, 22)}  ${p.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>A</th><th>B</th><th>co-occurs</th></tr>
+        </thead>
+        <tbody>
+          {topPairs.slice(0, 30).map((p) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td><strong>{p.count}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐚 top 10 单独出现 personas</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>solo sessions</th></tr>
+        </thead>
+        <tbody>
+          {topSolo.map(([name, c]) => (
+            <tr>
+              <td><code>{esc(name)}</code></td>
+              <td><strong>{c}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频 pair = 经常被组合调用</li>
+        <li>对比 <a href={`${base}/agents/persona-coverage/`}>Persona Coverage</a> 看单独频次</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pcc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pcc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pcc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
