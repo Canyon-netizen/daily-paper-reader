@@ -1,0 +1,258 @@
+---
+// /agents/goal-type-classifier.astro — iter #251:naive goal type classifier
+//
+// 根据 goal 文本关键词,朴素分类为:
+//   - research (研究/论文/文献/survey/review)
+//   - code (代码/实现/program/code/function)
+//   - write (写作/文章/总结/blog/essay)
+//   - analyze (分析/data/dataset/统计/分析)
+//   - design (设计/方案/架构/design/architecture)
+//   - other (其它)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['research', 'paper', 'study', 'survey', 'literature', '论文', '研究', '文献', '调研', '综述', '学术'],
+  code: ['code', 'program', 'function', 'implement', 'algorithm', '代码', '实现', '编程', '程序', '函数', '算法'],
+  write: ['write', 'blog', 'essay', 'article', 'report', '撰写', '写作', '文章', '博客', '报告', '作文', '散文'],
+  analyze: ['analyze', 'analysis', 'data', 'dataset', 'statistics', 'anomaly', '分析', '数据', '统计', '异常', '聚类', '回归'],
+  design: ['design', 'architect', 'plan', 'system', 'schema', '设计', '架构', '方案', '系统', '蓝图', '规划'],
+};
+
+interface Session {
+  sid: string;
+  goal: string;
+  type: string;
+  scores: number[];
+  tokens: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Session[] = [];
+
+function classify(goal: string): string {
+  const lower = goal.toLowerCase();
+  const scores: Record<string, number> = {};
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    let s = 0;
+    for (const kw of kws) {
+      if (lower.includes(kw)) s += 1;
+    }
+    scores[type] = s;
+  }
+  const max = Math.max(...Object.values(scores));
+  if (max === 0) return 'other';
+  for (const [type, s] of Object.entries(scores)) {
+    if (s === max) return type;
+  }
+  return 'other';
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    if (!goal) continue;
+    const type = classify(goal);
+    const scores: number[] = [];
+    let tokens = 0;
+    const rd = join(sp, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          tokens += r.feedback?.total_tokens ?? 0;
+          if (arr.length > 0) {
+            const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+            scores.push(avg);
+          }
+        } catch (e) { /* */ }
+      }
+    }
+    sessions.push({ sid, goal, type, scores, tokens });
+  }
+}
+
+// 按 type 聚合
+const typeStats = new Map<string, { count: number; totalTokens: number; scoreSum: number; scoreCnt: number; firstScores: number[]; finalScores: number[] }>();
+for (const s of sessions) {
+  if (!typeStats.has(s.type)) {
+    typeStats.set(s.type, { count: 0, totalTokens: 0, scoreSum: 0, scoreCnt: 0, firstScores: [], finalScores: [] });
+  }
+  const t = typeStats.get(s.type)!;
+  t.count += 1;
+  t.totalTokens += s.tokens;
+  for (const sc of s.scores) {
+    t.scoreSum += sc;
+    t.scoreCnt += 1;
+  }
+  if (s.scores.length > 0) {
+    t.firstScores.push(s.scores[0]);
+    t.finalScores.push(s.scores[s.scores.length - 1]);
+  }
+}
+
+const typeRows = Array.from(typeStats.entries()).map(([type, t]) => {
+  const avgScore = t.scoreCnt > 0 ? t.scoreSum / t.scoreCnt : 0;
+  const avgFirst = t.firstScores.length > 0 ? t.firstScores.reduce((a, b) => a + b, 0) / t.firstScores.length : 0;
+  const avgFinal = t.finalScores.length > 0 ? t.finalScores.reduce((a, b) => a + b, 0) / t.finalScores.length : 0;
+  const gain = avgFinal - avgFirst;
+  return { type, count: t.count, avgScore, avgFirst, avgFinal, gain, totalTokens: t.totalTokens };
+}).sort((a, b) => b.count - a.count);
+
+const maxCount = typeRows[0]?.count ?? 1;
+
+// 按 type 列出样本
+const samplesByType = new Map<string, Session[]>();
+for (const s of sessions) {
+  if (!samplesByType.has(s.type)) samplesByType.set(s.type, []);
+  const arr = samplesByType.get(s.type)!;
+  if (arr.length < 3) arr.push(s);
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Goal Type Classifier · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-classifier</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏷️ Goal Type Classifier <span class="muted" style="font-size:0.6em">(iter #251)</span></h1>
+      <p class="agents-sub">
+        基于关键词朴素分类:research / code / write / analyze / design / other。
+        多数关键词匹配胜出。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gtc-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>types: <strong>{typeStats.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 类型分布</h2>
+      <pre class="agents-gtc-flow">{typeRows.map((r) => {
+        return `${r.type.padEnd(12)} ${bar(r.count, maxCount, 22)}  ${r.count}  score=${r.avgScore.toFixed(2)} Δ=${r.gain >= 0 ? '+' : ''}${r.gain.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 类型-质量表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>count</th><th>avg first</th><th>avg final</th><th>Δ</th><th>avg score</th><th>total tokens</th></tr>
+        </thead>
+        <tbody>
+          {typeRows.map((r) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{r.type}</strong></td>
+              <td>{r.count}</td>
+              <td>{r.avgFirst.toFixed(2)}</td>
+              <td>{r.avgFinal.toFixed(2)}</td>
+              <td><strong style={`color:${r.gain >= 0 ? '#10b981' : '#ef4444'}`}>{r.gain >= 0 ? '+' : ''}{r.gain.toFixed(2)}</strong></td>
+              <td>{r.avgScore.toFixed(2)}</td>
+              <td>{fmtTok(r.totalTokens)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔍 样本 goals(每个类型)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>goal</th><th>rounds</th><th>avg score</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {typeRows.flatMap((r) => {
+            const samples = samplesByType.get(r.type) ?? [];
+            return samples.map((s) => (
+              <tr>
+                <td><strong style="color:#4f46e5">{r.type}</strong></td>
+                <td><small>{esc(s.goal.slice(0, 60))}{(s.goal ?? '').length > 60 ? '…' : ''}</small></td>
+                <td>{s.scores.length}</td>
+                <td>{s.scores.length > 0 ? (s.scores.reduce((a, b) => a + b, 0) / s.scores.length).toFixed(2) : 'N/A'}</td>
+                <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              </tr>
+            ));
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>分类基于关键词朴素匹配,可能有误差</li>
+        <li>Δ = avg_final - avg_first,跨类型比较"增量"</li>
+        <li>对照 <a href={`${base}/agents/goal-keyword-freq/`}>Goal Keywords</a> 看完整关键词分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gtc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
