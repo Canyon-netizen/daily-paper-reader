@@ -1,0 +1,173 @@
+---
+// /agents/persona-score-distribution.astro — iter #303:persona score distribution
+//
+// 各 persona 的 score 分布直方图(横向):
+//   - 0-2, 2-4, 4-5, 5-6, 6-7, 7-8, 8-10
+//   - 每行一个 persona
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaDist {
+  name: string;
+  total: number;
+  buckets: number[];   // 各分数桶的计数
+}
+
+const BUCKETS = [
+  { label: '0-3', min: 0, max: 3 },
+  { label: '3-4', min: 3, max: 4 },
+  { label: '4-5', min: 4, max: 5 },
+  { label: '5-6', min: 5, max: 6 },
+  { label: '6-7', min: 6, max: 7 },
+  { label: '7-8', min: 7, max: 8 },
+  { label: '8-10', min: 8, max: 11 },
+];
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, PersonaDist>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') {
+              if (!personaMap.has(name)) {
+                personaMap.set(name, { name, total: 0, buckets: BUCKETS.map(() => 0) });
+              }
+              const dist = personaMap.get(name)!;
+              dist.total += 1;
+              for (let i = 0; i < BUCKETS.length; i++) {
+                if (p.total >= BUCKETS[i].min && p.total < BUCKETS[i].max) {
+                  dist.buckets[i] += 1;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const personas = [...personaMap.values()]
+  .filter((p) => p.total >= 5)
+  .sort((a, b) => b.total - a.total);
+
+const maxBucketCount = Math.max(...personas.flatMap((p) => p.buckets), 1);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Persona Score Distribution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-score-distribution</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Persona Score Distribution <span class="muted" style="font-size:0.6em">(iter #303)</span></h1>
+      <p class="agents-sub">
+        各 persona 的 score 分布直方图。每行一个 persona,每个 cell 是某分数段的 proposals 数。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-psd-globals">
+        <span>personas: <strong>{personas.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 直方图</h2>
+      <pre class="agents-psd-flow">{personas.map((p) => {
+        return BUCKETS.map((b, i) => `${b.label.padEnd(5)} ${bar(p.buckets[i], maxBucketCount, 14)}  ${p.buckets[i]}`).join('\n') + `\n${p.name.padEnd(60)} total=${p.total}\n`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>persona</th>
+            <th>total</th>
+            {BUCKETS.map((b) => <th>{b.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {personas.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{esc(p.name)}</strong></td>
+              <td>{p.total}</td>
+              {p.buckets.map((c) => <td>{c}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>左偏 = persona 倾向低分(严苛)</li>
+        <li>右偏 = persona 倾向高分(宽松)</li>
+        <li>集中 = persona 评分一致 / 分散 = 评分波动大</li>
+        <li>对照 <a href={`${base}/agents/persona-score-bias/`}>Persona Score Bias</a></li>
+        <li>对照 <a href={`${base}/agents/persona-consistency/`}>Persona Consistency</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-psd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-psd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-psd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.7rem;
+    line-height: 1.3;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
