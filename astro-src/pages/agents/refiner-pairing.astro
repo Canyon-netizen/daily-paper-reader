@@ -1,0 +1,180 @@
+---
+// /agents/refiner-pairing.astro — iter #199:refiner action co-occurrence
+//
+// 看 modifier 在同一 round 里应用哪些 action pair:
+//   - (action_a, action_b) 共现频次
+//   - top pairs 排名
+//   - single vs multi-action rounds 比例
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Pair {
+  a: string;
+  b: string;
+  count: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const pairMap = new Map<string, number>();
+let singleActionRounds = 0;
+let multiActionRounds = 0;
+let emptyRounds = 0;
+let totalRounds = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        const applied = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        totalRounds += 1;
+        if (applied.length === 0) {
+          emptyRounds += 1;
+        } else if (applied.length === 1) {
+          singleActionRounds += 1;
+        } else {
+          multiActionRounds += 1;
+        }
+        // 共现 pair(去重 + 排序)
+        const uniq = [...new Set(applied)] as string[];
+        for (let i = 0; i < uniq.length; i++) {
+          for (let j = i + 1; j < uniq.length; j++) {
+            const key = `${uniq[i]}|||${uniq[j]}`;
+            pairMap.set(key, (pairMap.get(key) ?? 0) + 1);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const pairs: Pair[] = [];
+for (const [key, count] of pairMap.entries()) {
+  const [a, b] = key.split('|||');
+  pairs.push({ a, b, count });
+}
+pairs.sort((x, y) => y.count - x.count);
+const topPairs = pairs.slice(0, 25);
+
+// 统计每个 action 的总出现次数
+const actionCount = new Map<string, number>();
+for (const [key, count] of pairMap.entries()) {
+  const [a, b] = key.split('|||');
+  actionCount.set(a, (actionCount.get(a) ?? 0) + count);
+  actionCount.set(b, (actionCount.get(b) ?? 0) + count);
+}
+// 注意:这里 actionCount 实际统计的是"参与 pair 的次数",而非单独频次(但可以排序作参考)
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Refiner Action Pairing · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / refiner-pairing</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔗 Refiner Action Pairing <span class="muted" style="font-size:0.6em">(iter #199)</span></h1>
+      <p class="agents-sub">
+        同一 round 中 modifier 应用的 action pair 共现频次。
+        看哪些 action 经常组合使用。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rp-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>empty: <strong>{emptyRounds}</strong> ({totalRounds > 0 ? ((emptyRounds/totalRounds)*100).toFixed(1) : '0'}%)</span>
+        <span>single action: <strong>{singleActionRounds}</strong></span>
+        <span>multi action: <strong>{multiActionRounds}</strong></span>
+        <span>总 unique pairs: <strong>{pairs.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 top 25 action pair</h2>
+      <pre class="agents-rp-flow">{topPairs.map((p) => {
+        const max = topPairs[0]?.count ?? 1;
+        const labelA = p.a.length > 18 ? p.a.slice(0, 18) + '…' : p.a.padEnd(18);
+        const labelB = p.b.length > 18 ? p.b.slice(0, 18) + '…' : p.b.padEnd(18);
+        return `${labelA} + ${labelB}  ${bar(p.count, max, 20)}  ${p.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action A</th><th>action B</th><th>count</th></tr>
+        </thead>
+        <tbody>
+          {topPairs.map((p) => (
+            <tr>
+              <td><code>{p.a}</code></td>
+              <td><code>{p.b}</code></td>
+              <td><strong>{p.count}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频 pair = modifier 的常见组合策略</li>
+        <li>如果 pair 数 = 0 = modifier 总是只应用单个 action</li>
+        <li>对照 <a href={`${base}/agents/refiner-actions/`}>Refiner Actions</a> 看单独频次</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
