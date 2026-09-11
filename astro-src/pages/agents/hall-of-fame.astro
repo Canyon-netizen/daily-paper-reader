@@ -1,0 +1,228 @@
+---
+// /agents/hall-of-fame.astro — iter #253:session hall of fame (top sessions)
+//
+// 综合得分 = w1 * gain + w2 * eff + w3 * synth_quality
+// 找出 top sessions,展示其目标/分数/成本/产出
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface Fame {
+  sid: string;
+  goal: string;
+  rounds: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+  tokens: number;
+  cost: number;
+  hasSyn: boolean;
+  synChars: number;
+  fameScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Fame[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    let firstScore = 0;
+    let finalScore = 0;
+    let tokens = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        tokens += r.feedback?.total_tokens ?? 0;
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          if (i === rNum.length - 1) finalScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    const gain = finalScore - firstScore;
+    const cost = (tokens / 1_000_000) * SONNET_PRICE;
+    const sd = join(sp, 'synthesis');
+    let hasSyn = false;
+    let synChars = 0;
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) {
+          hasSyn = true;
+          try {
+            synChars += (await readFile(join(sd, sf), 'utf8')).length;
+          } catch (e) { /* */ }
+        }
+      }
+    }
+    // 综合得分
+    const eff = cost > 0 ? Math.max(0, gain / cost) : 0;
+    const synScore = hasSyn ? Math.min(10, synChars / 500) : 0;
+    const fameScore = gain * 10 + eff * 5 + synScore;
+    sessions.push({
+      sid, goal, rounds: rNum.length, firstScore, finalScore, gain,
+      tokens, cost, hasSyn, synChars, fameScore,
+    });
+  }
+}
+
+// 排序 by fameScore
+sessions.sort((a, b) => b.fameScore - a.fameScore);
+
+const top20 = sessions.slice(0, 20);
+const top10ByGain = [...sessions].sort((a, b) => b.gain - a.gain).slice(0, 10);
+const top10ByFinal = [...sessions].sort((a, b) => b.finalScore - a.finalScore).slice(0, 10);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Hall of Fame · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / hall-of-fame</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏆 Hall of Fame <span class="muted" style="font-size:0.6em">(iter #253)</span></h1>
+      <p class="agents-sub">
+        综合得分 = gain × 10 + (gain/cost) × 5 + syn_quality(0-10)。
+        Top 20 sessions — 最成功的多智能体迭代案例。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-hof-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>有 synthesis: <strong>{sessions.filter((s) => s.hasSyn).length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🥇 top 20 综合得分</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Rank</th><th>Fame</th><th>gain</th><th>final</th><th>rounds</th><th>cost</th><th>syn</th><th>sid</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {top20.map((s, i) => (
+            <tr>
+              <td><strong style="color:#f59e0b">#{i + 1}</strong></td>
+              <td><strong style="color:#10b981">{s.fameScore.toFixed(1)}</strong></td>
+              <td>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</td>
+              <td>{s.finalScore.toFixed(2)}</td>
+              <td>{s.rounds}</td>
+              <td>${s.cost.toFixed(2)}</td>
+              <td>{s.hasSyn ? `${(s.synChars / 1000).toFixed(1)}K` : '✗'}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 35))}{(s.goal ?? '').length > 35 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 10 by gain</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>gain</th><th>final</th><th>rounds</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {top10ByGain.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">+{s.gain.toFixed(2)}</strong></td>
+              <td>{s.finalScore.toFixed(2)}</td>
+              <td>{s.rounds}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 top 10 by final score</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>final</th><th>gain</th><th>rounds</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {top10ByFinal.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">{s.finalScore.toFixed(2)}</strong></td>
+              <td>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</td>
+              <td>{s.rounds}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>综合得分奖励"高增益 + 低成本 + 有产出"</li>
+        <li>top by gain 不考虑成本;top by final 不考虑迭代数</li>
+        <li>对照 <a href={`${base}/agents/score-leaderboard/`}>Score Leaderboard</a> 看单维度排行</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-hof-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-hof-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
