@@ -1,0 +1,177 @@
+---
+// /agents/milestone-299.astro — iter #299:pre-300 snapshot (one before 300)
+//
+// 300 是 Triple Century Round 重大里程碑。
+// iter #299 是它的前夕快照。
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+const root = join(process.cwd(), 'archive');
+let totalSessions = 0;
+let totalRounds = 0;
+let totalTokens = 0;
+let totalSyns = 0;
+let totalActions = 0;
+let allScores: number[] = [];
+const actionSet = new Set<string>();
+const personaSet = new Set<string>();
+let allGoals: string[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    totalSessions += 1;
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try {
+        const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+        if (goal) allGoals.push(goal);
+      } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        try {
+          const fp = join(rd, rf);
+          const r = JSON.parse(await readFile(fp, 'utf8'));
+          const tokens = r.feedback?.total_tokens ?? 0;
+          totalTokens += tokens;
+          totalRounds += 1;
+          for (const persona of r.feedback?.personas ?? []) {
+            const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+            personaSet.add(name);
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') allScores.push(p.total);
+            }
+          }
+          for (const a of (r.modifier?.applied ?? [])) {
+            const act = a.action ?? a.type ?? 'unknown';
+            actionSet.add(act);
+            totalActions += 1;
+          }
+        } catch (e) { /* */ }
+      }
+    }
+    if (existsSync(join(sp, 'synthesis'))) {
+      const sfs = await readdir(join(sp, 'synthesis')).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) totalSyns += 1;
+      }
+    }
+  }
+}
+
+const totalCost = (totalTokens / 1_000_000) * SONNET_PRICE;
+const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+const avgGoalLen = allGoals.length > 0 ? allGoals.reduce((s, g) => s + g.length, 0) / allGoals.length : 0;
+const sortedScores = [...allScores].sort((a, b) => a - b);
+const medianScore = allScores.length > 0 ? sortedScores[Math.floor(allScores.length / 2)] : 0;
+
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Milestone 299 · Agents">
+  <Navbar />
+  <main class="shell agents-shell milestone-special">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone-299</span>
+    </nav>
+
+    <header class="agents-header milestone-hero">
+      <h1>🏆 Milestone 299 — One Before 300 <span class="muted" style="font-size:0.5em">(iter #299)</span></h1>
+      <p class="agents-sub">
+        即将到达 300 大里程碑 (Triple Century Round)。iter #299 是它的前夜快照。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 系统快照</h2>
+      <div class="agents-m299-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 rounds: <strong>{totalRounds.toLocaleString()}</strong></span>
+        <span>总 actions: <strong>{totalActions.toLocaleString()}</strong></span>
+        <span>总 syntheses: <strong>{totalSyns}</strong></span>
+        <span>总 tokens: <strong>{fmtTok(totalTokens)}</strong></span>
+        <span>总 cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>avg score: <strong>{avgScore.toFixed(2)}</strong></span>
+        <span>median score: <strong>{medianScore.toFixed(2)}</strong></span>
+        <span>unique actions: <strong>{actionSet.size}</strong></span>
+        <span>unique personas: <strong>{personaSet.size}</strong></span>
+        <span>avg goal len: <strong>{avgGoalLen.toFixed(0)}</strong> chars</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎉 里程碑路线</h2>
+      <ul>
+        <li>✅ 100 — Centenary</li>
+        <li>✅ 200 — Bicentenary</li>
+        <li>✅ 250 — Quarter-K</li>
+        <li>✅ 270 — Triple Century</li>
+        <li>✅ 280 — Pre-300</li>
+        <li>🎯 299 — One Before 300(本次)</li>
+        <li>🚀 300 — Triple Century Round(下一里程碑!)</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 系统能力摘要</h2>
+      <ul>
+        <li>已分析 {totalSessions} sessions × {totalRounds.toLocaleString()} rounds</li>
+        <li>建立了 {actionSet.size} 种 actions / {personaSet.size} 种 personas 的知识库</li>
+        <li>累计消耗 {fmtTok(totalTokens)} tokens / ${totalCost.toFixed(2)}</li>
+        <li>产出 {totalSyns} 个 synthesis 文件</li>
+        <li>~300 个 agent analysis 页面已上线</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 推荐入口</h2>
+      <ul>
+        <li><a href={`${base}/agents/system-maturity/`}>System Maturity</a> — 健康度</li>
+        <li><a href={`${base}/agents/hall-of-fame/`}>Hall of Fame</a> — 顶级 sessions</li>
+        <li><a href={`${base}/agents/cost-forecast/`}>Cost Forecast</a> — 未来预测</li>
+        <li><a href={`${base}/agents/dashboard/`}>Dashboard</a> — 总览</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .milestone-special {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(245, 158, 11, 0.06));
+    padding-bottom: 3rem;
+  }
+  .milestone-hero {
+    text-align: center;
+    padding: 1.5rem 0;
+  }
+  .agents-m299-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-m299-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
