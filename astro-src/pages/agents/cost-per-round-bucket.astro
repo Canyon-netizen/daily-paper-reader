@@ -1,0 +1,220 @@
+---
+// /agents/cost-per-round-bucket.astro — iter #287:cost per round bucket distribution
+//
+// 每 round 的 cost 落入哪个桶?
+//   - <0.005 cheap, 0.005-0.02 normal, 0.02-0.05 high, 0.05+ premium
+//   - 每个桶里的 avg score / gain / actions / 占比
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface Bucket {
+  label: string;
+  range: string;
+  min: number;
+  max: number;
+  count: number;
+  scores: number[];
+  avgScore: number;
+  gains: number[];
+  avgGain: number;
+  totalActions: number;
+}
+
+const buckets: Bucket[] = [
+  { label: 'cheap',    range: '<$0.005',     min: 0,     max: 0.005, count: 0, scores: [], avgScore: 0, gains: [], avgGain: 0, totalActions: 0 },
+  { label: 'normal',   range: '$0.005-0.02', min: 0.005, max: 0.02,  count: 0, scores: [], avgScore: 0, gains: [], avgGain: 0, totalActions: 0 },
+  { label: 'high',     range: '$0.02-0.05',  min: 0.02,  max: 0.05,  count: 0, scores: [], avgScore: 0, gains: [], avgGain: 0, totalActions: 0 },
+  { label: 'premium',  range: '$0.05+',      min: 0.05,  max: 99999, count: 0, scores: [], avgScore: 0, gains: [], avgGain: 0, totalActions: 0 },
+];
+
+const root = join(process.cwd(), 'archive');
+
+interface RoundInfo {
+  sid: string;
+  round: number;
+  cost: number;
+  score: number;
+  gain: number;
+  actionCount: number;
+}
+
+const allRounds: RoundInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    const costs: number[] = [];
+    const acts: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        const cost = (tokens / 1_000_000) * SONNET_PRICE;
+        costs.push(cost);
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        scores.push(score);
+        acts.push((r.modifier?.applied ?? []).length);
+      } catch (e) { /* */ }
+    }
+
+    for (let i = 0; i < rNums.length; i++) {
+      const gain = i === 0 ? 0 : scores[i] - scores[i - 1];
+      allRounds.push({
+        sid, round: rNums[i],
+        cost: costs[i] ?? 0,
+        score: scores[i] ?? 0,
+        gain, actionCount: acts[i] ?? 0,
+      });
+    }
+  }
+}
+
+for (const r of allRounds) {
+  for (const b of buckets) {
+    if (r.cost >= b.min && r.cost < b.max) {
+      b.count += 1;
+      if (r.score > 0) b.scores.push(r.score);
+      if (i_should_include_gain(r.gain)) b.gains.push(r.gain);
+      b.totalActions += r.actionCount;
+      break;
+    }
+  }
+}
+
+function i_should_include_gain(g: number): boolean {
+  // 排除第 1 轮(gain = 0)
+  return g !== 0;
+}
+
+for (const b of buckets) {
+  b.avgScore = b.scores.length > 0 ? b.scores.reduce((a, x) => a + x, 0) / b.scores.length : 0;
+  b.avgGain = b.gains.length > 0 ? b.gains.reduce((a, x) => a + x, 0) / b.gains.length : 0;
+}
+
+const total = allRounds.length;
+const maxBucketCount = Math.max(...buckets.map((b) => b.count), 1);
+const totalCost = allRounds.reduce((s, r) => s + r.cost, 0);
+const avgCost = total > 0 ? totalCost / total : 0;
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Cost per Round Bucket · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-per-round-bucket</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💰 Cost per Round Bucket <span class="muted" style="font-size:0.6em">(iter #287)</span></h1>
+      <p class="agents-sub">
+        每 round 的 cost 落入哪个桶? 桶里的 avg score / gain / actions 表现如何?
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cprb-globals">
+        <span>总 rounds: <strong>{total}</strong></span>
+        <span>总 cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>avg cost / round: <strong>${avgCost.toFixed(4)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 cost 桶分布</h2>
+      <pre class="agents-cprb-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(8)} ${b.range.padEnd(12)} ${bar(b.count, maxBucketCount, 22)}  ${b.count}  (${((b.count / Math.max(1, total)) * 100).toFixed(1)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 各桶表现</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>bucket</th><th>range</th><th>count</th><th>% of all</th><th>avg score</th><th>avg gain</th><th>total actions</th></tr>
+        </thead>
+        <tbody>
+          {buckets.map((b) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{b.label}</strong></td>
+              <td>{b.range}</td>
+              <td>{b.count}</td>
+              <td>{((b.count / Math.max(1, total)) * 100).toFixed(1)}%</td>
+              <td>{b.avgScore > 0 ? b.avgScore.toFixed(2) : '—'}</td>
+              <td>{b.avgGain !== 0 ? (b.avgGain >= 0 ? '+' : '') + b.avgGain.toFixed(2) : '—'}</td>
+              <td>{b.totalActions}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>cheap bucket 多 = 多数 round 简短</li>
+        <li>premium bucket 多 = 反复触发长 feedback</li>
+        <li>avg gain 高的桶 = 性价比高的 cost 段</li>
+        <li>对照 <a href={`${base}/agents/cost-distribution/`}>Cost Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/cost-vs-score/`}>Cost vs Score</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cprb-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cprb-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cprb-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
