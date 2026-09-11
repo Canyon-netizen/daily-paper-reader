@@ -1,0 +1,219 @@
+---
+// /agents/round-detail.astro — iter #142:round detail inspector
+//
+// 让用户选任意 session + round,展示该 round 的 5 个 stage 完整状态:
+//   - designer 输出的所有 proposal
+//   - feedback 3 persona 的打分
+//   - gate 4-桶分类
+//   - modifier 跳过的 / 写入的 deliverables
+//   - telemetry (duration, tokens)
+//   - 与上一 round 的 diff(可选)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Option { sid: string; round: number; label: string; }
+const options: Option[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (!m) continue;
+      options.push({ sid, round: parseInt(m[1], 10), label: `${sid.slice(0, 12)} round ${parseInt(m[1], 10)}` });
+    }
+  }
+}
+options.sort((a, b) => b.sid.localeCompare(a.sid) || a.round - b.round);
+
+// 简单版:取第一个有内容的 round
+let detail: any = null;
+let meta: any = {};
+const pickedSid = options[0]?.sid;
+const pickedRound = options[0]?.round;
+if (pickedSid && pickedRound) {
+  const fp = join(root, pickedSid, 'rounds', `round_${String(pickedRound).padStart(3, '0')}.json`);
+  const mp = join(root, pickedSid, 'meta.json');
+  try { meta = JSON.parse(await readFile(mp, 'utf8')); } catch (e) { /* */ }
+  try { detail = JSON.parse(await readFile(fp, 'utf8')); } catch (e) { /* */ }
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtBytes(n: number): string {
+  if (n < 1024) return n + ' B';
+  return (n / 1024).toFixed(1) + ' KB';
+}
+---
+
+<BaseLayout title="Round Detail · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-detail</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔍 Round Detail Inspector <span class="muted" style="font-size:0.6em">(iter #142)</span></h1>
+      <p class="agents-sub">
+        选任意 session + round,查看该 round 5 个 stage 完整状态。
+        这是 debugging 单个 round 最详细的视图。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🛠 选择</h2>
+      <p class="muted">当前显示:最新修改的 round。下方共 {options.length} 个 round 可选。</p>
+      <details>
+        <summary>展开 / 收起 round 列表</summary>
+        <ol style="max-height:240px;overflow-y:auto;padding-left:1.5rem">
+          {options.slice(0, 200).map((o) => (
+            <li>
+              <a href={`${base}/agents/round-detail/?sid=${esc(o.sid)}&round=${o.round}`}>{esc(o.label)}</a>
+            </li>
+          ))}
+        </ol>
+      </details>
+    </section>
+
+    {detail ? (
+      <>
+        <section class="agents-session-section">
+          <h2>📋 session 上下文</h2>
+          <p>
+            <strong>session</strong>: <a href={`${base}/agents/${esc(pickedSid)}/`}><code>{esc(pickedSid)}</code></a><br />
+            <strong>goal</strong>: {esc(meta.goal ?? '(no goal)')}<br />
+            <strong>round</strong>: #{pickedRound}
+          </p>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📊 Telemetry</h2>
+          <table class="agents-session-table">
+            <tbody>
+              <tr><th>started_at</th><td><code>{esc(detail.started_at ?? '—')}</code></td></tr>
+              <tr><th>finished_at</th><td><code>{esc(detail.finished_at ?? '—')}</code></td></tr>
+              <tr><th>duration</th><td><code>{esc(detail.telemetry?.duration_ms ?? '—')} ms</code></td></tr>
+              <tr><th>total_tokens</th><td><code>{(detail.feedback?.total_tokens ?? 0).toLocaleString()}</code></td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>✏️ Designer</h2>
+          {detail.designer?.proposals?.length > 0 ? (
+            <table class="agents-session-table">
+              <thead>
+                <tr><th>#</th><th>title</th><th>type</th><th>rationale</th></tr>
+              </thead>
+              <tbody>
+                {detail.designer.proposals.map((p: any, i: number) => (
+                  <tr>
+                    <td>{i}</td>
+                    <td><strong>{esc(p.title ?? '(untitled)')}</strong></td>
+                    <td><code>{esc(p.type ?? 'unknown')}</code></td>
+                    <td><small>{esc((p.rationale ?? '').slice(0, 200))}{(p.rationale ?? '').length > 200 ? '…' : ''}</small></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p class="muted">无 designer 输出。</p>}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>💬 Feedback</h2>
+          {detail.feedback?.personas?.length > 0 ? (
+            <table class="agents-session-table">
+              <thead>
+                <tr><th>persona</th><th>总打分</th><th>avg score</th><th>详细</th></tr>
+              </thead>
+              <tbody>
+                {detail.feedback.personas.map((p: any) => {
+                  const total = p.total ?? (p.proposals ?? []).reduce((s: number, x: any) => s + (x.total ?? 0), 0);
+                  const arr = p.proposals ?? [];
+                  const avg = arr.length > 0 ? arr.reduce((s: number, x: any) => s + (x.total ?? 0), 0) / arr.length : 0;
+                  return (
+                    <tr>
+                      <td><strong>{esc(p.name ?? p.persona ?? p.role ?? 'unknown')}</strong></td>
+                      <td>{total.toFixed(1)}</td>
+                      <td>{avg.toFixed(2)}</td>
+                      <td><details><summary>{arr.length} proposals</summary>
+                        <pre style="background:rgba(0,0,0,0.3);color:#c9d1d9;padding:0.6rem;border-radius:4px;font-size:0.78rem;max-height:240px;overflow:auto">{JSON.stringify(arr, null, 2)}</pre>
+                      </details></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : <p class="muted">无 feedback 数据。</p>}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🚧 Gate</h2>
+          {detail.gate?.proposals?.length > 0 ? (
+            <table class="agents-session-table">
+              <thead>
+                <tr><th>#</th><th>category</th><th>title</th><th>total</th><th>reason</th></tr>
+              </thead>
+              <tbody>
+                {detail.gate.proposals.map((p: any, i: number) => (
+                  <tr>
+                    <td>{p.index ?? p.proposal_index ?? i}</td>
+                    <td><code>{esc(p.category ?? 'unknown')}</code></td>
+                    <td>{esc(p.title ?? '—')}</td>
+                    <td>{(p.total ?? 0).toFixed(1)}</td>
+                    <td><small>{esc((p.reason ?? '').slice(0, 100))}</small></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : <p class="muted">无 gate 输出。</p>}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🔧 Modifier</h2>
+          {detail.modifier ? (
+            <>
+              <p>
+                <strong>status</strong>: <code>{esc(detail.modifier.status ?? '—')}</code><br />
+                <strong>writes</strong>: {(detail.modifier.writes ?? []).length}<br />
+                <strong>skipped</strong>: {(detail.modifier.skipped ?? []).length}
+              </p>
+              {(detail.modifier.writes ?? []).length > 0 && (
+                <details>
+                  <summary>writes 详情</summary>
+                  <pre style="background:rgba(0,0,0,0.3);color:#c9d1d9;padding:0.6rem;border-radius:4px;font-size:0.78rem;max-height:300px;overflow:auto">{JSON.stringify(detail.modifier.writes, null, 2)}</pre>
+                </details>
+              )}
+            </>
+          ) : <p class="muted">无 modifier 输出。</p>}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📦 完整 JSON</h2>
+          <details>
+            <summary>展开 / 收起</summary>
+            <pre style="background:rgba(0,0,0,0.3);color:#c9d1d9;padding:0.8rem;border-radius:4px;font-size:0.78rem;max-height:600px;overflow:auto;white-space:pre-wrap">{JSON.stringify(detail, null, 2)}</pre>
+            <p class="muted"><small>{fmtBytes(JSON.stringify(detail).length)}</small></p>
+          </details>
+        </section>
+      </>
+    ) : (
+      <section class="agents-session-section">
+        <p class="muted">还没有 round 数据。</p>
+      </section>
+    )}
+  </main>
+</BaseLayout>
