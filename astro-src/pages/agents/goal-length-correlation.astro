@@ -1,0 +1,265 @@
+---
+// /agents/goal-length-correlation.astro — iter #260:goal length correlation
+//
+// 分析多个变量与最终 session score 的 Pearson 相关:
+//   - goal 字符数
+//   - goal token 数(切词后)
+//   - session round 数
+//   - session total tokens
+//   - session first score
+// 显示哪些因素与最终分数相关
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Session {
+  sid: string;
+  goalLen: number;
+  goalTokens: number;
+  rounds: number;
+  totalTokens: number;
+  firstScore: number;
+  finalScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Session[] = [];
+
+function tokenize(goal: string): number {
+  let count = 0;
+  const chs = goal.match(/[一-龥]+/g) ?? [];
+  count += chs.reduce((s, seg) => s + Math.max(1, Math.ceil(seg.length / 2)), 0);
+  const ens = goal.toLowerCase().match(/[a-z][a-z0-9]{1,}/g) ?? [];
+  count += ens.length;
+  return count;
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    let firstScore = 0;
+    let finalScore = 0;
+    let totalTokens = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        totalTokens += r.feedback?.total_tokens ?? 0;
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          if (i === rNum.length - 1) finalScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    if (finalScore > 0) {
+      sessions.push({
+        sid,
+        goalLen: goal.length,
+        goalTokens: tokenize(goal),
+        rounds: rNum.length,
+        totalTokens,
+        firstScore,
+        finalScore,
+      });
+    }
+  }
+}
+
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length < 3) return 0;
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? 0 : num / denom;
+}
+
+const finalScores = sessions.map((s) => s.finalScore);
+const corrLen = pearson(sessions.map((s) => s.goalLen), finalScores);
+const corrTokens = pearson(sessions.map((s) => s.goalTokens), finalScores);
+const corrRounds = pearson(sessions.map((s) => s.rounds), finalScores);
+const corrTotalTokens = pearson(sessions.map((s) => Math.log10(s.totalTokens + 1)), finalScores);
+const corrFirst = pearson(sessions.map((s) => s.firstScore), finalScores);
+
+// Avg / median by goal length bucket
+const buckets = [
+  { label: '< 30', min: 0, max: 30, list: [] as Session[] },
+  { label: '30-80', min: 30, max: 80, list: [] as Session[] },
+  { label: '80-150', min: 80, max: 150, list: [] as Session[] },
+  { label: '150-300', min: 150, max: 300, list: [] as Session[] },
+  { label: '> 300', min: 300, max: 99999, list: [] as Session[] },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.goalLen >= b.min && s.goalLen < b.max) {
+      b.list.push(s);
+      break;
+    }
+  }
+}
+
+const rows = buckets.map((b) => {
+  const list = b.list;
+  const avg = list.length > 0 ? list.reduce((s, x) => s + x.finalScore, 0) / list.length : 0;
+  const avgFirst = list.length > 0 ? list.reduce((s, x) => s + x.firstScore, 0) / list.length : 0;
+  const avgGain = avg - avgFirst;
+  return { label: b.label, count: list.length, avg, avgFirst, avgGain };
+});
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function corrColor(c: number): string {
+  const abs = Math.abs(c);
+  if (abs < 0.1) return '#999';
+  if (abs < 0.3) return '#f59e0b';
+  if (abs < 0.5) return '#fb923c';
+  return c > 0 ? '#10b981' : '#ef4444';
+}
+---
+
+<BaseLayout title="Goal Length Correlation · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-length-correlation</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Goal Length Correlation <span class="muted" style="font-size:0.6em">(iter #260)</span></h1>
+      <p class="agents-sub">
+        Pearson 相关:各因素 vs 最终 session score。系数 &gt; 0 = 正相关,&lt; 0 = 负相关。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-glc-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 相关性矩阵</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>因素</th><th>Pearson r</th><th>强度</th><th>解读</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>goal 字符数</td>
+            <td><strong style={`color:${corrColor(corrLen)}`}>{corrLen.toFixed(3)}</strong></td>
+            <td>{Math.abs(corrLen) < 0.1 ? '极弱' : Math.abs(corrLen) < 0.3 ? '弱' : Math.abs(corrLen) < 0.5 ? '中等' : '强'}</td>
+            <td><small>{corrLen > 0 ? '越长的 goal → 分数越高' : corrLen < 0 ? '越长的 goal → 分数越低' : '无明显相关'}</small></td>
+          </tr>
+          <tr>
+            <td>goal tokens</td>
+            <td><strong style={`color:${corrColor(corrTokens)}`}>{corrTokens.toFixed(3)}</strong></td>
+            <td>{Math.abs(corrTokens) < 0.1 ? '极弱' : Math.abs(corrTokens) < 0.3 ? '弱' : Math.abs(corrTokens) < 0.5 ? '中等' : '强'}</td>
+            <td><small>{corrTokens > 0 ? 'tokens 多 → 分数高' : corrTokens < 0 ? 'tokens 多 → 分数低' : '无明显相关'}</small></td>
+          </tr>
+          <tr>
+            <td>round 数</td>
+            <td><strong style={`color:${corrColor(corrRounds)}`}>{corrRounds.toFixed(3)}</strong></td>
+            <td>{Math.abs(corrRounds) < 0.1 ? '极弱' : Math.abs(corrRounds) < 0.3 ? '弱' : Math.abs(corrRounds) < 0.5 ? '中等' : '强'}</td>
+            <td><small>{corrRounds > 0 ? '迭代越多 → 分数高' : corrRounds < 0 ? '迭代越多 → 分数低' : '无明显相关'}</small></td>
+          </tr>
+          <tr>
+            <td>log₁₀ tokens</td>
+            <td><strong style={`color:${corrColor(corrTotalTokens)}`}>{corrTotalTokens.toFixed(3)}</strong></td>
+            <td>{Math.abs(corrTotalTokens) < 0.1 ? '极弱' : Math.abs(corrTotalTokens) < 0.3 ? '弱' : Math.abs(corrTotalTokens) < 0.5 ? '中等' : '强'}</td>
+            <td><small>{corrTotalTokens > 0 ? '投入 token 多 → 分数高' : corrTotalTokens < 0 ? '投入 token 多 → 分数低' : '无明显相关'}</small></td>
+          </tr>
+          <tr>
+            <td>first score</td>
+            <td><strong style={`color:${corrColor(corrFirst)}`}>{corrFirst.toFixed(3)}</strong></td>
+            <td>{Math.abs(corrFirst) < 0.1 ? '极弱' : Math.abs(corrFirst) < 0.3 ? '弱' : Math.abs(corrFirst) < 0.5 ? '中等' : '强'}</td>
+            <td><small>{corrFirst > 0 ? '起点高 → 终点高(马太效应)' : corrFirst < 0 ? '起点高 → 终点低' : '无明显相关'}</small></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 按 goal 长度分桶</h2>
+      <pre class="agents-glc-flow">{rows.map((r) => {
+        const max = Math.max(...rows.map((x) => x.count), 1);
+        return `${r.label.padEnd(10)} ${bar(r.count, max, 18)}  ${r.count}  score=${r.avg.toFixed(2)} Δ=${r.avgGain >= 0 ? '+' : ''}${r.avgGain.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>|r| &lt; 0.1 = 极弱;0.1-0.3 = 弱;0.3-0.5 = 中等;&gt; 0.5 = 强</li>
+        <li>first score 高 → final score 高 = "起点决定终点"模式</li>
+        <li>rounds × final = 正 = 迭代有价值;负 = 过度迭代反而退步</li>
+        <li>对照 <a href={`${base}/agents/goal-length-hist/`}>Goal Length Hist</a> 看长度分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-glc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-glc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-glc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
