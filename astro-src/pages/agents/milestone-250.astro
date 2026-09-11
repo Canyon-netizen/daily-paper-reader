@@ -1,0 +1,258 @@
+---
+// /agents/milestone-250.astro — iter #250:quarter-k milestone dashboard
+//
+// 250 次迭代里程碑页:跨所有 sessions 的全景仪表板
+// 包含:总 metrics + 趋势 + 类型分布 + 近期活动
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface Round {
+  sid: string;
+  roundIdx: number;
+  score: number;
+  tokens: number;
+  mtime: number;
+  actions: string[];
+}
+
+const root = join(process.cwd(), 'archive');
+const allRounds: Round[] = [];
+const sessionMetas = new Map<string, { goal: string; mtime: number; rounds: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    let metaMtime = 0;
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try {
+        const st = await stat(mp);
+        metaMtime = st.mtimeMs;
+        goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    let rounds = 0;
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        const m = rf.match(/^round_(\d+)\.json$/);
+        if (!m) continue;
+        try {
+          const fp = join(rd, rf);
+          const st = await stat(fp);
+          const r = JSON.parse(await readFile(fp, 'utf8'));
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          allRounds.push({
+            sid,
+            roundIdx: parseInt(m[1], 10),
+            score: arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0,
+            tokens: r.feedback?.total_tokens ?? 0,
+            mtime: st.mtimeMs,
+            actions: (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown'),
+          });
+          rounds += 1;
+        } catch (e) { /* */ }
+      }
+    }
+    sessionMetas.set(sid, { goal, mtime: metaMtime, rounds });
+  }
+}
+
+const totalSessions = sessionMetas.size;
+const totalRounds = allRounds.length;
+const totalTokens = allRounds.reduce((s, r) => s + r.tokens, 0);
+const totalCost = (totalTokens / 1_000_000) * SONNET_PRICE;
+const scoredRounds = allRounds.filter((r) => r.score > 0);
+const avgScore = scoredRounds.length > 0 ? scoredRounds.reduce((s, r) => s + r.score, 0) / scoredRounds.length : 0;
+
+// 按 ISO 周聚合
+function isoWeek(ms: number): string {
+  const d = new Date(ms);
+  const onejan = new Date(d.getFullYear(), 0, 1);
+  return `${d.getFullYear()}-W${Math.ceil((((d.getTime() - onejan.getTime()) / 86400000) + onejan.getDay() + 1) / 7).toString().padStart(2, '0')}`;
+}
+
+const weekly = new Map<string, { rounds: number; tokens: number; scoreSum: number; scoreCnt: number }>();
+for (const r of allRounds) {
+  const w = isoWeek(r.mtime);
+  if (!weekly.has(w)) weekly.set(w, { rounds: 0, tokens: 0, scoreSum: 0, scoreCnt: 0 });
+  const e = weekly.get(w)!;
+  e.rounds += 1;
+  e.tokens += r.tokens;
+  if (r.score > 0) {
+    e.scoreSum += r.score;
+    e.scoreCnt += 1;
+  }
+}
+const weeklyArr = Array.from(weekly.entries())
+  .map(([week, v]) => ({ week, ...v, avgScore: v.scoreCnt > 0 ? v.scoreSum / v.scoreCnt : 0 }))
+  .sort((a, b) => a.week.localeCompare(b.week))
+  .slice(-12);
+
+const maxWeeklyRounds = Math.max(...weeklyArr.map((w) => w.rounds), 1);
+const maxWeeklyTokens = Math.max(...weeklyArr.map((w) => w.tokens), 1);
+
+// 最近 24h
+const now = Date.now();
+const last24h = allRounds.filter((r) => now - r.mtime < 24 * 3600 * 1000);
+const last7d = allRounds.filter((r) => now - r.mtime < 7 * 24 * 3600 * 1000);
+const last30d = allRounds.filter((r) => now - r.mtime < 30 * 24 * 3600 * 1000);
+
+// top actions
+const actionCounts = new Map<string, number>();
+for (const r of allRounds) {
+  for (const a of r.actions) actionCounts.set(a, (actionCounts.get(a) ?? 0) + 1);
+}
+const topActions = Array.from(actionCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 12);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Milestone 250 · Agents">
+  <Navbar />
+  <main class="shell agents-shell milestone-special">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone-250</span>
+    </nav>
+
+    <header class="agents-header milestone-hero">
+      <h1>🏆 Milestone 250 — Quarter-K Dashboard <span class="muted" style="font-size:0.5em">(iter #250)</span></h1>
+      <p class="agents-sub">
+        第 250 次迭代 — 全景仪表板:总指标、12 周趋势、近期活动。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🌟 总览</h2>
+      <div class="agents-m250-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>总 tokens: <strong>{fmtTok(totalTokens)}</strong></span>
+        <span>总 cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>avg score: <strong>{avgScore.toFixed(2)}</strong></span>
+        <span>unique actions: <strong>{actionCounts.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 近 12 周 rounds 趋势</h2>
+      <pre class="agents-m250-flow">{weeklyArr.map((w) => {
+        return `${w.week}  rounds ${bar(w.rounds, maxWeeklyRounds, 18)} ${w.rounds}  score ${w.avgScore.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💰 近 12 周 tokens 趋势</h2>
+      <pre class="agents-m250-flow">{weeklyArr.map((w) => {
+        return `${w.week}  tokens  ${bar(w.tokens, maxWeeklyTokens, 18)} ${fmtTok(w.tokens)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⏱️ 近期活动</h2>
+      <div class="agents-m250-globals">
+        <span>近 24h rounds: <strong>{last24h.length}</strong></span>
+        <span>近 7d rounds: <strong>{last7d.length}</strong></span>
+        <span>近 30d rounds: <strong>{last30d.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏅 top 12 actions</h2>
+      <pre class="agents-m250-flow">{topActions.map(([a, count]) => {
+        const max = topActions[0][1];
+        return `${a.padEnd(28)} ${bar(count, max, 18)}  ${count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎉 里程碑成就</h2>
+      <ul>
+        <li>✅ 100 iters — Centenary</li>
+        <li>✅ 200 iters — Bicentenary</li>
+        <li>🎯 250 iters — Quarter-K(本次)</li>
+        <li>🚀 300 iters — Triple Century(下一里程碑)</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 关键页面</h2>
+      <ul>
+        <li><a href={`${base}/agents/system-maturity/`}>System Maturity Index</a> — 综合健康度</li>
+        <li><a href={`${base}/agents/session-scorecard/`}>Session Scorecard</a> — 单 session 评分</li>
+        <li><a href={`${base}/agents/round-token-eff/`}>Round Token Eff</a> — 位置效率</li>
+        <li><a href={`${base}/agents/trajectory-classifier/`}>Trajectory Classifier</a> — 轨迹分类</li>
+        <li><a href={`${base}/agents/action-pair-synergy/`}>Action Pair Synergy</a> — 协同效应</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .milestone-special {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.08), rgba(16, 185, 129, 0.08), rgba(99, 102, 241, 0.08));
+    padding-bottom: 3rem;
+  }
+  .milestone-hero {
+    text-align: center;
+    padding: 2rem 0;
+  }
+  .milestone-hero h1 {
+    background: linear-gradient(90deg, #f59e0b, #10b981, #4f46e5);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .agents-m250-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-m250-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-m250-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
