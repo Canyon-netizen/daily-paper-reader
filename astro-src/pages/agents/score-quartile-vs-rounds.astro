@@ -1,0 +1,190 @@
+---
+// /agents/score-quartile-vs-rounds.astro — iter #307:score quartile vs rounds
+//
+// sessions 按 final score 分 4 quartile:
+//   - Q1 (lowest) / Q2 / Q3 / Q4 (highest)
+// 每个 quartile 的 avg rounds 数
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface QuartileInfo {
+  label: string;
+  range: string;
+  count: number;
+  totalRounds: number;
+  avgRounds: number;
+  minScore: number;
+  maxScore: number;
+  sessions: { sid: string; goal: string; rounds: number; score: number }[];
+}
+
+const root = join(process.cwd(), 'archive');
+const allSessions: { sid: string; goal: string; rounds: number; score: number }[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+    let finalScore = 0;
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${rNums[rNums.length - 1]}.json`), 'utf8'));
+      const arr: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') arr.push(p.total);
+        }
+      }
+      if (arr.length > 0) finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+    } catch (e) { continue; }
+
+    allSessions.push({ sid, goal, rounds: rNums.length, score: finalScore });
+  }
+}
+
+const sorted = [...allSessions].sort((a, b) => a.score - b.score);
+const n = sorted.length;
+
+const quartiles: QuartileInfo[] = [
+  { label: 'Q1', range: '0-25%', count: 0, totalRounds: 0, avgRounds: 0, minScore: 0, maxScore: 0, sessions: [] },
+  { label: 'Q2', range: '25-50%', count: 0, totalRounds: 0, avgRounds: 0, minScore: 0, maxScore: 0, sessions: [] },
+  { label: 'Q3', range: '50-75%', count: 0, totalRounds: 0, avgRounds: 0, minScore: 0, maxScore: 0, sessions: [] },
+  { label: 'Q4', range: '75-100%', count: 0, totalRounds: 0, avgRounds: 0, minScore: 0, maxScore: 0, sessions: [] },
+];
+
+for (let i = 0; i < sorted.length; i++) {
+  const q = Math.min(3, Math.floor((i / n) * 4));
+  quartiles[q].count += 1;
+  quartiles[q].totalRounds += sorted[i].rounds;
+  quartiles[q].sessions.push(sorted[i]);
+}
+for (const q of quartiles) {
+  q.avgRounds = q.count > 0 ? q.totalRounds / q.count : 0;
+  if (q.sessions.length > 0) {
+    q.minScore = q.sessions[0].score;
+    q.maxScore = q.sessions[q.sessions.length - 1].score;
+  }
+}
+
+const maxAvgRounds = Math.max(...quartiles.map((q) => q.avgRounds), 1);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Quartile vs Rounds · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-quartile-vs-rounds</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Score Quartile vs Rounds <span class="muted" style="font-size:0.6em">(iter #307)</span></h1>
+      <p class="agents-sub">
+        按 final score 分 4 quartile(Q1 最低,Q4 最高),每个 quartile 的 avg rounds 数。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sqvr-globals">
+        <span>总 sessions: <strong>{n}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 各 quartile 概览</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>quartile</th><th>range</th><th>count</th><th>min score</th><th>max score</th><th>avg rounds</th></tr>
+        </thead>
+        <tbody>
+          {quartiles.map((q) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{q.label}</strong></td>
+              <td>{q.range}</td>
+              <td>{q.count}</td>
+              <td>{q.minScore.toFixed(2)}</td>
+              <td>{q.maxScore.toFixed(2)}</td>
+              <td><strong>{q.avgRounds.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 avg rounds 水平柱状图</h2>
+      <pre class="agents-sqvr-flow">{quartiles.map((q) => {
+        return `${q.label.padEnd(4)} ${bar(q.avgRounds, maxAvgRounds, 22)}  ${q.avgRounds.toFixed(2)} rounds`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>Q4 的 avg rounds 高 = 高分 sessions 多做了几轮</li>
+        <li>Q1 的 avg rounds 高 = 低分 sessions 怎么搞都不行(可能 modal 死循环)</li>
+        <li>Q4 的 avg rounds 低 = 系统快速定位到最佳方案</li>
+        <li>对照 <a href={`${base}/agents/rounds-vs-final-score/`}>Rounds vs Final Score</a></li>
+        <li>对照 <a href={`${base}/agents/final-score-decile/`}>Final Score Decile</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sqvr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sqvr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sqvr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
