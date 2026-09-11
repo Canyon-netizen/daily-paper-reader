@@ -1,0 +1,194 @@
+---
+// /agents/cost-per-score-point.astro — iter #305:cost per score point
+//
+// cost-per-point = totalCost / (finalScore - firstScore + ε)
+//   - 越低 = 越高效
+//   - 列出 sessions 的分布 + 最高效 / 低效对比
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+const EPS = 0.001;
+
+interface SessInfo {
+  sid: string;
+  goal: string;
+  totalCost: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+  costPerPoint: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let totalCost = 0;
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        totalCost += (tokens / 1_000_000) * SONNET_PRICE;
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+
+    const firstScore = scores[0];
+    const finalScore = scores[scores.length - 1];
+    const gain = finalScore - firstScore;
+    // 效率: gain / cost, gain ≤ 0 时算作 cost-per-point 极高
+    const costPerPoint = gain > 0 ? totalCost / gain : Infinity;
+
+    sessions.push({ sid, goal, totalCost, firstScore, finalScore, gain, costPerPoint });
+  }
+}
+
+const positive = sessions.filter((s) => s.gain > 0);
+positive.sort((a, b) => a.costPerPoint - b.costPerPoint);
+
+const efficient = positive.slice(0, 10);
+const inefficient = positive.slice().sort((a, b) => b.costPerPoint - a.costPerPoint).slice(0, 10);
+
+const total = sessions.length;
+const positiveN = positive.length;
+const avgCPP = positive.length > 0 ? positive.reduce((s, x) => s + x.costPerPoint, 0) / positive.length : 0;
+const medianCPP = (() => {
+  if (positive.length === 0) return 0;
+  const sorted = [...positive].sort((a, b) => a.costPerPoint - b.costPerPoint);
+  return sorted[Math.floor(sorted.length / 2)].costPerPoint;
+})();
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Cost per Score Point · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-per-score-point</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸 Cost per Score Point <span class="muted" style="font-size:0.6em">(iter #305)</span></h1>
+      <p class="agents-sub">
+        每拿到 1 分 score 增益花了多少钱。 costPerPoint = totalCost / gain。
+        越低 = 性价比越高。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cpsp-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>正增益 sessions: <strong>{positiveN}</strong></span>
+        <span>avg cost/point: <strong>${avgCPP.toFixed(3)}</strong></span>
+        <span>median cost/point: <strong>${medianCPP.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 性价比最高 Top 10</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>cost</th><th>gain</th><th>$ / point</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {efficient.map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>${s.totalCost.toFixed(3)}</td>
+              <td><strong style="color:#10b981">+{s.gain.toFixed(2)}</strong></td>
+              <td><strong style="color:#10b981">${s.costPerPoint.toFixed(3)}</strong></td>
+              <td><small class="muted">{esc((s.goal ?? '').slice(0, 30))}{(s.goal ?? '').length > 30 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 性价比最低 Top 10</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>cost</th><th>gain</th><th>$ / point</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {inefficient.map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>${s.totalCost.toFixed(3)}</td>
+              <td><strong style="color:#10b981">+{s.gain.toFixed(2)}</strong></td>
+              <td><strong style="color:#ef4444">${s.costPerPoint.toFixed(3)}</strong></td>
+              <td><small class="muted">{esc((s.goal ?? '').slice(0, 30))}{(s.goal ?? '').length > 30 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>cost/point &lt; $0.05 = 系统效率高</li>
+        <li>cost/point &gt; $0.5 = 烧钱但不增值</li>
+        <li>对照 <a href={`${base}/agents/cost-vs-score/`}>Cost vs Score</a></li>
+        <li>对照 <a href={`${base}/agents/hall-of-fame/`}>Hall of Fame</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cpsp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cpsp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
