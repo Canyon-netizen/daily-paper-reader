@@ -1,0 +1,190 @@
+---
+// /agents/topic-drift.astro — iter #135:synthesis topic drift
+//
+// 跨 session 选一个 session,看它在每个 synthesis 轮次里的 top 关键词变化:
+//   - 每个 synthesis 提取 top 10 keyword(过滤停用词)
+//   - 相邻 round 的 Jaccard 相似度 = 话题稳定性
+//   - 显示关键词 enter / exit(进入 / 退出)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionOption { sid: string; goal: string; synthCount: number; }
+const sessions: SessionOption[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(mp) || !existsSync(sd)) continue;
+    try {
+      const meta = JSON.parse(await readFile(mp, 'utf8'));
+      const sfs = await readdir(sd);
+      const synthCount = sfs.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+      if (synthCount < 2) continue; // 至少 2 份才能看 drift
+      sessions.push({ sid, goal: meta.goal ?? '', synthCount });
+    } catch (e) { /* */ }
+  }
+}
+
+sessions.sort((a, b) => b.synthCount - a.synthCount);
+
+const STOP = new Set([
+  'the','a','an','and','or','but','to','of','in','on','at','by','from','with','as','is','are','was','were','be','been','have','has','had','this','that','it','its','for','our','we','us','they','their',
+  '一个','一些','这个','那个','我们','你们','他们','什么','可以','可能','需要','比如',
+]);
+
+function extractKeywords(text: string): Map<string, number> {
+  const cleaned = text.replace(/```[\s\S]*?```/g, ' ').replace(/[#*_~>|]/g, ' ').replace(/[.,;:!?'"()\[\]{}\/\\\-]/g, ' ').toLowerCase();
+  const tokens = cleaned.split(/\s+/).filter((t) => t.length >= 3 && !STOP.has(t) && !/^\d+$/.test(t));
+  const freq = new Map<string, number>();
+  for (const t of tokens) freq.set(t, (freq.get(t) ?? 0) + 1);
+  return freq;
+}
+
+function topN(freq: Map<string, number>, n: number): Set<string> {
+  return new Set([...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map((x) => x[0]));
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter += 1;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+const selectedSid = sessions[0]?.sid ?? '';
+let driftData: { sid: string; rounds: { idx: number; top: string[]; jaccardToPrev: number; enters: string[]; exits: string[] }[]; overallDrift: number; } | null = null;
+
+if (selectedSid) {
+  const sd = join(root, selectedSid, 'synthesis');
+  const sfs = (await readdir(sd).catch(() => [])).filter((f) => /^synthesis_\d+\.md$/.test(f)).sort();
+  const rounds: { idx: number; top: string[]; jaccardToPrev: number; enters: string[]; exits: string[] }[] = [];
+  let prevTop = new Set<string>();
+  let driftSum = 0;
+  for (const f of sfs) {
+    const idx = parseInt(f.match(/synthesis_(\d+)/)?.[1] ?? '0', 10);
+    const text = await readFile(join(sd, f), 'utf8').catch(() => '');
+    const freq = extractKeywords(text);
+    const top = topN(freq, 10);
+    const j = prevTop.size === 0 ? 1 : jaccard(prevTop, top);
+    const enters: string[] = [];
+    const exits: string[] = [];
+    for (const t of top) if (!prevTop.has(t)) enters.push(t);
+    for (const t of prevTop) if (!top.has(t)) exits.push(t);
+    if (prevTop.size > 0) driftSum += (1 - j);
+    rounds.push({ idx, top: Array.from(top), jaccardToPrev: j, enters: enters.slice(0, 3), exits: exits.slice(0, 3) });
+    prevTop = top;
+  }
+  driftData = {
+    sid: selectedSid,
+    rounds,
+    overallDrift: rounds.length > 1 ? driftSum / (rounds.length - 1) : 0,
+  };
+}
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Topic Drift · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / topic-drift</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌊 Synthesis Topic Drift <span class="muted" style="font-size:0.6em">(iter #135)</span></h1>
+      <p class="agents-sub">
+        跟踪单 session 内每份 synthesis 的 top 关键词变化。
+        Jaccard 相似度低 = 话题大漂移,高 = 研究聚焦。
+        默认展示 synth 最多的 session,可通过 URL <code>?sid=xxx</code> 切换。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📋 可选 session({sessions.length} 个有 ≥ 2 份 synthesis)</h2>
+      <details>
+        <summary>展开 / 收起</summary>
+        <ol style="max-height:200px;overflow-y:auto;padding-left:1.5rem">
+          {sessions.slice(0, 100).map((s) => (
+            <li>
+              <a href={`${base}/agents/topic-drift/?sid=${esc(s.sid)}`}><code>{esc(s.sid.slice(0, 16))}</code></a>
+              <small class="muted"> · {s.synthCount} synth · {esc(s.goal.slice(0, 50))}{s.goal.length > 50 ? '…' : ''}</small>
+            </li>
+          ))}
+        </ol>
+      </details>
+    </section>
+
+    {driftData ? (
+      <section class="agents-session-section">
+        <h2>🌊 {esc(driftData.sid.slice(0, 18))} — overall drift: <strong style={`color:${driftData.overallDrift > 0.7 ? '#ef4444' : driftData.overallDrift > 0.4 ? '#f59e0b' : '#10b981'}`}>{driftData.overallDrift.toFixed(2)}</strong></h2>
+        <p class="muted">
+          overall drift = 平均(1 - Jaccard) — 越接近 1 话题越不稳定;越接近 0 越聚焦。
+        </p>
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>#</th><th>稳定性</th><th>top 关键词</th><th>新增</th><th>消失</th></tr>
+          </thead>
+          <tbody>
+            {driftData.rounds.map((r, i) => (
+              <tr>
+                <td>#{r.idx}</td>
+                <td>
+                  <strong style={`color:${r.jaccardToPrev >= 0.5 ? '#10b981' : r.jaccardToPrev >= 0.3 ? '#f59e0b' : '#ef4444'}`}>
+                    {r.jaccardToPrev.toFixed(2)}
+                  </strong>
+                </td>
+                <td><small>{r.top.slice(0, 8).map((t) => `<${t}>`).join(' ')}</small></td>
+                <td><small style="color:#10b981">{r.enters.map((t) => '+' + t).join(' ') || '—'}</small></td>
+                <td><small style="color:#ef4444">{r.exits.map((t) => '-' + t).join(' ') || '—'}</small></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <p class="muted">没有可分析的 session(需要至少 1 个有 ≥ 2 份 synthesis 的 session)。</p>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>📈 稳定性时间线</h2>
+      {driftData ? (
+        <pre class="agents-td-flow">{driftData.rounds.map((r) => `synth#${String(r.idx).padStart(3)} ${bar(r.jaccardToPrev, 1, 30)}  ${r.jaccardToPrev.toFixed(2)}`).join('\n')}</pre>
+      ) : '—'}
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-td-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
