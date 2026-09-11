@@ -1,0 +1,246 @@
+---
+// /agents/action-pair-synergy.astro — iter #242:action pair synergy matrix
+//
+// 分析 action 两两配对在同一 round 出现的频率和后续 round 分数变化:
+//   - 共现矩阵 N x N
+//   - 配对后 round avg 分数 vs 全局 avg
+//   - 识别"增效对"(同时出现 → 分数高) vs "互斥对"
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+interface PairStat {
+  a: string;
+  b: string;
+  coOcc: number;
+  pairScores: number[];
+}
+const pairMap = new Map<string, PairStat>();
+const actionCounts = new Map<string, number>();
+const soloScores: number[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const actions = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const roundAvg = arr.length > 0 ? arr.reduce((a: number, b: number) => a + b, 0) / arr.length : 0;
+        // action counts
+        for (const a of actions) actionCounts.set(a, (actionCounts.get(a) ?? 0) + 1);
+        soloScores.push(roundAvg);
+        // pairs
+        const uniqueActions = Array.from(new Set(actions));
+        for (let j = 0; j < uniqueActions.length; j++) {
+          for (let k = j + 1; k < uniqueActions.length; k++) {
+            const key = [uniqueActions[j], uniqueActions[k]].sort().join('||');
+            if (!pairMap.has(key)) {
+              pairMap.set(key, { a: uniqueActions[j], b: uniqueActions[k], coOcc: 0, pairScores: [] });
+            }
+            const stat = pairMap.get(key)!;
+            stat.coOcc += 1;
+            if (roundAvg > 0) stat.pairScores.push(roundAvg);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const totalRounds = soloScores.length;
+const globalAvg = totalRounds > 0 ? soloScores.reduce((a, b) => a + b, 0) / totalRounds : 0;
+
+// 计算每个 pair 的 avg 分数和 lift(相对 global)
+const pairList = Array.from(pairMap.values()).map((p) => {
+  const avg = p.pairScores.length > 0 ? p.pairScores.reduce((a, b) => a + b, 0) / p.pairScores.length : 0;
+  const lift = globalAvg > 0 ? (avg - globalAvg) : 0;
+  return { ...p, avg, lift };
+});
+
+const topSynergy = [...pairList].sort((a, b) => b.lift - a.lift).slice(0, 12);
+const topFriction = [...pairList].filter((p) => p.coOcc >= 2).sort((a, b) => a.lift - b.lift).slice(0, 12);
+const topCoOcc = [...pairList].sort((a, b) => b.coOcc - a.coOcc).slice(0, 12);
+
+// 简单 co-occurrence matrix(只显示 top N actions)
+const topActions = Array.from(actionCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 12).map((x) => x[0]);
+const matrix: number[][] = topActions.map(() => topActions.map(() => 0));
+for (const p of pairList) {
+  const ai = topActions.indexOf(p.a);
+  const bi = topActions.indexOf(p.b);
+  if (ai >= 0 && bi >= 0) {
+    matrix[ai][bi] = p.coOcc;
+    matrix[bi][ai] = p.coOcc;
+  }
+}
+
+const matrixMax = Math.max(1, ...matrix.flat());
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function trunc(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
+---
+
+<BaseLayout title="Action Pair Synergy · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-pair-synergy</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔗 Action Pair Synergy <span class="muted" style="font-size:0.6em">(iter #242)</span></h1>
+      <p class="agents-sub">
+        同一 round 中两 action 共现时的 avg 分数 vs 全局 avg。
+        lift &gt; 0 = 增效;lift &lt; 0 = 互斥。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-aps-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>unique actions: <strong>{actionCounts.size}</strong></span>
+        <span>unique pairs: <strong>{pairList.length}</strong></span>
+        <span>global avg score: <strong>{globalAvg.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 co-occurrence 矩阵(top {topActions.length} actions)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th></th>
+            {topActions.map((a) => <th><small>{esc(trunc(a, 8))}</small></th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {topActions.map((a, ai) => (
+            <tr>
+              <td><small>{esc(trunc(a, 10))}</small></td>
+              {topActions.map((_b, bi) => (
+                <td style={`text-align:center;color:${ai === bi ? '#666' : matrix[ai][bi] > 0 ? '#4f46e5' : '#999'}`}>
+                  <small>{matrix[ai][bi]}</small>
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 12 增效对(lift 最高)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action A</th><th>action B</th><th>co-occ</th><th>avg score</th><th>lift</th></tr>
+        </thead>
+        <tbody>
+          {topSynergy.map((p) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td>{p.coOcc}</td>
+              <td><strong>{p.avg.toFixed(2)}</strong></td>
+              <td><strong style="color:#10b981">+{p.lift.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚠️ top 12 互斥对(lift 最低)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action A</th><th>action B</th><th>co-occ</th><th>avg score</th><th>lift</th></tr>
+        </thead>
+        <tbody>
+          {topFriction.map((p) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td>{p.coOcc}</td>
+              <td><strong>{p.avg.toFixed(2)}</strong></td>
+              <td><strong style="color:#ef4444">{p.lift.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 top 12 高频对</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action A</th><th>action B</th><th>co-occ</th><th>avg score</th></tr>
+        </thead>
+        <tbody>
+          {topCoOcc.map((p) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td><strong>{p.coOcc}</strong></td>
+              <td>{p.avg.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>lift = pair avg - global avg;正值越大越应同时使用</li>
+        <li>互斥对(co-occ ≥ 2 才显示)说明某对可能互相干扰</li>
+        <li>高频对 = 系统常用组合,可作为基线</li>
+        <li>对照 <a href={`${base}/agents/action-cooccurrence/`}>Action Cooccurrence</a> 看基础共现统计</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-aps-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-aps-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
