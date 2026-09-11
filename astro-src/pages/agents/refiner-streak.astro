@@ -1,0 +1,252 @@
+---
+// /agents/refiner-streak.astro — iter #207:refiner success streak analysis
+//
+// 找出 modifier 应用的连续改善 streak:
+//   - 每个 session 的最长 streak
+//   - 全部 sessions 的 streak 排名
+//   - streak 中典型 action pattern
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundScore {
+  idx: number;
+  score: number;
+  applied: string[];
+}
+
+interface SessionStreak {
+  sid: string;
+  goal: string;
+  rounds: number;
+  longestStreak: number;
+  streakStart: number;
+  streakEnd: number;
+  streakActions: string[];
+  finalScore: number;
+  firstScore: number;
+  totalImprovement: number;
+}
+
+function getRoundAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionStreak[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    const scores: RoundScore[] = [];
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        const applied = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        scores.push({ idx: ri, score: getRoundAvg(r), applied });
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+
+    // longest streak of consecutive improving rounds
+    let longestStreak = 0;
+    let curStreak = 0;
+    let curStart = 0;
+    let bestStart = 0;
+    let bestEnd = 0;
+    for (let i = 1; i < scores.length; i++) {
+      if (scores[i].score > scores[i - 1].score) {
+        if (curStreak === 0) curStart = i - 1;
+        curStreak += 1;
+        if (curStreak > longestStreak) {
+          longestStreak = curStreak;
+          bestStart = curStart;
+          bestEnd = i;
+        }
+      } else {
+        curStreak = 0;
+      }
+    }
+    if (longestStreak === 0) continue;
+
+    const streakActions = new Set<string>();
+    for (let i = bestStart; i <= bestEnd; i++) {
+      for (const a of scores[i].applied) streakActions.add(a);
+    }
+
+    sessions.push({
+      sid, goal, rounds: scores.length,
+      longestStreak,
+      streakStart: scores[bestStart].idx,
+      streakEnd: scores[bestEnd].idx,
+      streakActions: [...streakActions],
+      firstScore: scores[0].score,
+      finalScore: scores[scores.length - 1].score,
+      totalImprovement: scores[scores.length - 1].score - scores[0].score,
+    });
+  }
+}
+
+const topStreak = [...sessions].sort((a, b) => b.longestStreak - a.longestStreak).slice(0, 20);
+const topImprovement = [...sessions].sort((a, b) => b.totalImprovement - a.totalImprovement).slice(0, 15);
+
+// streak 长度分布
+const buckets = [
+  { label: 'streak = 1', min: 1, max: 1, count: 0 },
+  { label: 'streak = 2', min: 2, max: 2, count: 0 },
+  { label: 'streak = 3', min: 3, max: 3, count: 0 },
+  { label: 'streak = 4', min: 4, max: 4, count: 0 },
+  { label: 'streak ≥ 5', min: 5, max: 99999, count: 0 },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.longestStreak >= b.min && s.longestStreak <= b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Refiner Success Streak · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / refiner-streak</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Refiner Success Streak <span class="muted" style="font-size:0.6em">(iter #207)</span></h1>
+      <p class="agents-sub">
+        连续改善的 rounds streak。
+        streak 长 = 持续优化路径;短 = 频繁卡顿。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rs-globals">
+        <span>总 sessions (≥ 2 rounds): <strong>{sessions.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 streak 长度分布</h2>
+      <pre class="agents-rs-flow">{buckets.map((b) => {
+        const max = Math.max(...buckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(14)} ${bar(b.count, max, 20)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 top 20 longest streak</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>streak</th><th>sid</th><th>rounds</th><th>from</th><th>to</th><th>actions</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topStreak.map((s) => (
+            <tr>
+              <td><strong>{s.longestStreak}</strong></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td>{s.rounds}</td>
+              <td>R{s.streakStart}</td>
+              <td>R{s.streakEnd}</td>
+              <td><small>{esc(s.streakActions.slice(0, 3).join(', '))}</small></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 30))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 最大总改善</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Δ score</th><th>sid</th><th>first → final</th><th>streak</th></tr>
+        </thead>
+        <tbody>
+          {topImprovement.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">+{s.totalImprovement.toFixed(2)}</strong></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td>{s.firstScore.toFixed(2)} → {s.finalScore.toFixed(2)}</td>
+              <td>{s.longestStreak}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>streak ≥ 3 = modifier 找到持续改善路径</li>
+        <li>streak = 1 = 单次改善就卡住</li>
+        <li>对照 <a href={`${base}/agents/improvement-predictor/`}>Improvement Predictor</a> 看改善前特征</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rs-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
