@@ -1,0 +1,172 @@
+---
+// /agents/round-position-trajectory.astro — iter #294:round position avg score trajectory
+//
+// 每个 round position(1, 2, 3, ...)在所有 sessions 上的 avg score 走势
+//   - 显示 modifier 在第 N 轮的平均改进幅度
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PositionStat {
+  position: number;
+  scores: number[];
+  count: number;
+  avg: number;
+  min: number;
+  max: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const positionMap = new Map<number, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    for (let i = 0; i < rNums.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNums[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          const pos = i + 1;
+          const score = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (!positionMap.has(pos)) positionMap.set(pos, []);
+          positionMap.get(pos)!.push(score);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const positions: PositionStat[] = [];
+for (const [pos, scores] of [...positionMap.entries()].sort((a, b) => a[0] - b[0])) {
+  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  positions.push({
+    position: pos,
+    scores, count: scores.length,
+    avg,
+    min: Math.min(...scores),
+    max: Math.max(...scores),
+  });
+}
+
+const SPARK_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+const maxAvg = Math.max(...positions.map((p) => p.avg), 1);
+const minAvg = Math.min(...positions.map((p) => p.avg), 10);
+
+function spark(values: number[]): string {
+  if (values.length === 0) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return SPARK_CHARS[0].repeat(values.length);
+  return values.map((v) => {
+    const idx = Math.min(7, Math.floor(((v - min) / (max - min)) * 7));
+    return SPARK_CHARS[idx];
+  }).join('');
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Round Position Trajectory · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-position-trajectory</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Round Position Trajectory <span class="muted" style="font-size:0.6em">(iter #294)</span></h1>
+      <p class="agents-sub">
+        跨所有 sessions 的第 N 轮 avg score 走势。看 modifier 在第几轮最有效。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 各 round position avg score</h2>
+      <pre class="agents-rpt-flow">{positions.map((p) => {
+        return `R${p.position.toString().padStart(2)}  ${bar(p.avg, 10, 22)}  avg=${p.avg.toFixed(2)}  n=${p.count}  min=${p.min.toFixed(2)}  max=${p.max.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 进步幅度(round-to-round gain)</h2>
+      <pre class="agents-rpt-flow">{positions.map((p, i) => {
+        const gain = i === 0 ? 0 : p.avg - positions[i - 1].avg;
+        const sym = gain >= 0 ? '+' : ' ';
+        return `R${p.position.toString().padStart(2)}  ${sym}${gain.toFixed(3)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详情</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>R#</th><th>count</th><th>avg</th><th>min</th><th>max</th><th>distribution</th></tr>
+        </thead>
+        <tbody>
+          {positions.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">R{p.position}</strong></td>
+              <td>{p.count}</td>
+              <td><strong>{p.avg.toFixed(2)}</strong></td>
+              <td>{p.min.toFixed(2)}</td>
+              <td>{p.max.toFixed(2)}</td>
+              <td style="font-family:ui-monospace,monospace">{spark(p.scores)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg 逐轮递增 = modifier 在持续改进</li>
+        <li>前几轮 gain 大 / 后几轮 gain 小 = 边际收益递减</li>
+        <li>R1 avg 是初始状态, R-N avg 是到达状态</li>
+        <li>对照 <a href={`${base}/agents/round-position-dist/`}>Round Position Dist</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rpt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
