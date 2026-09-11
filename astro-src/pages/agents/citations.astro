@@ -1,0 +1,174 @@
+---
+// /agents/citations.astro — iter #145:citation index
+//
+// 跨 session 从 synthesis 文本中提取:
+//   - arxiv IDs(如 2304.12345 / cs.LG/2401.00001)
+//   - 普通 URLs(http(s)://...)
+//   - 出现次数(反向索引:URL → 哪些 session 提到)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface CitationRef {
+  type: 'arxiv' | 'url';
+  value: string;
+  sessions: Set<string>;
+  count: number;
+}
+
+const refs: Record<string, CitationRef> = {};
+const ARXIV_NEW = /\b\d{4}\.\d{4,5}(v\d+)?\b/g;
+const ARXIV_OLD = /\b[\w-]+\/\d{7}(v\d+)?\b/g;
+const URL_PATTERN = /https?:\/\/[^\s)<>"'`]+/g;
+
+const root = join(process.cwd(), 'archive');
+let totalScanned = 0;
+let totalCitations = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const sfs = await readdir(sd).catch(() => []);
+    for (const f of sfs) {
+      if (!/^synthesis_\d+\.md$/.test(f)) continue;
+      totalScanned += 1;
+      let text = '';
+      try { text = await readFile(join(sd, f), 'utf8'); } catch (e) { continue; }
+
+      for (const m of text.matchAll(ARXIV_NEW)) {
+        const v = m[0];
+        const key = `arxiv:${v}`;
+        if (!refs[key]) refs[key] = { type: 'arxiv', value: v, sessions: new Set(), count: 0 };
+        refs[key].count += 1;
+        refs[key].sessions.add(sid);
+        totalCitations += 1;
+      }
+      for (const m of text.matchAll(ARXIV_OLD)) {
+        const v = m[0];
+        // 过滤掉非 arxiv 字符串(如 "section/3")
+        if (!/^(cs|math|stat|q-bio|q-fin|cond-mat|gr-qc|hep-|nucl-|physics)/.test(v)) continue;
+        const key = `arxiv:${v}`;
+        if (!refs[key]) refs[key] = { type: 'arxiv', value: v, sessions: new Set(), count: 0 };
+        refs[key].count += 1;
+        refs[key].sessions.add(sid);
+        totalCitations += 1;
+      }
+      for (const m of text.matchAll(URL_PATTERN)) {
+        const v = m[0];
+        // 过滤 markdown 内部 URL 太长 / 太短
+        if (v.length < 10 || v.length > 200) continue;
+        const key = `url:${v}`;
+        if (!refs[key]) refs[key] = { type: 'url', value: v, sessions: new Set(), count: 0 };
+        refs[key].count += 1;
+        refs[key].sessions.add(sid);
+        totalCitations += 1;
+      }
+    }
+  }
+}
+
+const arxivRefs = Object.values(refs).filter((r) => r.type === 'arxiv').sort((a, b) => b.count - a.count);
+const urlRefs = Object.values(refs).filter((r) => r.type === 'url').sort((a, b) => b.count - a.count);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Citation Index · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / citations</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📎 Citation Index <span class="muted" style="font-size:0.6em">(iter #145)</span></h1>
+      <p class="agents-sub">
+        跨 session 从 synthesis 文本提取 arxiv IDs + 普通 URLs,做反向索引:
+        每个引用出现在哪些 session 里、出现几次。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ci-globals">
+        <span>扫描 syntheses: <strong>{totalScanned}</strong></span>
+        <span>总 citations: <strong>{totalCitations}</strong></span>
+        <span>arxiv 唯一: <strong>{arxivRefs.length}</strong></span>
+        <span>URL 唯一: <strong>{urlRefs.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📚 arxiv 引用(Top 50)</h2>
+      {arxivRefs.length === 0 ? (
+        <p class="muted">还没有 arxiv 引用。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>#</th><th>arxiv ID</th><th>count</th><th>sessions</th><th>link</th></tr>
+          </thead>
+          <tbody>
+            {arxivRefs.slice(0, 50).map((r, i) => (
+              <tr>
+                <td>{i + 1}</td>
+                <td><code>{esc(r.value)}</code></td>
+                <td>{r.count}</td>
+                <td>{r.sessions.size}</td>
+                <td>
+                  <a href={`https://arxiv.org/abs/${esc(r.value)}`} target="_blank" rel="noopener">arxiv ↗</a>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 URL 引用(Top 50)</h2>
+      {urlRefs.length === 0 ? (
+        <p class="muted">还没有 URL 引用。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>#</th><th>URL</th><th>count</th><th>sessions</th></tr>
+          </thead>
+          <tbody>
+            {urlRefs.slice(0, 50).map((r, i) => (
+              <tr>
+                <td>{i + 1}</td>
+                <td><a href={esc(r.value)} target="_blank" rel="noopener"><small>{esc(r.value.slice(0, 80))}{r.value.length > 80 ? '…' : ''}</small></a></td>
+                <td>{r.count}</td>
+                <td>{r.sessions.size}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ci-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ci-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
