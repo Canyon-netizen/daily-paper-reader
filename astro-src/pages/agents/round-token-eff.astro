@@ -1,0 +1,206 @@
+---
+// /agents/round-token-eff.astro — iter #249:round token efficiency by position
+//
+// 每个 round 在 session 内的位置(0-based)聚合:
+//   - 平均 token 数
+//   - 平均分数
+//   - 平均 Δ vs 前一 round
+//   - token 效率 = Δ / tokens(单位:分数/k tokens)
+// 找出哪些位置"性价比最高"
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PositionStat {
+  position: number;
+  rounds: number;
+  tokensSum: number;
+  tokensAvg: number;
+  scoreSum: number;
+  scoreAvg: number;
+  deltaSum: number;
+  deltaAvg: number;
+  efficiency: number;  // deltaAvg / (tokensAvg/1000)
+}
+
+const root = join(process.cwd(), 'archive');
+const stats = new Map<number, PositionStat>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    const rounds: { score: number; tokens: number }[] = [];
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        rounds.push({
+          score: arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0,
+          tokens: r.feedback?.total_tokens ?? 0,
+        });
+      } catch (e) { /* */ }
+    }
+    for (let i = 0; i < rounds.length; i++) {
+      const cur = rounds[i];
+      const delta = i === 0 ? 0 : cur.score - rounds[i - 1].score;
+      if (!stats.has(i)) {
+        stats.set(i, {
+          position: i, rounds: 0, tokensSum: 0, tokensAvg: 0,
+          scoreSum: 0, scoreAvg: 0, deltaSum: 0, deltaAvg: 0, efficiency: 0,
+        });
+      }
+      const s = stats.get(i)!;
+      s.rounds += 1;
+      s.tokensSum += cur.tokens;
+      s.scoreSum += cur.score;
+      s.deltaSum += delta;
+    }
+  }
+}
+
+const arr = Array.from(stats.values()).sort((a, b) => a.position - b.position);
+for (const s of arr) {
+  s.tokensAvg = s.rounds > 0 ? s.tokensSum / s.rounds : 0;
+  s.scoreAvg = s.rounds > 0 ? s.scoreSum / s.rounds : 0;
+  s.deltaAvg = s.rounds > 0 ? s.deltaSum / s.rounds : 0;
+  s.efficiency = s.tokensAvg > 0 ? s.deltaAvg / (s.tokensAvg / 1000) : 0;
+}
+
+const topEfficient = [...arr].sort((a, b) => b.efficiency - a.efficiency).slice(0, 6);
+const topExpensive = [...arr].sort((a, b) => b.tokensAvg - a.tokensAvg).slice(0, 6);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Round Token Efficiency · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-token-eff</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⚡ Round Token Efficiency <span class="muted" style="font-size:0.6em">(iter #249)</span></h1>
+      <p class="agents-sub">
+        按 session 内的 round 位置(0-based)聚合:平均 tokens / 平均 score / 平均 Δ / 性价比。
+        性价比 = Δ / (tokens/1000)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 位置-效率表</h2>
+      <pre class="agents-rte-flow">{`pos  rounds  tokens(avg)  score(avg)  Δ(avg)    eff(/K tok)
+${arr.map((s) => {
+  return `${s.position.toString().padStart(3)}  ${s.rounds.toString().padStart(6)}  ${fmtTok(s.tokensAvg).padStart(11)}  ${s.scoreAvg.toFixed(2).padStart(10)}  ${(s.deltaAvg >= 0 ? '+' : '') + s.deltaAvg.toFixed(2).padStart(7)}  ${s.efficiency.toFixed(3).padStart(8)}`;
+}).join('\n')}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 tokens / score 趋势</h2>
+      <pre class="agents-rte-flow">{`tokens      ${bar(Math.max(...arr.map((s) => s.tokensAvg)), Math.max(...arr.map((s) => s.tokensAvg)), 22)}
+score       ${bar(Math.max(...arr.map((s) => s.scoreAvg)), Math.max(...arr.map((s) => s.scoreAvg)), 22)}
+delta       ${bar(Math.max(...arr.map((s) => Math.max(0, s.deltaAvg))), Math.max(...arr.map((s) => Math.max(0, s.deltaAvg))), 22)}
+
+0: ${arr.find((s) => s.position === 0) ? `tokens=${fmtTok(arr[0].tokensAvg)}, score=${arr[0].scoreAvg.toFixed(2)}` : 'no data'}
+${arr.slice(1).map((s) => `${s.position}: ${bar(s.scoreAvg, 10, 12)} score=${s.scoreAvg.toFixed(2)}, Δ=${s.deltaAvg.toFixed(2)}, eff=${s.efficiency.toFixed(3)}`).join('\n')}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 top 6 高性价比位置</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>position</th><th>rounds</th><th>avg Δ</th><th>avg tokens</th><th>eff / K tok</th></tr>
+        </thead>
+        <tbody>
+          {topEfficient.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">R{s.position}</strong></td>
+              <td>{s.rounds}</td>
+              <td>{s.deltaAvg >= 0 ? '+' : ''}{s.deltaAvg.toFixed(2)}</td>
+              <td>{fmtTok(s.tokensAvg)}</td>
+              <td><strong style="color:#10b981">{s.efficiency.toFixed(3)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 top 6 token 消耗最大位置</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>position</th><th>rounds</th><th>avg tokens</th><th>avg score</th><th>avg Δ</th></tr>
+        </thead>
+        <tbody>
+          {topExpensive.map((s) => (
+            <tr>
+              <td><strong style="color:#f59e0b">R{s.position}</strong></td>
+              <td>{s.rounds}</td>
+              <td>{fmtTok(s.tokensAvg)}</td>
+              <td>{s.scoreAvg.toFixed(2)}</td>
+              <td>{s.deltaAvg >= 0 ? '+' : ''}{s.deltaAvg.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>eff &gt; 0 = 投入产出比正向;接近 0 = 投入未带来收益(收敛迹象)</li>
+        <li>位置越靠后通常 eff 越低(临近收敛)</li>
+        <li>R0 = 初始 round(无 Δ,eff=0)</li>
+        <li>对照 <a href={`${base}/agents/round-economics/`}>Round Economics</a> 看单 round 详细成本</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rte-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
