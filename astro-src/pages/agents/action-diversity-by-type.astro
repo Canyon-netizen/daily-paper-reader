@@ -1,0 +1,210 @@
+---
+// /agents/action-diversity-by-type.astro — iter #296:action diversity by goal type
+//
+// 每个 goal type 的 action 多样性:
+//   - distinct actions per type
+//   - Shannon entropy of action distribution
+//   - top 5 actions per type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', '分析', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan'],
+  other: [],
+};
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+interface TypeActionInfo {
+  name: string;
+  count: number;
+  actionCounts: Map<string, number>;
+  totalActions: number;
+  distinctActions: number;
+  entropy: number;
+  topActions: { action: string; count: number; pct: number }[];
+}
+
+const root = join(process.cwd(), 'archive');
+const typeMap = new Map<string, TypeActionInfo>();
+
+for (const t of Object.keys(TYPE_KEYWORDS)) {
+  typeMap.set(t, {
+    name: t, count: 0,
+    actionCounts: new Map(),
+    totalActions: 0, distinctActions: 0, entropy: 0,
+    topActions: [],
+  });
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+    const t = typeMap.get(type)!;
+    t.count += 1;
+
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          t.actionCounts.set(act, (t.actionCounts.get(act) ?? 0) + 1);
+          t.totalActions += 1;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+for (const t of typeMap.values()) {
+  t.distinctActions = t.actionCounts.size;
+  // Shannon entropy
+  let entropy = 0;
+  for (const count of t.actionCounts.values()) {
+    const p = count / Math.max(1, t.totalActions);
+    if (p > 0) entropy -= p * Math.log2(p);
+  }
+  t.entropy = entropy;
+  // top 5
+  t.topActions = [...t.actionCounts.entries()]
+    .map(([action, count]) => ({ action, count, pct: (count / Math.max(1, t.totalActions)) * 100 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+}
+
+const arr = [...typeMap.values()].filter((t) => t.totalActions > 0).sort((a, b) => b.entropy - a.entropy);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function entropyLabel(e: number): string {
+  if (e >= 2.5) return '🌈 very diverse';
+  if (e >= 2) return '🟢 diverse';
+  if (e >= 1.5) return '🟡 mid';
+  if (e >= 1) return '🟠 low';
+  return '🔴 narrow';
+}
+---
+
+<BaseLayout title="Action Diversity by Type · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-diversity-by-type</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎨 Action Diversity by Type <span class="muted" style="font-size:0.6em">(iter #296)</span></h1>
+      <p class="agents-sub">
+        每个 goal type 的 action 多样性。Shannon entropy 越高 = 越多样化。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-adbt-globals">
+        <span>types: <strong>{arr.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎨 各 type 的 action 多样性</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>sessions</th><th>total actions</th><th>distinct</th><th>entropy</th><th>多样性</th></tr>
+        </thead>
+        <tbody>
+          {arr.map((t) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{t.name}</strong></td>
+              <td>{t.count}</td>
+              <td>{t.totalActions}</td>
+              <td>{t.distinctActions}</td>
+              <td><strong>{t.entropy.toFixed(2)}</strong></td>
+              <td><small>{entropyLabel(t.entropy)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 各 type top 5 actions</h2>
+      {arr.map((t) => (
+        <div style="margin-bottom:0.8rem">
+          <h3 style="margin:0.4rem 0;color:#4f46e5">{t.name} (n={t.totalActions})</h3>
+          <table class="agents-session-table">
+            <thead>
+              <tr><th>action</th><th>count</th><th>%</th></tr>
+            </thead>
+            <tbody>
+              {t.topActions.map((a) => (
+                <tr>
+                  <td><code>{esc(a.action)}</code></td>
+                  <td>{a.count}</td>
+                  <td>{a.pct.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>entropy 高 = modifier 在该 type 上有多种策略</li>
+        <li>entropy 低 = modifier 偏好特定 action</li>
+        <li>对照 <a href={`${base}/agents/type-action-rec/`}>Type Action Rec</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-adbt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-adbt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
