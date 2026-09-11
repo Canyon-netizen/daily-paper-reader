@@ -1,0 +1,271 @@
+---
+// /agents/improvement-pattern-cluster.astro — iter #289:improvement pattern cluster
+//
+// 把 sessions 的 score 轨迹聚成几类:
+//   - rising 持续上升
+//   - declining 持续下降
+//   - plateau 长期无变化
+//   - U-shape 先降后升
+//   - peak-end 开头高峰后降
+//   - mixed 无明显模式
+// 显示每类的代表 session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessInfo {
+  sid: string;
+  goal: string;
+  scores: number[];
+  pattern: string;
+  gain: number;
+  volatility: number;
+}
+
+const SPARK_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+function sparkline(values: number[]): string {
+  if (values.length === 0) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return SPARK_CHARS[0].repeat(values.length);
+  return values.map((v) => {
+    const idx = Math.min(7, Math.floor(((v - min) / (max - min)) * 7));
+    return SPARK_CHARS[idx];
+  }).join('');
+}
+
+function classify(scores: number[]): string {
+  if (scores.length < 3) return 'too-short';
+  const first = scores[0];
+  const last = scores[scores.length - 1];
+  const peakIdx = scores.indexOf(Math.max(...scores));
+  const troughIdx = scores.indexOf(Math.min(...scores));
+  const range = Math.max(...scores) - Math.min(...scores);
+
+  // 计算线性回归斜率
+  const n = scores.length;
+  const xs = scores.map((_, i) => i);
+  const xAvg = (n - 1) / 2;
+  const yAvg = scores.reduce((a, b) => a + b, 0) / n;
+  let num = 0, den = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - xAvg) * (scores[i] - yAvg);
+    den += (xs[i] - xAvg) ** 2;
+  }
+  const slope = den === 0 ? 0 : num / den;
+
+  // plateau
+  const lowRange = range < 0.5;
+  if (lowRange) return 'plateau';
+
+  // 强单调
+  if (slope > 0.05) return 'rising';
+  if (slope < -0.05) return 'declining';
+
+  // peak-end
+  if (peakIdx === 0 && last < first) return 'peak-end';
+
+  // U-shape
+  if (troughIdx > 0 && troughIdx < n - 1 && peakIdx > troughIdx) return 'U-shape';
+
+  // inverted-U
+  if (peakIdx > 0 && peakIdx < n - 1 && troughIdx > peakIdx) return 'inverted-U';
+
+  return 'mixed';
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 3) continue;
+
+    const pattern = classify(scores);
+    const gain = scores[scores.length - 1] - scores[0];
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    const variance = scores.reduce((s, x) => s + (x - avg) ** 2, 0) / scores.length;
+    const volatility = Math.sqrt(variance);
+
+    sessions.push({ sid, goal, scores, pattern, gain, volatility });
+  }
+}
+
+const patternMap = new Map<string, SessInfo[]>();
+for (const s of sessions) {
+  if (!patternMap.has(s.pattern)) patternMap.set(s.pattern, []);
+  patternMap.get(s.pattern)!.push(s);
+}
+
+const PATTERN_ORDER = ['rising', 'declining', 'plateau', 'U-shape', 'peak-end', 'inverted-U', 'mixed', 'too-short'];
+const ordered = PATTERN_ORDER
+  .map((p) => ({ name: p, list: patternMap.get(p) ?? [] }))
+  .filter((p) => p.list.length > 0);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function patternEmoji(p: string): string {
+  return {
+    'rising': '📈',
+    'declining': '📉',
+    'plateau': '🟰',
+    'U-shape': 'Ⓞ',
+    'peak-end': '🔺',
+    'inverted-U': '🔻',
+    'mixed': '🌀',
+    'too-short': '·',
+  }[p] ?? '·';
+}
+function patternDesc(p: string): string {
+  return {
+    'rising': '持续上升 — 探索有效',
+    'declining': '持续下降 — 越改越差',
+    'plateau': '长期不变 — 已到天花板',
+    'U-shape': '先降后升 — 中期修正',
+    'peak-end': '开头高峰 — 后期退步',
+    'inverted-U': '先升后降 — 中期巅峰',
+    'mixed': '无明显模式',
+    'too-short': '数据不足',
+  }[p] ?? '';
+}
+---
+
+<BaseLayout title="Improvement Pattern Cluster · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / improvement-pattern-cluster</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧩 Improvement Pattern Cluster <span class="muted" style="font-size:0.6em">(iter #289)</span></h1>
+      <p class="agents-sub">
+        把 sessions 按 score 轨迹模式聚类。 rising / declining / plateau / U-shape / peak-end / inverted-U / mixed。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ipc-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>聚类数: <strong>{ordered.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🧩 聚类分布</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>pattern</th><th>说明</th><th>count</th><th>%</th><th>代表 sparkline</th></tr>
+        </thead>
+        <tbody>
+          {ordered.map((p) => {
+            const rep = p.list.sort((a, b) => b.gain - a.gain)[0];
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{patternEmoji(p.name)} {p.name}</strong></td>
+                <td><small>{patternDesc(p.name)}</small></td>
+                <td><strong>{p.list.length}</strong></td>
+                <td>{((p.list.length / Math.max(1, sessions.length)) * 100).toFixed(1)}%</td>
+                <td style="font-family:ui-monospace,monospace;font-size:1.05em">{rep ? sparkline(rep.scores) : '·'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔍 每类代表 sessions</h2>
+      {ordered.map((p) => {
+        const reps = [...p.list].sort((a, b) => b.gain - a.gain).slice(0, 3);
+        return (
+          <div style="margin-bottom:1rem">
+            <h3 style="color:#4f46e5;margin:0.6rem 0 0.3rem">{patternEmoji(p.name)} {p.name} ({p.list.length})</h3>
+            <table class="agents-session-table">
+              <thead>
+                <tr><th>sid</th><th>gain</th><th>σ</th><th>sparkline</th><th>goal</th></tr>
+              </thead>
+              <tbody>
+                {reps.map((s) => (
+                  <tr>
+                    <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+                    <td>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</td>
+                    <td>{s.volatility.toFixed(2)}</td>
+                    <td style="font-family:ui-monospace,monospace">{sparkline(s.scores)}</td>
+                    <td><small class="muted">{esc((s.goal ?? '').slice(0, 35))}{(s.goal ?? '').length > 35 ? '…' : ''}</small></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rising 多 = 当前 modifier 探索有效</li>
+        <li>plateau 多 = 用户场景已饱和</li>
+        <li>declining 多 = 反馈信号可能在引导系统退化</li>
+        <li>对照 <a href={`${base}/agents/trajectory-classifier/`}>Trajectory Classifier</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ipc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ipc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
