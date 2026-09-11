@@ -1,0 +1,144 @@
+---
+// /agents/persona-round-share.astro — iter #321:persona appearance per round
+//
+// 各 persona 在多少 sessions/rounds 里出现过
+//   - 计数 vs 全局使用强度
+//   - 哪些 persona 永远在场 vs 偶尔出现
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaUsage {
+  name: string;
+  totalRounds: number;
+  totalSessions: Set<string>;
+  totalProposals: number;
+  avgPerRound: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, PersonaUsage>();
+
+let totalRoundsSeen = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      totalRoundsSeen += 1;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          if (!personaMap.has(name)) {
+            personaMap.set(name, {
+              name,
+              totalRounds: 0,
+              totalSessions: new Set<string>(),
+              totalProposals: 0,
+              avgPerRound: 0,
+            });
+          }
+          const p = personaMap.get(name)!;
+          p.totalRounds += 1;
+          p.totalSessions.add(sid);
+          p.totalProposals += (persona.proposals ?? []).length;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const personas: PersonaUsage[] = [];
+for (const p of personaMap.values()) {
+  p.avgPerRound = p.totalProposals > 0 ? p.totalProposals / p.totalRounds : 0;
+  personas.push(p);
+}
+personas.sort((a, b) => b.totalRounds - a.totalRounds);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Persona Round Share · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-round-share</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👥 Persona Round Share <span class="muted" style="font-size:0.6em">(iter #321)</span></h1>
+      <p class="agents-sub">
+        各 persona 在多少 rounds / sessions 里出现过 + 平均每次给多少 proposals。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-prs-globals">
+        <span>总 rounds: <strong>{totalRoundsSeen.toLocaleString()}</strong></span>
+        <span>personas: <strong>{personas.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>👥 persona 出现频次</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>persona</th><th>rounds</th><th>% of all rounds</th><th>sessions</th><th>total proposals</th><th>avg props/round</th></tr>
+        </thead>
+        <tbody>
+          {personas.map((p, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><strong style="color:#4f46e5">{esc(p.name)}</strong></td>
+              <td><strong>{p.totalRounds.toLocaleString()}</strong></td>
+              <td>{((p.totalRounds / Math.max(1, totalRoundsSeen)) * 100).toFixed(1)}%</td>
+              <td>{p.totalSessions.size}</td>
+              <td>{p.totalProposals.toLocaleString()}</td>
+              <td>{p.avgPerRound.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>出现频次高 = 系统常用</li>
+        <li>出现在 ≥90% sessions = 永远在线的"主 persona"</li>
+        <li>avg props/round 高 = 单次给更多评分</li>
+        <li>对照 <a href={`${base}/agents/persona-score-bias/`}>Persona Score Bias</a></li>
+        <li>对照 <a href={`${base}/agents/persona-consistency/`}>Persona Consistency</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-prs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-prs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
