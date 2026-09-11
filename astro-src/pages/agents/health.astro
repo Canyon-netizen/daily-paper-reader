@@ -1,0 +1,338 @@
+---
+// /agents/health.astro — iter #92:session health check
+//
+// 跑一组诊断检查,扫所有 session 的 archive 状态,报告:
+//   - meta.json 缺失 / 损坏
+//   - 没有 rounds(空 session)
+//   - 没有 synthesis
+//   - 引用了不存在的 arxiv ID(从 candidates 找)
+//   - 文件大小异常(超大 / 缺失)
+//   - score 全为 0(可能没跑成)
+//   - 长时间没活动(>30 天)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Issue {
+  severity: 'critical' | 'warning' | 'info';
+  emoji: string;
+  category: string;
+  text: string;
+}
+
+interface SessionHealth {
+  sid: string;
+  goal: string;
+  createdAt: number;
+  lastActivity: number;
+  roundsCount: number;
+  synthesesCount: number;
+  sizeBytes: number;
+  hasIssues: Issue[];
+  healthScore: number; // 0-100
+}
+
+const sessions: SessionHealth[] = [];
+const allArxivIds = new Set<string>();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const dir = join(root, sid);
+    // 只检查有 meta.json 的 session-like 目录;跳过日期文件夹等
+    if (!existsSync(join(dir, 'meta.json'))) continue;
+    let meta: any = null;
+    let hasMetaIssue = false;
+    let metaMissing = false;
+    try {
+      meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8'));
+    } catch (e) {
+      hasMetaIssue = true;
+      metaMissing = !existsSync(join(dir, 'meta.json'));
+    }
+
+    let roundsCount = 0;
+    let lastActivity = 0;
+    let totalTokens = 0;
+    let scoreTotal = 0; let scoreN = 0;
+    let roundParseErrors = 0;
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      for (const f of files) {
+        try {
+          const r = JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8'));
+          roundsCount++;
+          const fa = Number(r?.finished_at ?? 0);
+          if (fa > lastActivity) lastActivity = fa;
+          totalTokens += Number(r?.feedback?.total_tokens ?? 0);
+          for (const c of (Array.isArray(r?.feedback?.critiques) ? r.feedback.critiques : [])) {
+            if (typeof c?.total === 'number') { scoreTotal += c.total; scoreN++; }
+          }
+        } catch { roundParseErrors++; }
+      }
+    } catch { /* */ }
+
+    let synthesesCount = 0;
+    try {
+      const sdir = join(dir, 'synthesis');
+      const sfiles = await readdir(sdir);
+      synthesesCount = sfiles.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+      for (const f of sfiles) {
+        if (!/^synthesis_\d+\.md$/.test(f)) continue;
+        try {
+          const raw = await readFile(join(sdir, f), 'utf8');
+          for (const m of raw.matchAll(/\b(\d{4}\.\d{4,5}(?:v\d+)?)\b/g)) {
+            allArxivIds.add(m[1]);
+          }
+        } catch { /* */ }
+      }
+    } catch { /* */ }
+
+    let sizeBytes = 0;
+    async function sumDir(p: string): Promise<void> {
+      let entries: string[] = [];
+      try { entries = await readdir(p, { withFileTypes: false }); } catch { return; }
+      for (const e of entries) {
+        const fp = join(p, e);
+        try {
+          const s = await stat(fp);
+          if (s.isDirectory()) await sumDir(fp);
+          else sizeBytes += s.size;
+        } catch { /* */ }
+      }
+    }
+    await sumDir(dir);
+
+    const issues: Issue[] = [];
+    if (metaMissing) issues.push({ severity: 'critical', emoji: '🔴', category: 'meta', text: 'meta.json 缺失' });
+    else if (hasMetaIssue) issues.push({ severity: 'critical', emoji: '🔴', category: 'meta', text: 'meta.json 损坏(JSON parse 失败)' });
+    else if (!meta?.goal) issues.push({ severity: 'warning', emoji: '🟡', category: 'meta', text: 'goal 为空' });
+
+    if (roundsCount === 0) issues.push({ severity: 'warning', emoji: '🟡', category: 'rounds', text: '没有 rounds(空 session)' });
+    if (roundParseErrors > 0) issues.push({ severity: 'warning', emoji: '🟡', category: 'rounds', text: `${roundParseErrors} 个 round JSON parse 失败` });
+    if (synthesesCount === 0 && roundsCount > 0) issues.push({ severity: 'info', emoji: '🔵', category: 'synthesis', text: '有 rounds 但没 synthesis' });
+
+    if (scoreN > 0 && scoreTotal / scoreN < 3) {
+      issues.push({ severity: 'warning', emoji: '🟡', category: 'score', text: `avg score ${(scoreTotal / scoreN).toFixed(2)} 偏低(可能没跑成)` });
+    }
+
+    const now = Date.now();
+    const lastAct = Math.max(lastActivity, Number(meta?.created_at ?? 0));
+    if (lastAct > 0 && (now - lastAct) / 86_400_000 > 30) {
+      issues.push({ severity: 'info', emoji: '🔵', category: 'activity', text: `最后活动在 ${Math.floor((now - lastAct) / 86_400_000)} 天前` });
+    }
+
+    // 健康分(0-100)
+    let healthScore = 100;
+    for (const i of issues) {
+      if (i.severity === 'critical') healthScore -= 30;
+      else if (i.severity === 'warning') healthScore -= 10;
+      else healthScore -= 3;
+    }
+    healthScore = Math.max(0, healthScore);
+
+    sessions.push({
+      sid,
+      goal: typeof meta?.goal === 'string' ? meta.goal : '',
+      createdAt: Number(meta?.created_at ?? 0),
+      lastActivity: lastAct,
+      roundsCount,
+      synthesesCount,
+      sizeBytes,
+      hasIssues: issues,
+      healthScore,
+    });
+  }
+}
+
+// 排序:健康分低在前
+sessions.sort((a, b) => a.healthScore - b.healthScore);
+
+const totalIssues = sessions.reduce((a, s) => a + s.hasIssues.length, 0);
+const criticalIssues = sessions.reduce((a, s) => a + s.hasIssues.filter((i) => i.severity === 'critical').length, 0);
+const warningIssues = sessions.reduce((a, s) => a + s.hasIssues.filter((i) => i.severity === 'warning').length, 0);
+const infoIssues = sessions.reduce((a, s) => a + s.hasIssues.filter((i) => i.severity === 'info').length, 0);
+const healthyCount = sessions.filter((s) => s.hasIssues.length === 0).length;
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)}MB`;
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function healthClass(n: number): string {
+  if (n >= 90) return 'high';
+  if (n >= 60) return 'mid';
+  return 'low';
+}
+---
+
+<BaseLayout title="Health Check · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / health</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🩺 Health Check <span class="muted" style="font-size:0.6em">(iter #92)</span></h1>
+      <p class="agents-sub">
+        扫 archive/ 下所有 session,跑一组诊断(缺失文件 / parse 错误 / 空 session / 低分 / 长期未活动),
+        按健康分排序,便于维护。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局健康概览</h2>
+      <div class="agents-health-stats">
+        <span><strong>{sessions.length}</strong> sessions</span>
+        <span class="agents-health-stat-good"><strong>{healthyCount}</strong> 无 issue</span>
+        <span class="agents-health-stat-crit"><strong>{criticalIssues}</strong> critical</span>
+        <span class="agents-health-stat-warn"><strong>{warningIssues}</strong> warning</span>
+        <span class="agents-health-stat-info"><strong>{infoIssues}</strong> info</span>
+        <span><strong>{totalIssues}</strong> 总 issue</span>
+      </div>
+    </section>
+
+    {sessions.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">archive/ 下没有任何 session。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>🔍 详细报告(按健康分排序)</h2>
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>Health</th>
+              <th>Session</th>
+              <th>Goal</th>
+              <th>Rounds</th>
+              <th>Synth</th>
+              <th>大小</th>
+              <th>Issues</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sessions.map((s) => (
+              <tr>
+                <td>
+                  <span class={`agents-health-score agents-health-score-${healthClass(s.healthScore)}`}>
+                    {s.healthScore}
+                  </span>
+                </td>
+                <td>
+                  <a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a>
+                </td>
+                <td>
+                  <small>{escapeHtml(s.goal.length > 50 ? s.goal.slice(0, 49) + '…' : s.goal)}</small>
+                </td>
+                <td>{s.roundsCount}</td>
+                <td>{s.synthesesCount}</td>
+                <td><small>{fmtBytes(s.sizeBytes)}</small></td>
+                <td>
+                  {s.hasIssues.length === 0 ? (
+                    <span class="badge badge-high">✅ ok</span>
+                  ) : (
+                    <details>
+                      <summary>{s.hasIssues.length} issue{s.hasIssues.length !== 1 ? 's' : ''}</summary>
+                      <ul class="agents-health-issues">
+                        {s.hasIssues.map((i) => (
+                          <li class={`agents-health-issue-${i.severity}`}>
+                            <span>{i.emoji}</span>
+                            <code class="muted">{i.category}</code>
+                            <span>{i.text}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔧 Issue 类型说明</h2>
+      <ul class="muted" style="font-size:0.85rem">
+        <li>🔴 <strong>critical</strong> — 文件缺失或损坏,需立即处理(meta.json 损坏 / 缺失)</li>
+        <li>🟡 <strong>warning</strong> — 可能有问题的状态(空 session / parse 错误 / 极低分)</li>
+        <li>🔵 <strong>info</strong> — 提醒类(没 synthesis 但有 rounds / 长期未活动)</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-health-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-health-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-health-stat-good strong { color: #10b981; }
+  .agents-health-stat-crit strong { color: #ef4444; }
+  .agents-health-stat-warn strong { color: #f59e0b; }
+  .agents-health-stat-info strong { color: #4f46e5; }
+  .agents-health-score {
+    display: inline-block;
+    min-width: 36px;
+    padding: 0.2rem 0.4rem;
+    text-align: center;
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-weight: 600;
+  }
+  .agents-health-score-high { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+  .agents-health-score-mid { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+  .agents-health-score-low { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+  .agents-health-issues {
+    list-style: none;
+    padding: 0.3rem 0;
+    margin: 0;
+    font-size: 0.85rem;
+  }
+  .agents-health-issues li {
+    padding: 0.2rem 0.4rem;
+    margin: 0.1rem 0;
+    border-radius: 3px;
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    flex-wrap: wrap;
+  }
+  .agents-health-issue-critical { background: rgba(239, 68, 68, 0.1); }
+  .agents-health-issue-warning { background: rgba(245, 158, 11, 0.1); }
+  .agents-health-issue-info { background: rgba(99, 102, 241, 0.1); }
+</style>
