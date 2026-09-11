@@ -1,0 +1,253 @@
+---
+// /agents/session-aging-curve.astro — iter #252:session aging curve
+//
+// 每个 session 创建一个 mtime(基于最新 round),分析其"年龄" vs avg score:
+//   - 按月分桶(0-7d / 7-30d / 30-90d / 90d+)
+//   - 各时间段的 avg first / avg final / avg gain / avg rounds
+// 看系统是否有学习曲线
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Session {
+  sid: string;
+  ageMs: number;
+  ageDays: number;
+  bucket: string;
+  rounds: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+  tokens: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Session[] = [];
+
+const BUCKETS = [
+  { label: '< 7 days', minDays: 0, maxDays: 7 },
+  { label: '7-30 days', minDays: 7, maxDays: 30 },
+  { label: '30-90 days', minDays: 30, maxDays: 90 },
+  { label: '90-180 days', minDays: 90, maxDays: 180 },
+  { label: '> 180 days', minDays: 180, maxDays: 99999 },
+];
+
+function bucketize(days: number): string {
+  for (const b of BUCKETS) {
+    if (days >= b.minDays && days < b.maxDays) return b.label;
+  }
+  return 'unknown';
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+
+    let latestMtime = 0;
+    let firstScore = 0;
+    let finalScore = 0;
+    let tokens = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const fp = join(rd, `round_${rNum[i]}.json`);
+        const st = await stat(fp);
+        if (st.mtimeMs > latestMtime) latestMtime = st.mtimeMs;
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        tokens += r.feedback?.total_tokens ?? 0;
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          if (i === rNum.length - 1) finalScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    if (latestMtime === 0) continue;
+    const ageMs = Date.now() - latestMtime;
+    const ageDays = ageMs / (24 * 3600 * 1000);
+    sessions.push({
+      sid,
+      ageMs,
+      ageDays,
+      bucket: bucketize(ageDays),
+      rounds: rNum.length,
+      firstScore,
+      finalScore,
+      gain: finalScore - firstScore,
+      tokens,
+    });
+  }
+}
+
+// 按 bucket 聚合
+const bucketStats = new Map<string, Session[]>();
+for (const s of sessions) {
+  if (!bucketStats.has(s.bucket)) bucketStats.set(s.bucket, []);
+  bucketStats.get(s.bucket)!.push(s);
+}
+
+const rows = BUCKETS.map((b) => {
+  const arr = bucketStats.get(b.label) ?? [];
+  const count = arr.length;
+  const avgFirst = arr.length > 0 ? arr.reduce((s, x) => s + x.firstScore, 0) / arr.length : 0;
+  const avgFinal = arr.length > 0 ? arr.reduce((s, x) => s + x.finalScore, 0) / arr.length : 0;
+  const avgGain = arr.length > 0 ? arr.reduce((s, x) => s + x.gain, 0) / arr.length : 0;
+  const avgRounds = arr.length > 0 ? arr.reduce((s, x) => s + x.rounds, 0) / arr.length : 0;
+  const avgTokens = arr.length > 0 ? arr.reduce((s, x) => s + x.tokens, 0) / arr.length : 0;
+  return { label: b.label, count, avgFirst, avgFinal, avgGain, avgRounds, avgTokens };
+});
+
+// Pearson correlation:age vs gain / final
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length < 2) return 0;
+  const n = xs.length;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? 0 : num / denom;
+}
+
+const ages = sessions.map((s) => s.ageDays);
+const gains = sessions.map((s) => s.gain);
+const finals = sessions.map((s) => s.finalScore);
+const corrAgeGain = pearson(ages, gains);
+const corrAgeFinal = pearson(ages, finals);
+
+const total = sessions.length;
+const maxCount = Math.max(...rows.map((r) => r.count), 1);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Session Aging Curve · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-aging-curve</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏳ Session Aging Curve <span class="muted" style="font-size:0.6em">(iter #252)</span></h1>
+      <p class="agents-sub">
+        按 session 最新 round mtime 距离今天的天数分桶,看不同年龄段的产出差异。
+        是否新 session 比旧 session 更好?(学习曲线 / 系统漂移)
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sac-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>pearson(age, gain): <strong style={`color:${Math.abs(corrAgeGain) > 0.3 ? (corrAgeGain > 0 ? '#10b981' : '#ef4444') : '#999'}`}>{corrAgeGain.toFixed(3)}</strong></span>
+        <span>pearson(age, final): <strong style={`color:${Math.abs(corrAgeFinal) > 0.3 ? (corrAgeFinal > 0 ? '#10b981' : '#ef4444') : '#999'}`}>{corrAgeFinal.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 按 age bucket 聚合</h2>
+      <pre class="agents-sac-flow">{rows.map((r) => {
+        return `${r.label.padEnd(14)} ${bar(r.count, maxCount, 18)}  ${r.count}  first=${r.avgFirst.toFixed(2)} final=${r.avgFinal.toFixed(2)} Δ=${r.avgGain >= 0 ? '+' : ''}${r.avgGain.toFixed(2)} rounds=${r.avgRounds.toFixed(1)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>bucket</th><th>count</th><th>avg first</th><th>avg final</th><th>avg gain</th><th>avg rounds</th><th>avg tokens</th></tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr>
+              <td><strong>{r.label}</strong></td>
+              <td>{r.count}</td>
+              <td>{r.avgFirst.toFixed(2)}</td>
+              <td>{r.avgFinal.toFixed(2)}</td>
+              <td><strong style={`color:${r.avgGain >= 0 ? '#10b981' : '#ef4444'}`}>{r.avgGain >= 0 ? '+' : ''}{r.avgGain.toFixed(2)}</strong></td>
+              <td>{r.avgRounds.toFixed(1)}</td>
+              <td>{fmtTok(r.avgTokens)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>pearson(age, gain) &lt; -0.3 = 新 session 增益更大(系统在进步)</li>
+        <li>pearson(age, gain) &gt; +0.3 = 老 session 增益更大(早期质量高 / 当前模型退化)</li>
+        <li>|pearson| &lt; 0.3 = 无明显趋势</li>
+        <li>对照 <a href={`${base}/agents/milestone-250/`}>Milestone 250</a> 看 12 周趋势</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sac-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sac-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sac-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
