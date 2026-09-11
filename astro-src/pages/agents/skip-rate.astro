@@ -1,0 +1,237 @@
+---
+// /agents/skip-rate.astro — iter #208:gate skip rate + outcome distribution
+//
+// Gate 决定 proposals 的去向:
+//   - promoted(通过)
+//   - rejected(拒绝)
+//   - deferred(延后到下一轮)
+// 各 round 的比例分布
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface GateOutcome {
+  sid: string;
+  roundIdx: number;
+  promoted: number;
+  rejected: number;
+  deferred: number;
+  other: number;
+  total: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const records: GateOutcome[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        let promoted = 0, rejected = 0, deferred = 0, other = 0;
+        for (const gp of r.gate?.proposals ?? []) {
+          const cat = gp.category ?? 'unknown';
+          if (cat === 'promoted') promoted += 1;
+          else if (cat === 'rejected') rejected += 1;
+          else if (cat === 'deferred') deferred += 1;
+          else other += 1;
+        }
+        const total = promoted + rejected + deferred + other;
+        if (total === 0) continue;
+        records.push({ sid, roundIdx: ri, promoted, rejected, deferred, other, total });
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const totalRounds = records.length;
+const totalPromoted = records.reduce((s, r) => s + r.promoted, 0);
+const totalRejected = records.reduce((s, r) => s + r.rejected, 0);
+const totalDeferred = records.reduce((s, r) => s + r.deferred, 0);
+const totalOther = records.reduce((s, r) => s + r.other, 0);
+const totalAll = totalPromoted + totalRejected + totalDeferred + totalOther;
+
+const promoteRate = totalAll > 0 ? (totalPromoted / totalAll) * 100 : 0;
+const rejectRate = totalAll > 0 ? (totalRejected / totalAll) * 100 : 0;
+const deferRate = totalAll > 0 ? (totalDeferred / totalAll) * 100 : 0;
+const otherRate = totalAll > 0 ? (totalOther / totalAll) * 100 : 0;
+
+// 哪些 session 偏 skip
+const sessionMap = new Map<string, { p: number; r: number; d: number; o: number; t: number }>();
+for (const r of records) {
+  const cur = sessionMap.get(r.sid) ?? { p: 0, r: 0, d: 0, o: 0, t: 0 };
+  cur.p += r.promoted;
+  cur.r += r.rejected;
+  cur.d += r.deferred;
+  cur.o += r.other;
+  cur.t += r.total;
+  sessionMap.set(r.sid, cur);
+}
+const sessionDeferRate = [...sessionMap.entries()].map(([sid, v]) => ({
+  sid,
+  deferRate: v.t > 0 ? (v.d / v.t) * 100 : 0,
+  promoteRate: v.t > 0 ? (v.p / v.t) * 100 : 0,
+  rejectRate: v.t > 0 ? (v.r / v.t) * 100 : 0,
+  total: v.t,
+})).filter((s) => s.total >= 5);
+
+const topDefer = [...sessionDeferRate].sort((a, b) => b.deferRate - a.deferRate).slice(0, 10);
+const topReject = [...sessionDeferRate].sort((a, b) => b.rejectRate - a.rejectRate).slice(0, 10);
+const topPromote = [...sessionDeferRate].sort((a, b) => b.promoteRate - a.promoteRate).slice(0, 10);
+
+function bar(pct: number, width = 30): string {
+  const filled = Math.round((pct / 100) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Gate Skip Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / skip-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🚦 Gate Skip Rate <span class="muted" style="font-size:0.6em">(iter #208)</span></h1>
+      <p class="agents-sub">
+        Gate 对 proposals 的 4 种结局(promoted / rejected / deferred / other)分布。
+        defer = 延后到下一轮再看。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sr-globals">
+        <span>总 rounds: <strong>{totalRounds}</strong></span>
+        <span>总 proposals: <strong>{totalAll}</strong></span>
+        <span>promoted: <strong style="color:#10b981">{promoteRate.toFixed(1)}%</strong></span>
+        <span>rejected: <strong style="color:#ef4444">{rejectRate.toFixed(1)}%</strong></span>
+        <span>deferred: <strong style="color:#f59e0b">{deferRate.toFixed(1)}%</strong></span>
+        <span>other: <strong>{otherRate.toFixed(1)}%</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 分布条</h2>
+      <pre class="agents-sr-flow">{`promoted  ${bar(promoteRate)}  ${promoteRate.toFixed(1)}% (${totalPromoted})
+rejected  ${bar(rejectRate)}  ${rejectRate.toFixed(1)}% (${totalRejected})
+deferred  ${bar(deferRate)}  ${deferRate.toFixed(1)}% (${totalDeferred})
+other     ${bar(otherRate)}  ${otherRate.toFixed(1)}% (${totalOther})`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐢 top 10 高 defer sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>defer %</th><th>promote %</th><th>reject %</th><th>total</th></tr>
+        </thead>
+        <tbody>
+          {topDefer.map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td><strong style="color:#f59e0b">{s.deferRate.toFixed(0)}%</strong></td>
+              <td>{s.promoteRate.toFixed(0)}%</td>
+              <td>{s.rejectRate.toFixed(0)}%</td>
+              <td>{s.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>❌ top 10 高 reject sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>reject %</th><th>promote %</th><th>defer %</th><th>total</th></tr>
+        </thead>
+        <tbody>
+          {topReject.map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td><strong style="color:#ef4444">{s.rejectRate.toFixed(0)}%</strong></td>
+              <td>{s.promoteRate.toFixed(0)}%</td>
+              <td>{s.deferRate.toFixed(0)}%</td>
+              <td>{s.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌟 top 10 高 promote sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>promote %</th><th>defer %</th><th>reject %</th><th>total</th></tr>
+        </thead>
+        <tbody>
+          {topPromote.map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td><strong style="color:#10b981">{s.promoteRate.toFixed(0)}%</strong></td>
+              <td>{s.deferRate.toFixed(0)}%</td>
+              <td>{s.rejectRate.toFixed(0)}%</td>
+              <td>{s.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>defer % 高 = gate 谨慎,留待下轮观察</li>
+        <li>reject % 高 = gate 严苛</li>
+        <li>promote % 高 = gate 宽松</li>
+        <li>对照 <a href={`${base}/agents/promotion-funnel/`}>Promotion Funnel</a> 看最终转化</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
