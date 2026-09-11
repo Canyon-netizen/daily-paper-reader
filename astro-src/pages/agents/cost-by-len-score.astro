@@ -1,0 +1,197 @@
+---
+// /agents/cost-by-len-score.astro — iter #312:cost × length × score 3-axis heatmap
+//
+// 3 维 heatmap: goal length bucket × final score bucket = avg cost
+//   - 看 cost 是否与长度 / 分数相关
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+const LENGTH_BUCKETS = [
+  { label: '<30',   min: 0,   max: 30 },
+  { label: '30-80', min: 30,  max: 80 },
+  { label: '80-150',min: 80,  max: 150 },
+  { label: '150-300',min: 150,max: 300 },
+  { label: '300+',  min: 300, max: 99999 },
+];
+
+const SCORE_BUCKETS = [
+  { label: '<5',     min: 0, max: 5 },
+  { label: '5-6',    min: 5, max: 6 },
+  { label: '6-7',    min: 6, max: 7 },
+  { label: '7-8',    min: 7, max: 8 },
+  { label: '8+',     min: 8, max: 99 },
+];
+
+const costMatrix: number[][] = SCORE_BUCKETS.map(() => LENGTH_BUCKETS.map(() => 0));
+const countMatrix: number[][] = SCORE_BUCKETS.map(() => LENGTH_BUCKETS.map(() => 0));
+
+const root = join(process.cwd(), 'archive');
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const len = goal.length;
+
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+    let totalCost = 0;
+    let finalScore = 0;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        totalCost += (tokens / 1_000_000) * SONNET_PRICE;
+        if (rn === rNums[rNums.length - 1]) {
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          if (arr.length > 0) finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+        }
+      } catch (e) { /* */ }
+    }
+
+    let lbIdx = -1, sbIdx = -1;
+    for (let i = 0; i < LENGTH_BUCKETS.length; i++) {
+      if (len >= LENGTH_BUCKETS[i].min && len < LENGTH_BUCKETS[i].max) { lbIdx = i; break; }
+    }
+    for (let i = 0; i < SCORE_BUCKETS.length; i++) {
+      if (finalScore >= SCORE_BUCKETS[i].min && finalScore < SCORE_BUCKETS[i].max) { sbIdx = i; break; }
+    }
+    if (lbIdx >= 0 && sbIdx >= 0) {
+      costMatrix[sbIdx][lbIdx] += totalCost;
+      countMatrix[sbIdx][lbIdx] += 1;
+    }
+  }
+}
+
+const avgMatrix: number[][] = costMatrix.map((row, i) => row.map((c, j) => countMatrix[i][j] > 0 ? c / countMatrix[i][j] : 0));
+const max = Math.max(...avgMatrix.flat(), 1);
+
+function heat(c: number): string {
+  if (c === 0) return '·';
+  const ratio = c / max;
+  if (ratio >= 0.75) return '🟥';
+  if (ratio >= 0.5) return '🟧';
+  if (ratio >= 0.25) return '🟨';
+  return '🟩';
+}
+function intensity(c: number): string {
+  if (c === 0) return '·';
+  const ratio = c / max;
+  if (ratio >= 0.85) return '█';
+  if (ratio >= 0.66) return '▓';
+  if (ratio >= 0.45) return '▒';
+  if (ratio >= 0.25) return '░';
+  return '·';
+}
+---
+
+<BaseLayout title="Cost by Length × Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-by-len-score</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💎 Cost by Length × Score <span class="muted" style="font-size:0.6em">(iter #312)</span></h1>
+      <p class="agents-sub">
+        goal length × final score = avg cost 的 2D heatmap。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>💎 avg cost heatmap (emoji)</h2>
+      <pre class="agents-cbls-flow">
+{'         ' + LENGTH_BUCKETS.map((b) => b.label.padStart(8)).join('')}
+{avgMatrix.map((row, i) => (
+  `${SCORE_BUCKETS[i].label.padStart(8)} ` + row.map((c, j) => `${heat(c)}${c > 0 ? c.toFixed(2).padStart(6) : '   ·  '}`).join('')
+)).join('\n')}
+      </pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💎 avg cost heatmap (ascii)</h2>
+      <pre class="agents-cbls-flow">
+{'         ' + LENGTH_BUCKETS.map((b) => b.label.padStart(6)).join(' ')}
+{avgMatrix.map((row, i) => (
+  `${SCORE_BUCKETS[i].label.padStart(8)} ` + row.map((c) => intensity(c).padStart(7)).join(' ')
+)).join('\n')}
+      </pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>score \ len</th>
+            {LENGTH_BUCKETS.map((b) => <th>{b.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {avgMatrix.map((row, i) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{SCORE_BUCKETS[i].label}</strong></td>
+              {row.map((c, j) => (
+                <td>{c > 0 ? `$${c.toFixed(3)} (n=${countMatrix[i][j]})` : <span class="muted">—</span>}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>右上 = 长 goal + 高 score 通常 cost 高(付出有回报)</li>
+        <li>左下 = 短 goal + 低 score 通常 cost 低(快速放弃)</li>
+        <li>左上 = 短 goal + 高 score = 性价比最高</li>
+        <li>对照 <a href={`${base}/agents/cost-by-goal-type/`}>Cost by Goal Type</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cbls-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
