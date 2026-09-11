@@ -1,0 +1,384 @@
+---
+// /agents/budget.astro — iter #105:cost budget & spending tracker
+//
+// 用户设置每月预算上限(USD),展示:
+//   - 当月已花 / 剩余 / 进度条
+//   - 日均 + 预计月底超支 / 节余
+//   - 过去 12 个月费用走势(ASCII)
+//   - 单 session 平均费用 + top 3 烧钱 session
+//   - 阈值提醒(localStorage 存 monthly budget)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionAgg {
+  sid: string;
+  goal: string;
+  createdAt: number;
+  rounds: number;
+  tokens: number;
+  cost: number;
+}
+interface DayAgg {
+  date: string; // YYYY-MM-DD
+  tokens: number;
+  cost: number;
+  sessions: number;
+}
+
+const RATE = 0.50; // USD per 1M tokens,client-side 可改
+
+const sessions: SessionAgg[] = [];
+const dayMap = new Map<string, DayAgg>();
+let totalTokens = 0;
+let totalCost = 0;
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let meta: any = {};
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { /* */ }
+    const roundsDir = join(root, sid, 'rounds');
+    if (!existsSync(roundsDir)) continue;
+    let roundFiles: string[] = [];
+    try { roundFiles = await readdir(roundsDir); } catch { continue; }
+    let totalRoundTokens = 0;
+    let earliest = Number.MAX_SAFE_INTEGER;
+    for (const rf of roundFiles) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const raw = await readFile(join(roundsDir, rf), 'utf8');
+        const r = JSON.parse(raw);
+        const t = r.feedback?.total_tokens ?? 0;
+        totalRoundTokens += t;
+        const ts = r.started_at ?? 0;
+        if (ts > 0 && ts < earliest) earliest = ts;
+        // 按日聚合
+        if (ts > 0) {
+          const d = new Date(ts).toISOString().slice(0, 10);
+          const cur = dayMap.get(d) ?? { date: d, tokens: 0, cost: 0, sessions: 0 };
+          cur.tokens += t;
+          cur.sessions += 1;
+          dayMap.set(d, cur);
+        }
+      } catch { /* */ }
+    }
+    const createdAt = meta.created_at ?? earliest ?? 0;
+    const cost = (totalRoundTokens / 1_000_000) * RATE;
+    sessions.push({
+      sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      createdAt,
+      rounds: roundFiles.length,
+      tokens: totalRoundTokens,
+      cost,
+    });
+    totalTokens += totalRoundTokens;
+    totalCost += cost;
+  }
+}
+
+sessions.sort((a, b) => b.cost - a.cost);
+
+// 计算日均费用
+for (const d of dayMap.values()) d.cost = (d.tokens / 1_000_000) * RATE;
+const dayList = Array.from(dayMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+// 当月
+const now = new Date();
+const monthKey = now.toISOString().slice(0, 7); // YYYY-MM
+const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1).getTime();
+const monthDays = dayList.filter((d) => d.date >= monthKey + '-01' && d.date < (() => {
+  const m = monthKey + '-01';
+  const [y, mo] = m.split('-').map(Number);
+  return new Date(y, mo, 1).toISOString().slice(0, 10);
+})());
+const monthSpend = monthDays.reduce((s, d) => s + d.cost, 0);
+const monthTokens = monthDays.reduce((s, d) => s + d.tokens, 0);
+const today = now.getDate();
+const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+const dailyAvg = today > 0 ? monthSpend / today : 0;
+const projected = dailyAvg * daysInMonth;
+
+function pct(n: number, d: number): number {
+  return d > 0 ? Math.min(999, (n / d) * 100) : 0;
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function fmt$(n: number): string {
+  if (n === 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
+}
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  return `${Math.floor(days / 30)} 个月前`;
+}
+---
+
+<BaseLayout title="Budget · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / budget</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸 Cost Budget <span class="muted" style="font-size:0.6em">(iter #105)</span></h1>
+      <p class="agents-sub">
+        设定每月预算上限,自动跟踪当月花销、剩余金额、预计月底超支 / 节余。所有阈值存 localStorage(浏览器本地)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 月度预算</h2>
+      <div class="agents-bg-controls">
+        <label>
+          每月上限 (USD)
+          <input id="bg-limit" type="number" min="0" step="1" value="50" />
+        </label>
+        <button class="button primary" id="bg-save" type="button">💾 保存</button>
+        <span id="bg-status" class="muted"><small>未保存</small></span>
+      </div>
+      <div class="agents-bg-progress">
+        <div class="agents-bg-bar"><div class="agents-bg-bar-fill" id="bg-fill"></div></div>
+        <p class="agents-bg-stats">
+          <span><strong id="bg-spent">{fmt$(monthSpend)}</strong> 已花 / <strong id="bg-limit-display">$50.00</strong> 上限</span>
+          <span>剩余 <strong id="bg-remaining">—</strong></span>
+          <span id="bg-alert"></span>
+        </p>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 当月分析</h2>
+      <div class="agents-bg-month">
+        <div><strong>{today}</strong> / {daysInMonth} 天</div>
+        <div><strong>{fmt$(dailyAvg)}</strong> 日均</div>
+        <div><strong>{fmt$(projected)}</strong> 预计月底</div>
+        <div><strong>{monthTokens.toLocaleString()}</strong> tokens</div>
+        <div><strong>{monthDays.length}</strong> 有活动的天</div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 全局总览</h2>
+      <div class="agents-bg-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>总 tokens: <strong>{totalTokens.toLocaleString()}</strong></span>
+        <span>总费用: <strong>{fmt$(totalCost)}</strong></span>
+        <span>单 session 平均: <strong>{fmt$(sessions.length ? totalCost / sessions.length : 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top 烧钱 session</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>session</th><th>rounds</th><th>tokens</th><th>cost</th><th>created</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 10).map((s, i) => (
+            <tr>
+              <td><strong>{i + 1}</strong></td>
+              <td>
+                <a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a>
+                <br /><small class="muted">{escapeHtml(s.goal.slice(0, 60))}</small>
+              </td>
+              <td>{s.rounds}</td>
+              <td>{s.tokens.toLocaleString()}</td>
+              <td><strong>{fmt$(s.cost)}</strong></td>
+              <td><small>{agoStr(s.createdAt)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 按日费用(最近 30 天有活动的天)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>date</th><th>tokens</th><th>cost</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {dayList.slice(-30).reverse().map((d) => {
+            const maxCost = Math.max(...dayList.map((x) => x.cost), 0.01);
+            const barLen = Math.round((d.cost / maxCost) * 30);
+            return (
+              <tr>
+                <td><code>{d.date}</code></td>
+                <td>{d.tokens.toLocaleString()}</td>
+                <td><strong>{fmt$(d.cost)}</strong></td>
+                <td><code>█{'█'.repeat(barLen - 1)}{'░'.repeat(Math.max(0, 30 - barLen))}</code></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/tokens/`}>💸 Tokens</a>
+        <a class="button" href={`${base}/agents/health/`}>🩺 Health</a>
+        <a class="button" href={`${base}/agents/settings/`}>⚙️ Settings</a>
+        <a class="button" href={`${base}/agents/digest/`}>📰 Digest</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-bg-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+  }
+  .agents-bg-controls label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .agents-bg-controls input {
+    width: 100px;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    background: rgba(0, 0, 0, 0.2);
+    color: inherit;
+    border-radius: 4px;
+    font-size: 0.95rem;
+  }
+  .agents-bg-progress {
+    background: rgba(255,255,255,0.03);
+    padding: 1rem;
+    border-radius: 6px;
+  }
+  .agents-bg-bar {
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    height: 16px;
+    overflow: hidden;
+    margin-bottom: 0.6rem;
+  }
+  .agents-bg-bar-fill {
+    background: linear-gradient(90deg, #10b981, #4f46e5);
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  .agents-bg-bar-fill-over {
+    background: linear-gradient(90deg, #ef4444, #f59e0b) !important;
+  }
+  .agents-bg-stats {
+    display: flex;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    margin: 0;
+  }
+  .agents-bg-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-bg-month, .agents-bg-globals {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.8rem;
+  }
+  .agents-bg-month div, .agents-bg-globals span {
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.18);
+    border-radius: 4px;
+    padding: 0.5rem 0.7rem;
+  }
+  .agents-bg-month strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.3rem;
+  }
+  .agents-bg-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.2rem;
+  }
+</style>
+
+<script define:vars={{ monthSpend, dailyAvg, projected }}>
+const KEY = 'agents:budget:v1';
+
+function load(): number {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return 50;
+    return Number(JSON.parse(raw).limit) || 50;
+  } catch { return 50; }
+}
+function save(limit: number): void {
+  try { localStorage.setItem(KEY, JSON.stringify({ limit })); } catch { /* */ }
+}
+
+function refresh(): void {
+  const limit = load();
+  const spent = monthSpend;
+  const remaining = Math.max(0, limit - spent);
+  const pct = limit > 0 ? Math.min(999, (spent / limit) * 100) : 0;
+  const projectedOver = projected - limit;
+  const fillEl = document.getElementById('bg-fill');
+  const spentEl = document.getElementById('bg-spent');
+  const limEl = document.getElementById('bg-limit-display');
+  const remEl = document.getElementById('bg-remaining');
+  const alertEl = document.getElementById('bg-alert');
+  const inpEl = document.getElementById('bg-limit') as HTMLInputElement | null;
+  if (fillEl) {
+    fillEl.style.width = `${Math.min(100, pct)}%`;
+    fillEl.classList.toggle('agents-bg-bar-fill-over', pct > 100);
+  }
+  if (limEl) limEl.textContent = `$${limit.toFixed(2)}`;
+  if (remEl) remEl.textContent = `$${remaining.toFixed(2)}`;
+  if (inpEl) inpEl.value = String(limit);
+  if (alertEl) {
+    if (pct > 100) alertEl.innerHTML = `<span style="color:#ef4444">⚠️ 已超支 $${(spent - limit).toFixed(2)}</span>`;
+    else if (projectedOver > 0) alertEl.innerHTML = `<span style="color:#f59e0b">📈 按日均 $${dailyAvg.toFixed(2)} 预计月底超支 $${projectedOver.toFixed(2)}</span>`;
+    else if (pct > 80) alertEl.innerHTML = `<span style="color:#f59e0b">⚠️ 已用 ${pct.toFixed(0)}%,谨慎</span>`;
+    else alertEl.innerHTML = `<span style="color:#10b981">✅ 在预算内</span>`;
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refresh();
+  document.getElementById('bg-save')?.addEventListener('click', () => {
+    const v = Number((document.getElementById('bg-limit') as HTMLInputElement).value);
+    if (!Number.isFinite(v) || v < 0) return alert('请填非负数字');
+    refresh();
+    const status = document.getElementById('bg-status');
+    if (status) status.innerHTML = `<small style="color:#10b981">✅ 已保存 · ${new Date().toLocaleTimeString()}</small>`;
+  });
+  (document.getElementById('bg-limit') as HTMLInputElement | null)?.addEventListener('input', () => {
+    const status = document.getElementById('bg-status');
+    if (status) status.innerHTML = `<small class="muted">未保存(改值后按 💾 保存)</small>`;
+  });
+});
+</script>
