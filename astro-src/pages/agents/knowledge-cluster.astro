@@ -1,0 +1,193 @@
+---
+// /agents/knowledge-cluster.astro — iter #133:session clustering by goal
+//
+// 基于 iter #132 的 cosine 相似度做简单 union-find 聚类:
+//   - 阈值 0.15:任何 pair 相似 → 同一 cluster
+//   - 输出 cluster 大小、代表 session(最长 rounds)、成员列表
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Session { sid: string; goal: string; rounds: number; vector: Record<string, number>; norm: number; }
+
+const sessions: Session[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const meta = JSON.parse(await readFile(mp, 'utf8'));
+      const goal: string = meta.goal ?? '';
+      if (!goal || goal.length < 5) continue;
+      let rounds = 0;
+      const rd = join(root, sid, 'rounds');
+      if (existsSync(rd)) {
+        const rfs = await readdir(rd).catch(() => []);
+        rounds = rfs.filter((f) => /^round_\d+\.json$/.test(f)).length;
+      }
+      const tokens = goal.toLowerCase().replace(/[^\w\s一-鿿]/g, ' ').split(/\s+/).filter((t) => t.length >= 3);
+      const freq: Record<string, number> = {};
+      for (const t of tokens) freq[t] = (freq[t] ?? 0) + 1;
+      const norm = Math.sqrt(Object.values(freq).reduce((a, b) => a + b * b, 0));
+      sessions.push({ sid, goal, rounds, vector: freq, norm });
+    } catch (e) { /* */ }
+  }
+}
+
+// Union-find
+const parent: Record<string, string> = {};
+for (const s of sessions) parent[s.sid] = s.sid;
+function find(x: string): string {
+  if (parent[x] !== x) parent[x] = find(parent[x]);
+  return parent[x];
+}
+function union(a: string, b: string): void {
+  const ra = find(a), rb = find(b);
+  if (ra !== rb) parent[ra] = rb;
+}
+
+function cosine(a: Session, b: Session): number {
+  if (a.norm === 0 || b.norm === 0) return 0;
+  let dot = 0;
+  for (const k of Object.keys(a.vector)) {
+    if (k in b.vector) dot += a.vector[k] * b.vector[k];
+  }
+  return dot / (a.norm * b.norm);
+}
+
+const cap = Math.min(sessions.length, 200);
+const THRESHOLD = 0.15;
+for (let i = 0; i < cap; i++) {
+  for (let j = i + 1; j < cap; j++) {
+    const sim = cosine(sessions[i], sessions[j]);
+    if (sim >= THRESHOLD) union(sessions[i].sid, sessions[j].sid);
+  }
+}
+
+// Group by root
+const clusters: Record<string, Session[]> = {};
+for (const s of sessions) {
+  const r = find(s.sid);
+  if (!clusters[r]) clusters[r] = [];
+  clusters[r].push(s);
+}
+
+const sortedClusters = Object.entries(clusters)
+  .map(([root, members]) => ({
+    root,
+    members: members.sort((a, b) => b.rounds - a.rounds),
+    size: members.length,
+    totalRounds: members.reduce((s, m) => s + m.rounds, 0),
+    representative: members.reduce((best, m) => m.rounds > best.rounds ? m : best, members[0]),
+  }))
+  .sort((a, b) => b.size - a.size || b.totalRounds - a.totalRounds);
+
+const totalClusters = sortedClusters.length;
+const singletons = sortedClusters.filter((c) => c.size === 1).length;
+const multiClusters = sortedClusters.filter((c) => c.size >= 2);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Knowledge Clusters · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / knowledge-cluster</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧠 Knowledge Clusters <span class="muted" style="font-size:0.6em">(iter #133)</span></h1>
+      <p class="agents-sub">
+        基于 goal 文本的 cosine 相似度 + union-find 聚类(阈值 ≥ 0.15)。
+        每个 cluster 是同一个研究主题下的多个 session,
+        代表 session = rounds 数最多的那个。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-kc-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>clusters: <strong>{totalClusters}</strong></span>
+        <span>单 session cluster: <strong>{singletons}</strong></span>
+        <span>多 session cluster: <strong>{multiClusters.length}</strong></span>
+        <span>最大 cluster: <strong>{Math.max(...sortedClusters.map((c) => c.size))}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🧠 Top clusters(按 size 倒序)</h2>
+      {sortedClusters.length === 0 ? (
+        <p class="muted">还没有 sessions。</p>
+      ) : (
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>size</th><th>代表 session</th><th>代表 goal</th><th>总 rounds</th><th>成员</th></tr>
+          </thead>
+          <tbody>
+            {sortedClusters.slice(0, 50).map((c) => (
+              <tr>
+                <td>
+                  <strong style={`color:${c.size >= 3 ? '#10b981' : c.size >= 2 ? '#3b82f6' : '#6b7280'}`}>{c.size}</strong>
+                </td>
+                <td>
+                  <a href={`${base}/agents/${c.representative.sid}/`}><code>{esc(c.representative.sid.slice(0, 14))}</code></a>
+                  <small class="muted">({c.representative.rounds}r)</small>
+                </td>
+                <td><small>{esc(c.representative.goal.slice(0, 60))}{c.representative.goal.length > 60 ? '…' : ''}</small></td>
+                <td>{c.totalRounds}</td>
+                <td>
+                  <details>
+                    <summary>{c.size === 1 ? '独自' : `${c.size} 个 session`}</summary>
+                    <ul style="margin:0.3rem 0;padding-left:1rem">
+                      {c.members.map((m) => (
+                        <li>
+                          <a href={`${base}/agents/${m.sid}/`}><code>{esc(m.sid.slice(0, 14))}</code></a>
+                          <small class="muted"> · {m.rounds}r · {esc(m.goal.slice(0, 40))}{m.goal.length > 40 ? '…' : ''}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 使用建议</h2>
+      <ul>
+        <li>size ≥ 3 的 cluster 是你的核心研究方向</li>
+        <li>看 cluster 内多个 session 的 goal,提取共同关键词作为下一步研究的 focus</li>
+        <li>把 cluster 视为"研究主题",在 <a href={`${base}/agents/capture/`}>Capture</a> 里做长期跟踪</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-kc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-kc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
