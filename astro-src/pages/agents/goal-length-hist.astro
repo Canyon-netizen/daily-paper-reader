@@ -1,0 +1,216 @@
+---
+// /agents/goal-length-hist.astro — iter #234:goal character length histogram
+//
+// 跨 session 看 goal 文本长度分布:
+//   - 字符数分桶
+//   - token 数分桶
+//   - mean / median / max
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const lengths: { sid: string; chars: number; tokens: number; goal: string }[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      if (!goal || goal.length < 3) continue;
+      lengths.push({
+        sid,
+        chars: goal.length,
+        tokens: goal.match(/\S+/g)?.length ?? 0,
+        goal,
+      });
+    } catch (e) { /* */ }
+  }
+}
+
+const total = lengths.length;
+if (total === 0) {
+  lengths.push({ sid: 'placeholder', chars: 0, tokens: 0, goal: 'placeholder' });
+}
+
+const charBuckets = [
+  { label: '< 20', min: 0, max: 20, count: 0 },
+  { label: '20-50', min: 20, max: 50, count: 0 },
+  { label: '50-100', min: 50, max: 100, count: 0 },
+  { label: '100-200', min: 100, max: 200, count: 0 },
+  { label: '200-400', min: 200, max: 400, count: 0 },
+  { label: '400-800', min: 400, max: 800, count: 0 },
+  { label: '> 800', min: 800, max: 99999, count: 0 },
+];
+
+const tokenBuckets = [
+  { label: '1-3 tokens', min: 1, max: 3, count: 0 },
+  { label: '4-8', min: 4, max: 8, count: 0 },
+  { label: '9-15', min: 9, max: 15, count: 0 },
+  { label: '16-30', min: 16, max: 30, count: 0 },
+  { label: '31-60', min: 31, max: 60, count: 0 },
+  { label: '> 60', min: 60, max: 99999, count: 0 },
+];
+
+for (const l of lengths) {
+  for (const b of charBuckets) {
+    if (l.chars >= b.min && l.chars < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+  for (const b of tokenBuckets) {
+    if (l.tokens >= b.min && l.tokens < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const real = lengths.filter((l) => l.sid !== 'placeholder');
+const charValues = real.map((l) => l.chars).sort((a, b) => a - b);
+const tokenValues = real.map((l) => l.tokens).sort((a, b) => a - b);
+
+const avgChars = real.length > 0 ? charValues.reduce((a, b) => a + b, 0) / real.length : 0;
+const medianChars = real.length > 0 ? charValues[Math.floor(real.length / 2)] : 0;
+const maxChars = real.length > 0 ? charValues[charValues.length - 1] : 0;
+
+const avgTokens = real.length > 0 ? tokenValues.reduce((a, b) => a + b, 0) / real.length : 0;
+const medianTokens = real.length > 0 ? tokenValues[Math.floor(real.length / 2)] : 0;
+
+const topLongest = [...real].sort((a, b) => b.chars - a.chars).slice(0, 10);
+const topShortest = [...real].filter((l) => l.chars > 0).sort((a, b) => a.chars - b.chars).slice(0, 10);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Length Histogram · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-length-hist</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Goal Length Histogram <span class="muted" style="font-size:0.6em">(iter #234)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 goal 文本字符数与 token 数的分布。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-glh-globals">
+        <span>总 goals: <strong>{real.length}</strong></span>
+        <span>avg chars: <strong>{avgChars.toFixed(0)}</strong></span>
+        <span>median chars: <strong>{medianChars}</strong></span>
+        <span>max chars: <strong>{maxChars}</strong></span>
+        <span>avg tokens: <strong>{avgTokens.toFixed(1)}</strong></span>
+        <span>median tokens: <strong>{medianTokens}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 字符数分布</h2>
+      <pre class="agents-glh-flow">{charBuckets.map((b) => {
+        const max = Math.max(...charBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(12)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 token 数分布</h2>
+      <pre class="agents-glh-flow">{tokenBuckets.map((b) => {
+        const max = Math.max(...tokenBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(14)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📏 top 10 最长 goals</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>chars</th><th>tokens</th><th>sid</th><th>goal (前 60 字符)</th></tr>
+        </thead>
+        <tbody>
+          {topLongest.map((l) => (
+            <tr>
+              <td><strong>{l.chars}</strong></td>
+              <td>{l.tokens}</td>
+              <td><a href={`${base}/agents/${l.sid}/`}><code>{esc(l.sid.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(l.goal.slice(0, 60))}{(l.goal ?? '').length > 60 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📐 top 10 最短 goals(> 0 chars)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>chars</th><th>tokens</th><th>sid</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topShortest.map((l) => (
+            <tr>
+              <td><strong>{l.chars}</strong></td>
+              <td>{l.tokens}</td>
+              <td><a href={`${base}/agents/${l.sid}/`}><code>{esc(l.sid.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(l.goal.slice(0, 60))}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>median < avg = 分布右偏(部分超长 goal 拉高)</li>
+        <li>tokens 用空白拆分估算</li>
+        <li>对照 <a href={`${base}/agents/goal-length-score/`}>Goal Length vs Score</a> 看长度 vs score</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-glh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-glh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-glh-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
