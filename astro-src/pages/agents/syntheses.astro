@@ -1,0 +1,227 @@
+---
+// /agents/syntheses.astro — iter #99:global syntheses feed
+//
+// 聚合所有 session 的 synthesis 文件,按 mtime 倒序列出最新 50 份:
+//   - 标题 + session ID + 创建时间
+//   - 1-2 段 TL;DR 预览
+//   - 字数 / topics 数
+//   - 跳转链接到完整 synthesis 页面
+//   - 复制 markdown 按钮
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SynthesisEntry {
+  sid: string;
+  idx: number;
+  title: string;
+  raw: string;
+  mtime: number;
+  preview: string;
+  wordCount: number;
+  topicCount: number;
+  refCount: number;
+}
+
+const entries: SynthesisEntry[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const sdir = join(root, sid, 'synthesis');
+    if (!existsSync(sdir)) continue;
+    let files: string[] = [];
+    try { files = await readdir(sdir); } catch { continue; }
+    for (const f of files) {
+      if (!/^synthesis_\d+\.md$/.test(f)) continue;
+      const m = f.match(/^synthesis_(\d+)\.md$/);
+      const idx = m ? Number(m[1]) : 0;
+      let raw = '';
+      let mtime = 0;
+      try {
+        const fp = join(sdir, f);
+        raw = await readFile(fp, 'utf8');
+        mtime = (await stat(fp)).mtimeMs;
+      } catch { continue; }
+
+      // 解析 frontmatter
+      const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+      let title = `synthesis_${idx}`;
+      if (fm) {
+        const titleM = fm[1].match(/^title:\s*["']?(.+?)["']?\s*$/m);
+        if (titleM) title = titleM[1];
+      }
+
+      // 提取 body
+      const noFm = raw.replace(/^---[\s\S]*?---\n?/, '');
+      const bodyLines = noFm.split('\n').filter((l) => l.trim() && !l.startsWith('#'));
+      const preview = bodyLines.slice(0, 3).join(' ').trim().slice(0, 300);
+
+      // 字数 / topics / refs
+      const wordCount = noFm.replace(/[^\w\s一-鿿]/g, '').length;
+      const topicMatches = noFm.match(/^##\s+(.+)$/gm) ?? [];
+      const topicCount = topicMatches.length;
+      const refCount = (noFm.match(/\b\d{4}\.\d{4,5}/g) ?? []).length;
+
+      entries.push({ sid, idx, title, raw, mtime, preview, wordCount, topicCount, refCount });
+    }
+  }
+}
+
+// 按 mtime 倒序
+entries.sort((a, b) => b.mtime - a.mtime);
+const topEntries = entries.slice(0, 50);
+
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  return `${Math.floor(days / 30)} 个月前`;
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Latest Syntheses · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / syntheses</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧠 Latest Syntheses <span class="muted" style="font-size:0.6em">(iter #99)</span></h1>
+      <p class="agents-sub">
+        所有 session 的 synthesis 全局 feed,按修改时间倒序,最新 50 份。每条带标题、TL;DR 预览、
+        字数、topics 数、refs 数,一键跳转完整页。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-syn-stats">
+        <span><strong>{entries.length}</strong> total syntheses</span>
+        <span><strong>{topEntries.length}</strong> showing</span>
+      </div>
+    </section>
+
+    {entries.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">archive/ 下还没有任何 synthesis。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>📋 最新 syntheses</h2>
+        <ol class="agents-syn-list">
+          {topEntries.map((e) => (
+            <li class="agents-syn-item">
+              <header class="agents-syn-head">
+                <h3>
+                  <a href={`${base}/agents/${e.sid}/synthesis/${String(e.idx).padStart(3, '0')}/`}>
+                    {escapeHtml(e.title)}
+                  </a>
+                </h3>
+                <small class="muted">
+                  session <a href={`${base}/agents/${e.sid}/`}><code>{e.sid}</code></a>
+                  · synthesis #{e.idx}
+                  · {agoStr(e.mtime)}
+                </small>
+              </header>
+              {e.preview && <p class="agents-syn-preview">{escapeHtml(e.preview)}…</p>}
+              <p class="agents-syn-stats muted">
+                <small>
+                  📝 {e.wordCount} 字 · 📋 {e.topicCount} topics · 📚 {e.refCount} arxiv refs
+                </small>
+              </p>
+              <details>
+                <summary>查看 raw markdown ({e.raw.length} chars)</summary>
+                <pre class="agents-syn-raw">{e.raw}</pre>
+              </details>
+            </li>
+          ))}
+        </ol>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/digest/`}>📰 Digest</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-syn-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-syn-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-syn-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-syn-item {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 3px solid #4f46e5;
+    border-radius: 4px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.7rem;
+  }
+  .agents-syn-head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    margin-bottom: 0.4rem;
+  }
+  .agents-syn-head h3 { margin: 0; font-size: 1rem; font-weight: 600; }
+  .agents-syn-head h3 a { color: #4f46e5; }
+  .agents-syn-preview {
+    margin: 0.4rem 0;
+    font-size: 0.92rem;
+    color: #4b5563;
+    line-height: 1.55;
+    background: rgba(0,0,0,0.15);
+    padding: 0.5rem 0.7rem;
+    border-radius: 3px;
+  }
+  .agents-syn-stats {
+    margin: 0.4rem 0 0;
+  }
+  .agents-syn-raw {
+    background: rgba(0,0,0,0.3);
+    padding: 0.7rem;
+    border-radius: 4px;
+    max-height: 400px;
+    overflow: auto;
+    font-size: 0.78rem;
+    margin-top: 0.5rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
