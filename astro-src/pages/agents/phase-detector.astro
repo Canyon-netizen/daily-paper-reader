@@ -1,0 +1,203 @@
+---
+// /agents/phase-detector.astro — iter #247:round phase detector
+//
+// 给每 round 标 phase(基于分数变化斜率):
+//   - warmup:早期 rounds,score 波动但绝对值较低
+//   - productive:score 持续上升或维持高点
+//   - wrapup:末期 rounds,score 收敛或下降
+//   - rebound:score 突然回升(突破)
+
+// 简化规则:phase 是 session 内部的相对位置 + score 变化
+//   - round 位置 ≤ 1/4 → warmup
+//   - 位置 ≥ 3/4 且 |Δ| < 0.3 → wrapup
+//   - Δ > 0.5 → productive (rising)
+//   - Δ < -0.3 → wrapup (declining)
+//   - 其它 → steady
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PhaseRecord {
+  sid: string;
+  round: number;
+  position: number;  // 0..1
+  score: number;
+  delta: number;
+  phase: string;
+}
+
+const root = join(process.cwd(), 'archive');
+const records: PhaseRecord[] = [];
+const phaseDist: Record<string, number> = {};
+
+function classify(pos: number, delta: number, prevPhase: string): string {
+  if (pos <= 0.25) return 'warmup';
+  if (pos >= 0.75 && Math.abs(delta) < 0.3) return 'wrapup';
+  if (delta > 0.5) return 'productive';
+  if (delta < -0.5) return 'declining';
+  if (delta > 0.2) return 'rebound';
+  return 'steady';
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    const scores: number[] = [];
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { /* */ }
+    }
+    let prevPhase = '';
+    for (let i = 0; i < scores.length; i++) {
+      const pos = scores.length > 1 ? i / (scores.length - 1) : 0;
+      const delta = i === 0 ? 0 : scores[i] - scores[i - 1];
+      const phase = classify(pos, delta, prevPhase);
+      prevPhase = phase;
+      records.push({
+        sid, round: rNum[i], position: pos, score: scores[i], delta, phase,
+      });
+      phaseDist[phase] = (phaseDist[phase] ?? 0) + 1;
+    }
+  }
+}
+
+const total = records.length;
+const sortedPhases = Object.entries(phaseDist).sort((a, b) => b[1] - a[1]);
+
+// session 内 phase 序列
+const sessionPhases = new Map<string, string[]>();
+for (const r of records) {
+  if (!sessionPhases.has(r.sid)) sessionPhases.set(r.sid, []);
+  sessionPhases.get(r.sid)!.push(r.phase);
+}
+
+// 找最常见 phase 序列(只看 ≥ 3 rounds 的)
+const sequenceCount = new Map<string, number>();
+for (const seq of sessionPhases.values()) {
+  if (seq.length < 3) continue;
+  const key = seq.join(' → ');
+  sequenceCount.set(key, (sequenceCount.get(key) ?? 0) + 1);
+}
+const topSeqs = Array.from(sequenceCount.entries()).sort((a, b) => b[1] - a[1]).slice(0, 15);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Phase Detector · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / phase-detector</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧭 Phase Detector <span class="muted" style="font-size:0.6em">(iter #247)</span></h1>
+      <p class="agents-sub">
+        每个 round 基于 session 内部位置 + 分数变化斜率分类为 warmup / productive / wrapup / declining / rebound / steady。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pd-globals">
+        <span>总 rounds: <strong>{total}</strong></span>
+        <span>总 sessions: <strong>{sessionPhases.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 phase 分布</h2>
+      <pre class="agents-pd-flow">{sortedPhases.map(([p, count]) => {
+        const max = sortedPhases[0][1];
+        return `${p.padEnd(14)} ${bar(count, max, 22)}  ${count}  (${((count / total) * 100).toFixed(1)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔁 top 15 phase 序列(≥ 3 rounds)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>序列</th><th>长度</th><th>出现次数</th></tr>
+        </thead>
+        <tbody>
+          {topSeqs.map(([seq, count]) => (
+            <tr>
+              <td><code style="font-size:0.85em">{esc(seq)}</code></td>
+              <td>{seq.split(' → ').length}</td>
+              <td><strong>{count}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>warmup:session 前 1/4 rounds</li>
+        <li>productive:Δ &gt; 0.5</li>
+        <li>wrapup:后 1/4 rounds 且 |Δ| &lt; 0.3</li>
+        <li>declining:Δ &lt; -0.5</li>
+        <li>rebound:0.2 &lt; Δ ≤ 0.5</li>
+        <li>steady:其它</li>
+        <li>对照 <a href={`${base}/agents/trajectory-classifier/`}>Trajectory Classifier</a> 看 session 级分类</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
