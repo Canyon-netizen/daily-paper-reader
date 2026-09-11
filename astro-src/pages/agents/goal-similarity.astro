@@ -1,10 +1,10 @@
 ---
-// /agents/goal-similarity.astro — iter #132:goal similarity search
+// /agents/goal-similarity.astro — iter #198:cross-session goal similarity
 //
-// 跨 session 看 goal 文本相似度:
-//   - 提取每个 session 的 goal,做简单 bag-of-words 向量化
-//   - 计算 cosine 相似度
-//   - 输出最相似的 pair
+// 跨 session 看 goal 的相似度:
+//   - Jaccard over goal word tokens
+//   - top N similar pairs(可能是重复 sessions)
+//   - 各 session 与 avg 其他 session 的相似度分布
 
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -15,78 +15,129 @@ import '../../styles/agents.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
-interface Session { sid: string; goal: string; rounds: number; }
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of',
+  'with', 'by', 'from', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should', 'could',
+  'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those', 'i', 'you',
+  'he', 'she', 'it', 'we', 'they', 'what', 'which', 'who', 'when', 'where', 'why',
+  'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some',
+  'such', 'no', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 's',
+  't', 'just', 'don', 'now', '一个', '一些', '什么', '怎么', '怎样', '我们', '你们',
+  '他们', '以及', '或者', '但是', '因为', '所以', '如果', '这个', '那个', '这些', '那些',
+  '是否', '可以', '可能', '应该', '已经', '正在', '需要', '需要', '使用', '通过',
+  '进行', '实现', '构建', '生成', '设计', '开发', '研究', '分析', '关于', '中',
+  '上', '下', '里', '为', '于', '是', '的', '了', '在', '和', '有',
+]);
 
-const sessions: Session[] = [];
+function tokenize(goal: string): Set<string> {
+  const text = (goal ?? '').toLowerCase();
+  const words = text.match(/[a-z0-9一-鿿]+/g) ?? [];
+  // 把中文 token 切分成 bigrams 以更细粒度
+  const tokens: string[] = [];
+  for (const w of words) {
+    if (/^[一-鿿]+$/.test(w) && w.length > 1) {
+      for (let i = 0; i < w.length - 1; i++) tokens.push(w.slice(i, i + 2));
+    } else if (w.length >= 2 && !STOPWORDS.has(w)) {
+      tokens.push(w);
+    }
+  }
+  return new Set(tokens);
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter += 1;
+  const uni = a.size + b.size - inter;
+  return uni === 0 ? 0 : inter / uni;
+}
+
+interface SessionGoal {
+  sid: string;
+  goal: string;
+  tokens: Set<string>;
+}
+
 const root = join(process.cwd(), 'archive');
+const sessions: SessionGoal[] = [];
+
 if (existsSync(root)) {
   const sids = await readdir(root).catch(() => []);
   for (const sid of sids) {
     const mp = join(root, sid, 'meta.json');
     if (!existsSync(mp)) continue;
     try {
-      const meta = JSON.parse(await readFile(mp, 'utf8'));
-      const goal: string = meta.goal ?? '';
+      const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
       if (!goal || goal.length < 5) continue;
-      let rounds = 0;
-      const rd = join(root, sid, 'rounds');
-      if (existsSync(rd)) {
-        const rfs = await readdir(rd).catch(() => []);
-        rounds = rfs.filter((f) => /^round_\d+\.json$/.test(f)).length;
-      }
-      sessions.push({ sid, goal, rounds });
+      sessions.push({ sid, goal, tokens: tokenize(goal) });
     } catch (e) { /* */ }
   }
 }
 
-const STOP = new Set([
-  'the','a','an','and','or','but','if','to','of','in','on','at','by','from','with','as','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','should','could','may','might','can','this','that','these','those','it','its','their','them','they','we','our','us','you','your','he','she','his','her','i','my','me','also','more','most','some','such','than','too','very','just','only','any','all','each','every','no','not','so','for',
-  'research','study','paper','papers','goal','use','used','using','work','works','approach','approaches','based','via','through','among','about','into','over','under','within','between','before','after','since','until','while','when','where','how','what','which','who','whom','whose',
-  '一个','一些','这个','那个','我们','你们','他们','什么','怎么','哪些','为何','因为','所以','如果','但是','虽然','然而','因此','或者','可以','可能','应该','需要','首先','其次','然后','最后','例如','比如','也就是说','换句话说','总之','综上','所示',
-]);
+const total = sessions.length;
 
-function tokenize(text: string): string[] {
-  return text
-    .toLowerCase()
-    .replace(/[^\w\s一-鿿]/g, ' ')
-    .split(/\s+/)
-    .filter((t) => t.length >= 2 && !STOP.has(t));
-}
-
-const vectors = sessions.map((s) => {
-  const toks = tokenize(s.goal);
-  const freq: Record<string, number> = {};
-  for (const t of toks) freq[t] = (freq[t] ?? 0) + 1;
-  return { sid: s.sid, goal: s.goal, vec: freq, norm: Math.sqrt(Object.values(freq).reduce((a, b) => a + b * b, 0)) };
-});
-
-function cosine(a: Record<string, number>, an: number, b: Record<string, number>, bn: number): number {
-  if (an === 0 || bn === 0) return 0;
-  let dot = 0;
-  for (const k of Object.keys(a)) {
-    if (k in b) dot += a[k] * b[k];
-  }
-  return dot / (an * bn);
-}
-
-interface Pair { a: string; ag: string; ar: number; b: string; bg: string; br: number; sim: number; }
-const pairs: Pair[] = [];
-// O(n^2/2) — 上限 200 个 session 即可
-const cap = Math.min(vectors.length, 200);
-for (let i = 0; i < cap; i++) {
-  for (let j = i + 1; j < cap; j++) {
-    const sim = cosine(vectors[i].vec, vectors[i].norm, vectors[j].vec, vectors[j].norm);
-    if (sim < 0.15) continue;
-    pairs.push({
-      a: vectors[i].sid, ag: vectors[i].goal, ar: sessions[i].rounds,
-      b: vectors[j].sid, bg: vectors[j].goal, br: sessions[j].rounds,
-      sim,
-    });
+// 计算 pairwise Jaccard,top 20
+const pairs: { a: string; b: string; goalA: string; goalB: string; sim: number }[] = [];
+for (let i = 0; i < sessions.length; i++) {
+  for (let j = i + 1; j < sessions.length; j++) {
+    const sim = jaccard(sessions[i].tokens, sessions[j].tokens);
+    if (sim > 0.1) {
+      pairs.push({
+        a: sessions[i].sid,
+        b: sessions[j].sid,
+        goalA: sessions[i].goal,
+        goalB: sessions[j].goal,
+        sim,
+      });
+    }
   }
 }
+pairs.sort((x, y) => y.sim - x.sim);
+const topPairs = pairs.slice(0, 25);
 
-pairs.sort((a, b) => b.sim - a.sim);
+// 每个 session 与其他 session 平均相似度
+const simMap = new Map<string, { sum: number; count: number }>();
+for (const p of pairs) {
+  for (const sid of [p.a, p.b]) {
+    const cur = simMap.get(sid) ?? { sum: 0, count: 0 };
+    cur.sum += p.sim;
+    cur.count += 1;
+    simMap.set(sid, cur);
+  }
+}
+const avgSim = [...simMap.entries()].map(([sid, v]) => ({
+  sid,
+  avg: v.count > 0 ? v.sum / v.count : 0,
+  pairCount: v.count,
+})).sort((x, y) => y.avg - x.avg);
 
+// 孤立 sessions(无相似 pair)
+const lonely = sessions.filter((s) => !simMap.has(s.sid)).slice(0, 20);
+
+// 相似度分布
+const buckets = [
+  { label: 'sim > 0.5 (重复)', min: 0.5, max: 1.01, count: 0 },
+  { label: '0.3 < sim ≤ 0.5', min: 0.3, max: 0.5, count: 0 },
+  { label: '0.2 < sim ≤ 0.3', min: 0.2, max: 0.3, count: 0 },
+  { label: '0.1 < sim ≤ 0.2', min: 0.1, max: 0.2, count: 0 },
+  { label: 'sim ≤ 0.1 (无关)', min: 0, max: 0.1, count: 0 },
+];
+for (const p of pairs) {
+  for (const b of buckets) {
+    if (p.sim > b.min && p.sim <= b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+const maxBucket = Math.max(...buckets.map((b) => b.count), 1);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
 function esc(s: any): string {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
 }
@@ -101,57 +152,91 @@ function esc(s: any): string {
     </nav>
 
     <header class="agents-header">
-      <h1>🔗 Goal Similarity <span class="muted" style="font-size:0.6em">(iter #132)</span></h1>
+      <h1>🧬 Goal Similarity <span class="muted" style="font-size:0.6em">(iter #198)</span></h1>
       <p class="agents-sub">
-        跨 session 用 bag-of-words + cosine 相似度找 goal 接近的 pair。
-        帮你在开始新 session 前发现历史相关工作,或者把多个 session 合并成一个大主题。
+        跨 session 看 goal 相似度(Jaccard over tokens + 中文 bigram)。
+        高相似度 = 可能重复 session。
       </p>
     </header>
 
     <section class="agents-session-section">
       <h2>📊 全局</h2>
       <div class="agents-gs-globals">
-        <span>总 sessions: <strong>{sessions.length}</strong></span>
-        <span>比较对数 (cap 200): <strong>{pairs.length}</strong></span>
-        <span>相似度 ≥ 0.3: <strong>{pairs.filter((p) => p.sim >= 0.3).length}</strong></span>
-        <span>相似度 ≥ 0.5: <strong>{pairs.filter((p) => p.sim >= 0.5).length}</strong></span>
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>总 pairs (sim &gt; 0.1): <strong>{pairs.length}</strong></span>
+        <span>avg sim (top pairs avg): <strong>{pairs.length > 0 ? (pairs.reduce((s, p) => s + p.sim, 0) / pairs.length).toFixed(3) : '0'}</strong></span>
       </div>
     </section>
 
-    {pairs.length === 0 ? (
-      <section class="agents-session-section">
-        <p class="muted">没有相似度 ≥ 0.15 的 pair(可能 goals 都太独特,或 session 数太少)。</p>
-      </section>
-    ) : (
-      <section class="agents-session-section">
-        <h2>🔗 最相似的 pair(Top 30)</h2>
-        <table class="agents-session-table">
-          <thead>
-            <tr><th>sim</th><th>session A</th><th>goal A</th><th>r</th><th>session B</th><th>goal B</th><th>r</th></tr>
-          </thead>
-          <tbody>
-            {pairs.slice(0, 30).map((p) => (
-              <tr>
-                <td><strong style={`color:${p.sim >= 0.5 ? '#10b981' : p.sim >= 0.3 ? '#3b82f6' : '#6b7280'}`}>{p.sim.toFixed(3)}</strong></td>
-                <td><a href={`${base}/agents/${p.a}/`}><code>{esc(p.a.slice(0, 12))}</code></a></td>
-                <td><small>{esc(p.ag.slice(0, 50))}{p.ag.length > 50 ? '…' : ''}</small></td>
-                <td>{p.ar}</td>
-                <td><a href={`${base}/agents/${p.b}/`}><code>{esc(p.b.slice(0, 12))}</code></a></td>
-                <td><small>{esc(p.bg.slice(0, 50))}{p.bg.length > 50 ? '…' : ''}</small></td>
-                <td>{p.br}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-    )}
+    <section class="agents-session-section">
+      <h2>📊 相似度分布</h2>
+      <pre class="agents-gs-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(22)} ${bar(b.count, maxBucket, 22)}  ${String(b.count).padStart(4)}`;
+      }).join('\n')}</pre>
+    </section>
 
     <section class="agents-session-section">
-      <h2>💡 使用建议</h2>
+      <h2>🔗 top 25 高相似度 pairs</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sim</th><th>sid A</th><th>goal A</th><th>sid B</th><th>goal B</th></tr>
+        </thead>
+        <tbody>
+          {topPairs.map((p) => (
+            <tr>
+              <td><strong>{p.sim.toFixed(2)}</strong></td>
+              <td><a href={`${base}/agents/${p.a}/`}><code>{esc(p.a.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(p.goalA.slice(0, 30))}…</small></td>
+              <td><a href={`${base}/agents/${p.b}/`}><code>{esc(p.b.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(p.goalB.slice(0, 30))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌀 平均相似度 top 10 sessions(被多次重复)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>avg sim</th><th>pairs</th></tr>
+        </thead>
+        <tbody>
+          {avgSim.slice(0, 10).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 14))}</code></a></td>
+              <td><strong>{s.avg.toFixed(3)}</strong></td>
+              <td>{s.pairCount}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏝️ 孤立 sessions(无相似 pair)</h2>
+      <p class="muted">共 {sessions.length - avgSim.length} 个孤立。展示前 20:</p>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {lonely.map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 14))}</code></a></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 80))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
       <ul>
-        <li>相似度 ≥ 0.5 的 pair 可能在做同一件事,可以考虑合并 / --resume</li>
-        <li>看 mid-range 相似(0.3-0.5),可能共享方法论 / 数据集 / 研究问题</li>
-        <li>用 <a href={`${base}/agents/compare-sessions/`}>Compare Sessions</a> 详细对比高相似度 pair</li>
+        <li>sim &gt; 0.5 = 几乎是同一个目标,可能重复 session,可合并</li>
+        <li>中文 token 拆 bigram,英文用整词</li>
+        <li>对照 <a href={`${base}/agents/goal-journey/`}>Goal Journey</a> 看单 session 内变化</li>
       </ul>
     </section>
   </main>
@@ -167,5 +252,16 @@ function esc(s: any): string {
     color: #4f46e5;
     font-family: ui-monospace, monospace;
     margin: 0 0.3rem;
+  }
+  .agents-gs-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
   }
 </style>
