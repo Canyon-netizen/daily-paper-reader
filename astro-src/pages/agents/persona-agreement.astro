@@ -1,11 +1,10 @@
 ---
-// /agents/persona-agreement.astro — iter #204:persona pair voting agreement
+// /agents/persona-agreement.astro — iter #309:persona pair agreement
 //
-// 任意两个 persona 对同一轮 proposals 评分的相关性:
-//   - Pearson r(分数相关性)
-//   - 平均分差
-//   - 共同评分的 proposal 数
-// 高 r = 评分方向一致;低 r = 评分分歧
+// 各 persona 对之间的"评分一致性"(在同 session/round 中):
+//   - 收集所有 rounds 里所有 persona × persona 的 score diff
+//   - 计算 avg abs diff
+//   - 低 diff = 高一致
 
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -16,15 +15,11 @@ import '../../styles/agents.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
 
-interface RoundScores {
-  sid: string;
-  roundIdx: number;
-  // key: persona name → array of scores
-  byPersona: Map<string, number[]>;
-}
+const AGREEMENT_THRESHOLD = 1.0;  // |a-b| < 1 算 agree
 
 const root = join(process.cwd(), 'archive');
-const rounds: RoundScores[] = [];
+const allPersonas = new Set<string>();
+const pairDiffs = new Map<string, number[]>();   // "a||b" → [diff, diff, ...]
 
 if (existsSync(root)) {
   const sids = await readdir(root).catch(() => []);
@@ -32,103 +27,53 @@ if (existsSync(root)) {
     const rd = join(root, sid, 'rounds');
     if (!existsSync(rd)) continue;
     const rfs = await readdir(rd).catch(() => []);
-    const rNum: number[] = [];
     for (const rf of rfs) {
-      const m = rf.match(/^round_(\d+)\.json$/);
-      if (m) rNum.push(parseInt(m[1], 10));
-    }
-    rNum.sort((a, b) => a - b);
-    for (const ri of rNum) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
       try {
-        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
-        const byPersona = new Map<string, number[]>();
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        // 对每个 round,收集 (persona, avg_score)
+        const scores: { name: string; score: number }[] = [];
         for (const persona of r.feedback?.personas ?? []) {
           const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
-          const scores: number[] = [];
+          const arr: number[] = [];
           for (const p of persona.proposals ?? []) {
-            if (typeof p.total === 'number') scores.push(p.total);
+            if (typeof p.total === 'number') arr.push(p.total);
           }
-          byPersona.set(name, scores);
+          if (arr.length > 0) {
+            scores.push({ name, score: arr.reduce((a, b) => a + b, 0) / arr.length });
+          }
         }
-        if (byPersona.size >= 2) rounds.push({ sid, roundIdx: ri, byPersona });
+        for (const s of scores) allPersonas.add(s.name);
+        for (let i = 0; i < scores.length; i++) {
+          for (let j = i + 1; j < scores.length; j++) {
+            const a = scores[i], b = scores[j];
+            const key = [a.name, b.name].sort().join('||');
+            const diff = Math.abs(a.score - b.score);
+            if (!pairDiffs.has(key)) pairDiffs.set(key, []);
+            pairDiffs.get(key)!.push(diff);
+          }
+        }
       } catch (e) { /* */ }
     }
   }
 }
 
-// collect all persona names
-const allPersonas = new Set<string>();
-for (const r of rounds) {
-  for (const name of r.byPersona.keys()) allPersonas.add(name);
+const personas = [...allPersonas].sort();
+const pairStats: { a: string; b: string; n: number; avgDiff: number; agreement: number }[] = [];
+for (const [key, diffs] of pairDiffs.entries()) {
+  const [a, b] = key.split('||');
+  const avgDiff = diffs.reduce((s, x) => s + x, 0) / diffs.length;
+  const agreement = diffs.filter((d) => d < AGREEMENT_THRESHOLD).length / diffs.length;
+  pairStats.push({ a, b, n: diffs.length, avgDiff, agreement });
 }
-const personas = [...allPersonas];
+pairStats.sort((x, y) => x.avgDiff - y.avgDiff);
 
-// 对每个 pair 算 correlation + avg diff
-function pearson(xs: number[], ys: number[]): number {
-  if (xs.length < 3 || xs.length !== ys.length) return 0;
-  const n = xs.length;
-  const mx = xs.reduce((a, b) => a + b, 0) / n;
-  const my = ys.reduce((a, b) => a + b, 0) / n;
-  let num = 0, dx2 = 0, dy2 = 0;
-  for (let i = 0; i < n; i++) {
-    const dx = xs[i] - mx;
-    const dy = ys[i] - my;
-    num += dx * dy;
-    dx2 += dx * dx;
-    dy2 += dy * dy;
-  }
-  const denom = Math.sqrt(dx2 * dy2);
-  return denom === 0 ? 0 : num / denom;
-}
-
-interface PairStat {
-  a: string;
-  b: string;
-  r: number;
-  sharedRounds: number;
-  avgDiff: number;
-}
-
-const pairMap = new Map<string, PairStat>();
-for (const r of rounds) {
-  const names = [...r.byPersona.keys()];
-  // 取前 K 个 proposal(假设各 persona 评相同 proposals,按 index 对齐)
-  for (let i = 0; i < names.length; i++) {
-    for (let j = i + 1; j < names.length; j++) {
-      const A = r.byPersona.get(names[i])!;
-      const B = r.byPersona.get(names[j])!;
-      const k = Math.min(A.length, B.length);
-      if (k < 2) continue;
-      const aSlice = A.slice(0, k);
-      const bSlice = B.slice(0, k);
-      const corr = pearson(aSlice, bSlice);
-      const avgDiff = aSlice.reduce((s, x, idx) => s + Math.abs(x - bSlice[idx]), 0) / k;
-      const key = `${names[i]}|||${names[j]}`;
-      const cur = pairMap.get(key) ?? { a: names[i], b: names[j], r: 0, sharedRounds: 0, avgDiff: 0 };
-      cur.r += corr;
-      cur.sharedRounds += 1;
-      cur.avgDiff += avgDiff;
-      pairMap.set(key, cur);
-    }
-  }
-}
-
-const pairs: PairStat[] = [];
-for (const p of pairMap.values()) {
-  if (p.sharedRounds < 2) continue;
-  pairs.push({
-    ...p,
-    r: p.r / p.sharedRounds,
-    avgDiff: p.avgDiff / p.sharedRounds,
-  });
-}
-pairs.sort((x, y) => y.r - x.r);
-
-const topAgree = pairs.slice(0, 15);
-const topDisagree = [...pairs].sort((x, y) => x.r - y.r).slice(0, 15);
+const totalPairs = pairStats.length;
+const highlyAgree = pairStats.filter((p) => p.avgDiff < 0.5).length;
 
 function esc(s: any): string {
-  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 ---
 
@@ -141,10 +86,9 @@ function esc(s: any): string {
     </nav>
 
     <header class="agents-header">
-      <h1>🤝 Persona Agreement <span class="muted" style="font-size:0.6em">(iter #204)</span></h1>
+      <h1>🤝 Persona Agreement <span class="muted" style="font-size:0.6em">(iter #309)</span></h1>
       <p class="agents-sub">
-        两两 persona 对同一轮 proposals 评分的 Pearson 相关系数。
-        r 高 = 一致;r 低(负) = 反向。
+        各 persona 对之间的评分一致性。|diff| &lt; {AGREEMENT_THRESHOLD} 视为同意。
       </p>
     </header>
 
@@ -152,24 +96,26 @@ function esc(s: any): string {
       <h2>📊 全局</h2>
       <div class="agents-pa-globals">
         <span>personas: <strong>{personas.length}</strong></span>
-        <span>总 pairs (≥ 2 shared): <strong>{pairs.length}</strong></span>
+        <span>pairs: <strong>{totalPairs}</strong></span>
+        <span>高度一致 (avg diff &lt; 0.5): <strong style="color:#10b981">{highlyAgree}</strong></span>
       </div>
     </section>
 
     <section class="agents-session-section">
-      <h2>🤝 top 15 最一致 pairs</h2>
+      <h2>🤝 最一致 Top 10</h2>
       <table class="agents-session-table">
         <thead>
-          <tr><th>A</th><th>B</th><th>r</th><th>shared rounds</th><th>avg |diff|</th></tr>
+          <tr><th>#</th><th>persona A</th><th>persona B</th><th>n</th><th>avg diff</th><th>agreement %</th></tr>
         </thead>
         <tbody>
-          {topAgree.map((p) => (
+          {pairStats.slice(0, 10).map((p, i) => (
             <tr>
-              <td><code>{esc(p.a)}</code></td>
-              <td><code>{esc(p.b)}</code></td>
-              <td><strong style="color:#10b981">{p.r.toFixed(3)}</strong></td>
-              <td>{p.sharedRounds}</td>
-              <td>{p.avgDiff.toFixed(2)}</td>
+              <td>{i + 1}</td>
+              <td><strong style="color:#4f46e5">{esc(p.a)}</strong></td>
+              <td><strong style="color:#4f46e5">{esc(p.b)}</strong></td>
+              <td>{p.n}</td>
+              <td><strong style="color:#10b981">{p.avgDiff.toFixed(2)}</strong></td>
+              <td>{(p.agreement * 100).toFixed(0)}%</td>
             </tr>
           ))}
         </tbody>
@@ -177,19 +123,20 @@ function esc(s: any): string {
     </section>
 
     <section class="agents-session-section">
-      <h2>⚔️ top 15 最分歧 pairs</h2>
+      <h2>⚡ 最不一致 Top 10</h2>
       <table class="agents-session-table">
         <thead>
-          <tr><th>A</th><th>B</th><th>r</th><th>shared rounds</th><th>avg |diff|</th></tr>
+          <tr><th>#</th><th>persona A</th><th>persona B</th><th>n</th><th>avg diff</th><th>agreement %</th></tr>
         </thead>
         <tbody>
-          {topDisagree.map((p) => (
+          {pairStats.slice().sort((a, b) => b.avgDiff - a.avgDiff).slice(0, 10).map((p, i) => (
             <tr>
-              <td><code>{esc(p.a)}</code></td>
-              <td><code>{esc(p.b)}</code></td>
-              <td><strong style="color:#ef4444">{p.r.toFixed(3)}</strong></td>
-              <td>{p.sharedRounds}</td>
-              <td>{p.avgDiff.toFixed(2)}</td>
+              <td>{i + 1}</td>
+              <td><strong style="color:#4f46e5">{esc(p.a)}</strong></td>
+              <td><strong style="color:#4f46e5">{esc(p.b)}</strong></td>
+              <td>{p.n}</td>
+              <td><strong style="color:#ef4444">{p.avgDiff.toFixed(2)}</strong></td>
+              <td>{(p.agreement * 100).toFixed(0)}%</td>
             </tr>
           ))}
         </tbody>
@@ -199,10 +146,11 @@ function esc(s: any): string {
     <section class="agents-session-section">
       <h2>💡 解读</h2>
       <ul>
-        <li>r &gt; 0.7 = 高度一致(可能冗余)</li>
-        <li>r &lt; 0 = 反向(罕见但说明对立视角)</li>
-        <li>avg |diff| = 平均分差(越小越一致)</li>
-        <li>对照 <a href={`${base}/agents/persona-elo/`}>Persona Elo</a> 看 ELO 排名</li>
+        <li>avg diff &lt; 0.5 = 强一致</li>
+        <li>avg diff &gt; 2 = 经常分歧</li>
+        <li>高 agreement 多的 sessions = 反馈稳定</li>
+        <li>对照 <a href={`${base}/agents/persona-score-bias/`}>Persona Score Bias</a></li>
+        <li>对照 <a href={`${base}/agents/persona-pair-corr/`}>Persona Pair Corr</a></li>
       </ul>
     </section>
   </main>
