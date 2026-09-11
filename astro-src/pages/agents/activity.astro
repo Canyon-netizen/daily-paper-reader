@@ -1,0 +1,252 @@
+---
+// /agents/activity.astro — iter #97:recent activity feed
+//
+// 按时间倒序聚合所有 events:
+//   - session 创建
+//   - round 开始 / 结束
+//   - synthesis 生成
+//   - deliverable applied
+//   - session 删除(从 meta 没了的)
+// 类似 Twitter feed,但聚焦研究活动。
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface FeedItem {
+  ts: number;
+  sid: string;
+  kind: 'session_created' | 'round_started' | 'round_finished' | 'synthesis_generated' | 'deliverable_applied';
+  label: string;
+  detail: string;
+  href: string;
+}
+
+const items: FeedItem[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const dir = join(root, sid);
+    if (!existsSync(join(dir, 'meta.json'))) continue;
+    let meta: any = null;
+    try { meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')); } catch { continue; }
+
+    // session_created
+    const createdAt = Number(meta.created_at ?? 0);
+    if (createdAt > 0) {
+      items.push({
+        ts: createdAt,
+        sid,
+        kind: 'session_created',
+        label: '🆕 session 创建',
+        detail: typeof meta.goal === 'string' ? meta.goal.slice(0, 80) : '',
+        href: `${base}/agents/${sid}/`,
+      });
+    }
+
+    // rounds
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      for (const f of files) {
+        try {
+          const r = JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8'));
+          const round = r.round ?? 0;
+          const sa = Number(r.started_at ?? 0);
+          const fa = Number(r.finished_at ?? 0);
+          if (sa > 0) {
+            items.push({
+              ts: sa, sid, kind: 'round_started',
+              label: `▶️ round ${round} 开始`,
+              detail: '', href: `${base}/agents/${sid}/${String(round).padStart(3, '0')}/`,
+            });
+          }
+          if (fa > 0) {
+            const tok = Number(r?.feedback?.total_tokens ?? 0);
+            const propN = Array.isArray(r?.designer?.proposals) ? r.designer.proposals.length : 0;
+            const apN = Array.isArray(r?.modifier?.applied) ? r.modifier.applied.length : 0;
+            items.push({
+              ts: fa, sid, kind: 'round_finished',
+              label: `✅ round ${round} 完成`,
+              detail: `${propN} proposals · ${apN} applied · ${tok.toLocaleString()} tokens`,
+              href: `${base}/agents/${sid}/${String(round).padStart(3, '0')}/`,
+            });
+          }
+        } catch { /* */ }
+      }
+    } catch { /* */ }
+
+    // syntheses
+    try {
+      const sdir = join(dir, 'synthesis');
+      const sfiles = await readdir(sdir);
+      for (const f of sfiles) {
+        if (!/^synthesis_\d+\.md$/.test(f)) continue;
+        const m = f.match(/^synthesis_(\d+)\.md$/);
+        const idx = m ? Number(m[1]) : 0;
+        let ts = 0;
+        try {
+          const s = await stat(join(sdir, f));
+          ts = s.mtimeMs;
+        } catch { /* */ }
+        items.push({
+          ts, sid, kind: 'synthesis_generated',
+          label: `🧠 synthesis #${idx} 生成`,
+          detail: '', href: `${base}/agents/${sid}/synthesis/${String(idx).padStart(3, '0')}/`,
+        });
+      }
+    } catch { /* */ }
+  }
+}
+
+// 按 ts 倒序
+items.sort((a, b) => b.ts - a.ts);
+
+// 按日分组
+const dayMap = new Map<string, FeedItem[]>();
+for (const it of items) {
+  const k = new Date(it.ts).toISOString().slice(0, 10);
+  if (!dayMap.has(k)) dayMap.set(k, []);
+  dayMap.get(k)!.push(it);
+}
+const days = [...dayMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+
+const totalItems = items.length;
+const last7Days = items.filter((it) => (Date.now() - it.ts) / 86_400_000 <= 7).length;
+
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  return `${Math.floor(days / 30)} 个月前`;
+}
+function fmtTime(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleTimeString();
+}
+---
+
+<BaseLayout title="Recent Activity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / activity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📡 Recent Activity <span class="muted" style="font-size:0.6em">(iter #97)</span></h1>
+      <p class="agents-sub">
+        所有 session 的活动事件按时间倒序,像 research Twitter feed。
+        显示 session 创建 / round 起止 / synthesis 生成等。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-act-stats">
+        <span><strong>{totalItems}</strong> total events</span>
+        <span><strong>{last7Days}</strong> 过去 7 天</span>
+        <span><strong>{days.length}</strong> 活跃天</span>
+      </div>
+    </section>
+
+    {items.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">archive/ 下还没有任何 session 活动。</p>
+      </section>
+    ) : (
+      days.map(([day, dayItems]) => (
+        <section class="agents-session-section">
+          <h2>
+            📅 {day}
+            <small class="muted" style="margin-left:0.6rem;font-size:0.65em;font-weight:normal">
+              ({dayItems.length} event{dayItems.length !== 1 ? 's' : ''} · {agoStr(new Date(day).getTime())})
+            </small>
+          </h2>
+          <ol class="agents-act-feed">
+            {dayItems.map((it) => (
+              <li class={`agents-act-item agents-act-${it.kind}`}>
+                <span class="agents-act-time muted">{fmtTime(it.ts)}</span>
+                <span class="agents-act-label">{it.label}</span>
+                <a href={it.href} class="agents-act-link">
+                  <code>{it.sid}</code>
+                </a>
+                {it.detail && <span class="muted">— {it.detail}</span>}
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/digest/`}>📰 Digest</a>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-act-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-act-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-act-feed {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-act-item {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: baseline;
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px dashed rgba(255,255,255,0.06);
+    font-size: 0.9rem;
+  }
+  .agents-act-item:hover {
+    background: rgba(255,255,255,0.03);
+  }
+  .agents-act-time {
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+    min-width: 80px;
+  }
+  .agents-act-label {
+    font-weight: 500;
+  }
+  .agents-act-link code {
+    background: rgba(99, 102, 241, 0.12);
+    color: #4f46e5;
+    padding: 0.05rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.82rem;
+  }
+  .agents-act-item .muted {
+    font-size: 0.85rem;
+  }
+</style>
