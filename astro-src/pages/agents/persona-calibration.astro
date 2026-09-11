@@ -1,0 +1,199 @@
+---
+// /agents/persona-calibration.astro — iter #209:persona calibration analysis
+//
+// 检查每个 persona 是否"校准"(评分接近 session 平均):
+//   - bias = persona mean - session mean
+//   - 大幅正 bias = 该 persona 偏宽松
+//   - 大幅负 bias = 该 persona 偏严苛
+//   - 计算每个 persona 在所有 session 上的 avg bias
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaBias {
+  name: string;
+  biasSum: number;
+  biasCount: number;
+  meanBias: number;
+  stdDevBias: number;
+  biasList: number[];
+  lenientCount: number;  // bias > 0.5
+  strictCount: number;   // bias < -0.5
+  totalSessions: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, { biasSum: number; biasList: number[]; sessions: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length === 0) continue;
+    // 用最后一轮的 avg score 作为 session baseline
+    const last = rNum[rNum.length - 1];
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${last}.json`), 'utf8'));
+      const allScores: number[] = [];
+      const perPersona = new Map<string, number[]>();
+      for (const persona of r.feedback?.personas ?? []) {
+        const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') {
+            allScores.push(p.total);
+            if (!perPersona.has(name)) perPersona.set(name, []);
+            perPersona.get(name)!.push(p.total);
+          }
+        }
+      }
+      if (allScores.length === 0) continue;
+      const sessionMean = allScores.reduce((a, b) => a + b, 0) / allScores.length;
+      for (const [name, scores] of perPersona.entries()) {
+        if (scores.length === 0) continue;
+        const personaMean = scores.reduce((a, b) => a + b, 0) / scores.length;
+        const bias = personaMean - sessionMean;
+        const cur = personaMap.get(name) ?? { biasSum: 0, biasList: [], sessions: 0 };
+        cur.biasSum += bias;
+        cur.biasList.push(bias);
+        cur.sessions += 1;
+        personaMap.set(name, cur);
+      }
+    } catch (e) { /* */ }
+  }
+}
+
+const stats: PersonaBias[] = [];
+for (const [name, v] of personaMap.entries()) {
+  if (v.sessions === 0) continue;
+  const meanBias = v.biasSum / v.sessions;
+  const variance = v.biasList.reduce((s, x) => s + (x - meanBias) ** 2, 0) / v.biasList.length;
+  stats.push({
+    name,
+    biasSum: v.biasSum,
+    biasCount: v.biasList.length,
+    meanBias,
+    stdDevBias: Math.sqrt(variance),
+    biasList: v.biasList,
+    lenientCount: v.biasList.filter((b) => b > 0.5).length,
+    strictCount: v.biasList.filter((b) => b < -0.5).length,
+    totalSessions: v.sessions,
+  });
+}
+
+stats.sort((a, b) => b.meanBias - a.meanBias);
+const mostLenient = stats.slice(0, 10);
+const mostStrict = [...stats].sort((a, b) => a.meanBias - b.meanBias).slice(0, 10);
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Persona Calibration · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-calibration</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Persona Calibration <span class="muted" style="font-size:0.6em">(iter #209)</span></h1>
+      <p class="agents-sub">
+        每个 persona 的 bias = persona mean - session mean。
+        正 bias = 偏宽松;负 = 偏严苛;接近 0 = 校准。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pc-globals">
+        <span>personas: <strong>{stats.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌸 top 10 最宽松 personas(bias 高)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>mean bias</th><th>σ</th><th>lenient</th><th>strict</th><th>sessions</th></tr>
+        </thead>
+        <tbody>
+          {mostLenient.map((s) => (
+            <tr>
+              <td><code>{esc(s.name)}</code></td>
+              <td><strong style="color:#10b981">+{s.meanBias.toFixed(2)}</strong></td>
+              <td>{s.stdDevBias.toFixed(2)}</td>
+              <td>{s.lenientCount}</td>
+              <td>{s.strictCount}</td>
+              <td>{s.totalSessions}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🥶 top 10 最严苛 personas(bias 低)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>mean bias</th><th>σ</th><th>lenient</th><th>strict</th><th>sessions</th></tr>
+        </thead>
+        <tbody>
+          {mostStrict.map((s) => (
+            <tr>
+              <td><code>{esc(s.name)}</code></td>
+              <td><strong style="color:#ef4444">{s.meanBias.toFixed(2)}</strong></td>
+              <td>{s.stdDevBias.toFixed(2)}</td>
+              <td>{s.lenientCount}</td>
+              <td>{s.strictCount}</td>
+              <td>{s.totalSessions}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>bias = persona mean - session mean(用最后一轮)</li>
+        <li>|bias| &gt; 1 = 强烈倾向(可能 calibration drift)</li>
+        <li>lenient = bias &gt; 0.5 的 session 数</li>
+        <li>对照 <a href={`${base}/agents/persona-range/`}>Persona Range</a> 看绝对分数</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
