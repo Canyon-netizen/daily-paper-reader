@@ -1,0 +1,239 @@
+---
+// /agents/action-win-rate.astro — iter #245:per-action win rate
+//
+// 每个 action 的"成功率":
+//   - 出现该 action 的 round 比例(after 该 round,score 是否上升)
+//   - 样本数 = 该 action 出现次数
+//   - win = (next_round_avg > this_round_avg) OR (这是 last round 且 > first round)
+//   - 排除 last round 单点统计
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ActionStat {
+  action: string;
+  attempts: number;
+  wins: number;
+  losses: number;
+  neutral: number;
+  winRate: number;
+  avgScore: number;
+  avgDelta: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const actionStats = new Map<string, ActionStat>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+
+    // 加载所有 rounds
+    const rounds: { idx: number; score: number; actions: string[] }[] = [];
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        const actions = (r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown');
+        rounds.push({ idx: rNum[i], score, actions });
+      } catch (e) { /* */ }
+    }
+
+    for (let i = 0; i < rounds.length; i++) {
+      const cur = rounds[i];
+      const next = i + 1 < rounds.length ? rounds[i + 1] : null;
+      const delta = next ? next.score - cur.score : cur.score - (rounds[0].score);
+      for (const a of cur.actions) {
+        if (!actionStats.has(a)) {
+          actionStats.set(a, {
+            action: a, attempts: 0, wins: 0, losses: 0, neutral: 0,
+            winRate: 0, avgScore: 0, avgDelta: 0,
+          });
+        }
+        const stat = actionStats.get(a)!;
+        stat.attempts += 1;
+        stat.avgScore += cur.score;
+        stat.avgDelta += delta;
+        if (delta > 0.05) stat.wins += 1;
+        else if (delta < -0.05) stat.losses += 1;
+        else stat.neutral += 1;
+      }
+    }
+  }
+}
+
+// 标准化
+for (const stat of actionStats.values()) {
+  stat.avgScore = stat.attempts > 0 ? stat.avgScore / stat.attempts : 0;
+  stat.avgDelta = stat.attempts > 0 ? stat.avgDelta / stat.attempts : 0;
+  stat.winRate = stat.attempts > 0 ? (stat.wins / stat.attempts) * 100 : 0;
+}
+
+const all = Array.from(actionStats.values());
+const topWinRate = [...all].filter((a) => a.attempts >= 3).sort((a, b) => b.winRate - a.winRate).slice(0, 15);
+const topLosers = [...all].filter((a) => a.attempts >= 3).sort((a, b) => a.winRate - b.winRate).slice(0, 15);
+const topDelta = [...all].filter((a) => a.attempts >= 3).sort((a, b) => b.avgDelta - a.avgDelta).slice(0, 15);
+const topByAttempts = [...all].sort((a, b) => b.attempts - a.attempts).slice(0, 20);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function winBar(rate: number, width = 12): string {
+  const filled = Math.round((rate / 100) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Action Win Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-win-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Action Win Rate <span class="muted" style="font-size:0.6em">(iter #245)</span></h1>
+      <p class="agents-sub">
+        每个 action 的"成功率" = 应用该 action 后下一个 round score 上升的比例。
+        排除 attempts &lt; 3 的 action,避免噪声。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-awr-globals">
+        <span>unique actions: <strong>{actionStats.size}</strong></span>
+        <span>total applications: <strong>{all.reduce((s, a) => s + a.attempts, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 top 15 最高胜率(attempts ≥ 3)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>win rate</th><th>W / L / N</th><th>avg Δ</th><th>attempts</th></tr>
+        </thead>
+        <tbody>
+          {topWinRate.map((a) => (
+            <tr>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{winBar(a.winRate)} <strong style="color:#10b981">{a.winRate.toFixed(0)}%</strong></td>
+              <td><small>{a.wins}/{a.losses}/{a.neutral}</small></td>
+              <td><strong style={`color:${a.avgDelta >= 0 ? '#10b981' : '#ef4444'}`}>{a.avgDelta >= 0 ? '+' : ''}{a.avgDelta.toFixed(2)}</strong></td>
+              <td>{a.attempts}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚠️ top 15 最低胜率</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>win rate</th><th>W / L / N</th><th>avg Δ</th><th>attempts</th></tr>
+        </thead>
+        <tbody>
+          {topLosers.map((a) => (
+            <tr>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{winBar(a.winRate)} <strong style="color:#ef4444">{a.winRate.toFixed(0)}%</strong></td>
+              <td><small>{a.wins}/{a.losses}/{a.neutral}</small></td>
+              <td><strong style={`color:${a.avgDelta >= 0 ? '#10b981' : '#ef4444'}`}>{a.avgDelta >= 0 ? '+' : ''}{a.avgDelta.toFixed(2)}</strong></td>
+              <td>{a.attempts}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 15 最大 avg Δ</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>avg Δ</th><th>win rate</th><th>attempts</th></tr>
+        </thead>
+        <tbody>
+          {topDelta.map((a) => (
+            <tr>
+              <td><code>{esc(a.action)}</code></td>
+              <td><strong style="color:#10b981">+{a.avgDelta.toFixed(2)}</strong></td>
+              <td>{a.winRate.toFixed(0)}%</td>
+              <td>{a.attempts}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 应用次数 top 20</h2>
+      <pre class="agents-awr-flow">{topByAttempts.map((a) => {
+        const max = topByAttempts[0].attempts;
+        return `${a.action.padEnd(28)} ${bar(a.attempts, max, 18)}  ${a.attempts}  (W${a.winRate.toFixed(0)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>win rate &gt; 70% = 值得多用的 action</li>
+        <li>win rate &lt; 30% = 可能需重新设计或慎用</li>
+        <li>attempts ≥ 3 才显示胜率排名(过滤噪声)</li>
+        <li>对照 <a href={`${base}/agents/action-effectiveness/`}>Action Effectiveness</a> 看完整 effectiveness 矩阵</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-awr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-awr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-awr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
