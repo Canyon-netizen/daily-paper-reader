@@ -1,0 +1,206 @@
+---
+// /agents/daily-pulse.astro — iter #254:daily activity pulse (last 30 days)
+//
+// 最近 30 天每天的 rounds 数 / sessions 数 / tokens / cost
+// 用 ASCII sparkline + 表格展示
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+const ONE_DAY = 24 * 60 * 60 * 1000;
+
+interface Day {
+  date: string;
+  rounds: number;
+  tokens: number;
+  cost: number;
+  newSessions: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const dailyMap = new Map<string, Day>();
+const sessionDays = new Map<string, string>(); // sid -> first day
+
+function dayKey(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let firstDay = '';
+    try {
+      const st = await stat(sp);
+      firstDay = dayKey(st.mtimeMs);
+      sessionDays.set(sid, firstDay);
+    } catch (e) { /* */ }
+
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const fp = join(rd, rf);
+        const st = await stat(fp);
+        const dk = dayKey(st.mtimeMs);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        if (!dailyMap.has(dk)) {
+          dailyMap.set(dk, { date: dk, rounds: 0, tokens: 0, cost: 0, newSessions: 0 });
+        }
+        const day = dailyMap.get(dk)!;
+        day.rounds += 1;
+        day.tokens += tokens;
+        day.cost += (tokens / 1_000_000) * SONNET_PRICE;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 标记 new sessions
+for (const [sid, day] of sessionDays) {
+  if (dailyMap.has(day)) {
+    dailyMap.get(day)!.newSessions += 1;
+  }
+}
+
+// 生成最近 30 天(包含今天)
+const today = new Date();
+today.setUTCHours(0, 0, 0, 0);
+const days: Day[] = [];
+for (let i = 29; i >= 0; i--) {
+  const d = new Date(today.getTime() - i * ONE_DAY);
+  const key = d.toISOString().slice(0, 10);
+  days.push(dailyMap.get(key) ?? { date: key, rounds: 0, tokens: 0, cost: 0, newSessions: 0 });
+}
+
+const totalRounds = days.reduce((s, d) => s + d.rounds, 0);
+const totalCost = days.reduce((s, d) => s + d.cost, 0);
+const maxRounds = Math.max(...days.map((d) => d.rounds), 1);
+const maxTokens = Math.max(...days.map((d) => d.tokens), 1);
+const peakDay = days.reduce((best, d) => d.rounds > best.rounds ? d : best, days[0]);
+const activeDays = days.filter((d) => d.rounds > 0).length;
+
+// 最近 7d vs 前 23d
+const last7 = days.slice(-7);
+const prev23 = days.slice(0, -7);
+const last7Rounds = last7.reduce((s, d) => s + d.rounds, 0);
+const prev23Rounds = prev23.reduce((s, d) => s + d.rounds, 0);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Daily Pulse · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-pulse</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Daily Activity Pulse <span class="muted" style="font-size:0.6em">(iter #254)</span></h1>
+      <p class="agents-sub">
+        最近 30 天的 rounds / tokens / cost / new sessions 分布。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dp-globals">
+        <span>30d 总 rounds: <strong>{totalRounds}</strong></span>
+        <span>30d 总 cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>活跃天数: <strong>{activeDays}</strong> / 30</span>
+        <span>峰值日: <strong>{peakDay.date}</strong>({peakDay.rounds} rounds)</span>
+        <span>近 7d: <strong>{last7Rounds}</strong> rounds</span>
+        <span>前 23d: <strong>{prev23Rounds}</strong> rounds</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 rounds 分布</h2>
+      <pre class="agents-dp-flow">{days.map((d) => {
+        return `${d.date}  ${bar(d.rounds, maxRounds, 22)}  ${d.rounds.toString().padStart(3)} rounds  new=${d.newSessions}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💰 tokens 分布</h2>
+      <pre class="agents-dp-flow">{days.map((d) => {
+        return `${d.date}  ${bar(d.tokens, maxTokens, 22)}  ${fmtTok(d.tokens).padStart(6)}  $${d.cost.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 完整表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>date</th><th>rounds</th><th>tokens</th><th>cost</th><th>new sessions</th></tr>
+        </thead>
+        <tbody>
+          {days.slice().reverse().map((d) => (
+            <tr>
+              <td><code>{d.date}</code></td>
+              <td><strong>{d.rounds}</strong></td>
+              <td>{fmtTok(d.tokens)}</td>
+              <td>${d.cost.toFixed(2)}</td>
+              <td>{d.newSessions}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>活跃天数 &gt; 20 = 高频使用;&lt; 5 = 偶发</li>
+        <li>近 7d vs 前 23d:正加速 / 负减速</li>
+        <li>对照 <a href={`${base}/agents/daily-score-trend/`}>Daily Score Trend</a> 看分数趋势</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-dp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
