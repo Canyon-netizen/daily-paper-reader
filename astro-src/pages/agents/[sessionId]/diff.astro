@@ -1,0 +1,384 @@
+---
+// /agents/[sessionId]/diff.astro — iter #88:round diff browser UI
+//
+// 选两份 round 文件,服务端解析,展示:
+//   - proposal added / removed / shared
+//   - score 平均值 delta
+//   - gate 决策变化(promoted count delta 等)
+//   - token / 耗时 delta
+//   - 展开两份 round JSON 详情
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import '../../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+export async function getStaticPaths() {
+  const root = join(process.cwd(), 'archive');
+  if (!existsSync(root)) return [];
+  const out: { params: { sessionId: string } }[] = [];
+  let entries: string[] = [];
+  try { entries = await readdir(root); } catch { return []; }
+  for (const sid of entries) {
+    const rdir = join(root, sid, 'rounds');
+    if (!existsSync(rdir)) continue;
+    const files = (await readdir(rdir)).filter((f) => /^round_\d+\.json$/.test(f));
+    if (files.length >= 2 && existsSync(join(root, sid, 'meta.json'))) {
+      out.push({ params: { sessionId: sid } });
+    }
+  }
+  return out;
+}
+
+const { sessionId } = Astro.params;
+const sessionDir = join(process.cwd(), 'archive', sessionId);
+const rdir = join(sessionDir, 'rounds');
+
+const roundFiles = (await readdir(rdir))
+  .filter((f) => /^round_\d+\.json$/.test(f))
+  .sort();
+
+interface RoundEntry {
+  round: number;
+  path: string;
+  raw: string;
+  data: any;
+}
+
+const rounds: RoundEntry[] = [];
+for (const f of roundFiles) {
+  const m = f.match(/^round_(\d+)\.json$/);
+  const round = m ? Number(m[1]) : 0;
+  const path = join(rdir, f);
+  const raw = await readFile(path, 'utf8');
+  try {
+    rounds.push({ round, path, raw, data: JSON.parse(raw) });
+  } catch { /* skip */ }
+}
+
+// URL params
+const url = Astro.url;
+const aRound = Number(url.searchParams.get('a') ?? rounds[0]?.round ?? 0);
+const bRound = Number(url.searchParams.get('b') ?? rounds[rounds.length - 1]?.round ?? 0);
+
+const a = rounds.find((r) => r.round === aRound) ?? rounds[0];
+const b = rounds.find((r) => r.round === bRound) ?? rounds[rounds.length - 1];
+
+// 计算 diff
+interface Diff {
+  proposalsAdded: any[];
+  proposalsRemoved: any[];
+  proposalsShared: any[];
+  avgScoreA: number;
+  avgScoreB: number;
+  avgScoreDelta: number;
+  promotedA: number;
+  promotedB: number;
+  rejectedA: number;
+  rejectedB: number;
+  appliedA: number;
+  appliedB: number;
+  tokensA: number;
+  tokensB: number;
+  tokensDelta: number;
+  durationA: number;
+  durationB: number;
+  durationDelta: number;
+}
+
+function computeDiff(a: any, b: any): Diff {
+  const aProps = a?.data?.designer?.proposals ?? [];
+  const bProps = b?.data?.designer?.proposals ?? [];
+  const aById = new Map<string, any>();
+  const bById = new Map<string, any>();
+  for (const p of aProps) if (p?.proposal_id) aById.set(p.proposal_id, p);
+  for (const p of bProps) if (p?.proposal_id) bById.set(p.proposal_id, p);
+  const added: any[] = [];
+  const removed: any[] = [];
+  const shared: any[] = [];
+  for (const [id, p] of bById.entries()) {
+    if (!aById.has(id)) added.push(p);
+    else shared.push({ a: aById.get(id), b: p });
+  }
+  for (const [id, p] of aById.entries()) {
+    if (!bById.has(id)) removed.push(p);
+  }
+
+  function avgCr(r: any): number {
+    const cr = Array.isArray(r?.data?.feedback?.critiques) ? r.data.feedback.critiques : [];
+    if (cr.length === 0) return 0;
+    return cr.reduce((acc: number, c: any) => acc + (typeof c?.total === 'number' ? c.total : 0), 0) / cr.length;
+  }
+  const as = avgCr(a); const bs = avgCr(b);
+  return {
+    proposalsAdded: added,
+    proposalsRemoved: removed,
+    proposalsShared: shared,
+    avgScoreA: as,
+    avgScoreB: bs,
+    avgScoreDelta: bs - as,
+    promotedA: Array.isArray(a?.data?.gate?.promoted) ? a.data.gate.promoted.length : 0,
+    promotedB: Array.isArray(b?.data?.gate?.promoted) ? b.data.gate.promoted.length : 0,
+    rejectedA: Array.isArray(a?.data?.gate?.rejected) ? a.data.gate.rejected.length : 0,
+    rejectedB: Array.isArray(b?.data?.gate?.rejected) ? b.data.gate.rejected.length : 0,
+    appliedA: Array.isArray(a?.data?.modifier?.applied) ? a.data.modifier.applied.length : 0,
+    appliedB: Array.isArray(b?.data?.modifier?.applied) ? b.data.modifier.applied.length : 0,
+    tokensA: Number(a?.data?.feedback?.total_tokens ?? 0),
+    tokensB: Number(b?.data?.feedback?.total_tokens ?? 0),
+    tokensDelta: Number(b?.data?.feedback?.total_tokens ?? 0) - Number(a?.data?.feedback?.total_tokens ?? 0),
+    durationA: Number(a?.data?.telemetry?.duration_ms ?? 0),
+    durationB: Number(b?.data?.telemetry?.duration_ms ?? 0),
+    durationDelta: Number(b?.data?.telemetry?.duration_ms ?? 0) - Number(a?.data?.telemetry?.duration_ms ?? 0),
+  };
+}
+
+const diff = (a && b) ? computeDiff(a, b) : null;
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+
+function deltaStr(n: number): string {
+  if (n > 0) return `+${n}`;
+  return String(n);
+}
+
+function fmtMs(ms: number): string {
+  if (!ms) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60_000).toFixed(1)}min`;
+}
+---
+
+<BaseLayout title={`Round Diff · ${sessionId} — Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <a href={`${base}/agents/${sessionId}/`}>{sessionId}</a>
+      <span class="agents-breadcrumb-sep">/</span>
+      <span>diff</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔀 Round Diff · <code>{sessionId}</code></h1>
+      <p class="agents-sub">
+        iter #88 · 选两份 round 对比 proposals added/removed/shared、score delta、token / 耗时变化。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📂 选两份 round</h2>
+      <form method="get" class="agents-sdiff-form">
+        <label>
+          <span>A (基线)</span>
+          <select name="a" onchange="this.form.submit()">
+            {rounds.map((r) => (
+              <option value={r.round} selected={r.round === a?.round}>round_{String(r.round).padStart(3, '0')}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>B (对比)</span>
+          <select name="b" onchange="this.form.submit()">
+            {rounds.map((r) => (
+              <option value={r.round} selected={r.round === b?.round}>round_{String(r.round).padStart(3, '0')}</option>
+            ))}
+          </select>
+        </label>
+      </form>
+    </section>
+
+    {diff && a && b && (
+      <>
+        <section class="agents-session-section">
+          <h2>📊 指标对比</h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr><th>指标</th><th>A · round_{a.round}</th><th>B · round_{b.round}</th><th>Δ</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>avg critique total</td>
+                <td>{diff.avgScoreA.toFixed(2)}</td>
+                <td>{diff.avgScoreB.toFixed(2)}</td>
+                <td class={diff.avgScoreDelta >= 0 ? 'agents-diff-pos' : 'agents-diff-neg'}>{deltaStr(Number(diff.avgScoreDelta.toFixed(2)))}</td>
+              </tr>
+              <tr>
+                <td>promoted</td>
+                <td>{diff.promotedA}</td>
+                <td>{diff.promotedB}</td>
+                <td>{deltaStr(diff.promotedB - diff.promotedA)}</td>
+              </tr>
+              <tr>
+                <td>rejected</td>
+                <td>{diff.rejectedA}</td>
+                <td>{diff.rejectedB}</td>
+                <td>{deltaStr(diff.rejectedB - diff.rejectedA)}</td>
+              </tr>
+              <tr>
+                <td>applied</td>
+                <td>{diff.appliedA}</td>
+                <td>{diff.appliedB}</td>
+                <td>{deltaStr(diff.appliedB - diff.appliedA)}</td>
+              </tr>
+              <tr>
+                <td>tokens</td>
+                <td>{diff.tokensA.toLocaleString()}</td>
+                <td>{diff.tokensB.toLocaleString()}</td>
+                <td>{deltaStr(diff.tokensDelta)}</td>
+              </tr>
+              <tr>
+                <td>duration</td>
+                <td>{fmtMs(diff.durationA)}</td>
+                <td>{fmtMs(diff.durationB)}</td>
+                <td>{fmtMs(diff.durationDelta)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>➕ Proposals added (B - A) · {diff.proposalsAdded.length}</h2>
+          {diff.proposalsAdded.length === 0 ? (
+            <p class="muted">无新增 proposals。</p>
+          ) : (
+            <ul class="agents-diff-list">
+              {diff.proposalsAdded.map((p) => (
+                <li class="agents-diff-add">
+                  <strong>{escapeHtml(p?.title ?? '(untitled)')}</strong>
+                  <small class="muted">
+                    · <code>{escapeHtml(p?.type ?? 'unknown')}</code>
+                    · <code>{escapeHtml(p?.proposal_id ?? '')}</code>
+                  </small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>➖ Proposals removed (A - B) · {diff.proposalsRemoved.length}</h2>
+          {diff.proposalsRemoved.length === 0 ? (
+            <p class="muted">无删除 proposals。</p>
+          ) : (
+            <ul class="agents-diff-list">
+              {diff.proposalsRemoved.map((p) => (
+                <li class="agents-diff-rm">
+                  <strong>{escapeHtml(p?.title ?? '(untitled)')}</strong>
+                  <small class="muted">
+                    · <code>{escapeHtml(p?.type ?? 'unknown')}</code>
+                    · <code>{escapeHtml(p?.proposal_id ?? '')}</code>
+                  </small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>🔁 Proposals shared (出现在两边) · {diff.proposalsShared.length}</h2>
+          {diff.proposalsShared.length === 0 ? (
+            <p class="muted">无共享 proposals。</p>
+          ) : (
+            <ul class="agents-diff-list">
+              {diff.proposalsShared.map((pair) => (
+                <li class="agents-diff-shared">
+                  <strong>{escapeHtml(pair.b?.title ?? pair.a?.title ?? '(untitled)')}</strong>
+                  <small class="muted">
+                    · <code>{escapeHtml(pair.b?.type ?? pair.a?.type ?? 'unknown')}</code>
+                    · <code>{escapeHtml(pair.b?.proposal_id ?? '')}</code>
+                    {pair.a?.title !== pair.b?.title && (
+                      <span> · 标题变化</span>
+                    )}
+                  </small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📜 展开两份 round JSON</h2>
+          <details>
+            <summary>📄 A: round_{String(a.round).padStart(3, '0')}.json</summary>
+            <pre class="agents-sdiff-raw">{a.raw}</pre>
+          </details>
+          <details>
+            <summary>📄 B: round_{String(b.round).padStart(3, '0')}.json</summary>
+            <pre class="agents-sdiff-raw">{b.raw}</pre>
+          </details>
+        </section>
+      </>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/${sessionId}/`}>← Session 详情</a>
+        <a class="button" href={`${base}/agents/${sessionId}/timeline/`}>📜 Timeline</a>
+        <a class="button" href={`${base}/agents/${sessionId}/stats/`}>📈 Stats</a>
+        <a class="button" href={`${base}/agents/${sessionId}/synthesis/diff/`}>🧠 Synthesis Diff</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sdiff-form {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .agents-sdiff-form label {
+    flex: 1;
+    min-width: 240px;
+  }
+  .agents-sdiff-form label span {
+    display: block;
+    margin-bottom: 0.3rem;
+    font-size: 0.85rem;
+    color: #6b7280;
+  }
+  .agents-sdiff-form select {
+    width: 100%;
+    padding: 0.4rem;
+    border-radius: 4px;
+    border: 1px solid #d1d5db;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-diff-pos { color: #10b981; }
+  .agents-diff-neg { color: #ef4444; }
+  .agents-diff-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-diff-list li {
+    padding: 0.3rem 0.6rem;
+    border-radius: 4px;
+    margin-bottom: 0.3rem;
+    font-size: 0.9rem;
+  }
+  .agents-diff-add { background: rgba(16, 185, 129, 0.12); border-left: 3px solid #10b981; }
+  .agents-diff-rm { background: rgba(239, 68, 68, 0.12); border-left: 3px solid #ef4444; }
+  .agents-diff-shared { background: rgba(99, 102, 241, 0.12); border-left: 3px solid #4f46e5; }
+  .agents-sdiff-raw {
+    background: rgba(0,0,0,0.2);
+    padding: 0.8rem;
+    border-radius: 4px;
+    max-height: 500px;
+    overflow: auto;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
