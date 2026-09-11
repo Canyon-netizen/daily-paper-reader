@@ -1,0 +1,196 @@
+---
+// /agents/type-action-rec.astro — iter #261:per-type action recommendations
+//
+// 对每个 goal 类型,找出在该类型 sessions 中最常出现的 actions,
+// 以及这些 actions 配套下的 avg score。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['research', 'paper', 'study', 'survey', 'literature', '论文', '研究', '文献', '调研', '综述', '学术'],
+  code: ['code', 'program', 'function', 'implement', 'algorithm', '代码', '实现', '编程', '程序', '函数', '算法'],
+  write: ['write', 'blog', 'essay', 'article', 'report', '撰写', '写作', '文章', '博客', '报告', '作文', '散文'],
+  analyze: ['analyze', 'analysis', 'data', 'dataset', 'statistics', 'anomaly', '分析', '数据', '统计', '异常', '聚类', '回归'],
+  design: ['design', 'architect', 'plan', 'system', 'schema', '设计', '架构', '方案', '系统', '蓝图', '规划'],
+};
+
+interface TypeStat {
+  type: string;
+  count: number;
+  avgFinal: number;
+  actionCounts: Map<string, number>;
+  actionScores: Map<string, number[]>;
+}
+
+function classify(goal: string): string {
+  const lower = goal.toLowerCase();
+  const scores: Record<string, number> = {};
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    let s = 0;
+    for (const kw of kws) {
+      if (lower.includes(kw)) s += 1;
+    }
+    scores[type] = s;
+  }
+  const max = Math.max(...Object.values(scores));
+  if (max === 0) return 'other';
+  for (const [type, s] of Object.entries(scores)) {
+    if (s === max) return type;
+  }
+  return 'other';
+}
+
+const root = join(process.cwd(), 'archive');
+const typeMap = new Map<string, TypeStat>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    if (!goal) continue;
+    const type = classify(goal);
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+
+    let finalScore = 0;
+    const actionSet = new Set<string>();
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+        }
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          actionSet.add(act);
+        }
+      } catch (e) { /* */ }
+    }
+
+    if (!typeMap.has(type)) {
+      typeMap.set(type, {
+        type, count: 0, avgFinal: 0,
+        actionCounts: new Map(), actionScores: new Map(),
+      });
+    }
+    const ts = typeMap.get(type)!;
+    ts.count += 1;
+    ts.avgFinal += finalScore;
+    for (const a of actionSet) {
+      ts.actionCounts.set(a, (ts.actionCounts.get(a) ?? 0) + 1);
+      if (!ts.actionScores.has(a)) ts.actionScores.set(a, []);
+      ts.actionScores.get(a)!.push(finalScore);
+    }
+  }
+}
+
+// 标准化 avg final
+for (const ts of typeMap.values()) {
+  ts.avgFinal = ts.count > 0 ? ts.avgFinal / ts.count : 0;
+}
+
+// per type top actions
+const typeRecs = Array.from(typeMap.entries()).map(([type, ts]) => {
+  const actions = Array.from(ts.actionCounts.entries())
+    .map(([a, c]) => {
+      const scores = ts.actionScores.get(a) ?? [];
+      const avg = scores.length > 0 ? scores.reduce((s, x) => s + x, 0) / scores.length : 0;
+      return { action: a, count: c, avg, lift: avg - ts.avgFinal };
+    })
+    .filter((x) => x.count >= 2)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+  return { type, count: ts.count, avgFinal: ts.avgFinal, actions };
+}).sort((a, b) => b.count - a.count);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 12): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Type Action Recommendations · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / type-action-rec</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎁 Type Action Recommendations <span class="muted" style="font-size:0.6em">(iter #261)</span></h1>
+      <p class="agents-sub">
+        按 goal 类型推荐最相关的 actions。lift = 该 type 下使用该 action 时的 avg score - type 全局 avg。
+      </p>
+    </header>
+
+    {typeRecs.map((tr) => (
+      <section class="agents-session-section">
+        <h2>🏷️ {tr.type} ({tr.count} sessions, avg final = {tr.avgFinal.toFixed(2)})</h2>
+        <table class="agents-session-table">
+          <thead>
+            <tr><th>action</th><th>count</th><th>avg score</th><th>lift</th></tr>
+          </thead>
+          <tbody>
+            {tr.actions.map((a) => (
+              <tr>
+                <td><code>{esc(a.action)}</code></td>
+                <td>{bar(a.count, Math.max(...tr.actions.map((x) => x.count)), 12)} {a.count}</td>
+                <td>{a.avg.toFixed(2)}</td>
+                <td><strong style={`color:${a.lift >= 0 ? '#10b981' : '#ef4444'}`}>{a.lift >= 0 ? '+' : ''}{a.lift.toFixed(2)}</strong></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高 lift action = 在该类型下值得优先使用</li>
+        <li>低 lift 或 0 = 该 action 在此类型下无明显效果</li>
+        <li>count &lt; 2 的 action 被过滤(样本不足)</li>
+        <li>对照 <a href={`${base}/agents/goal-type-classifier/`}>Goal Type Classifier</a> 看类型分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-session-table {
+    font-size: 0.85em;
+  }
+</style>
