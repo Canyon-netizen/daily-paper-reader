@@ -1,0 +1,193 @@
+---
+// /agents/persona-range.astro — iter #201:per-persona score range
+//
+// 每个 persona 的评分范围:
+//   - min / max / mean
+//   - 标准差
+//   - 评分分布直方图
+//   - "严厉度"排名(score 均值越低 = 越严)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaStats {
+  name: string;
+  count: number;
+  sum: number;
+  min: number;
+  max: number;
+  mean: number;
+  stdDev: number;
+  scores: number[];
+}
+
+const root = join(process.cwd(), 'archive');
+const personaScores = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') {
+              if (!personaScores.has(name)) personaScores.set(name, []);
+              personaScores.get(name)!.push(p.total);
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const stats: PersonaStats[] = [];
+for (const [name, scores] of personaScores.entries()) {
+  if (scores.length === 0) continue;
+  const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const variance = scores.reduce((s, x) => s + (x - mean) ** 2, 0) / scores.length;
+  const stdDev = Math.sqrt(variance);
+  stats.push({
+    name,
+    count: scores.length,
+    sum: scores.reduce((a, b) => a + b, 0),
+    min: Math.min(...scores),
+    max: Math.max(...scores),
+    mean,
+    stdDev,
+    scores,
+  });
+}
+stats.sort((a, b) => a.mean - b.mean); // 越严的越前
+
+// 评分分布(per persona)
+function histText(scores: number[], buckets = 10, width = 20): string {
+  if (scores.length === 0) return '';
+  const min = 0;
+  const max = 10;
+  const bucketSize = (max - min) / buckets;
+  const counts = new Array(buckets).fill(0);
+  for (const s of scores) {
+    const idx = Math.min(buckets - 1, Math.floor((s - min) / bucketSize));
+    if (idx >= 0 && idx < buckets) counts[idx] += 1;
+  }
+  const maxCount = Math.max(...counts, 1);
+  const lines: string[] = [];
+  for (let i = 0; i < buckets; i++) {
+    const lo = (min + i * bucketSize).toFixed(0);
+    const hi = (min + (i + 1) * bucketSize).toFixed(0);
+    const filled = Math.round((counts[i] / maxCount) * width);
+    lines.push(`${lo.padStart(2)}-${hi.padEnd(2)} ${'█'.repeat(filled)}${'░'.repeat(width - filled)} ${counts[i]}`);
+  }
+  return lines.join('\n');
+}
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Persona Score Range · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-range</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎚️ Persona Score Range <span class="muted" style="font-size:0.6em">(iter #201)</span></h1>
+      <p class="agents-sub">
+        每个 persona 的评分分布。
+        越严 = mean 越低;越宽 = stdDev 越大。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-prange-globals">
+        <span>persona 总数: <strong>{stats.length}</strong></span>
+        <span>总评分记录: <strong>{stats.reduce((s, p) => s + p.count, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Persona 评分分布(按 mean 排序,越严越前)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>count</th><th>min</th><th>mean</th><th>max</th><th>σ</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((p) => (
+            <tr>
+              <td><code>{esc(p.name)}</code></td>
+              <td>{p.count}</td>
+              <td>{p.min.toFixed(1)}</td>
+              <td><strong>{p.mean.toFixed(2)}</strong></td>
+              <td>{p.max.toFixed(1)}</td>
+              <td>{p.stdDev.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    {stats.slice(0, 8).map((p) => (
+      <section class="agents-session-section">
+        <h2>📊 {esc(p.name)} 直方图</h2>
+        <pre class="agents-prange-flow">{histText(p.scores)}</pre>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>σ &gt; 2 = 该 persona 评分跨度大,可能受 proposal 影响</li>
+        <li>σ &lt; 0.5 = 该 persona 评分总是接近,可能极端化(总给高分或低分)</li>
+        <li>对照 <a href={`${base}/agents/persona-elo/`}>Persona Elo</a> 看相互排名</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-prange-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-prange-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-prange-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
