@@ -1,0 +1,204 @@
+---
+// /agents/action-usage-trend.astro — iter #276:action usage trend over weeks
+//
+// 对每个高频 action,展示最近 12 周的使用频率趋势:
+//   - 找出"兴起"(近期多用)和"衰退"(近期少用)的 actions
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function isoWeek(ms: number): string {
+  const d = new Date(ms);
+  const onejan = new Date(d.getFullYear(), 0, 1);
+  return `${d.getFullYear()}-W${Math.ceil((((d.getTime() - onejan.getTime()) / 86400000) + onejan.getDay() + 1) / 7).toString().padStart(2, '0')}`;
+}
+
+const root = join(process.cwd(), 'archive');
+const actionWeekMap = new Map<string, Map<string, number>>();  // action -> week -> count
+const allWeeks = new Set<string>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    for (const rn of rNum) {
+      try {
+        const fp = join(rd, `round_${rn}.json`);
+        const st = await stat(fp);
+        const w = isoWeek(st.mtimeMs);
+        allWeeks.add(w);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const acts = new Set<string>();
+        for (const a of (r.modifier?.applied ?? [])) {
+          acts.add(a.action ?? a.type ?? 'unknown');
+        }
+        for (const a of acts) {
+          if (!actionWeekMap.has(a)) actionWeekMap.set(a, new Map());
+          const wm = actionWeekMap.get(a)!;
+          wm.set(w, (wm.get(w) ?? 0) + 1);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// 排序周
+const sortedWeeks = Array.from(allWeeks).sort().slice(-12);
+
+// 找出 top 15 actions(by 总使用次数)
+const totalByAction = Array.from(actionWeekMap.entries())
+  .map(([a, wm]) => ({ action: a, total: Array.from(wm.values()).reduce((s, x) => s + x, 0) }))
+  .sort((a, b) => b.total - a.total)
+  .slice(0, 15);
+
+// 计算 trend = 后 4 周 - 前 4 周 (取最近 12 周)
+function trend(action: string): { recent: number; older: number; diff: number; trend: 'rising' | 'falling' | 'stable' } {
+  const wm = actionWeekMap.get(action);
+  if (!wm) return { recent: 0, older: 0, diff: 0, trend: 'stable' };
+  const recent4 = sortedWeeks.slice(-4).reduce((s, w) => s + (wm.get(w) ?? 0), 0);
+  const older4 = sortedWeeks.slice(0, 4).reduce((s, w) => s + (wm.get(w) ?? 0), 0);
+  const diff = recent4 - older4;
+  const trend: 'rising' | 'falling' | 'stable' = diff > 2 ? 'rising' : diff < -2 ? 'falling' : 'stable';
+  return { recent: recent4, older: older4, diff, trend };
+}
+
+const top15 = totalByAction.map((a) => ({ ...a, ...trend(a.action) }));
+const rising = [...top15].sort((a, b) => b.diff - a.diff).slice(0, 8);
+const falling = [...top15].sort((a, b) => a.diff - b.diff).slice(0, 8);
+
+function sparkline(action: string): string {
+  const wm = actionWeekMap.get(action);
+  if (!wm) return '▅';
+  const values = sortedWeeks.map((w) => wm.get(w) ?? 0);
+  const blocks = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const max = Math.max(...values, 1);
+  return values.map((v) => blocks[Math.min(blocks.length - 1, Math.floor((v / max) * (blocks.length - 1)))]).join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Usage Trend · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-usage-trend</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Action Usage Trend <span class="muted" style="font-size:0.6em">(iter #276)</span></h1>
+      <p class="agents-sub">
+        跨最近 12 周,高频 action 的使用频率趋势。
+        recent(后 4 周)vs older(前 4 周)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-aut-globals">
+        <span>tracked weeks: <strong>{sortedWeeks.length}</strong></span>
+        <span>unique actions: <strong>{actionWeekMap.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 15 actions 趋势</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>total</th><th>recent 4w</th><th>older 4w</th><th>diff</th><th>trend</th><th>sparkline(12w)</th></tr>
+        </thead>
+        <tbody>
+          {top15.map((a) => (
+            <tr>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{a.total}</td>
+              <td>{a.recent}</td>
+              <td>{a.older}</td>
+              <td><strong style={`color:${a.diff > 0 ? '#10b981' : a.diff < 0 ? '#ef4444' : '#999'}`}>{a.diff >= 0 ? '+' : ''}{a.diff}</strong></td>
+              <td>{a.trend === 'rising' ? '🚀 rising' : a.trend === 'falling' ? '📉 falling' : '➡️ stable'}</td>
+              <td><code style="font-size:1.1em;color:#4f46e5">{sparkline(a.action)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 8 兴起中</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>diff</th><th>action</th><th>recent</th><th>older</th></tr>
+        </thead>
+        <tbody>
+          {rising.map((a) => (
+            <tr>
+              <td><strong style="color:#10b981">+{a.diff}</strong></td>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{a.recent}</td>
+              <td>{a.older}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 top 8 衰退中</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>diff</th><th>action</th><th>recent</th><th>older</th></tr>
+        </thead>
+        <tbody>
+          {falling.map((a) => (
+            <tr>
+              <td><strong style="color:#ef4444">{a.diff}</strong></td>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{a.recent}</td>
+              <td>{a.older}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>diff = recent_4w - older_4w,正值表示使用频率上升</li>
+        <li>rising action = 系统近期偏好</li>
+        <li>falling action = 可能被替代或失去价值</li>
+        <li>对照 <a href={`${base}/agents/action-decay/`}>Action Decay</a> 看累计</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-aut-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-aut-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
