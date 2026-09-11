@@ -1,0 +1,213 @@
+---
+// /agents/improvement-roi.astro — iter #210:round improvement ROI
+//
+// 每个 session 的"投入产出比":
+//   - cost = tokens 消耗(归一化到 $)
+//   - score_gain = 末轮 avg score - 首轮 avg score
+//   - ROI = score_gain / cost
+//   - 排名:高 ROI sessions(性价比最佳)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface SessionROI {
+  sid: string;
+  goal: string;
+  rounds: number;
+  tokens: number;
+  cost: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+  roi: number;        // gain / cost
+  roiPerRound: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionROI[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    let totalTokens = 0;
+    let firstScore = 0;
+    let finalScore = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        totalTokens += r.feedback?.total_tokens ?? 0;
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const avg = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        if (i === 0) firstScore = avg;
+        if (i === rNum.length - 1) finalScore = avg;
+      } catch (e) { /* */ }
+    }
+    const cost = (totalTokens / 1_000_000) * SONNET_PRICE;
+    const gain = finalScore - firstScore;
+    const roi = cost > 0.0001 ? gain / cost : 0;
+    sessions.push({
+      sid, goal, rounds: rNum.length,
+      tokens: totalTokens, cost,
+      firstScore, finalScore, gain,
+      roi,
+      roiPerRound: rNum.length > 0 ? roi / rNum.length : 0,
+    });
+  }
+}
+
+// 排名(排除 cost 太小的)
+const filtered = sessions.filter((s) => s.cost >= 0.001);
+const topROI = [...filtered].sort((a, b) => b.roi - a.roi).slice(0, 15);
+const topGain = [...sessions].sort((a, b) => b.gain - a.gain).slice(0, 10);
+const worstROI = [...filtered].sort((a, b) => a.roi - b.roi).slice(0, 10);
+
+const avgROI = filtered.length > 0 ? filtered.reduce((s, x) => s + x.roi, 0) / filtered.length : 0;
+const avgCost = sessions.length > 0 ? sessions.reduce((s, x) => s + x.cost, 0) / sessions.length : 0;
+const avgGain = sessions.length > 0 ? sessions.reduce((s, x) => s + x.gain, 0) / sessions.length : 0;
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Improvement ROI · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / improvement-roi</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💰 Improvement ROI <span class="muted" style="font-size:0.6em">(iter #210)</span></h1>
+      <p class="agents-sub">
+        每 session 的投入产出比:score gain / cost。
+        高 ROI = 性价比最佳;低/负 ROI = 烧钱不出分。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-iroi-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>avg cost: <strong>${avgCost.toFixed(3)}</strong></span>
+        <span>avg gain: <strong>{avgGain.toFixed(2)}</strong></span>
+        <span>avg ROI: <strong>{avgROI.toFixed(1)} pts/$</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💎 top 15 高 ROI sessions(score/$)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>ROI</th><th>sid</th><th>gain</th><th>cost</th><th>rounds</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topROI.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">{s.roi.toFixed(1)}</strong></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td>+{s.gain.toFixed(2)}</td>
+              <td>${s.cost.toFixed(3)}</td>
+              <td>{s.rounds}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 25))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 10 最大绝对改善</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>gain</th><th>sid</th><th>first → final</th><th>cost</th></tr>
+        </thead>
+        <tbody>
+          {topGain.map((s) => (
+            <tr>
+              <td><strong>+{s.gain.toFixed(2)}</strong></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td>{s.firstScore.toFixed(2)} → {s.finalScore.toFixed(2)}</td>
+              <td>${s.cost.toFixed(3)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 worst 10 ROI(烧钱陷阱)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>ROI</th><th>sid</th><th>gain</th><th>cost</th></tr>
+        </thead>
+        <tbody>
+          {worstROI.map((s) => (
+            <tr>
+              <td><strong style="color:#ef4444">{s.roi.toFixed(1)}</strong></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td>{s.gain.toFixed(2)}</td>
+              <td>${s.cost.toFixed(3)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>ROI &gt; 100 = 极高性价比(可能 cost 接近 0)</li>
+        <li>ROI &lt; 0 = 投入后分数反而降</li>
+        <li>对照 <a href={`${base}/agents/cost-by-phase/`}>Cost by Phase</a> 看成本构成</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-iroi-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-iroi-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
