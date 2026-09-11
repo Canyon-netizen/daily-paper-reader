@@ -1,0 +1,169 @@
+---
+// /agents/avg-round-score.astro — iter #317:global avg round score distribution
+//
+// 看每个 round 的 score 在 0-10 区间内的分布
+//   - avg/min/max/std per round
+//   - 看 modifier 输出质量
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundInfo {
+  sid: string;
+  round: number;
+  score: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const allScores: number[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) allScores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const total = allScores.length;
+const avg = total > 0 ? allScores.reduce((a, b) => a + b, 0) / total : 0;
+const sorted = [...allScores].sort((a, b) => a - b);
+const min = total > 0 ? sorted[0] : 0;
+const max = total > 0 ? sorted[sorted.length - 1] : 0;
+const median = total > 0 ? sorted[Math.floor(total / 2)] : 0;
+const p25 = total > 0 ? sorted[Math.floor(total * 0.25)] : 0;
+const p75 = total > 0 ? sorted[Math.floor(total * 0.75)] : 0;
+const p95 = total > 0 ? sorted[Math.floor(total * 0.95)] : 0;
+const variance = total > 0 ? allScores.reduce((s, x) => s + (x - avg) ** 2, 0) / total : 0;
+const std = Math.sqrt(variance);
+
+const BUCKETS = [
+  { label: '0-3', min: 0, max: 3, count: 0 },
+  { label: '3-4', min: 3, max: 4, count: 0 },
+  { label: '4-5', min: 4, max: 5, count: 0 },
+  { label: '5-6', min: 5, max: 6, count: 0 },
+  { label: '6-7', min: 6, max: 7, count: 0 },
+  { label: '7-8', min: 7, max: 8, count: 0 },
+  { label: '8-10', min: 8, max: 11, count: 0 },
+];
+
+for (const s of allScores) {
+  for (const b of BUCKETS) {
+    if (s >= b.min && s < b.max) { b.count += 1; break; }
+  }
+}
+
+const maxBucket = Math.max(...BUCKETS.map((b) => b.count), 1);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Avg Round Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / avg-round-score</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Avg Round Score <span class="muted" style="font-size:0.6em">(iter #317)</span></h1>
+      <p class="agents-sub">
+        跨所有 sessions × rounds 的 avg score 分布。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局统计</h2>
+      <div class="agents-ars-globals">
+        <span>总 rounds: <strong>{total.toLocaleString()}</strong></span>
+        <span>avg: <strong>{avg.toFixed(2)}</strong></span>
+        <span>median: <strong>{median.toFixed(2)}</strong></span>
+        <span>std: <strong>{std.toFixed(2)}</strong></span>
+        <span>min: <strong>{min.toFixed(2)}</strong></span>
+        <span>max: <strong>{max.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 百分位</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>percentile</th><th>score</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>p25</td><td>{p25.toFixed(2)}</td></tr>
+          <tr><td>p50 (median)</td><td><strong>{median.toFixed(2)}</strong></td></tr>
+          <tr><td>p75</td><td>{p75.toFixed(2)}</td></tr>
+          <tr><td>p95</td><td>{p95.toFixed(2)}</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 分数桶分布</h2>
+      <pre class="agents-ars-flow">{BUCKETS.map((b) => {
+        return `${b.label.padEnd(6)} ${bar(b.count, maxBucket, 22)}  ${b.count}  (${((b.count / Math.max(1, total)) * 100).toFixed(1)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg &gt; 7 = 系统整体质量高</li>
+        <li>median &gt; 5 = 多数 round 中等以上</li>
+        <li>std &lt; 1 = 评分稳定</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+        <li>对照 <a href={`${base}/agents/score-quartile-vs-rounds/`}>Score Quartile vs Rounds</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ars-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ars-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ars-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
