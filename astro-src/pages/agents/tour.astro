@@ -1,0 +1,277 @@
+---
+// /agents/tour.astro — iter #106:interactive onboarding tour
+//
+// 给新用户的引导页:
+//   - 6 个核心页面的 ASCII preview
+//   - 一键跳转
+//   - 跟踪完成进度(localStorage)
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STEPS = [
+  {
+    n: 1,
+    title: '📋 控制台',
+    href: '/agents/',
+    desc: '多智能体系统的"主页"。从这里新建 session、查看已有 session、跳转到所有子页面。',
+    preview: `┌─ /agents/ ──────────────────┐
+│                              │
+│ ➕ 新建 session               │
+│                              │
+│ [🔍 Search] [📦 Bulk] [🩺 Health]│
+│ [📊 Score] [🧠 Insights]      │
+│ [📜 Changelog] [💸 Tokens]    │
+│ ...                          │
+│                              │
+│ Sessions:                    │
+│ • test-score-iter75 (3)      │
+│ • research-agent-2024 (12)   │
+│                              │
+└──────────────────────────────┘`,
+  },
+  {
+    n: 2,
+    title: '🧠 跨 session Insights',
+    href: '/agents/insights/',
+    desc: '看所有 session 的整体趋势:proposal 类型频率、arxiv 热点、研究方向漂移(top sessions)。',
+    preview: `┌─ /agents/insights/ ────────┐
+│                              │
+│ Proposal 类型频率:            │
+│   method     ████████ 32%     │
+│   experiment █████  22%      │
+│   analysis   ████   17%      │
+│                              │
+│ arxiv 热点:                   │
+│   2501.12345  出现 8 次       │
+│   2412.00100  出现 5 次       │
+│                              │
+│ 研究方向漂移: 稳定 ✅         │
+│                              │
+└──────────────────────────────┘`,
+  },
+  {
+    n: 3,
+    title: '📜 Changelog',
+    href: '/agents/changelog/',
+    desc: '从 git log 生成的发布说明。看每个 commit 加了什么、改了什么。',
+    preview: `┌─ /agents/changelog/ ───────┐
+│                              │
+│ 最近 30 commits:             │
+│                              │
+│ b176756a  feat: global arxiv │
+│   reverse index (iter #93)   │
+│                              │
+│ ea43b54b  feat: session      │
+│   health check (#92)         │
+│                              │
+│ 49295ca5  feat: token &      │
+│   cost dashboard (#91)       │
+│                              │
+└──────────────────────────────┘`,
+  },
+  {
+    n: 4,
+    title: '💸 Token & Cost',
+    href: '/agents/tokens/',
+    desc: 'token 消耗 + 费用 dashboard。按 session 排名、按日聚合。',
+    preview: `┌─ /agents/tokens/ ──────────┐
+│                              │
+│ 总 tokens: 6,500             │
+│ 总费用:    <$0.01            │
+│                              │
+│ Top sessions:                │
+│   iter75  ████████  6,500   │
+│                              │
+│ 过去 7 天:                   │
+│   Mon ░                       │
+│   Tue ░                       │
+│   Wed ░                       │
+│                              │
+└──────────────────────────────┘`,
+  },
+  {
+    n: 5,
+    title: '🩺 Health Check',
+    href: '/agents/health/',
+    desc: '扫描所有 session 的健康问题(缺文件、缺 round、缺 synthesis 等)。',
+    preview: `┌─ /agents/health/ ──────────┐
+│                              │
+│ 总 sessions: 1               │
+│ 健康:        1 (100%)        │
+│ 警告:        0               │
+│ 错误:        0               │
+│                              │
+│ Session 详情:                │
+│ ✅ test-score-iter75         │
+│   meta.json  ✓               │
+│   rounds/    ✓ (3 files)     │
+│   synthesis/ ✓ (2 files)     │
+│                              │
+└──────────────────────────────┘`,
+  },
+  {
+    n: 6,
+    title: '🎉 Milestone',
+    href: '/agents/milestone/',
+    desc: '查看整个系统的迭代历史:100+ 次 commit 累计的 page、line、feature 时间线。',
+    preview: `┌─ /agents/milestone/ ───────┐
+│                              │
+│ 🎉 Milestone #100            │
+│                              │
+│ 38 .astro pages              │
+│ 5,000+ lines of code         │
+│ 100+ agent iters             │
+│                              │
+│ Feature 时间线:               │
+│ #75 score dashboard          │
+│ #76 cross-session insights   │
+│ #77 daily standup            │
+│ ...                          │
+│ #100 milestone 🎉            │
+│                              │
+└──────────────────────────────┘`,
+  },
+];
+---
+
+<BaseLayout title="Tour · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / tour</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🚶 Tour <span class="muted" style="font-size:0.6em">(iter #106)</span></h1>
+      <p class="agents-sub">
+        给新用户的 6 步引导。每步展示一个核心页面的 ASCII preview + 跳转链接。
+        进度自动存 localStorage。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 进度</h2>
+      <div class="agents-tour-progress">
+        <strong id="tour-progress-text">0 / {STEPS.length}</strong> 步已完成
+        <div class="agents-tour-bar"><div class="agents-tour-bar-fill" id="tour-fill"></div></div>
+        <button class="button small" id="tour-reset" type="button">↩️ 重置</button>
+      </div>
+    </section>
+
+    {STEPS.map((s) => (
+      <section class="agents-session-section agents-tour-step" data-step={s.n}>
+        <h2>Step {s.n}: {s.title}</h2>
+        <p>{s.desc}</p>
+        <pre class="agents-tour-preview">{s.preview}</pre>
+        <p>
+          <a class="button primary tour-visit" href={s.href} data-step={s.n}>👁 访问 {s.title}</a>
+          <button class="button small tour-mark" type="button" data-step={s.n}>✓ 标记完成</button>
+        </p>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>🎓 完成!</h2>
+      <p>完成所有 6 步后,你已经熟悉了系统的核心能力。剩下的页面(<a href={`${base}/agents/about/`}>/agents/about/</a>)有完整索引。</p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-tour-progress {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .agents-tour-progress strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-tour-bar {
+    background: rgba(255,255,255,0.08);
+    border-radius: 4px;
+    height: 12px;
+    flex: 1;
+    min-width: 200px;
+    overflow: hidden;
+  }
+  .agents-tour-bar-fill {
+    background: linear-gradient(90deg, #10b981, #4f46e5);
+    height: 100%;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  .agents-tour-step {
+    border-left: 3px solid rgba(99, 102, 241, 0.3);
+    transition: border-color 0.3s;
+  }
+  .agents-tour-step-done {
+    border-left-color: #10b981;
+  }
+  .agents-tour-preview {
+    background: #0d1117;
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 6px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    border: 1px solid rgba(99, 102, 241, 0.2);
+  }
+</style>
+
+<script define:vars={{ totalSteps: STEPS.length }}>
+const KEY = 'agents:tour:v1';
+const TOTAL = totalSteps;
+
+function load(): number[] {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+function save(done: number[]): void {
+  try { localStorage.setItem(KEY, JSON.stringify(done)); } catch { /* */ }
+}
+function refresh(): void {
+  const done = load();
+  const fill = document.getElementById('tour-fill');
+  const txt = document.getElementById('tour-progress-text');
+  if (fill) fill.style.width = `${(done.length / TOTAL) * 100}%`;
+  if (txt) txt.textContent = `${done.length} / ${TOTAL}`;
+  document.querySelectorAll<HTMLElement>('.agents-tour-step').forEach((el) => {
+    const n = Number(el.dataset.step ?? '0');
+    el.classList.toggle('agents-tour-step-done', done.includes(n));
+    const btn = el.querySelector<HTMLButtonElement>('.tour-mark');
+    if (btn) btn.textContent = done.includes(n) ? '↩️ 标为未完成' : '✓ 标记完成';
+  });
+}
+document.addEventListener('DOMContentLoaded', () => {
+  refresh();
+  document.body.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    if (t.classList.contains('tour-mark')) {
+      const n = Number(t.dataset.step ?? '0');
+      const done = load();
+      const i = done.indexOf(n);
+      if (i >= 0) done.splice(i, 1);
+      else done.push(n);
+      save(done);
+      refresh();
+    }
+  });
+  document.getElementById('tour-reset')?.addEventListener('click', () => {
+    localStorage.removeItem(KEY);
+    refresh();
+  });
+});
+</script>
