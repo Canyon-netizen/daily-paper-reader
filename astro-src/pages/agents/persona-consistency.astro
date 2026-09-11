@@ -1,0 +1,207 @@
+---
+// /agents/persona-consistency.astro — iter #268:persona score consistency
+//
+// 每个 persona 评分的稳定性:
+//   - σ(per persona) = 跨所有 rounds 该 persona 给分方差
+//   - 一致性 = 1 - cv(σ/mean)
+// 高一致性 = 该 persona 评分可预测;低一致性 = 该 persona 评分随机性大
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaStat {
+  name: string;
+  count: number;
+  mean: number;
+  std: number;
+  cv: number;
+  consistency: number;
+  min: number;
+  max: number;
+  range: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaScores = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    for (const rn of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') {
+              if (!personaScores.has(name)) personaScores.set(name, []);
+              personaScores.get(name)!.push(p.total);
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function stdev(values: number[]): { mean: number; std: number } {
+  if (values.length === 0) return { mean: 0, std: 0 };
+  const mean = values.reduce((a, b) => a + b, 0) / values.length;
+  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+  return { mean, std: Math.sqrt(variance) };
+}
+
+const personas: PersonaStat[] = [];
+for (const [name, scores] of personaScores) {
+  if (scores.length < 3) continue;
+  const { mean, std } = stdev(scores);
+  const cv = mean > 0 ? std / mean : 0;
+  const consistency = Math.max(0, Math.min(1, 1 - cv));
+  personas.push({
+    name,
+    count: scores.length,
+    mean, std, cv, consistency,
+    min: Math.min(...scores),
+    max: Math.max(...scores),
+    range: Math.max(...scores) - Math.min(...scores),
+  });
+}
+
+personas.sort((a, b) => b.consistency - a.consistency);
+const topConsistent = personas.slice(0, 12);
+const topInconsistent = [...personas].sort((a, b) => a.consistency - b.consistency).slice(0, 12);
+const topRange = [...personas].sort((a, b) => b.range - a.range).slice(0, 10);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function consistencyBar(c: number, width = 16): string {
+  const filled = Math.round(c * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Persona Consistency · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-consistency</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Persona Consistency <span class="muted" style="font-size:0.6em">(iter #268)</span></h1>
+      <p class="agents-sub">
+        每个 persona 评分的稳定性(基于 σ / mean = CV)。
+        consistency = 1 - CV,越高越稳定。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pc-globals">
+        <span>personas (≥ 3 评分): <strong>{personas.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 top 12 最一致 persona</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>consistency</th><th>mean</th><th>σ</th><th>range</th><th>count</th></tr>
+        </thead>
+        <tbody>
+          {topConsistent.map((p) => (
+            <tr>
+              <td><strong>{esc(p.name)}</strong></td>
+              <td>{consistencyBar(p.consistency)} <strong style="color:#10b981">{p.consistency.toFixed(3)}</strong></td>
+              <td>{p.mean.toFixed(2)}</td>
+              <td>{p.std.toFixed(2)}</td>
+              <td>{p.range.toFixed(2)}</td>
+              <td>{p.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚠️ top 12 最不一致 persona</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>consistency</th><th>mean</th><th>σ</th><th>range</th><th>count</th></tr>
+        </thead>
+        <tbody>
+          {topInconsistent.map((p) => (
+            <tr>
+              <td><strong>{esc(p.name)}</strong></td>
+              <td>{consistencyBar(p.consistency)} <strong style="color:#ef4444">{p.consistency.toFixed(3)}</strong></td>
+              <td>{p.mean.toFixed(2)}</td>
+              <td>{p.std.toFixed(2)}</td>
+              <td>{p.range.toFixed(2)}</td>
+              <td>{p.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📏 top 10 range 最大 persona</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>range</th><th>min</th><th>max</th><th>count</th></tr>
+        </thead>
+        <tbody>
+          {topRange.map((p) => (
+            <tr>
+              <td><strong>{esc(p.name)}</strong></td>
+              <td><strong>{p.range.toFixed(2)}</strong></td>
+              <td>{p.min.toFixed(2)}</td>
+              <td>{p.max.toFixed(2)}</td>
+              <td>{p.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>consistency &gt; 0.85 = 评分高度可预测</li>
+        <li>consistency &lt; 0.5 = 评分波动大,可能受 prompt 噪声影响</li>
+        <li>range 大 = 该 persona 在极端情况给极端分数</li>
+        <li>对照 <a href={`${base}/agents/persona-calibration/`}>Persona Calibration</a> 看基准偏移</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
