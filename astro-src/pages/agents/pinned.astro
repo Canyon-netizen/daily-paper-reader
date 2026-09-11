@@ -1,0 +1,313 @@
+---
+// /agents/pinned.astro — iter #114:pinned sessions
+//
+// 把重要 session 钉到主页顶部。在浏览器 localStorage 里保存 pin 列表。
+//
+// 列表项显示:
+//   - session id + goal 摘要
+//   - 最近 update / score / tokens
+//   - 移除按钮
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionMeta {
+  sid: string;
+  goal: string;
+  createdAt: number;
+  lastUpdate: number;
+  rounds: number;
+  tokens: number;
+  cost: number;
+  healthIssueCount: number;
+}
+
+const sessions: SessionMeta[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let meta: any = {};
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { /* */ }
+    const roundsDir = join(root, sid, 'rounds');
+    let totalTokens = 0;
+    let last = 0;
+    let rounds = 0;
+    if (existsSync(roundsDir)) {
+      let rfs: string[] = [];
+      try { rfs = await readdir(roundsDir); } catch { /* */ }
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        rounds += 1;
+        try {
+          const r = JSON.parse(await readFile(join(roundsDir, rf), 'utf8'));
+          totalTokens += r.feedback?.total_tokens ?? 0;
+          const t = r.finished_at ?? r.started_at ?? 0;
+          if (t > last) last = t;
+        } catch { /* */ }
+      }
+    }
+    let healthIssueCount = 0;
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) healthIssueCount += 1;
+    else {
+      let sf: string[] = [];
+      try { sf = await readdir(sd); } catch { /* */ }
+      if (!sf.some((f) => /^synthesis_\d+\.md$/.test(f))) healthIssueCount += 1;
+    }
+    sessions.push({
+      sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      createdAt: meta.created_at ?? 0,
+      lastUpdate: last,
+      rounds,
+      tokens: totalTokens,
+      cost: (totalTokens / 1_000_000) * 0.5,
+      healthIssueCount,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.lastUpdate - a.lastUpdate);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function fmt$(n: number): string {
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
+}
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  return `${Math.floor(days / 30)} 个月前`;
+}
+---
+
+<BaseLayout title="Pinned · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / pinned</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📌 Pinned Sessions <span class="muted" style="font-size:0.6em">(iter #114)</span></h1>
+      <p class="agents-sub">
+        把最重要的 session 钉到顶部。所有 pin 列表存 localStorage(浏览器本地),
+        可以一键重排 / 删除 / 导出 / 导入。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📌 已 pin 的 sessions</h2>
+      <ul class="agents-pn-list" id="pn-list"></ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📂 全部 sessions(可选 + pin)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>session</th><th>goal</th><th>rounds</th><th>cost</th><th>last</th><th>health</th><th>操作</th></tr>
+        </thead>
+        <tbody>
+          {sessions.map((s) => (
+            <tr data-sid={s.sid}>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{escapeHtml(s.sid)}</code></a></td>
+              <td><small class="muted">{escapeHtml(s.goal.slice(0, 60))}</small></td>
+              <td>{s.rounds}</td>
+              <td>{fmt$(s.cost)}</td>
+              <td><small>{agoStr(s.lastUpdate)}</small></td>
+              <td>{s.healthIssueCount > 0 ? '⚠' : '✅'}</td>
+              <td><button class="button small pn-pin" data-sid={s.sid} type="button">📌 pin</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📤 数据管理</h2>
+      <p>
+        <button class="button" id="pn-export" type="button">📤 导出 pin JSON</button>
+        <button class="button" id="pn-import" type="button">📥 导入 pin JSON</button>
+        <button class="button" id="pn-clear" type="button">🗑️ 清空 pin</button>
+        <input type="file" id="pn-file" hidden accept="application/json" />
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pn-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-pn-list li {
+    background: rgba(245, 158, 11, 0.06);
+    border: 1px solid rgba(245, 158, 11, 0.2);
+    border-left: 3px solid #f59e0b;
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.4rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .agents-pn-list .pn-text { flex: 1; }
+  .agents-pn-list .pn-meta { color: #6b7280; font-size: 0.78rem; }
+  .agents-pn-list button {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: none;
+    padding: 0.25rem 0.5rem;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 0.78rem;
+  }
+  .agents-pn-list button:hover {
+    background: rgba(239, 68, 68, 0.3);
+  }
+  .agents-pn-empty {
+    text-align: center;
+    color: #6b7280;
+    padding: 0.6rem;
+  }
+</style>
+
+<script define:vars={{ allSids: sessions.map((s) => s.sid) }}>
+const KEY = 'agents:pinned:v1';
+
+function load(): string[] {
+  try {
+    const raw = localStorage.getItem(KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+function save(arr: string[]): void {
+  try { localStorage.setItem(KEY, JSON.stringify(arr)); } catch { /* */ }
+}
+
+function refresh(): void {
+  const arr = load();
+  const list = document.getElementById('pn-list');
+  if (!list) return;
+  if (arr.length === 0) {
+    list.innerHTML = '<li class="agents-pn-empty">📌 还没有 pin。在下面表格点 "📌 pin" 把重要 session 钉到这里。</li>';
+    return;
+  }
+  // 通过已知 session 列表过滤(防止 pin 一个已删除的 sid)
+  const valid = arr.filter((sid) => allSids.includes(sid));
+  list.innerHTML = valid.map((sid, i) => `
+    <li data-sid="${sid}">
+      <span class="pn-text">
+        <a href="/agents/${sid}/"><strong>${sid}</strong></a>
+        <br><small class="pn-meta">位置: ${i + 1} / ${valid.length}</small>
+      </span>
+      <span>
+        <button data-act="up" data-i="${i}">↑</button>
+        <button data-act="down" data-i="${i}">↓</button>
+        <button data-act="remove">🗑️</button>
+      </span>
+    </li>
+  `).join('');
+  if (valid.length !== arr.length) save(valid);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  refresh();
+  // pin 按钮
+  document.querySelectorAll<HTMLButtonElement>('.pn-pin').forEach((btn) => {
+    const sid = btn.dataset.sid ?? '';
+    btn.addEventListener('click', () => {
+      const arr = load();
+      if (arr.includes(sid)) {
+        alert(`"${sid}" 已经在 pin 列表`);
+        return;
+      }
+      arr.push(sid);
+      save(arr);
+      refresh();
+      btn.textContent = '✅ pinned';
+      btn.disabled = true;
+    });
+    // 检查是否已 pinned
+    if (load().includes(sid)) {
+      btn.textContent = '✅ pinned';
+      btn.disabled = true;
+    }
+  });
+  // 列表内点击(重排 / 删除)
+  document.body.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const li = t.closest('li');
+    const sid = li?.dataset.sid ?? '';
+    if (!sid) return;
+    const arr = load();
+    const i = arr.indexOf(sid);
+    if (i < 0) return;
+    const act = t.dataset.act;
+    if (act === 'remove') {
+      arr.splice(i, 1);
+    } else if (act === 'up' && i > 0) {
+      [arr[i - 1], arr[i]] = [arr[i], arr[i - 1]];
+    } else if (act === 'down' && i < arr.length - 1) {
+      [arr[i + 1], arr[i]] = [arr[i], arr[i + 1]];
+    } else return;
+    save(arr);
+    refresh();
+  });
+  document.getElementById('pn-export')?.addEventListener('click', () => {
+    const data = load();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agents-pinned-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+  document.getElementById('pn-import')?.addEventListener('click', () => {
+    document.getElementById('pn-file')?.click();
+  });
+  document.getElementById('pn-file')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(String(reader.result));
+        if (Array.isArray(data)) {
+          save(data);
+          refresh();
+          alert('导入成功');
+        }
+      } catch (err) { alert('JSON 解析错误: ' + String(err)); }
+    };
+    reader.readAsText(file);
+  });
+  document.getElementById('pn-clear')?.addEventListener('click', () => {
+    if (!confirm('清空所有 pin?')) return;
+    localStorage.removeItem(KEY);
+    refresh();
+  });
+});
+</script>
