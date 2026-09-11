@@ -1,0 +1,239 @@
+---
+// /agents/token-score-scatter.astro — iter #244:token spend vs score gain scatter
+//
+// 每个 session 一个点:
+//   x = total tokens
+//   y = score gain (final - first)
+//   大小 = round 数
+//   颜色 = 是否产出 synthesis
+// 用 ASCII 散点图展示在 60x20 网格中
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Point {
+  sid: string;
+  tokens: number;
+  gain: number;
+  rounds: number;
+  hasSyn: boolean;
+}
+
+const root = join(process.cwd(), 'archive');
+const points: Point[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 2) continue;
+    rNum.sort((a, b) => a - b);
+    let firstScore = 0;
+    let lastScore = 0;
+    let tokens = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        tokens += r.feedback?.total_tokens ?? 0;
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          if (i === rNum.length - 1) lastScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    const gain = lastScore - firstScore;
+    const hasSyn = existsSync(join(sp, 'synthesis'));
+    points.push({ sid, tokens, gain, rounds: rNum.length, hasSyn });
+  }
+}
+
+// 散点图 grid(50 cols x 18 rows)
+const COLS = 50;
+const ROWS = 18;
+const tokenValues = points.map((p) => p.tokens).filter((t) => t > 0);
+const gainValues = points.map((p) => p.gain);
+const minX = Math.min(1, ...tokenValues) * 0.9;
+const maxX = Math.max(1, ...tokenValues) * 1.1;
+const minY = Math.min(-5, ...gainValues, 0) * 1.1;
+const maxY = Math.max(5, ...gainValues, 0) * 1.1;
+
+// 统计每个 grid cell 的点数
+const grid: { count: number; hasSyn: number; total: number }[][] = Array.from({ length: ROWS }, () =>
+  Array.from({ length: COLS }, () => ({ count: 0, hasSyn: 0, total: 0 }))
+);
+for (const p of points) {
+  if (p.tokens <= 0) continue;
+  const col = Math.min(COLS - 1, Math.max(0, Math.floor(((Math.log10(p.tokens) - Math.log10(minX)) / (Math.log10(maxX) - Math.log10(minX))) * COLS)));
+  const row = Math.min(ROWS - 1, Math.max(0, ROWS - 1 - Math.floor(((p.gain - minY) / (maxY - minY)) * ROWS)));
+  grid[row][col].count += 1;
+  grid[row][col].total += 1;
+  if (p.hasSyn) grid[row][col].hasSyn += 1;
+}
+
+// 渲染(密度 + 标记)
+const maxCount = Math.max(1, ...grid.flat().map((c) => c.count));
+const densityChars = ['·', '░', '▒', '▓', '█'];
+let plot = '';
+for (let r = 0; r < ROWS; r++) {
+  for (let c = 0; c < COLS; c++) {
+    const cell = grid[r][c];
+    if (cell.count === 0) {
+      plot += ' ';
+    } else {
+      const level = Math.min(densityChars.length - 1, Math.floor((cell.count / maxCount) * densityChars.length));
+      plot += densityChars[level];
+    }
+  }
+  plot += '\n';
+}
+
+// 找 ROI sweet spot:low tokens + high gain
+const efficient = points
+  .filter((p) => p.gain > 1 && p.tokens > 0)
+  .map((p) => ({ ...p, roi: p.gain / Math.log10(p.tokens + 10) }))
+  .sort((a, b) => b.roi - a.roi)
+  .slice(0, 10);
+
+const topExpensive = [...points].sort((a, b) => b.tokens - a.tokens).slice(0, 8);
+const topGainers = [...points].sort((a, b) => b.gain - a.gain).slice(0, 8);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t}`;
+}
+---
+
+<BaseLayout title="Token × Score Scatter · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / token-score-scatter</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💰×📈 Token × Score Scatter <span class="muted" style="font-size:0.6em">(iter #244)</span></h1>
+      <p class="agents-sub">
+        每 session 一个点(共 {points.length} 个)。
+        x = log₁₀ tokens,y = score gain。密度字符:·░▒▓█。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 散点图</h2>
+      <pre class="agents-tss-flow">{plot}</pre>
+      <p class="muted" style="font-size:0.85em">
+        x 轴:log₁₀ tokens,范围 {fmtTok(minX)} - {fmtTok(maxX)};y 轴:gain,范围 {minY.toFixed(1)} - {maxY.toFixed(1)}
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 top 10 高 ROI session(gain / log tokens)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>ROI</th><th>tokens</th><th>gain</th><th>rounds</th><th>syn</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {efficient.map((p) => (
+            <tr>
+              <td><strong style="color:#10b981">{p.roi.toFixed(2)}</strong></td>
+              <td>{fmtTok(p.tokens)}</td>
+              <td><strong>+{p.gain.toFixed(2)}</strong></td>
+              <td>{p.rounds}</td>
+              <td>{p.hasSyn ? '✓' : '✗'}</td>
+              <td><a href={`${base}/agents/${p.sid}/`}><code>{esc(p.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 top 8 token 消耗最多</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>tokens</th><th>gain</th><th>rounds</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topExpensive.map((p) => (
+            <tr>
+              <td><strong style="color:#f59e0b">{fmtTok(p.tokens)}</strong></td>
+              <td>{p.gain >= 0 ? '+' : ''}{p.gain.toFixed(2)}</td>
+              <td>{p.rounds}</td>
+              <td><a href={`${base}/agents/${p.sid}/`}><code>{esc(p.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 top 8 分数提升最多</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>gain</th><th>tokens</th><th>rounds</th><th>sid</th></tr>
+        </thead>
+        <tbody>
+          {topGainers.map((p) => (
+            <tr>
+              <td><strong style="color:#10b981">+{p.gain.toFixed(2)}</strong></td>
+              <td>{fmtTok(p.tokens)}</td>
+              <td>{p.rounds}</td>
+              <td><a href={`${base}/agents/${p.sid}/`}><code>{esc(p.sid.slice(0, 12))}</code></a></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>左下密集 = 多数 session 投入小、产出小</li>
+        <li>右上 = 投入大、产出大(值得)</li>
+        <li>左上 = 高 ROI 区域(目标方向)</li>
+        <li>对照 <a href={`${base}/agents/cost-vs-score/`}>Cost vs Score</a> 看趋势线</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-tss-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.65rem;
+    line-height: 1.1;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
