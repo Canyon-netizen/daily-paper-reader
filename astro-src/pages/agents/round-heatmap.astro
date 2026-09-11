@@ -1,0 +1,202 @@
+---
+// /agents/round-heatmap.astro — iter #137:round score heatmap
+//
+// 2D 热力图:行 = session,列 = round #,单元格颜色 = avg best feedback score
+// 颜色:红(<5) → 黄(5-7) → 绿(>7)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Row { sid: string; goal: string; scores: (number | null)[]; rounds: number; lastUpdate: number; }
+
+const rows: Row[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    let goal = '';
+    if (existsSync(metaPath)) {
+      try { goal = JSON.parse(await readFile(metaPath, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rfs = await readdir(rd).catch(() => []);
+    let maxRound = 0;
+    const rfsFiltered = rfs.filter((f) => /^round_\d+\.json$/.test(f));
+    for (const rf of rfsFiltered) {
+      const n = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      if (n > maxRound) maxRound = n;
+    }
+    if (maxRound === 0) continue;
+    const scores: (number | null)[] = Array(maxRound).fill(null);
+    let lastUpdate = 0;
+    for (const rf of rfsFiltered) {
+      const n = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        const bestByIdx: Record<number, number> = {};
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const tot = p.total ?? 0;
+            if (!bestByIdx[idx] || tot > bestByIdx[idx]) bestByIdx[idx] = tot;
+          }
+        }
+        const arr = Object.values(bestByIdx);
+        if (arr.length > 0) {
+          scores[n - 1] = arr.reduce((a, b) => a + b, 0) / arr.length;
+        }
+      } catch (e) { /* */ }
+    }
+    rows.push({ sid, goal, scores, rounds: maxRound, lastUpdate });
+  }
+}
+
+rows.sort((a, b) => b.lastUpdate - a.lastUpdate);
+const top = rows.slice(0, 50); // 显示最近 50 个 session
+const maxRounds = top.reduce((m, r) => Math.max(m, r.scores.length), 0);
+
+function colorFor(score: number | null): string {
+  if (score == null) return 'rgba(107,114,128,0.15)';
+  if (score < 4) return 'rgba(239,68,68,0.85)';
+  if (score < 5) return 'rgba(245,158,11,0.85)';
+  if (score < 6) return 'rgba(234,179,8,0.85)';
+  if (score < 7) return 'rgba(132,204,22,0.85)';
+  if (score < 8) return 'rgba(34,197,94,0.85)';
+  return 'rgba(16,185,129,0.95)';
+}
+function fmtScore(s: number | null): string {
+  return s == null ? '·' : s.toFixed(1);
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Round Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Round Heatmap <span class="muted" style="font-size:0.6em">(iter #137)</span></h1>
+      <p class="agents-sub">
+        跨 session 看每轮 round 的 avg best feedback score。
+        行 = session(最近 50 个),列 = round 编号,颜色 = 分数(红→黄→绿)。
+        帮你一眼看出"哪些 session 在哪些轮最强"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rh-globals">
+        <span>显示 sessions: <strong>{top.length}</strong></span>
+        <span>最大 round: <strong>{maxRounds}</strong></span>
+      </div>
+      <p>
+        <span style="background:rgba(239,68,68,0.85);color:white;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.78rem">&lt; 4</span>
+        <span style="background:rgba(245,158,11,0.85);color:white;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.78rem">4-5</span>
+        <span style="background:rgba(234,179,8,0.85);color:white;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.78rem">5-6</span>
+        <span style="background:rgba(132,204,22,0.85);color:white;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.78rem">6-7</span>
+        <span style="background:rgba(34,197,94,0.85);color:white;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.78rem">7-8</span>
+        <span style="background:rgba(16,185,129,0.95);color:white;padding:0.1rem 0.5rem;border-radius:3px;font-size:0.78rem">≥ 8</span>
+        <span style="background:rgba(107,114,128,0.15);padding:0.1rem 0.5rem;border-radius:3px;font-size:0.78rem">无数据</span>
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Heatmap</h2>
+      {top.length === 0 ? (
+        <p class="muted">还没有 session 数据。</p>
+      ) : (
+        <div class="agents-rh-wrap">
+          <table class="agents-rh-table">
+            <thead>
+              <tr>
+                <th class="agents-rh-sid">session</th>
+                {Array.from({ length: maxRounds }, (_, i) => (
+                  <th class="agents-rh-round">#{i + 1}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {top.map((r) => (
+                <tr>
+                  <td class="agents-rh-sid">
+                    <a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a>
+                    <p class="muted" style="margin:0;font-size:0.7rem">{esc((r.goal ?? '').slice(0, 30))}{(r.goal ?? '').length > 30 ? '…' : ''}</p>
+                  </td>
+                  {r.scores.map((s, i) => (
+                    <td
+                      class="agents-rh-cell"
+                      style={`background:${colorFor(s)}`}
+                      title={s == null ? `round ${i + 1}: 无数据` : `round ${i + 1}: ${s.toFixed(2)}`}
+                    >{fmtScore(s)}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.8rem;
+  }
+  .agents-rh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rh-wrap {
+    overflow-x: auto;
+  }
+  .agents-rh-table {
+    border-collapse: collapse;
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+  }
+  .agents-rh-sid {
+    text-align: left;
+    padding: 0.4rem 0.6rem;
+    background: rgba(99, 102, 241, 0.08);
+    min-width: 220px;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+  }
+  .agents-rh-round {
+    text-align: center;
+    padding: 0.2rem 0.3rem;
+    background: rgba(99, 102, 241, 0.05);
+    color: #6b7280;
+    font-weight: 600;
+  }
+  .agents-rh-cell {
+    padding: 0.3rem 0.4rem;
+    text-align: center;
+    color: white;
+    font-weight: 600;
+    min-width: 36px;
+    cursor: default;
+  }
+</style>
