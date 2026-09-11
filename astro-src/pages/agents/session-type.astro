@@ -1,0 +1,249 @@
+---
+// /agents/session-type.astro — iter #157:session type classifier
+//
+// 基于 goal 文本关键词自动分类每个 session 为 6 种研究类型:
+//   - exploration:探索性(关键词:explore, investigate, probe, ...)
+//   - comparison:对比(compar, vs, versus, benchmark)
+//   - refutation:反驳(refute, falsif, disprove)
+//   - survey:综述(survey, review, summary)
+//   - implementation:实现(implement, build, code, design)
+//   - theory:理论(theorem, prove, formal)
+//
+// 输出:
+//   - 每种类型的 session 数
+//   - 平均 rounds / promoted / score
+//   - 最近 10 个该类型 sessions
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface TypeStats {
+  type: string;
+  emoji: string;
+  count: number;
+  avgRounds: number;
+  avgPromoted: number;
+  avgScore: number;
+  sids: string[];
+}
+
+interface SessionRow {
+  sid: string;
+  goal: string;
+  type: string;
+  rounds: number;
+  promoted: number;
+  avgScore: number;
+}
+
+const TYPES = [
+  { type: 'exploration', emoji: '🔭', keys: ['explore', 'investigate', 'probe', 'discover', '探索', '探究', '调查'] },
+  { type: 'comparison', emoji: '⚖️', keys: ['compar', ' vs ', 'versus', 'benchmark', '对比', '基准', '比较'] },
+  { type: 'refutation', emoji: '🛡️', keys: ['refute', 'falsif', 'disprove', 'debunk', '反驳', '证伪'] },
+  { type: 'survey', emoji: '📚', keys: ['survey', 'review', 'summary', 'meta-analysis', '综述', '回顾'] },
+  { type: 'implementation', emoji: '🛠️', keys: ['implement', 'build', 'code', 'design', 'deploy', '实现', '构建', '搭建', '设计'] },
+  { type: 'theory', emoji: '🧮', keys: ['theorem', 'prove', 'formal', 'proof', '理论', '证明'] },
+];
+
+const root = join(process.cwd(), 'archive');
+const rows: SessionRow[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    let rounds = 0, promoted = 0;
+    const allScores: number[] = [];
+    const rd = join(root, sid, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        rounds += 1;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') allScores.push(p.total);
+            }
+          }
+          for (const gp of r.gate?.proposals ?? []) {
+            if (gp.category === 'promoted') promoted += 1;
+          }
+        } catch (e) { /* */ }
+      }
+    }
+    const goalLower = goal.toLowerCase();
+    let bestType = 'other';
+    let bestHits = 0;
+    for (const t of TYPES) {
+      let hits = 0;
+      for (const k of t.keys) {
+        if (goalLower.includes(k)) hits += 1;
+      }
+      if (hits > bestHits) { bestHits = hits; bestType = t.type; }
+    }
+    const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+    rows.push({ sid, goal, type: bestType, rounds, promoted, avgScore });
+  }
+}
+
+const stats: TypeStats[] = TYPES.map((t) => {
+  const subset = rows.filter((r) => r.type === t.type);
+  const totalRounds = subset.reduce((s, r) => s + r.rounds, 0);
+  const totalProm = subset.reduce((s, r) => s + r.promoted, 0);
+  const scoredRows = subset.filter((r) => r.avgScore > 0);
+  const avgScore = scoredRows.length > 0 ? scoredRows.reduce((s, r) => s + r.avgScore, 0) / scoredRows.length : 0;
+  return {
+    type: t.type,
+    emoji: t.emoji,
+    count: subset.length,
+    avgRounds: subset.length > 0 ? totalRounds / subset.length : 0,
+    avgPromoted: subset.length > 0 ? totalProm / subset.length : 0,
+    avgScore,
+    sids: subset.map((r) => r.sid),
+  };
+});
+
+const otherCount = rows.filter((r) => r.type === 'other').length;
+const totalSessions = rows.length;
+
+function bar(n: number, max: number, width = 30): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Session Type Classifier · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-type</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏷️ Session Type Classifier <span class="muted" style="font-size:0.6em">(iter #157)</span></h1>
+      <p class="agents-sub">
+        基于 goal 文本关键词自动分类每个 session 为 6 种研究类型。
+        每种类型显示 session 数 + 平均 rounds / promoted / score。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 分布</h2>
+      <pre class="agents-st-flow">{[...stats, { type: 'other', emoji: '🌀', count: otherCount, avgRounds: 0, avgPromoted: 0, avgScore: 0, sids: [] } as TypeStats].sort((a, b) => b.count - a.count).map((s) => {
+        const max = Math.max(...stats.map((x) => x.count), 1);
+        return `${s.emoji} ${s.type.padEnd(18)} ${bar(s.count, max, 24)}  ${String(s.count).padStart(4)} (${totalSessions > 0 ? ((s.count/totalSessions)*100).toFixed(1) : '0'}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细指标</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>类型</th><th>数量</th><th>平均 rounds</th><th>平均 promoted</th><th>平均 score</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((s) => (
+            <tr>
+              <td>{s.emoji} <code>{s.type}</code></td>
+              <td>{s.count}</td>
+              <td>{s.avgRounds.toFixed(1)}</td>
+              <td>{s.avgPromoted.toFixed(2)}</td>
+              <td>{s.avgScore.toFixed(2)}</td>
+            </tr>
+          ))}
+          <tr>
+            <td>🌀 <code>other</code></td>
+            <td>{otherCount}</td>
+            <td>—</td><td>—</td><td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔬 最近 5 个 implementation sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>promoted</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {rows
+            .filter((r) => r.type === 'implementation')
+            .slice(-5)
+            .reverse()
+            .map((r) => (
+              <tr>
+                <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+                <td>{r.rounds}</td>
+                <td>{r.promoted}</td>
+                <td><small class="muted">{esc(r.goal.slice(0, 60))}{(r.goal ?? '').length > 60 ? '…' : ''}</small></td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔬 最近 5 个 comparison sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>promoted</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {rows
+            .filter((r) => r.type === 'comparison')
+            .slice(-5)
+            .reverse()
+            .map((r) => (
+              <tr>
+                <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+                <td>{r.rounds}</td>
+                <td>{r.promoted}</td>
+                <td><small class="muted">{esc(r.goal.slice(0, 60))}{(r.goal ?? '').length > 60 ? '…' : ''}</small></td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>类型分布反映研究组合的均衡度</li>
+        <li>avg score 高的类型意味着该方向 LLM 反馈更积极</li>
+        <li>survey / refutation 类型通常需要更多 rounds,implementation 通常 promoted 数高</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-st-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
