@@ -1,0 +1,188 @@
+---
+// /agents/action-sequence.astro — iter #217:refiner action sequence analysis
+//
+// 分析 modifier 在 session 内的 action 时序:
+//   - 每个 session 内 action 出现顺序
+//   - 找"开局 action"(position 1 最常用)
+//   - 找"收尾 action"(position last 最常用)
+//   - 常见 transition:action X 后跟 action Y
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionSeq {
+  sid: string;
+  actions: string[];   // 平铺所有 applied actions
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionSeq[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    const actions: string[] = [];
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        for (const a of r.modifier?.applied ?? []) {
+          actions.push(a.action ?? a.type ?? 'unknown');
+        }
+      } catch (e) { /* */ }
+    }
+    if (actions.length > 0) sessions.push({ sid, actions });
+  }
+}
+
+// 开局 / 收尾 action 频次
+const openingMap = new Map<string, number>();
+const closingMap = new Map<string, number>();
+// transition: A → B
+const transMap = new Map<string, number>();
+
+for (const s of sessions) {
+  if (s.actions.length === 0) continue;
+  openingMap.set(s.actions[0], (openingMap.get(s.actions[0]) ?? 0) + 1);
+  closingMap.set(s.actions[s.actions.length - 1], (closingMap.get(s.actions[s.actions.length - 1]) ?? 0) + 1);
+  for (let i = 0; i < s.actions.length - 1; i++) {
+    const key = `${s.actions[i]}→${s.actions[i + 1]}`;
+    transMap.set(key, (transMap.get(key) ?? 0) + 1);
+  }
+}
+
+const openings = [...openingMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+const closings = [...closingMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+const transitions = [...transMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+
+const totalSessions = sessions.length;
+const totalActions = sessions.reduce((s, x) => s + x.actions.length, 0);
+---
+
+<BaseLayout title="Action Sequence · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-sequence</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏭️ Action Sequence <span class="muted" style="font-size:0.6em">(iter #217)</span></h1>
+      <p class="agents-sub">
+        Modifier 在 session 内的 action 时序分析。
+        看"开局 action" / "收尾 action" / 常见 transition。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-as-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 actions: <strong>{totalActions}</strong></span>
+        <span>unique transitions: <strong>{transMap.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 10 开局 action(position 1)</h2>
+      <pre class="agents-as-flow">{(() => {
+        const max = Math.max(...openings.map(([, c]) => c), 1);
+        return openings.map(([a, c]) => {
+          const label = a.length > 20 ? a.slice(0, 20) + '…' : a.padEnd(20);
+          return `${label} ${bar(c, max, 22)}  ${c}`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏁 top 10 收尾 action(position last)</h2>
+      <pre class="agents-as-flow">{(() => {
+        const max = Math.max(...closings.map(([, c]) => c), 1);
+        return closings.map(([a, c]) => {
+          const label = a.length > 20 ? a.slice(0, 20) + '…' : a.padEnd(20);
+          return `${label} ${bar(c, max, 22)}  ${c}`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 top 20 常见 transition(A → B)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>A</th><th>→</th><th>B</th><th>count</th></tr>
+        </thead>
+        <tbody>
+          {transitions.map(([k, c]) => {
+            const [a, b] = k.split('→');
+            return (
+              <tr>
+                <td><code>{esc(a)}</code></td>
+                <td>→</td>
+                <td><code>{esc(b)}</code></td>
+                <td><strong>{c}</strong></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>开局 action = modifier 通常第一步做什么</li>
+        <li>收尾 action = 最后一步通常做什么</li>
+        <li>transition 揭示典型工作流</li>
+        <li>对照 <a href={`${base}/agents/action-heatmap/`}>Action Heatmap</a> 看位置分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-as-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-as-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-as-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
