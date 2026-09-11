@@ -1,0 +1,240 @@
+---
+// /agents/pipeline-trace.astro — iter #170:per-session pipeline trace
+//
+// 每个 session 的 7 阶段流水线 ASCII trace:
+//   1. ideation (designer)
+//   2. lit review (researcher)
+//   3. experiment (engineer)
+//   4. draft (writer)
+//   5. review (reviewer)
+//   6. revise (reviser)
+//   7. export (final)
+//
+// 每个 stage 显示当前 session 中是否到达该阶段
+// 用 ✓ / ~ / ✗ 标记
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STAGES = ['ideation', 'lit review', 'experiment', 'draft', 'review', 'revise', 'export'];
+
+interface SessionTrace {
+  sid: string;
+  goal: string;
+  hasRounds: boolean;
+  roundCount: number;
+  hasSynthesis: boolean;
+  synthCount: number;
+  hasMeta: boolean;
+  status: 'complete' | 'partial' | 'pending' | 'error';
+  stageFlags: boolean[]; // 每阶段是否到达
+}
+
+const traces: SessionTrace[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    let goal = '';
+    let hasMeta = false;
+    if (existsSync(metaPath)) {
+      hasMeta = true;
+      try { goal = JSON.parse(await readFile(metaPath, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    const sd = join(root, sid, 'synthesis');
+    let hasRounds = false;
+    let roundCount = 0;
+    let lastRound: any = null;
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        if (/^round_\d+\.json$/.test(rf)) {
+          hasRounds = true;
+          roundCount += 1;
+          const m = rf.match(/^round_(\d+)\.json$/);
+          if (m) {
+            const idx = parseInt(m[1], 10);
+            try {
+              lastRound = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+            } catch (e) { /* */ }
+          }
+        }
+      }
+    }
+    let hasSynthesis = false;
+    let synthCount = 0;
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      synthCount = sfs.filter((f) => /^synthesis_\d+\.md$/.test(f)).length;
+      if (synthCount > 0) hasSynthesis = true;
+    }
+
+    // 阶段 flag
+    const flags: boolean[] = [
+      hasMeta,                                 // ideation: 必有 meta
+      hasRounds,                               // lit review
+      hasRounds,                               // experiment
+      hasRounds && roundCount >= 2,            // draft: ≥ 2 rounds
+      hasRounds,                               // review
+      hasSynthesis,                            // revise
+      hasSynthesis,                            // export
+    ];
+
+    let status: 'complete' | 'partial' | 'pending' | 'error' = 'pending';
+    if (hasSynthesis && roundCount >= 2) status = 'complete';
+    else if (hasRounds) status = 'partial';
+    if (!hasMeta && !hasRounds) status = 'error';
+
+    traces.push({
+      sid, goal,
+      hasRounds, roundCount,
+      hasSynthesis, synthCount,
+      hasMeta, status, stageFlags: flags,
+    });
+  }
+}
+
+// 排序
+const completeCount = traces.filter((t) => t.status === 'complete').length;
+const partialCount = traces.filter((t) => t.status === 'partial').length;
+const pendingCount = traces.filter((t) => t.status === 'pending').length;
+const errorCount = traces.filter((t) => t.status === 'error').length;
+
+function fmt(s: SessionTrace): string {
+  return STAGES.map((st, i) => s.stageFlags[i] ? '✓' : '✗').join('─');
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+
+const maxRows = 30;
+---
+
+<BaseLayout title="Pipeline Trace · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / pipeline-trace</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔀 Pipeline Trace <span class="muted" style="font-size:0.6em">(iter #170)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 7 阶段流水线 trace。
+        ✓ = 该阶段到达,✗ = 未到达。
+        help 识别哪些 session 卡在某阶段。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pt-globals">
+        <span>总 sessions: <strong>{traces.length}</strong></span>
+        <span>complete: <strong>{completeCount}</strong></span>
+        <span>partial: <strong>{partialCount}</strong></span>
+        <span>pending: <strong>{pendingCount}</strong></span>
+        <span>error: <strong>{errorCount}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 阶段说明</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>阶段</th><th>含义</th><th>触发条件</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>1. ideation</td><td>生成 goal</td><td>meta.json 存在</td></tr>
+          <tr><td>2. lit review</td><td>文献回顾</td><td>rounds/ 存在</td></tr>
+          <tr><td>3. experiment</td><td>实验运行</td><td>rounds/ 存在</td></tr>
+          <tr><td>4. draft</td><td>草稿撰写</td><td>rounds ≥ 2</td></tr>
+          <tr><td>5. review</td><td>同行评审</td><td>rounds/ 存在</td></tr>
+          <tr><td>6. revise</td><td>修订</td><td>synthesis/ 存在</td></tr>
+          <tr><td>7. export</td><td>导出</td><td>synthesis/ 存在</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 per-session trace(最新 {maxRows} 个)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>ideation─review─export</th><th>status</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {traces.slice(0, maxRows).map((t) => (
+            <tr>
+              <td><a href={`${base}/agents/${t.sid}/`}><code>{esc(t.sid.slice(0, 14))}</code></a></td>
+              <td><code class={`agents-pt-flow ${t.status}`}>{fmt(t)}</code></td>
+              <td>{t.status}</td>
+              <td><small class="muted">{esc(t.goal.slice(0, 40))}{(t.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 每阶段到达率</h2>
+      <pre class="agents-pt-flow">{STAGES.map((st, i) => {
+        const reached = traces.filter((t) => t.stageFlags[i]).length;
+        const max = traces.length || 1;
+        const pct = ((reached / max) * 100).toFixed(1);
+        const filled = Math.round((reached / max) * 24);
+        return `${st.padEnd(12)} ${'█'.repeat(filled)}${'░'.repeat(24 - filled)}  ${String(reached).padStart(4)}/${max} (${pct}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>阶段到达率最低的就是瓶颈 — 检查 prompt / API</li>
+        <li>partial 状态的 session 可在 <a href={`${base}/agents/resume/`}>Resume</a> 中继续</li>
+        <li>对照 <a href={`${base}/agents/funnel/`}>Funnel</a> 看 stage 转化</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-pt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.7;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .agents-pt-flow.complete {
+    color: #10b981;
+  }
+  .agents-pt-flow.partial {
+    color: #f59e0b;
+  }
+  .agents-pt-flow.error {
+    color: #ef4444;
+  }
+</style>
