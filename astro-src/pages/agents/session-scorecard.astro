@@ -1,0 +1,230 @@
+---
+// /agents/session-scorecard.astro — iter #241:per-session health scorecard
+//
+// 给每个 session 打 5 个迷你分(0-100):
+//   - goal_spec  (goal 长度 20-200 字符为佳)
+//   - round_cnt  (5-20 为佳)
+//   - score_gain (final-first 差,>0 加分)
+//   - cost_eff   (gain/cost > 0.1)
+//   - synth_cov  (有 synthesis 加分)
+// 然后取平均作为综合 scorecard。
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface Scorecard {
+  sid: string;
+  goal: string;
+  goalLen: number;
+  rounds: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+  tokens: number;
+  cost: number;
+  hasSyn: boolean;
+  goalSpec: number;
+  roundCnt: number;
+  scoreGain: number;
+  costEff: number;
+  synthCov: number;
+  overall: number;
+  grade: string;
+}
+
+function scoreToGrade(s: number): string {
+  if (s >= 90) return 'A';
+  if (s >= 80) return 'B';
+  if (s >= 70) return 'C';
+  if (s >= 60) return 'D';
+  return 'F';
+}
+
+const root = join(process.cwd(), 'archive');
+const cards: Scorecard[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const goalLen = goal.length;
+    let rounds = 0;
+    let firstScore = 0;
+    let finalScore = 0;
+    let tokens = 0;
+    const rd = join(sp, 'rounds');
+    const rNum: number[] = [];
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      for (const rf of rfs) {
+        const m = rf.match(/^round_(\d+)\.json$/);
+        if (m) rNum.push(parseInt(m[1], 10));
+      }
+      rNum.sort((a, b) => a - b);
+      rounds = rNum.length;
+      for (let i = 0; i < rNum.length; i++) {
+        try {
+          const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          tokens += r.feedback?.total_tokens ?? 0;
+          if (arr.length > 0) {
+            const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+            if (i === 0) firstScore = avg;
+            if (i === rNum.length - 1) finalScore = avg;
+          }
+        } catch (e) { /* */ }
+      }
+    }
+    const gain = finalScore > 0 && firstScore > 0 ? (finalScore - firstScore) : 0;
+    const cost = (tokens / 1_000_000) * SONNET_PRICE;
+    const hasSyn = existsSync(join(sp, 'synthesis'));
+
+    // 5 mini-scores
+    // goal_spec: 20-200 字符最佳(两端衰减)
+    const goalSpec = goalLen <= 0 ? 0 :
+                     goalLen < 20 ? (goalLen / 20) * 50 :
+                     goalLen <= 200 ? 100 :
+                     goalLen <= 400 ? 100 - ((goalLen - 200) / 200) * 50 :
+                     Math.max(0, 50 - (goalLen - 400) / 10);
+    // round_cnt: 5-20 为最佳
+    const roundCnt = rounds <= 0 ? 0 :
+                     rounds < 5 ? (rounds / 5) * 80 :
+                     rounds <= 20 ? 100 :
+                     rounds <= 40 ? 100 - ((rounds - 20) / 20) * 40 :
+                     Math.max(0, 60 - (rounds - 40));
+    // score_gain: >0 加分,>3 满分
+    const scoreGain = gain <= 0 ? 0 :
+                      gain < 3 ? (gain / 3) * 100 :
+                      100;
+    // cost_eff: gain/cost 比例(避免除 0)
+    const costEff = cost > 0 ? Math.max(0, Math.min(100, (gain / cost) * 50)) :
+                    gain > 0 ? 100 : 0;
+    // synth_cov: 有/无
+    const synthCov = hasSyn ? 100 : 0;
+
+    const overall = (goalSpec + roundCnt + scoreGain + costEff + synthCov) / 5;
+    cards.push({
+      sid, goal, goalLen, rounds, firstScore, finalScore, gain, tokens, cost, hasSyn,
+      goalSpec, roundCnt, scoreGain, costEff, synthCov, overall,
+      grade: scoreToGrade(overall),
+    });
+  }
+}
+
+// 排序 by overall desc
+cards.sort((a, b) => b.overall - a.overall);
+
+const total = cards.length;
+const gradeDist = { A: 0, B: 0, C: 0, D: 0, F: 0 };
+for (const c of cards) gradeDist[c.grade as keyof typeof gradeDist] += 1;
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function miniBar(score: number, width = 6): string {
+  if (score >= 90) return '🟢'.repeat(width);
+  if (score >= 70) return '🟡'.repeat(width);
+  if (score >= 50) return '🟠'.repeat(width);
+  return '🔴'.repeat(width);
+}
+---
+
+<BaseLayout title="Session Scorecard · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-scorecard</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📇 Session Scorecard <span class="muted" style="font-size:0.6em">(iter #241)</span></h1>
+      <p class="agents-sub">
+        每 session 5 个迷你分 + 总分(A-F)。
+        维度:goal_spec / round_cnt / score_gain / cost_eff / synth_cov。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ss-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>A: <strong style="color:#10b981">{gradeDist.A}</strong></span>
+        <span>B: <strong style="color:#84cc16">{gradeDist.B}</strong></span>
+        <span>C: <strong style="color:#f59e0b">{gradeDist.C}</strong></span>
+        <span>D: <strong style="color:#fb923c">{gradeDist.D}</strong></span>
+        <span>F: <strong style="color:#ef4444">{gradeDist.F}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 全部 sessions(按总分降序)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Grade</th><th>Score</th><th>sid</th><th>goal</th><th>🎯 goal</th><th>🔁 rounds</th><th>📈 gain</th><th>💰 cost</th><th>📝 syn</th></tr>
+        </thead>
+        <tbody>
+          {cards.slice(0, 80).map((c) => (
+            <tr>
+              <td><strong style={`color:${c.grade === 'A' ? '#10b981' : c.grade === 'B' ? '#84cc16' : c.grade === 'C' ? '#f59e0b' : c.grade === 'D' ? '#fb923c' : '#ef4444'}`}>{c.grade}</strong></td>
+              <td><strong>{c.overall.toFixed(0)}</strong></td>
+              <td><a href={`${base}/agents/${c.sid}/`}><code>{esc(c.sid.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(c.goal.slice(0, 28))}{(c.goal ?? '').length > 28 ? '…' : ''}</small></td>
+              <td><small>{miniBar(c.goalSpec)} {c.goalSpec.toFixed(0)}</small></td>
+              <td><small>{miniBar(c.roundCnt)} {c.roundCnt.toFixed(0)}</small></td>
+              <td><small>{miniBar(c.scoreGain)} {c.scoreGain.toFixed(0)}</small></td>
+              <td><small>{miniBar(c.costEff)} {c.costEff.toFixed(0)}</small></td>
+              <td><small>{miniBar(c.synthCov)} {c.synthCov > 0 ? '✓' : '✗'}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>每个维度 0-100:goal_spec 看长度合理性,round_cnt 看迭代次数,score_gain 看分数增长,cost_eff 看性价比,synth_cov 看是否产出</li>
+        <li>mini bar:🟢 ≥ 90,🟡 70-89,🟠 50-69,🔴 &lt; 50</li>
+        <li>对照 <a href={`${base}/agents/session-maturity/`}>Session Maturity</a> 看 5 维度评分</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ss-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ss-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
