@@ -1,0 +1,415 @@
+---
+// /agents/digest.astro — iter #94:auto research digest
+//
+// 类似"每日研究简报":跨 session 提取最重要的内容,生成一段叙事性 markdown 摘要。
+//   - 高分 session 摘要
+//   - 热门 arxiv 论文(top 5,≥2 sessions 引用)
+//   - 高频 proposal type + 趋势
+//   - 最近一周活动概览
+//   - 关键数字:总 token / 总 sessions / 总 deliverables
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildEvaluationReport } from '../../lib/agents/evaluator.mjs';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionDigest {
+  sid: string;
+  goal: string;
+  createdAt: number;
+  lastActivity: number;
+  rounds: any[];
+  overall: number;
+  totalTokens: number;
+  arxivIds: Set<string>;
+  proposalTypes: Map<string, number>;
+  totalProposals: number;
+  totalApplied: number;
+}
+
+const sessions: SessionDigest[] = [];
+const allArxivFreq = new Map<string, number>();
+const allTypeFreq = new Map<string, number>();
+const weekActivity = new Map<string, number>(); // ISO date → token
+const now = Date.now();
+const weekAgo = now - 7 * 86_400_000;
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const dir = join(root, sid);
+    if (!existsSync(join(dir, 'meta.json'))) continue;
+    let meta: any = null;
+    try { meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')); } catch { continue; }
+
+    let rounds: any[] = [];
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      rounds = await Promise.all(files.map(async (f) => {
+        try { return JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8')); }
+        catch { return null; }
+      })).then((arr) => arr.filter(Boolean));
+    } catch { /* */ }
+
+    const arxivIds = new Set<string>();
+    const proposalTypes = new Map<string, number>();
+    let totalTokens = 0;
+    let totalProposals = 0;
+    let totalApplied = 0;
+    let lastActivity = 0;
+    for (const r of rounds) {
+      const fa = Number(r?.finished_at ?? 0);
+      if (fa > lastActivity) lastActivity = fa;
+      totalTokens += Number(r?.feedback?.total_tokens ?? 0);
+      totalApplied += Array.isArray(r?.modifier?.applied) ? r.modifier.applied.length : 0;
+      for (const p of (r?.designer?.proposals ?? [])) {
+        totalProposals++;
+        const tp = p?.type ?? 'unknown';
+        proposalTypes.set(tp, (proposalTypes.get(tp) ?? 0) + 1);
+        for (const id of (p?.evidence?.paperIds ?? [])) {
+          arxivIds.add(String(id));
+          if (!allArxivFreq.has(String(id))) allArxivFreq.set(String(id), 0);
+        }
+      }
+      // 记录周活动
+      if (fa > weekAgo) {
+        const k = new Date(fa).toISOString().slice(0, 10);
+        weekActivity.set(k, (weekActivity.get(k) ?? 0) + totalTokens);
+      }
+    }
+    // 算每个 arxiv 被多少 session 引用
+    for (const id of arxivIds) {
+      allArxivFreq.set(id, (allArxivFreq.get(id) ?? 0) + 1);
+    }
+    for (const [t, n] of proposalTypes) {
+      allTypeFreq.set(t, (allTypeFreq.get(t) ?? 0) + n);
+    }
+
+    // evaluator
+    let overall = 0;
+    try {
+      const evalRounds = rounds.flatMap((r) => {
+        const out: any[] = [];
+        for (const p of (r?.designer?.proposals ?? [])) {
+          out.push({ proposal: { evidence: { paperIds: p?.evidence?.paperIds ?? [] } }, actions: [] });
+        }
+        for (const a of (r?.modifier?.applied ?? [])) {
+          out.push({
+            proposal: { evidence: { paperIds: a?.payload?.paperIds ?? [] } },
+            actions: [{ target: { arxivIds: a?.payload?.arxivIds ?? [] }, paperIds: a?.payload?.paperIds ?? [] }],
+          });
+        }
+        return out;
+      });
+      const delivs = rounds.flatMap((r) =>
+        (r?.modifier?.applied ?? []).map((a: any) => ({
+          kind: a.kind, proposal_id: a.proposal_id, payload: a.payload ?? {}, arxivIds: [],
+        })),
+      );
+      const rpt = buildEvaluationReport({
+        meta, rounds: evalRounds, deliverables: delivs, syntheses: [],
+        generatedAt: new Date().toISOString(),
+      });
+      overall = rpt.scores.overall;
+    } catch { /* */ }
+
+    sessions.push({
+      sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      createdAt: Number(meta.created_at ?? 0),
+      lastActivity,
+      rounds,
+      overall,
+      totalTokens,
+      arxivIds,
+      proposalTypes,
+      totalProposals,
+      totalApplied,
+    });
+  }
+}
+
+// 按 overall 排序取 top sessions
+const topSessions = [...sessions].filter((s) => s.overall > 0).sort((a, b) => b.overall - a.overall).slice(0, 5);
+const hotArxiv = [...allArxivFreq.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 5);
+const topTypes = [...allTypeFreq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+const totalTokens = sessions.reduce((a, s) => a + s.totalTokens, 0);
+const totalProposals = sessions.reduce((a, s) => a + s.totalProposals, 0);
+const totalApplied = sessions.reduce((a, s) => a + s.totalApplied, 0);
+const totalRounds = sessions.reduce((a, s) => a + s.rounds.length, 0);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function shortGoal(g: string, n = 80): string {
+  if (!g) return '(无 goal)';
+  return g.length > n ? g.slice(0, n - 1) + '…' : g;
+}
+---
+
+<BaseLayout title="Research Digest · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / digest</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📰 Research Digest <span class="muted" style="font-size:0.6em">(iter #94)</span></h1>
+      <p class="agents-sub">
+        自动生成的研究简报:聚合所有 session,挑出高分进展 + 热门 arxiv + 高频 proposal 类型,
+        类似一份"周报",每次打开都能 30 秒看完最近研究动态。
+      </p>
+    </header>
+
+    {sessions.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">archive/ 下没有任何 session。</p>
+      </section>
+    ) : (
+      <>
+        <section class="agents-session-section">
+          <h2>📊 全局数字</h2>
+          <div class="agents-digest-stats">
+            <span><strong>{sessions.length}</strong> sessions</span>
+            <span><strong>{totalRounds}</strong> rounds</span>
+            <span><strong>{totalProposals}</strong> proposals</span>
+            <span><strong>{totalApplied}</strong> applied</span>
+            <span><strong>{totalTokens.toLocaleString()}</strong> tokens</span>
+            <span><strong>{allArxivFreq.size}</strong> unique papers</span>
+          </div>
+        </section>
+
+        {topSessions.length > 0 && (
+          <section class="agents-session-section">
+            <h2>🏆 Top 5 sessions (by overall score)</h2>
+            <ol class="agents-digest-list">
+              {topSessions.map((s) => (
+                <li class="agents-digest-session">
+                  <header>
+                    <span class={`agents-digest-score agents-digest-score-${s.overall >= 0.7 ? 'high' : s.overall >= 0.4 ? 'mid' : 'low'}`}>
+                      {(s.overall * 100).toFixed(0)}%
+                    </span>
+                    <strong>
+                      <a href={`${base}/agents/${s.sid}/`}>{escapeHtml(s.sid)}</a>
+                    </strong>
+                  </header>
+                  <p class="muted">{escapeHtml(shortGoal(s.goal, 100))}</p>
+                  <p class="muted">
+                    <small>
+                      {s.totalProposals} proposals · {s.totalApplied} applied · {s.totalTokens.toLocaleString()} tokens · {s.arxivIds.size} unique papers
+                    </small>
+                  </p>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+
+        {hotArxiv.length > 0 && (
+          <section class="agents-session-section">
+            <h2>📚 热门 arxiv (≥2 sessions 引用)</h2>
+            <p class="agents-arxiv-cloud">
+              {hotArxiv.map(([id, n]) => (
+                <a class={`agents-arxiv-chip agents-arxiv-chip-${n >= 4 ? 'very-hot' : n >= 3 ? 'hot' : 'warm'}`}
+                   href={`https://arxiv.org/abs/${id}`}
+                   target="_blank"
+                   rel="noopener">
+                  {id} <small>×{n}</small>
+                </a>
+              ))}
+            </p>
+          </section>
+        )}
+
+        {topTypes.length > 0 && (
+          <section class="agents-session-section">
+            <h2>📋 Top proposal types</h2>
+            <table class="agents-session-table">
+              <thead>
+                <tr><th>类型</th><th>总次数</th><th>占比</th></tr>
+              </thead>
+              <tbody>
+                {topTypes.map(([t, n]) => (
+                  <tr>
+                    <td><code>{escapeHtml(t)}</code></td>
+                    <td>{n}</td>
+                    <td>{((n / totalProposals) * 100).toFixed(0)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
+
+        <section class="agents-session-section">
+          <h2>📝 自动叙事摘要</h2>
+          <div class="agents-digest-prose">
+            <p>
+              共扫描 <strong>{sessions.length}</strong> 个 session,合计 <strong>{totalRounds}</strong> rounds / <strong>{totalProposals}</strong> proposals / <strong>{totalApplied}</strong> applied deliverables,
+              消耗 <strong>{totalTokens.toLocaleString()}</strong> tokens。
+            </p>
+            {topSessions.length > 0 && (
+              <p>
+                其中 <strong>{topSessions[0].sid}</strong> 综合分最高( {(topSessions[0].overall * 100).toFixed(0)}%),
+                goal 是「{escapeHtml(shortGoal(topSessions[0].goal, 60))}」。
+              </p>
+            )}
+            {hotArxiv.length > 0 && (
+              <p>
+                跨 ≥2 sessions 引用的论文共 <strong>{hotArxiv.length}</strong> 篇,
+                最热门是 <a href={`https://arxiv.org/abs/${hotArxiv[0][0]}`} target="_blank" rel="noopener"><code>{hotArxiv[0][0]}</code></a>({hotArxiv[0][1]} sessions 引用)。
+              </p>
+            )}
+            {topTypes.length > 0 && (
+              <p>
+                最高频的 proposal 类型是 <code>{topTypes[0][0]}</code>({topTypes[0][1]} 次,占 {((topTypes[0][1] / totalProposals) * 100).toFixed(0)}%)。
+              </p>
+            )}
+            {weekActivity.size > 0 && (
+              <p>
+                过去 7 天有 <strong>{weekActivity.size}</strong> 天有研究活动,
+                累计消耗 <strong>{[...weekActivity.values()].reduce((a, b) => a + b, 0).toLocaleString()}</strong> tokens。
+              </p>
+            )}
+          </div>
+        </section>
+
+        <section class="agents-session-section">
+          <h2>📋 复制 markdown 简报</h2>
+          <p class="muted">点击复制整页摘要为 markdown,可贴到 Notion / README / 邮件。</p>
+          <button class="button primary" id="agents-digest-copy-btn">📋 复制 markdown</button>
+          <pre id="agents-digest-md" class="agents-auto-cmd" hidden></pre>
+        </section>
+      </>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/heatmap/`}>🔥 Heatmap</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-digest-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-digest-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .agents-digest-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-digest-session {
+    background: rgba(99, 102, 241, 0.06);
+    border-left: 3px solid #4f46e5;
+    border-radius: 4px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.5rem;
+  }
+  .agents-digest-session header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.3rem;
+  }
+  .agents-digest-score {
+    display: inline-block;
+    min-width: 42px;
+    text-align: center;
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    font-family: ui-monospace, monospace;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .agents-digest-score-high { background: rgba(16, 185, 129, 0.2); color: #10b981; }
+  .agents-digest-score-mid { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+  .agents-digest-score-low { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+  .agents-digest-session p { margin: 0.2rem 0; font-size: 0.9rem; line-height: 1.5; }
+  .agents-digest-prose {
+    background: rgba(255,255,255,0.03);
+    padding: 0.8rem 1rem;
+    border-radius: 4px;
+    line-height: 1.6;
+  }
+  .agents-digest-prose p { margin: 0.5rem 0; }
+</style>
+
+<script define:vars={{
+  sessionCount: sessions.length,
+  totalRounds,
+  totalProposals,
+  totalApplied,
+  totalTokens,
+  topSid: topSessions[0]?.sid ?? '',
+  topOverall: topSessions[0]?.overall ?? 0,
+  topGoal: topSessions[0]?.goal ?? '',
+  hotArxivCount: hotArxiv.length,
+  topArxivId: hotArxiv[0]?.[0] ?? '',
+  topArxivN: hotArxiv[0]?.[1] ?? 0,
+  topType: topTypes[0]?.[0] ?? '',
+  topTypeN: topTypes[0]?.[1] ?? 0,
+  weekDays: weekActivity.size,
+  weekTokens: [...weekActivity.values()].reduce((a, b) => a + b, 0),
+  hotArxivList: hotArxiv.slice(0, 5),
+  topSessionsList: topSessions.slice(0, 5).map((s) => ({
+    sid: s.sid, overall: s.overall, goal: s.goal,
+    proposals: s.totalProposals, applied: s.totalApplied, tokens: s.totalTokens,
+  })),
+}}>
+  const topSessionMd = topSessionsList.map((s, i) =>
+    `${i + 1}. **${s.sid}** — ${(s.overall * 100).toFixed(0)}% · ${s.proposals} proposals · ${s.applied} applied\n   goal: ${s.goal.slice(0, 80)}${s.goal.length > 80 ? '…' : ''}`
+  ).join('\n');
+  const hotArxivMd = hotArxivList.map(([id, n]) => `- [${id}](https://arxiv.org/abs/${id}) (×${n})`).join('\n');
+
+  const md = [
+    `# Research Digest`,
+    ``,
+    `生成于 ${new Date().toLocaleString()}`,
+    ``,
+    `## 全局`,
+    `- ${sessionCount} sessions · ${totalRounds} rounds · ${totalProposals} proposals · ${totalApplied} applied · ${totalTokens.toLocaleString()} tokens`,
+    ``,
+    topSessionsList.length > 0 ? `## 🏆 Top sessions\n\n${topSessionMd}\n` : '',
+    hotArxivList.length > 0 ? `## 📚 热门 arxiv\n\n${hotArxivMd}\n` : '',
+    topType ? `## 高频 proposal 类型\n\n- \`${topType}\` × ${topTypeN} (${((topTypeN / totalProposals) * 100).toFixed(0)}%)\n` : '',
+    weekDays > 0 ? `## 过去 7 天\n\n- ${weekDays} 天活跃 · ${weekTokens.toLocaleString()} tokens\n` : '',
+  ].filter(Boolean).join('\n');
+
+  const pre = document.getElementById('agents-digest-md');
+  if (pre) pre.textContent = md;
+
+  document.getElementById('agents-digest-copy-btn')?.addEventListener('click', () => {
+    if (!pre) return;
+    navigator.clipboard?.writeText(pre.textContent ?? '').then(
+      () => console.info('[digest] copied'),
+      (e) => console.warn('[digest] copy failed:', e),
+    );
+  });
+</script>
