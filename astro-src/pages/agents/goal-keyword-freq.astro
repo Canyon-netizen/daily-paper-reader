@@ -1,0 +1,197 @@
+---
+// /agents/goal-keyword-freq.astro — iter #246:goal keyword frequency
+//
+// 跨 session 提取 goal 文本中的高频词:
+//   - 中英文混合分词
+//   - 简单 stopword 过滤(常见代词/介词/数字/标点)
+//   - 输出 top 50 词 + 频率
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOPWORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by',
+  'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+  'i', 'you', 'he', 'she', 'it', 'we', 'they', 'them', 'their', 'this', 'that', 'these', 'those',
+  'as', 'from', 'into', 'about', 'than', 'then', 'so', 'not', 'no', 'if', 'also', 'more', 'most',
+  '的', '了', '在', '是', '我', '你', '他', '她', '它', '们', '和', '与', '或', '但', '而',
+  '就', '都', '也', '很', '这', '那', '此', '并', '及', '把', '让', '给', '向', '从', '到',
+  '为', '以', '于', '上', '下', '中', '里', '外', '前', '后', '什么', '怎么', '如何', '怎样',
+  '一', '二', '三', '四', '五', '六', '七', '八', '九', '十',
+]);
+
+const root = join(process.cwd(), 'archive');
+const wordCounts = new Map<string, number>();
+const wordSessions = new Map<string, Set<string>>();
+const totalSessions = 0;
+let totalWords = 0;
+
+let sessionCount = 0;
+
+function tokenize(text: string): string[] {
+  const tokens: string[] = [];
+  // 切英文单词 + 数字
+  const englishTokens = text.toLowerCase().match(/[a-z][a-z0-9_-]{1,}/g) ?? [];
+  for (const t of englishTokens) {
+    if (t.length < 3) continue;
+    if (STOPWORDS.has(t)) continue;
+    tokens.push(t);
+  }
+  // 中文:二元 + 三元 bigram
+  const chineseChars = text.match(/[一-龥]+/g) ?? [];
+  for (const seg of chineseChars) {
+    if (seg.length === 1) continue;
+    // 单字 + 二元 + 三元
+    for (let i = 0; i < seg.length - 1; i++) {
+      const bg = seg.slice(i, i + 2);
+      if (!STOPWORDS.has(bg)) tokens.push(bg);
+    }
+    for (let i = 0; i < seg.length - 2; i++) {
+      const tg = seg.slice(i, i + 3);
+      if (!STOPWORDS.has(tg)) tokens.push(tg);
+    }
+    // 全串(4 字及以上)
+    if (seg.length >= 4) {
+      for (let i = 0; i <= seg.length - 4; i++) {
+        const q = seg.slice(i, i + 4);
+        if (!STOPWORDS.has(q)) tokens.push(q);
+      }
+    }
+  }
+  return tokens;
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      if (!goal) continue;
+      sessionCount += 1;
+      const tokens = tokenize(goal);
+      totalWords += tokens.length;
+      const seen = new Set<string>();
+      for (const t of tokens) {
+        wordCounts.set(t, (wordCounts.get(t) ?? 0) + 1);
+        if (!seen.has(t)) {
+          if (!wordSessions.has(t)) wordSessions.set(t, new Set());
+          wordSessions.get(t)!.add(sid);
+          seen.add(t);
+        }
+      }
+    } catch (e) { /* */ }
+  }
+}
+
+const total = wordCounts.size;
+const sorted = Array.from(wordCounts.entries())
+  .map(([word, count]) => ({ word, count, sessions: wordSessions.get(word)?.size ?? 0 }))
+  .sort((a, b) => b.count - a.count);
+
+const top50 = sorted.slice(0, 50);
+const top15SingleSession = sorted.filter((s) => s.count >= 2 && s.sessions === 1).slice(0, 15);
+const maxFreq = top50[0]?.count ?? 1;
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Goal Keyword Frequency · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-keyword-freq</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📚 Goal Keyword Frequency <span class="muted" style="font-size:0.6em">(iter #246)</span></h1>
+      <p class="agents-sub">
+        跨 session 提取 goal 文本高频词。
+        中英文混合分词(中文用 2/3/4 元切分);常用停用词已过滤。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gkf-globals">
+        <span>总 sessions: <strong>{sessionCount}</strong></span>
+        <span>总 tokens: <strong>{totalWords}</strong></span>
+        <span>unique keywords: <strong>{total}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 top 50 关键词</h2>
+      <pre class="agents-gkf-flow">{top50.map((w) => {
+        return `${w.word.padEnd(16)} ${bar(w.count, maxFreq, 22)}  ${w.count}  (${w.sessions} sessions)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 单 session 专有高频词(只在 1 session 中出现 ≥ 2 次)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>keyword</th><th>count</th><th>sessions</th></tr>
+        </thead>
+        <tbody>
+          {top15SingleSession.map((w) => (
+            <tr>
+              <td><code>{esc(w.word)}</code></td>
+              <td><strong>{w.count}</strong></td>
+              <td>{w.sessions}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频词 = 系统经常处理的主题(可能是用户偏好或工具默认任务)</li>
+        <li>跨多个 session = 系统性问题;单 session = 偶发</li>
+        <li>中文分词用 n-gram(2-4),英文用单词</li>
+        <li>对照 <a href={`${base}/agents/goal-words/`}>Goal Words</a> 看单词级分布</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gkf-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gkf-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gkf-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
