@@ -1,0 +1,186 @@
+---
+// /agents/persona-elo.astro — iter #161:per-persona avg score trajectory
+//
+// 跨 session 看每个 persona(方法论/工程师/怀疑论)的分数轨迹:
+//   - 按 round_index 聚合每个 persona 的平均分
+//   - 比较 3 个 persona 的得分倾向(是否某 persona 永远偏低/高)
+//   - per-persona 总平均分排名
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaStat {
+  name: string;
+  totalProposals: number;
+  avgScore: number;
+  scoresByRound: number[]; // index = round - 1
+  minScore: number;
+  maxScore: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, { total: number; sum: number; min: number; max: number; byRound: Map<number, number[]> }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const pname = persona.name ?? persona.role ?? persona.id ?? 'unknown';
+          if (!personaMap.has(pname)) {
+            personaMap.set(pname, {
+              total: 0, sum: 0, min: 99, max: -1,
+              byRound: new Map<number, number[]>(),
+            });
+          }
+          const stat = personaMap.get(pname)!;
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') {
+              stat.total += 1;
+              stat.sum += p.total;
+              if (p.total < stat.min) stat.min = p.total;
+              if (p.total > stat.max) stat.max = p.total;
+              if (!stat.byRound.has(ri)) stat.byRound.set(ri, []);
+              stat.byRound.get(ri)!.push(p.total);
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const stats: PersonaStat[] = [];
+const maxR = Math.max(...Array.from(personaMap.values()).flatMap((s) => Array.from(s.byRound.keys())), 1);
+
+for (const [name, stat] of personaMap) {
+  const scoresByRound: number[] = [];
+  for (let r = 1; r <= maxR; r++) {
+    const arr = stat.byRound.get(r) ?? [];
+    scoresByRound.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+  }
+  stats.push({
+    name,
+    totalProposals: stat.total,
+    avgScore: stat.total > 0 ? stat.sum / stat.total : 0,
+    scoresByRound,
+    minScore: stat.min === 99 ? 0 : stat.min,
+    maxScore: stat.max === -1 ? 0 : stat.max,
+  });
+}
+
+stats.sort((a, b) => b.totalProposals - a.totalProposals);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Per-Persona Trajectory · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-elo</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>👥 Per-Persona Trajectory <span class="muted" style="font-size:0.6em">(iter #161)</span></h1>
+      <p class="agents-sub">
+        跨 session 看每个 persona(方法论/工程师/怀疑论)的分数倾向。
+        谁给分高,谁给分低,谁随时间漂移。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>评 proposals</th><th>平均分</th><th>min</th><th>max</th><th>spread</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((s) => (
+            <tr>
+              <td><code>{esc(s.name)}</code></td>
+              <td>{s.totalProposals}</td>
+              <td><strong>{s.avgScore.toFixed(2)}</strong></td>
+              <td>{s.minScore.toFixed(1)}</td>
+              <td>{s.maxScore.toFixed(1)}</td>
+              <td>{(s.maxScore - s.minScore).toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 per-persona 分数轨迹(每轮平均)</h2>
+      <pre class="agents-pe-flow">{(() => {
+        const max = 10;
+        return stats.map((s) => {
+          const trail = s.scoresByRound.map((v, i) => {
+            return `R${String(i + 1).padStart(2)}=${v.toFixed(1).padStart(4)}`;
+          }).join(' ');
+          const overall = `${s.avgScore.toFixed(2)} (n=${s.totalProposals})`;
+          return `${s.name.padEnd(20)} | ${overall.padEnd(20)} | ${trail}`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎯 偏好强度</h2>
+      <p>用 bar 显示每个 persona 的平均分,直观比较谁最挑剔 / 谁最宽容:</p>
+      <pre class="agents-pe-flow">{stats.map((s) => {
+        const max = 10;
+        return `${s.name.padEnd(20)} ${bar(s.avgScore, max, 24)}  ${s.avgScore.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>3 persona 平均分差距大 → 可能 LLM 偏好不一致,需要对齐</li>
+        <li>某 persona 永远偏低 → 看 prompt 是否鼓励严格</li>
+        <li>spread(范围)大的 persona 更"分化",适合做否决者</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pe-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+    max-height: 500px;
+    overflow-y: auto;
+  }
+</style>
