@@ -1,0 +1,264 @@
+---
+// /agents/archive.astro — iter #89:archive by month
+//
+// 把所有 sessions 按创建月份分组归档,像 filing cabinet / 时间胶囊。
+// 每组展示该月 session 数 / 累计 token / 最高评分 / 引用论文数。
+// 点击 session ID 进入详情。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildEvaluationReport } from '../../lib/agents/evaluator.mjs';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface MonthEntry {
+  year: number;
+  month: number; // 1-12
+  label: string; // "2026-09"
+  sessions: { sid: string; goal: string; createdAt: number; overall: number; tokens: number; rounds: number }[];
+  totalSessions: number;
+  totalRounds: number;
+  totalTokens: number;
+  maxOverall: number;
+}
+
+interface SessionRow {
+  sid: string;
+  goal: string;
+  createdAt: number;
+  rounds: any[];
+  overall: number;
+  totalTokens: number;
+  proposalCount: number;
+  appliedCount: number;
+  uniquePapers: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const rows: SessionRow[] = [];
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const dir = join(root, sid);
+    const metaPath = join(dir, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let meta: any = null;
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { continue; }
+
+    let rounds: any[] = [];
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      rounds = await Promise.all(files.map(async (f) => {
+        try { return JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8')); }
+        catch { return null; }
+      })).then((arr) => arr.filter(Boolean));
+    } catch { /* */ }
+
+    let totalTokens = 0;
+    let proposalCount = 0;
+    let appliedCount = 0;
+    const arxivIds = new Set<string>();
+    for (const r of rounds) {
+      totalTokens += Number(r?.feedback?.total_tokens ?? 0);
+      for (const p of (r?.designer?.proposals ?? [])) {
+        proposalCount++;
+        for (const id of (p?.evidence?.paperIds ?? [])) arxivIds.add(String(id));
+      }
+      appliedCount += Array.isArray(r?.modifier?.applied) ? r.modifier.applied.length : 0;
+    }
+
+    let overall = 0;
+    try {
+      const evalRounds = rounds.flatMap((r) => {
+        const out: any[] = [];
+        for (const p of (r?.designer?.proposals ?? [])) {
+          out.push({ proposal: { evidence: { paperIds: p?.evidence?.paperIds ?? [] } }, actions: [] });
+        }
+        for (const a of (r?.modifier?.applied ?? [])) {
+          out.push({
+            proposal: { evidence: { paperIds: a?.payload?.paperIds ?? [] } },
+            actions: [{ target: { arxivIds: a?.payload?.arxivIds ?? [] }, paperIds: a?.payload?.paperIds ?? [] }],
+          });
+        }
+        return out;
+      });
+      const delivs = rounds.flatMap((r) =>
+        (r?.modifier?.applied ?? []).map((a: any) => ({
+          kind: a.kind, proposal_id: a.proposal_id, payload: a.payload ?? {}, arxivIds: [],
+        })),
+      );
+      const rpt = buildEvaluationReport({
+        meta, rounds: evalRounds, deliverables: delivs, syntheses: [],
+        generatedAt: new Date().toISOString(),
+      });
+      overall = rpt.scores.overall;
+    } catch { /* */ }
+
+    rows.push({
+      sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      createdAt: Number(meta.created_at ?? 0),
+      rounds,
+      overall,
+      totalTokens,
+      proposalCount,
+      appliedCount,
+      uniquePapers: arxivIds.size,
+    });
+  }
+}
+
+// 按月份分组
+const monthMap = new Map<string, MonthEntry>();
+for (const r of rows) {
+  const d = new Date(r.createdAt > 0 ? r.createdAt : Date.now());
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const label = `${year}-${String(month).padStart(2, '0')}`;
+  let m = monthMap.get(label);
+  if (!m) {
+    m = { year, month, label, sessions: [], totalSessions: 0, totalRounds: 0, totalTokens: 0, maxOverall: 0 };
+    monthMap.set(label, m);
+  }
+  m.sessions.push({
+    sid: r.sid,
+    goal: r.goal,
+    createdAt: r.createdAt,
+    overall: r.overall,
+    tokens: r.totalTokens,
+    rounds: r.rounds.length,
+  });
+  m.totalSessions++;
+  m.totalRounds += r.rounds.length;
+  m.totalTokens += r.totalTokens;
+  if (r.overall > m.maxOverall) m.maxOverall = r.overall;
+}
+
+const months = [...monthMap.values()].sort((a, b) => b.label.localeCompare(a.label));
+
+function scoreClass(n: number): string {
+  if (n >= 0.7) return 'high';
+  if (n >= 0.4) return 'mid';
+  return 'low';
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function fmt(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleDateString();
+}
+const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+---
+
+<BaseLayout title="归档 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / archive</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📦 归档(按月) <span class="muted" style="font-size:0.6em">(iter #89)</span></h1>
+      <p class="agents-sub">
+        所有 session 按创建月份归档,像 filing cabinet。每月显示 session 数 / 累计 token / 最高评分。
+      </p>
+    </header>
+
+    {months.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">archive/ 下还没有任何 session。</p>
+      </section>
+    ) : (
+      months.map((m) => (
+        <section class="agents-session-section agents-archive-month">
+          <h2>
+            📅 {m.year} 年 {monthNames[m.month - 1]}
+            <small class="muted" style="margin-left:0.6rem;font-size:0.65em;font-weight:normal">
+              ({m.totalSessions} sessions · {m.totalRounds} rounds · {m.totalTokens.toLocaleString()} tokens · 最高 {m.maxOverall > 0 ? (m.maxOverall * 100).toFixed(0) + '%' : '—'})
+            </small>
+          </h2>
+          <table class="agents-session-table">
+            <thead>
+              <tr>
+                <th>Session</th>
+                <th>Goal</th>
+                <th>创建</th>
+                <th>Rounds</th>
+                <th>Tokens</th>
+                <th>Score</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {m.sessions.sort((a, b) => b.createdAt - a.createdAt).map((s) => (
+                <tr>
+                  <td>
+                    <a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a>
+                  </td>
+                  <td>
+                    <small>{escapeHtml(s.goal.length > 60 ? s.goal.slice(0, 59) + '…' : s.goal)}</small>
+                  </td>
+                  <td><small>{fmt(s.createdAt)}</small></td>
+                  <td>{s.rounds}</td>
+                  <td>{s.tokens > 0 ? s.tokens.toLocaleString() : '—'}</td>
+                  <td>
+                    {s.overall > 0 ? (
+                      <span class={`agents-archive-score-${scoreClass(s.overall)}`}>
+                        {(s.overall * 100).toFixed(0)}%
+                      </span>
+                    ) : '—'}
+                  </td>
+                  <td>
+                    <a class="button small" href={`${base}/agents/${s.sid}/brief/`}>brief</a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ))
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/heatmap/`}>🔥 Heatmap</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-archive-month h2 {
+    border-bottom: 2px solid #4f46e5;
+    padding-bottom: 0.4rem;
+  }
+  .agents-archive-score-high {
+    color: #10b981;
+    font-weight: 600;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-archive-score-mid {
+    color: #f59e0b;
+    font-weight: 600;
+    font-family: ui-monospace, monospace;
+  }
+  .agents-archive-score-low {
+    color: #ef4444;
+    font-weight: 600;
+    font-family: ui-monospace, monospace;
+  }
+</style>
