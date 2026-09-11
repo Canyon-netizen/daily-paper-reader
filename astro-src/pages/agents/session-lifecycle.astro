@@ -1,0 +1,230 @@
+---
+// /agents/session-lifecycle.astro — iter #182:session lifecycle
+//
+// 跨 session 看"寿命"(首轮 → 末轮的 mtime 跨度):
+//   - 寿命分布直方图
+//   - "长寿" sessions(> 7 天)
+//   - "短命" sessions(≤ 1 天)
+//   - 当前活跃 sessions(since 末轮 < 1 天)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Life {
+  sid: string;
+  goal: string;
+  rounds: number;
+  firstMtime: number;
+  lastMtime: number;
+  lifeDays: number;
+  isAlive: boolean; // lastMtime in past 24h
+  status: 'newborn' | 'active' | 'warm' | 'cold' | 'dead';
+}
+
+const root = join(process.cwd(), 'archive');
+const records: Life[] = [];
+const now = Date.now();
+const ONE_DAY = 24 * 60 * 60 * 1000;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    let firstMtime = 0;
+    let lastMtime = 0;
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+      try {
+        const st = await stat(join(rd, rf));
+        if (firstMtime === 0 || st.mtimeMs < firstMtime) firstMtime = st.mtimeMs;
+        if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs;
+      } catch (e) { /* */ }
+    }
+    if (rNum.length === 0 || firstMtime === 0) continue;
+
+    const lifeDays = (lastMtime - firstMtime) / ONE_DAY;
+    const sinceLastDays = (now - lastMtime) / ONE_DAY;
+    const isAlive = sinceLastDays < 1;
+
+    let status: Life['status'] = 'cold';
+    if (sinceLastDays < 1) status = 'active';
+    else if (sinceLastDays < 3) status = 'warm';
+    else if (lifeDays < 0.5) status = 'newborn';
+    else if (sinceLastDays > 30) status = 'dead';
+    else status = 'cold';
+
+    records.push({
+      sid, goal,
+      rounds: rNum.length,
+      firstMtime,
+      lastMtime,
+      lifeDays,
+      isAlive,
+      status,
+    });
+  }
+}
+
+const alive = records.filter((r) => r.isAlive).length;
+const warm = records.filter((r) => r.status === 'warm').length;
+const dead = records.filter((r) => r.status === 'dead').length;
+const avgLifeDays = records.length > 0 ? records.reduce((s, r) => s + r.lifeDays, 0) / records.length : 0;
+
+// 直方图
+const buckets = [
+  { label: '< 1 day  ', min: 0, max: 1, count: 0 },
+  { label: '1-3 days ', min: 1, max: 3, count: 0 },
+  { label: '3-7 days ', min: 3, max: 7, count: 0 },
+  { label: '7-30 days', min: 7, max: 30, count: 0 },
+  { label: '> 30 days', min: 30, max: 99999, count: 0 },
+];
+for (const r of records) {
+  for (const b of buckets) {
+    if (r.lifeDays >= b.min && r.lifeDays < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+const maxBucket = Math.max(...buckets.map((b) => b.count), 1);
+
+const longest = [...records].sort((a, b) => b.lifeDays - a.lifeDays).slice(0, 10);
+const shortest = [...records].filter((r) => r.rounds >= 2).sort((a, b) => a.lifeDays - b.lifeDays).slice(0, 10);
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtDate(ts: number): string {
+  return new Date(ts).toISOString().slice(0, 16).replace('T', ' ');
+}
+---
+
+<BaseLayout title="Session Lifecycle · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-lifecycle</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏳ Session Lifecycle <span class="muted" style="font-size:0.6em">(iter #182)</span></h1>
+      <p class="agents-sub">
+        跨 session 看"寿命"(首轮 → 末轮)。
+        长寿 sessions = 反复迭代;短命 = 一次性。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sl-globals">
+        <span>总 sessions: <strong>{records.length}</strong></span>
+        <span>alive (24h 内): <strong>{alive}</strong></span>
+        <span>warm (&lt; 3d): <strong>{warm}</strong></span>
+        <span>dead (>30d): <strong>{dead}</strong></span>
+        <span>avg life: <strong>{avgLifeDays.toFixed(1)} 天</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 寿命分布</h2>
+      <pre class="agents-sl-flow">{buckets.map((b) => {
+        return `${b.label} ${bar(b.count, maxBucket, 24)}  ${String(b.count).padStart(4)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏛️ top 10 长寿 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>life</th><th>首轮</th><th>末轮</th><th>status</th></tr>
+        </thead>
+        <tbody>
+          {longest.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td><strong>{r.lifeDays.toFixed(1)}d</strong></td>
+              <td><small class="muted">{fmtDate(r.firstMtime)}</small></td>
+              <td><small class="muted">{fmtDate(r.lastMtime)}</small></td>
+              <td>{r.status}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚡ top 10 短命 sessions(≥ 2 rounds)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>life</th><th>status</th></tr>
+        </thead>
+        <tbody>
+          {shortest.map((r) => (
+            <tr>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td>{r.rounds}</td>
+              <td><strong>{r.lifeDays.toFixed(2)}d</strong></td>
+              <td>{r.status}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>长寿 sessions 通常代表深度研究方向</li>
+        <li>短命 sessions 通常是 quick experiments — 一次性完成</li>
+        <li>dead 状态可能值得 <a href={`${base}/agents/resume/`}>Resume</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sl-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sl-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sl-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
