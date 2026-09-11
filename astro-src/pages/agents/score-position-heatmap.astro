@@ -1,0 +1,165 @@
+---
+// /agents/score-position-heatmap.astro — iter #232:score × round position × month heatmap
+//
+// 2D heatmap:round position(rows) × month(cols)
+// 单元格颜色强度 = avg score
+// 看每个 round position 的 score 随时间变化
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const matrix = new Map<string, number[]>(); // key: pos|||month → scores
+let maxPos = 0;
+const monthSet = new Set<string>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    for (let i = 0; i < rNum.length; i++) {
+      const pos = i + 1;
+      if (pos > maxPos) maxPos = pos;
+      try {
+        const fp = join(rd, `round_${rNum[i]}.json`);
+        const st = await stat(fp);
+        const month = new Date(st.mtimeMs).toISOString().slice(0, 7);
+        monthSet.add(month);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const avg = getAvg(r);
+        if (avg === 0) continue;
+        const key = `${pos}|||${month}`;
+        matrix.set(key, (matrix.get(key) ?? []).concat(avg));
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const months = [...monthSet].sort();
+
+function block(score: number): string {
+  if (score === 0) return ' ';
+  const chars = ['░', '▒', '▓', '█'];
+  const idx = Math.min(chars.length - 1, Math.floor((score / 10) * chars.length));
+  return chars[idx];
+}
+
+// build grid: rows = positions 1..maxPos, cols = months
+const header = `pos\\month         ${months.map((m) => m.slice(5)).join(' ')}`;
+const rows: string[] = [];
+for (let p = 1; p <= maxPos; p++) {
+  const cells = months.map((m) => {
+    const scores = matrix.get(`${p}|||${m}`) ?? [];
+    if (scores.length === 0) return '   ';
+    const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+    return `${block(avg)}${avg.toFixed(1)}`;
+  });
+  rows.push(`R${String(p).padStart(2)}              ${cells.join(' ')}`);
+}
+
+// column averages (per-month overall)
+const monthAvg = months.map((m) => {
+  const allScores: number[] = [];
+  for (let p = 1; p <= maxPos; p++) {
+    allScores.push(...(matrix.get(`${p}|||${m}`) ?? []));
+  }
+  return allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+});
+const avgRow = `avg              ${monthAvg.map((a) => a > 0 ? `${block(a)}${a.toFixed(1)}` : '   ').join(' ')}`;
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Score Position Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-position-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Score Position Heatmap <span class="muted" style="font-size:0.6em">(iter #232)</span></h1>
+      <p class="agents-sub">
+        round position × month 二维热力图。
+        行 = round 1..N;列 = 月份;颜色 = avg score。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sph-globals">
+        <span>max position: <strong>{maxPos}</strong></span>
+        <span>months: <strong>{months.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 热力图</h2>
+      <pre class="agents-sph-flow">{`${header}
+${'-'.repeat(20 + months.length * 4)}
+${rows.join('\n')}
+${'-'.repeat(20 + months.length * 4)}
+${avgRow}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>每格 = 该 round position 在该月的 avg score</li>
+        <li>空格 = 该 round position 该月无数据</li>
+        <li>对照 <a href={`${base}/agents/round-sweet-spot/`}>Round Sweet Spot</a> 看全局 peak</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sph-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sph-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sph-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
