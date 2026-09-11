@@ -1,0 +1,251 @@
+---
+// /agents/daily-highlights.astro — iter #123:daily highlights
+//
+// "今日研究亮点" - 跨 session 找今天发生的事情:
+//   - 今日最佳 proposal(feedback 最高)
+//   - 今日最活跃 session(rounds 最多)
+//   - 今日最高 token 消耗
+//   - 今日最长效 round
+//   - 今日新增 synthesis
+//   - 今日命中关键词
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+// 今天的 0:00
+const todayStart = new Date();
+todayStart.setHours(0, 0, 0, 0);
+const todayMs = todayStart.getTime();
+
+interface Highlight {
+  icon: string;
+  title: string;
+  detail: string;
+  link: string;
+}
+
+const highlights: Highlight[] = [];
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  let totalRoundsToday = 0;
+  let totalSynthToday = 0;
+  let totalTokensToday = 0;
+  const todaysProposals: any[] = [];
+  const sessionActivity: Record<string, number> = {};
+  const longestRound: { dur: number; sid: string; round: number } = { dur: 0, sid: '', round: 0 };
+
+  for (const sid of sids) {
+    const metaPath = join(root, sid, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    const metaStat = await stat(metaPath).catch(() => null);
+    if (metaStat && metaStat.mtimeMs >= todayMs) sessionActivity[sid] = 0;
+
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_(\d+)\.json$/.test(rf)) continue;
+      const roundNum = parseInt(rf.match(/round_(\d+)/)?.[1] ?? '0', 10);
+      const fp = join(join(rd, rf));
+      const st = await stat(fp).catch(() => null);
+      if (!st) continue;
+      if (st.mtimeMs < todayMs) continue; // 只看今天
+
+      totalRoundsToday += 1;
+      if (sessionActivity[sid] != null) sessionActivity[sid] += 1;
+
+      try {
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tok = r.feedback?.total_tokens ?? 0;
+        totalTokensToday += tok;
+        const dur = r.telemetry?.duration_ms ?? 0;
+        if (dur > longestRound.dur) {
+          longestRound.dur = dur;
+          longestRound.sid = sid;
+          longestRound.round = roundNum;
+        }
+        const fbPersonas = r.feedback?.personas ?? [];
+        for (const persona of fbPersonas) {
+          for (const p of persona.proposals ?? []) {
+            const idx = p.proposal_index ?? p.index;
+            if (idx == null) continue;
+            const dProposal = (r.designer?.proposals ?? [])[idx];
+            todaysProposals.push({
+              title: dProposal?.title ?? '(untitled)',
+              type: dProposal?.type ?? 'unknown',
+              total: p.total ?? 0,
+              sid, round: roundNum,
+            });
+          }
+        }
+      } catch (e) { /* */ }
+    }
+
+    // 今日新增 synthesis
+    const sd = join(root, sid, 'synthesis');
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      for (const f of sfs) {
+        if (!/^synthesis_\d+\.md$/.test(f)) continue;
+        const st = await stat(join(sd, f)).catch(() => null);
+        if (st && st.mtimeMs >= todayMs) totalSynthToday += 1;
+      }
+    }
+  }
+
+  // Best proposal
+  todaysProposals.sort((a, b) => b.total - a.total);
+  const best = todaysProposals[0];
+  if (best) {
+    highlights.push({
+      icon: '🏅',
+      title: `今日最佳 proposal: ${best.title.slice(0, 60)}${best.title.length > 60 ? '…' : ''}`,
+      detail: `score=${best.total.toFixed(1)} · type=${best.type} · ${best.sid.slice(0, 10)} r${best.round}`,
+      link: `${base}/agents/${best.sid}/pipeline/#round-${best.round}`,
+    });
+  }
+
+  // Most active session
+  const mostActiveSid = Object.entries(sessionActivity).sort((a, b) => b[1] - a[1])[0];
+  if (mostActiveSid && mostActiveSid[1] > 0) {
+    highlights.push({
+      icon: '🔥',
+      title: `今日最活跃: ${mostActiveSid[0].slice(0, 16)}`,
+      detail: `${mostActiveSid[1]} rounds modified 今日`,
+      link: `${base}/agents/${mostActiveSid[0]}/`,
+    });
+  }
+
+  // Total stats
+  highlights.push({
+    icon: '📊',
+    title: `今日统计`,
+    detail: `rounds: ${totalRoundsToday} · syntheses: ${totalSynthToday} · tokens: ${totalTokensToday.toLocaleString()}`,
+    link: `${base}/agents/`,
+  });
+
+  // Most expensive
+  const expensive: { sid: string; tok: number; round: number } = { sid: '', tok: 0, round: 0 };
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      const fp = join(rd, rf);
+      const st = await stat(fp).catch(() => null);
+      if (!st || st.mtimeMs < todayMs) continue;
+      try {
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const tok = r.feedback?.total_tokens ?? 0;
+        if (tok > expensive.tok) {
+          expensive.tok = tok;
+          expensive.sid = sid;
+          const m = rf.match(/round_(\d+)/);
+          expensive.round = m ? parseInt(m[1], 10) : 0;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+  if (expensive.sid) {
+    highlights.push({
+      icon: '💸',
+      title: `今日最贵 round: ${expensive.sid.slice(0, 12)} r${expensive.round}`,
+      detail: `${expensive.tok.toLocaleString()} tokens`,
+      link: `${base}/agents/${expensive.sid}/pipeline/#round-${expensive.round}`,
+    });
+  }
+
+  // Longest round
+  if (longestRound.dur > 0) {
+    const sec = (longestRound.dur / 1000).toFixed(1);
+    highlights.push({
+      icon: '⏱',
+      title: `今日最长 round: ${longestRound.sid.slice(0, 12)} r${longestRound.round}`,
+      detail: `${sec} s`,
+      link: `${base}/agents/${longestRound.sid}/pipeline/#round-${longestRound.round}`,
+    });
+  }
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+
+const dateStr = todayStart.toISOString().slice(0, 10);
+---
+
+<BaseLayout title={`Daily Highlights · Agents`}>
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / daily-highlights</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📰 Daily Highlights <span class="muted" style="font-size:0.6em">(iter #123)</span></h1>
+      <p class="agents-sub">
+        今日 ({dateStr}) 跨 session 的研究亮点:最佳 proposal / 最活跃 session / 最贵 round / 最长 round / 今日统计。
+        <a href={`${base}/agents/daily-highlights/?yesterday=1`}>查看昨日</a>
+      </p>
+    </header>
+
+    {highlights.length === 0 ? (
+      <section class="agents-session-section">
+        <p class="muted">今日还没有活动。</p>
+      </section>
+    ) : (
+      <section class="agents-session-section">
+        <h2>🎯 今日亮点</h2>
+        <ul class="agents-dh-list">
+          {highlights.map((h) => (
+            <li>
+              <span class="agents-dh-icon">{h.icon}</span>
+              <a href={h.link}><strong>{esc(h.title)}</strong></a>
+              <p class="muted"><small>{esc(h.detail)}</small></p>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 相关视图</h2>
+      <p>
+        <a class="button" href={`${base}/agents/digest/`}>📰 Digest</a>
+        <a class="button" href={`${base}/agents/journal/`}>📔 Journal</a>
+        <a class="button" href={`${base}/agents/activity/`}>📡 Activity</a>
+        <a class="button" href={`${base}/agents/best-proposals/`}>🏆 Best Proposals</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dh-list {
+    list-style: none;
+    padding: 0;
+  }
+  .agents-dh-list li {
+    padding: 0.8rem;
+    margin-bottom: 0.6rem;
+    background: rgba(99, 102, 241, 0.05);
+    border-left: 3px solid rgba(99, 102, 241, 0.4);
+    border-radius: 4px;
+  }
+  .agents-dh-icon {
+    font-size: 1.4rem;
+    margin-right: 0.5rem;
+  }
+  .agents-dh-list p {
+    margin: 0.2rem 0 0 2rem;
+  }
+</style>
