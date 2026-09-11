@@ -1,0 +1,196 @@
+---
+// /agents/action-effectiveness.astro — iter #222:per-action effectiveness analysis
+//
+// 看每个 modifier action 类型在不同 session 中带来的 score Δ:
+//   - 对每 session,每 round 应用某 action 后的下一 round Δ
+//   - 聚合每个 action 的 avg Δ、success rate、total uses
+//   - 排除成本高的 action(高 uses 但低 Δ)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ActionStat {
+  action: string;
+  uses: number;
+  improvements: number;
+  declines: number;
+  neutrals: number;
+  avgDelta: number;
+  successRate: number;
+  totalDelta: number;
+}
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const actionMap = new Map<string, { deltas: number[] }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length < 2) continue;
+    // 加载所有 rounds 的 avg score
+    const scores: number[] = [];
+    const appliedActions: string[][] = [];
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        scores.push(getAvg(r));
+        appliedActions.push((r.modifier?.applied ?? []).map((a: any) => a.action ?? a.type ?? 'unknown'));
+      } catch (e) { /* */ }
+    }
+    // 对每个 round,看其应用的 actions 对 round+1 score 的影响
+    for (let i = 0; i < appliedActions.length - 1; i++) {
+      const delta = scores[i + 1] - scores[i];
+      for (const action of appliedActions[i]) {
+        if (!actionMap.has(action)) actionMap.set(action, { deltas: [] });
+        actionMap.get(action)!.deltas.push(delta);
+      }
+    }
+  }
+}
+
+const stats: ActionStat[] = [];
+for (const [action, v] of actionMap.entries()) {
+  if (v.deltas.length === 0) continue;
+  const sum = v.deltas.reduce((a, b) => a + b, 0);
+  const improvements = v.deltas.filter((d) => d > 0).length;
+  const declines = v.deltas.filter((d) => d < 0).length;
+  const neutrals = v.deltas.filter((d) => d === 0).length;
+  stats.push({
+    action,
+    uses: v.deltas.length,
+    improvements,
+    declines,
+    neutrals,
+    avgDelta: sum / v.deltas.length,
+    successRate: (improvements / v.deltas.length) * 100,
+    totalDelta: sum,
+  });
+}
+stats.sort((a, b) => b.avgDelta - a.avgDelta);
+
+const topEffective = stats.filter((s) => s.uses >= 2).slice(0, 15);
+const topIneffective = [...stats].filter((s) => s.uses >= 2).sort((a, b) => a.avgDelta - b.avgDelta).slice(0, 10);
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Action Effectiveness · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-effectiveness</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧪 Action Effectiveness <span class="muted" style="font-size:0.6em">(iter #222)</span></h1>
+      <p class="agents-sub">
+        每 modifier action 应用后下一 round score 的 Δ 分布。
+        高 avg Δ = 高效 action;低/负 avg Δ = 反向 action。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ae-globals">
+        <span>unique actions: <strong>{stats.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 高效 actions(avg Δ, ≥ 2 uses)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>avg Δ</th><th>uses</th><th>↑</th><th>↓</th><th>success %</th><th>action</th></tr>
+        </thead>
+        <tbody>
+          {topEffective.map((s) => (
+            <tr>
+              <td><strong style="color:#10b981">+{s.avgDelta.toFixed(3)}</strong></td>
+              <td>{s.uses}</td>
+              <td>{s.improvements}</td>
+              <td>{s.declines}</td>
+              <td>{s.successRate.toFixed(0)}%</td>
+              <td><code>{esc(s.action)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>❌ top 10 低效 actions(avg Δ, ≥ 2 uses)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>avg Δ</th><th>uses</th><th>↑</th><th>↓</th><th>success %</th><th>action</th></tr>
+        </thead>
+        <tbody>
+          {topIneffective.map((s) => (
+            <tr>
+              <td><strong style="color:#ef4444">{s.avgDelta.toFixed(3)}</strong></td>
+              <td>{s.uses}</td>
+              <td>{s.improvements}</td>
+              <td>{s.declines}</td>
+              <td>{s.successRate.toFixed(0)}%</td>
+              <td><code>{esc(s.action)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg Δ = mean(score[N+1] - score[N]) where this action applied at N</li>
+        <li>success rate = 带来 score 上升的次数 / 总 uses</li>
+        <li>对照 <a href={`${base}/agents/refiner-effects/`}>Refiner Effects</a> 看更细分析</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ae-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ae-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
