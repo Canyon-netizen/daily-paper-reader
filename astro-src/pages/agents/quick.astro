@@ -1,0 +1,216 @@
+---
+// /agents/quick.astro — iter #117:quick actions launcher
+//
+// 一页式快速操作面板:
+//   - 大按钮网格(新 session / 看 pinned / 看 recent / 看 notifications 等)
+//   - 显示当前 session 数 / 今日活动 / 累计 stats
+//   - 快捷跳转
+
+import { readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+let sessionCount = 0;
+let recentSessions: { sid: string; lastUpdate: number }[] = [];
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    sessionCount += 1;
+    // mtime of meta.json as lastUpdate
+    const m = await import('node:fs/promises').then((mod) => mod.stat(mp).catch(() => null));
+    if (m) recentSessions.push({ sid, lastUpdate: m.mtimeMs });
+  }
+}
+recentSessions.sort((a, b) => b.lastUpdate - a.lastUpdate);
+recentSessions = recentSessions.slice(0, 5);
+
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return '刚刚';
+  if (sec < 3600) return `${Math.floor(sec / 60)} 分钟前`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)} 小时前`;
+  return `${Math.floor(sec / 86400)} 天前`;
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Quick Actions · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / quick</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⚡ Quick Actions <span class="muted" style="font-size:0.6em">(iter #117)</span></h1>
+      <p class="agents-sub">
+        一页式快速操作。最常用的 8 个动作一屏可达。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 当前状态</h2>
+      <div class="agents-qk-stats">
+        <span>总 sessions: <strong>{sessionCount}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 主操作</h2>
+      <div class="agents-qk-grid">
+        <a class="agents-qk-btn agents-qk-btn-primary" href={`${base}/agents/new-session/`}>
+          <span class="agents-qk-icon">➕</span>
+          <strong>新建 Session</strong>
+          <small>从模板开始研究</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/auto/`}>
+          <span class="agents-qk-icon">🤖</span>
+          <strong>Auto Mode</strong>
+          <small>自动推进 session</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/capture/`}>
+          <span class="agents-qk-icon">📥</span>
+          <strong>灵感收件箱</strong>
+          <small>记录想法</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/digest/`}>
+          <span class="agents-qk-icon">📰</span>
+          <strong>今日 Digest</strong>
+          <small>研究简报</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/notifications/`}>
+          <span class="agents-qk-icon">🔔</span>
+          <strong>通知</strong>
+          <small>需要处理的事项</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/standup/`}>
+          <span class="agents-qk-icon">📅</span>
+          <strong>Daily Standup</strong>
+          <small>今日计划</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/reading/`}>
+          <span class="agents-qk-icon">📖</span>
+          <strong>Now Reading</strong>
+          <small>下一份未读 synthesis</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/todos/`}>
+          <span class="agents-qk-icon">✅</span>
+          <strong>Todos</strong>
+          <small>跨 session 待办</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/insights/`}>
+          <span class="agents-qk-icon">🧠</span>
+          <strong>Insights</strong>
+          <small>跨 session 趋势</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/health/`}>
+          <span class="agents-qk-icon">🩺</span>
+          <strong>Health Check</strong>
+          <small>扫描 issue</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/search/`}>
+          <span class="agents-qk-icon">🔍</span>
+          <strong>Search</strong>
+          <small>全文搜索</small>
+        </a>
+        <a class="agents-qk-btn" href={`${base}/agents/bookmarks/`}>
+          <span class="agents-qk-icon">🔖</span>
+          <strong>Bookmarks</strong>
+          <small>已收藏</small>
+        </a>
+      </div>
+    </section>
+
+    {recentSessions.length > 0 && (
+      <section class="agents-session-section">
+        <h2>🕐 最近 5 个 sessions</h2>
+        <ol class="agents-qk-recent">
+          {recentSessions.map((s) => (
+            <li>
+              <a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid)}</code></a>
+              <small class="muted">— {agoStr(s.lastUpdate)}</small>
+            </li>
+          ))}
+        </ol>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 完整索引</h2>
+      <p>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+        <a class="button" href={`${base}/agents/about/`}>🧭 About</a>
+        <a class="button" href={`${base}/agents/tour/`}>🚶 Tour</a>
+        <a class="button" href={`${base}/agents/help/`}>❓ Help</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-qk-stats {
+    display: flex;
+    gap: 1.2rem;
+  }
+  .agents-qk-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-qk-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.8rem;
+  }
+  .agents-qk-btn {
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+    text-decoration: none;
+    color: inherit;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    transition: all 0.15s;
+  }
+  .agents-qk-btn:hover {
+    background: rgba(99, 102, 241, 0.15);
+    border-color: rgba(99, 102, 241, 0.4);
+    transform: translateY(-1px);
+  }
+  .agents-qk-btn-primary {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(99, 102, 241, 0.1));
+    border-color: rgba(99, 102, 241, 0.4);
+  }
+  .agents-qk-icon {
+    font-size: 2rem;
+  }
+  .agents-qk-btn strong {
+    font-size: 1rem;
+  }
+  .agents-qk-btn small {
+    color: #6b7280;
+    font-size: 0.78rem;
+  }
+  .agents-qk-recent {
+    padding-left: 1.5rem;
+  }
+  .agents-qk-recent li {
+    margin-bottom: 0.3rem;
+  }
+</style>
