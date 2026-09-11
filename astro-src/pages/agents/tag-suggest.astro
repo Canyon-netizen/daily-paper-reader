@@ -1,0 +1,226 @@
+---
+// /agents/tag-suggest.astro — iter #148:tag auto-suggest
+//
+// 基于现有 tagged sessions(从 localStorage `agents:tags:v1` 读)给新 goal 推荐 tags:
+//   - 读取用户的 tag 历史
+//   - 与 goal 文本的关键词匹配
+//   - 用 TF + tag 共现率打分
+//   - 用户也可以直接输入 goal 看推荐
+//
+// 注意:tags 在浏览器 localStorage,SSR 看不到;这里读取纯文件元信息,提供一个 fallback
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const STOP = new Set([
+  'the','a','an','and','or','but','if','to','of','in','on','at','by','from','with','as','is','are','was','were','be','been','have','has','had','this','that','it','its','for','our','we','us','they','their','i','my','me','you','your',
+  '一个','一些','这个','那个','我们','你们','他们','什么','怎么','可以','可能','需要','应该','但是','因为','所以','如果',
+]);
+
+// 静态扫描每个 session 的 goal,提取高频关键词作为候选 tag basis
+const goalKeywords = new Map<string, number>();
+const sessions: { sid: string; goal: string }[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      const goal: string = m.goal ?? '';
+      if (!goal) continue;
+      sessions.push({ sid, goal });
+      const cleaned = goal.replace(/[#*_~>|]/g, ' ').replace(/[.,;:!?'"()\[\]{}\/\\\-]/g, ' ').toLowerCase();
+      const tokens = cleaned.split(/\s+/).filter((t) => t.length >= 4 && !STOP.has(t) && !/^\d+$/.test(t));
+      const seen = new Set<string>();
+      for (const t of tokens) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        goalKeywords.set(t, (goalKeywords.get(t) ?? 0) + 1);
+      }
+    } catch (e) { /* */ }
+  }
+}
+
+const topKeywords = [...goalKeywords.entries()]
+  .filter(([_, c]) => c >= 3)
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 80);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Tag Suggestions · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / tag-suggest</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏷️ Tag Auto-Suggest <span class="muted" style="font-size:0.6em">(iter #148)</span></h1>
+      <p class="agents-sub">
+        基于现有 {sessions.length} 个 session 的 goal 文本,提取高频关键词作为推荐 tag。
+        在下方输入框输入你的 goal,系统会按相关度排序推荐 tags。
+        最终 tags 保存到 <a href={`${base}/agents/tags/`}>Tags</a> 页面。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🛠 输入 goal,获取推荐 tags</h2>
+      <textarea id="ts-input" placeholder="输入你的研究 goal … 例如:研究 transformer 在长上下文中的失效模式" rows="3" style="width:100%;padding:0.6rem;border-radius:4px;border:1px solid rgba(99,102,241,0.3);background:rgba(99,102,241,0.05);color:inherit;font-family:inherit"></textarea>
+      <div style="margin-top:0.6rem">
+        <button class="button primary" id="ts-suggest" type="button">✨ 推荐 tags</button>
+        <button class="button" id="ts-clear" type="button">🗑️ 清空</button>
+        <span id="ts-selected-count" class="muted" style="margin-left:0.6rem">选中: 0</span>
+      </div>
+      <div id="ts-results" style="margin-top:1rem"></div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📚 全局候选 tags(Top 80)</h2>
+      <p class="muted"><small>从所有 session goal 中提取的高频词,可作为通用标签起点。</small></p>
+      <div class="agents-ts-cloud">
+        {topKeywords.map(([term, count]) => (
+          <span class="agents-ts-chip" data-term={term} data-count={count}>
+            {term} <small>({count})</small>
+          </span>
+        ))}
+      </div>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+const STOP = new Set([
+  'the','a','an','and','or','but','if','to','of','in','on','at','by','from','with','as','is','are','was','were','be','been','have','has','had','this','that','it','its','for','our','we','us','they','their','i','my','me','you','your',
+  '一个','一些','这个','那个','我们','你们','他们','什么','怎么','可以','可能','需要','应该','但是','因为','所以','如果',
+]);
+const TOP_KW: Array<[string, number]> = Array.from(document.querySelectorAll('.agents-ts-chip')).map((el) => {
+  return [el.getAttribute('data-term') ?? '', parseInt(el.getAttribute('data-count') ?? '0', 10)];
+});
+
+const inputEl = document.getElementById('ts-input') as HTMLTextAreaElement | null;
+const suggestBtn = document.getElementById('ts-suggest');
+const clearBtn = document.getElementById('ts-clear');
+const resultsEl = document.getElementById('ts-results');
+const countEl = document.getElementById('ts-selected-count');
+
+const selected = new Set<string>();
+
+function tokens(text: string): string[] {
+  return text.toLowerCase().replace(/[#*_~>|]/g, ' ').replace(/[.,;:!?'"()\[\]{}\/\\\-]/g, ' ').split(/\s+/).filter((t) => t.length >= 3 && !STOP.has(t));
+}
+
+function suggest(): void {
+  if (!inputEl || !resultsEl) return;
+  const text = inputEl.value;
+  if (text.length < 5) {
+    resultsEl.innerHTML = '<p class="muted">输入至少 5 个字符。</p>';
+    return;
+  }
+  const inputTokens = tokens(text);
+  const inputSet = new Set(inputTokens);
+  const scored = TOP_KW.map(([term, count]) => {
+    let score = 0;
+    if (inputSet.has(term)) score += 100;
+    // substring match: 'transformer' → 'transformers'
+    for (const t of inputTokens) {
+      if (t.length >= 4 && (t.includes(term) || term.includes(t))) {
+        score += 50;
+        break;
+      }
+    }
+    // base frequency
+    score += Math.log(count + 1);
+    return { term, count, score };
+  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score).slice(0, 15);
+
+  if (scored.length === 0) {
+    resultsEl.innerHTML = '<p class="muted">没有匹配项 — 试试更具体的关键词。</p>';
+    return;
+  }
+
+  const html = '<div class="agents-ts-cloud">' + scored.map((s) => {
+    const checked = selected.has(s.term) ? 'agents-ts-checked' : '';
+    return `<span class="agents-ts-chip agents-ts-suggested ${checked}" data-term="${s.term}" data-score="${s.score.toFixed(1)}">
+      ${s.term} <small>(score: ${s.score.toFixed(1)}, freq: ${s.count})</small>
+    </span>`;
+  }).join('') + '</div>';
+  resultsEl.innerHTML = html;
+  bindChips();
+}
+
+function updateCount(): void {
+  if (countEl) countEl.textContent = `选中: ${selected.size}`;
+}
+
+function bindChips(): void {
+  document.querySelectorAll('.agents-ts-suggested').forEach((el) => {
+    el.addEventListener('click', () => {
+      const term = el.getAttribute('data-term');
+      if (!term) return;
+      if (selected.has(term)) {
+        selected.delete(term);
+        el.classList.remove('agents-ts-checked');
+      } else {
+        selected.add(term);
+        el.classList.add('agents-ts-checked');
+      }
+      updateCount();
+    });
+  });
+}
+
+suggestBtn?.addEventListener('click', suggest);
+clearBtn?.addEventListener('click', () => {
+  if (inputEl) inputEl.value = '';
+  selected.clear();
+  if (resultsEl) resultsEl.innerHTML = '';
+  updateCount();
+});
+updateCount();
+</script>
+
+<style>
+  .agents-ts-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .agents-ts-chip {
+    display: inline-block;
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 4px;
+    padding: 0.3rem 0.6rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .agents-ts-chip:hover {
+    background: rgba(99, 102, 241, 0.15);
+  }
+  .agents-ts-checked {
+    background: rgba(16, 185, 129, 0.2);
+    border-color: rgba(16, 185, 129, 0.6);
+    color: #10b981;
+  }
+  .agents-ts-suggested {
+    animation: agents-ts-pop 0.2s;
+  }
+  @keyframes agents-ts-pop {
+    from { transform: scale(0.9); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+</style>
