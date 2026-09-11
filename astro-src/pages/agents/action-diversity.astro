@@ -1,0 +1,257 @@
+---
+// /agents/action-diversity.astro — iter #233:per-session action diversity
+//
+// 计算每 session 的 modifier action Shannon 多样性:
+//   - 高 diversity = 用很多不同 action
+//   - 低 diversity = 集中在少数 action
+//   - 与 final score 相关性
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Diversity {
+  sid: string;
+  goal: string;
+  rounds: number;
+  actions: string[];
+  uniqueActions: number;
+  totalActions: number;
+  shannon: number;
+  finalScore: number;
+}
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+function shannon(actions: string[]): number {
+  if (actions.length === 0) return 0;
+  const counts = new Map<string, number>();
+  for (const a of actions) counts.set(a, (counts.get(a) ?? 0) + 1);
+  const total = actions.length;
+  let h = 0;
+  for (const c of counts.values()) {
+    const p = c / total;
+    if (p > 0) h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+const root = join(process.cwd(), 'archive');
+const records: Diversity[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    const actions: string[] = [];
+    let finalScore = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        for (const a of r.modifier?.applied ?? []) {
+          actions.push(a.action ?? a.type ?? 'unknown');
+        }
+        if (i === rNum.length - 1) finalScore = getAvg(r);
+      } catch (e) { /* */ }
+    }
+    if (actions.length === 0) continue;
+    const unique = new Set(actions);
+    records.push({
+      sid, goal, rounds: rNum.length,
+      actions, uniqueActions: unique.size, totalActions: actions.length,
+      shannon: shannon(actions),
+      finalScore,
+    });
+  }
+}
+
+const total = records.length;
+const avgShannon = total > 0 ? records.reduce((s, r) => s + r.shannon, 0) / total : 0;
+const avgUnique = total > 0 ? records.reduce((s, r) => s + r.uniqueActions, 0) / total : 0;
+
+// diversity 分桶
+const buckets = [
+  { label: 'H = 0 (单一 action)', min: 0, max: 0.01, count: 0 },
+  { label: '0 < H ≤ 1.0', min: 0.01, max: 1.0, count: 0 },
+  { label: '1.0 < H ≤ 2.0', min: 1.0, max: 2.0, count: 0 },
+  { label: 'H > 2.0 (高度多样)', min: 2.0, max: 99, count: 0 },
+];
+for (const r of records) {
+  for (const b of buckets) {
+    if (r.shannon > b.min && r.shannon <= b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const topDiverse = [...records].sort((a, b) => b.shannon - a.shannon).slice(0, 15);
+const topFocused = [...records].sort((a, b) => a.shannon - b.shannon).slice(0, 15);
+
+// Pearson
+function pearson(xs: number[], ys: number[]): number {
+  const n = xs.length;
+  if (n < 2) return 0;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let num = 0, dx2 = 0, dy2 = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - mx;
+    const dy = ys[i] - my;
+    num += dx * dy;
+    dx2 += dx * dx;
+    dy2 += dy * dy;
+  }
+  const denom = Math.sqrt(dx2 * dy2);
+  return denom === 0 ? 0 : num / denom;
+}
+
+const r = pearson(records.map((x) => x.shannon), records.map((x) => x.finalScore));
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Action Diversity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-diversity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌈 Action Diversity <span class="muted" style="font-size:0.6em">(iter #233)</span></h1>
+      <p class="agents-sub">
+        每 session 的 modifier action Shannon 多样性。
+        多样性高 = 工具箱丰富;低 = 集中少数动作。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-adv-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>avg Shannon H: <strong>{avgShannon.toFixed(2)}</strong></span>
+        <span>avg unique actions: <strong>{avgUnique.toFixed(1)}</strong></span>
+        <span>H ↔ final score r: <strong style={r > 0 ? 'color:#10b981' : 'color:#ef4444'}>{r.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 diversity 分布</h2>
+      <pre class="agents-adv-flow">{buckets.map((b) => {
+        const max = Math.max(...buckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(22)} ${bar(b.count, max, 20)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🌈 top 15 高多样性 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>H</th><th>unique</th><th>total</th><th>final</th><th>sid</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topDiverse.map((d) => (
+            <tr>
+              <td><strong>{d.shannon.toFixed(2)}</strong></td>
+              <td>{d.uniqueActions}</td>
+              <td>{d.totalActions}</td>
+              <td>{d.finalScore.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${d.sid}/`}><code>{esc(d.sid.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(d.goal.slice(0, 25))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔬 top 15 高聚焦 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>H</th><th>unique</th><th>total</th><th>final</th><th>sid</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topFocused.map((d) => (
+            <tr>
+              <td><strong>{d.shannon.toFixed(2)}</strong></td>
+              <td>{d.uniqueActions}</td>
+              <td>{d.totalActions}</td>
+              <td>{d.finalScore.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${d.sid}/`}><code>{esc(d.sid.slice(0, 12))}</code></a></td>
+              <td><small class="muted">{esc(d.goal.slice(0, 25))}…</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>Shannon H 越高 = action 类型越多</li>
+        <li>r &gt; 0 = 多样性与 score 正相关</li>
+        <li>对照 <a href={`${base}/agents/refiner-actions/`}>Refiner Actions</a> 看绝对频次</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-adv-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-adv-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-adv-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
