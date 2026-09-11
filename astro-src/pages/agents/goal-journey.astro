@@ -1,0 +1,254 @@
+---
+// /agents/goal-journey.astro — iter #169:goal journey
+//
+// 每个 session 的"旅程"摘要:
+//   - 第一轮的 goal / 提案数 / promoted / score
+//   - 最后一轮的 goal / 提案数 / promoted / score
+//   - 关键转折(最大 Δ round)
+//   - duration(首轮到最后轮的 mtime 跨度)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundSnapshot {
+  idx: number;
+  mtime: number;
+  goal: string;
+  proposalCount: number;
+  promoted: number;
+  avgScore: number;
+}
+
+interface Journey {
+  sid: string;
+  goal: string;
+  rounds: RoundSnapshot[];
+  firstRound: RoundSnapshot | null;
+  lastRound: RoundSnapshot | null;
+  biggestJump: { from: number; to: number; delta: number } | null;
+  durationMs: number;
+}
+
+const journeys: Journey[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length === 0) continue;
+    const snaps: RoundSnapshot[] = [];
+    for (const ri of rNum) {
+      try {
+        const fp = join(rd, `round_${ri}.json`);
+        const st = await stat(fp);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const proposalCount = (r.designer?.proposals ?? []).length;
+        let promoted = 0;
+        const scores: number[] = [];
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') promoted += 1;
+        }
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') scores.push(p.total);
+          }
+        }
+        const avgScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+        snaps.push({
+          idx: ri,
+          mtime: st.mtimeMs,
+          goal: r.goal ?? '',
+          proposalCount,
+          promoted,
+          avgScore,
+        });
+      } catch (e) { /* */ }
+    }
+    if (snaps.length === 0) continue;
+
+    // 最大 jump
+    let biggestJump: Journey['biggestJump'] = null;
+    for (let i = 1; i < snaps.length; i++) {
+      const d = snaps[i].avgScore - snaps[i - 1].avgScore;
+      if (!biggestJump || d > biggestJump.delta) {
+        biggestJump = { from: snaps[i - 1].avgScore, to: snaps[i].avgScore, delta: d };
+      }
+    }
+
+    const first = snaps[0];
+    const last = snaps[snaps.length - 1];
+    const durationMs = last.mtime - first.mtime;
+
+    journeys.push({
+      sid, goal,
+      rounds: snaps,
+      firstRound: first,
+      lastRound: last,
+      biggestJump,
+      durationMs,
+    });
+  }
+}
+
+// 排序:旅程时长最长 / score 上升最多
+journeys.sort((a, b) => {
+  const deltaA = (a.lastRound?.avgScore ?? 0) - (a.firstRound?.avgScore ?? 0);
+  const deltaB = (b.lastRound?.avgScore ?? 0) - (b.firstRound?.avgScore ?? 0);
+  return deltaB - deltaA;
+});
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtDuration(ms: number): string {
+  if (ms <= 0) return '—';
+  const days = Math.floor(ms / (24 * 60 * 60 * 1000));
+  if (days >= 1) return `${days}d`;
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  if (hours >= 1) return `${hours}h`;
+  const mins = Math.floor(ms / (60 * 1000));
+  return `${mins}m`;
+}
+---
+
+<BaseLayout title="Goal Journey · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-journey</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🛤️ Goal Journey <span class="muted" style="font-size:0.6em">(iter #169)</span></h1>
+      <p class="agents-sub">
+        每个 session 的"旅程"摘要:首轮 vs 末轮 + 关键转折 + 持续时间。
+        按 score 上升幅度排序。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gj-globals">
+        <span>总 sessions: <strong>{journeys.length}</strong></span>
+        <span>平均 duration: <strong>{journeys.length > 0 ? fmtDuration(journeys.reduce((s, j) => s + j.durationMs, 0) / journeys.length) : '—'}</strong></span>
+        <span>有 biggest jump: <strong>{journeys.filter((j) => j.biggestJump != null && j.biggestJump.delta !== 0).length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 top 20 score 上升最多</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>first score</th><th>last score</th><th>Δ</th><th>biggest jump</th><th>duration</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {journeys.slice(0, 20).map((j) => {
+            const delta = (j.lastRound?.avgScore ?? 0) - (j.firstRound?.avgScore ?? 0);
+            const bjDelta = j.biggestJump?.delta ?? 0;
+            return (
+              <tr>
+                <td><a href={`${base}/agents/${j.sid}/`}><code>{esc(j.sid.slice(0, 14))}</code></a></td>
+                <td>{j.rounds.length}</td>
+                <td>{j.firstRound?.avgScore.toFixed(2) ?? '—'}</td>
+                <td>{j.lastRound?.avgScore.toFixed(2) ?? '—'}</td>
+                <td><strong style={delta >= 0 ? 'color:#10b981' : 'color:#ef4444'}>{delta >= 0 ? '+' : ''}{delta.toFixed(2)}</strong></td>
+                <td>
+                  {j.biggestJump
+                    ? `R${j.rounds[j.rounds.length - 1]?.idx} (${bjDelta >= 0 ? '+' : ''}${bjDelta.toFixed(2)})`
+                    : '—'}
+                </td>
+                <td>{fmtDuration(j.durationMs)}</td>
+                <td><small class="muted">{esc(j.goal.slice(0, 40))}{(j.goal ?? '').length > 40 ? '…' : ''}</small></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📜 单 session journey(示例)</h2>
+      {journeys.slice(0, 5).map((j) => (
+        <details class="agents-gj-journey">
+          <summary>
+            <strong><a href={`${base}/agents/${j.sid}/`}><code>{esc(j.sid.slice(0, 14))}</code></a></strong>
+            <span class="muted"> · {j.rounds.length} rounds · duration {fmtDuration(j.durationMs)} · Δ {(j.lastRound && j.firstRound ? (j.lastRound.avgScore - j.firstRound.avgScore) : 0).toFixed(2)}</span>
+          </summary>
+          <table class="agents-session-table" style="margin-top:0.6rem">
+            <thead>
+              <tr><th>round</th><th>proposals</th><th>promoted</th><th>avg score</th><th>Δ vs prev</th><th>mtime</th></tr>
+            </thead>
+            <tbody>
+              {j.rounds.map((s, i) => {
+                const prev = i > 0 ? j.rounds[i - 1] : null;
+                const d = prev ? s.avgScore - prev.avgScore : 0;
+                return (
+                  <tr>
+                    <td>R{s.idx}</td>
+                    <td>{s.proposalCount}</td>
+                    <td>{s.promoted}</td>
+                    <td>{s.avgScore.toFixed(2)}</td>
+                    <td>{prev ? (d >= 0 ? '+' : '') + d.toFixed(2) : '—'}</td>
+                    <td><small class="muted">{new Date(s.mtime).toISOString().slice(0, 16).replace('T', ' ')}</small></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </details>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>Δ &gt; 0.5 表示 LLM 反馈认可了 session 走向</li>
+        <li>Δ 接近 0 但 rounds 多 = 探索中未收敛</li>
+        <li>biggest jump 的 round 可能是关键修改发生处</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gj-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gj-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gj-journey {
+    background: rgba(99, 102, 241, 0.05);
+    border-left: 3px solid rgba(99, 102, 241, 0.4);
+    padding: 0.6rem;
+    margin-bottom: 0.6rem;
+    border-radius: 4px;
+  }
+  .agents-gj-journey summary {
+    cursor: pointer;
+  }
+</style>
