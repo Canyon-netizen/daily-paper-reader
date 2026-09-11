@@ -1,0 +1,191 @@
+---
+// /agents/score-leaderboard.astro — iter #223:cross-session score leaderboard
+//
+// 全 sessions 排名,按最终 score 排序:
+//   - top N sessions
+//   - score 分布
+//   - 各 rank bucket 的 cost / rounds
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionRank {
+  sid: string;
+  goal: string;
+  rounds: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+  rank: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const records: SessionRank[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    let firstScore = 0;
+    let finalScore = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const avg = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        if (i === 0) firstScore = avg;
+        if (i === rNum.length - 1) finalScore = avg;
+      } catch (e) { /* */ }
+    }
+    records.push({
+      sid, goal, rounds: rNum.length,
+      firstScore, finalScore, gain: finalScore - firstScore,
+      rank: 0,
+    });
+  }
+}
+
+records.sort((a, b) => b.finalScore - a.finalScore);
+records.forEach((r, i) => { r.rank = i + 1; });
+
+// score 分桶
+const buckets = [
+  { label: '9-10 (卓越)', min: 9, max: 10.01, count: 0 },
+  { label: '8-9 (优秀)', min: 8, max: 9, count: 0 },
+  { label: '7-8 (良好)', min: 7, max: 8, count: 0 },
+  { label: '6-7 (中上)', min: 6, max: 7, count: 0 },
+  { label: '5-6 (中等)', min: 5, max: 6, count: 0 },
+  { label: '< 5 (不足)', min: 0, max: 5, count: 0 },
+];
+for (const r of records) {
+  for (const b of buckets) {
+    if (r.finalScore >= b.min && r.finalScore < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const top30 = records.slice(0, 30);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Score Leaderboard · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-leaderboard</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏅 Score Leaderboard <span class="muted" style="font-size:0.6em">(iter #223)</span></h1>
+      <p class="agents-sub">
+        所有 sessions 按最终 score 排名。
+        看谁跑出了最高分。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sl-globals">
+        <span>总 sessions: <strong>{records.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 score 分布</h2>
+      <pre class="agents-sl-flow">{buckets.map((b) => {
+        const max = Math.max(...buckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(14)} ${bar(b.count, max, 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 top 30 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>final</th><th>gain</th><th>rounds</th><th>sid</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {top30.map((r) => (
+            <tr>
+              <td><strong>#{r.rank}</strong></td>
+              <td><strong style={r.finalScore >= 8 ? 'color:#10b981' : r.finalScore >= 6 ? 'color:#f59e0b' : ''}>{r.finalScore.toFixed(2)}</strong></td>
+              <td>{r.gain >= 0 ? '+' : ''}{r.gain.toFixed(2)}</td>
+              <td>{r.rounds}</td>
+              <td><a href={`${base}/agents/${r.sid}/`}><code>{esc(r.sid.slice(0, 14))}</code></a></td>
+              <td><small class="muted">{esc(r.goal.slice(0, 40))}{(r.goal ?? '').length > 40 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rank = 按 final score 降序</li>
+        <li>final ≥ 9 = 卓越 sessions</li>
+        <li>对照 <a href={`${base}/agents/top-sessions/`}>Top Sessions</a> 看综合排名</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sl-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sl-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sl-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
