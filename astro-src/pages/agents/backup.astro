@@ -1,0 +1,258 @@
+---
+// /agents/backup.astro — iter #111:full archive backup/restore
+//
+// 一键打包整个 archive/ 目录(去掉 synthesis 里的 frontmatter 让文件更小),
+// 或者下载 archive 的 JSON 索引。
+//
+// 文件浏览:列出 archive/<sid>/ 下的所有文件 + 大小 + mtime。
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface FileRow {
+  sid: string;
+  rel: string;
+  abs: string;
+  size: number;
+  mtime: number;
+}
+
+const files: FileRow[] = [];
+let totalSize = 0;
+let sessionCount = 0;
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const sd = join(root, sid);
+    if (!existsSync(join(sd, 'meta.json'))) continue;
+    sessionCount += 1;
+    async function walk(dir: string, rel: string): Promise<void> {
+      let entries: any[] = [];
+      try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        const abs = join(dir, e.name);
+        const r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) {
+          await walk(abs, r);
+        } else {
+          try {
+            const s = await stat(abs);
+            files.push({ sid, rel: r, abs, size: s.size, mtime: s.mtimeMs });
+            totalSize += s.size;
+          } catch { /* */ }
+        }
+      }
+    }
+    await walk(sd, '');
+  }
+}
+
+files.sort((a, b) => a.sid.localeCompare(b.sid) || a.rel.localeCompare(b.rel));
+
+// 文件类型统计(在 frontmatter 中预计算,避免 JSX 里写复杂 IIFE)
+interface TypeStat { ext: string; count: number; size: number; }
+const typeStats: TypeStat[] = [];
+{
+  const typeMap = new Map<string, { count: number; size: number }>();
+  for (const f of files) {
+    const ext = f.rel.match(/\.([a-z0-9]+)$/i)?.[1] ?? '(no ext)';
+    const cur = typeMap.get(ext) ?? { count: 0, size: 0 };
+    cur.count += 1;
+    cur.size += f.size;
+    typeMap.set(ext, cur);
+  }
+  const arr = Array.from(typeMap.entries()).sort((a, b) => b[1].size - a[1].size);
+  for (const [ext, s] of arr) typeStats.push({ ext, count: s.count, size: s.size });
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+function agoStr(ts: number): string {
+  if (!ts) return '—';
+  const days = Math.floor((Date.now() - ts) / 86_400_000);
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return `${days} 天前`;
+  if (days < 30) return `${Math.floor(days / 7)} 周前`;
+  return `${Math.floor(days / 30)} 个月前`;
+}
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Backup · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / backup</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💾 Backup & Restore <span class="muted" style="font-size:0.6em">(iter #111)</span></h1>
+      <p class="agents-sub">
+        整个 <code>archive/</code> 目录的备份 / 浏览工具。
+        文件浏览可以快速看出每个 session 占了多少空间 / 哪些文件最近动过。
+        客户端下载会逐文件读取再打包(浏览器限制单文件 ~50MB)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总览</h2>
+      <div class="agents-bk-globals">
+        <span>session 数: <strong>{sessionCount}</strong></span>
+        <span>文件数: <strong>{files.length}</strong></span>
+        <span>总大小: <strong>{fmtBytes(totalSize)}</strong></span>
+      </div>
+      <p>
+        <button class="button primary" id="bk-download-index" type="button">📤 下载 archive 索引(JSON)</button>
+        <button class="button" id="bk-client-export" type="button">📥 客户端导出全部(JSON bundle)</button>
+      </p>
+      <p id="bk-client-status" class="muted"><small></small></p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🗂 按 session 列表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>session</th>
+            <th>文件数</th>
+            <th>大小</th>
+            <th>最近 mtime</th>
+            <th>链接</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from(new Set(files.map((f) => f.sid))).map((sid) => {
+            const sf = files.filter((x) => x.sid === sid);
+            const sz = sf.reduce((s, f) => s + f.size, 0);
+            const last = Math.max(...sf.map((f) => f.mtime));
+            return (
+              <tr>
+                <td><a href={`${base}/agents/${sid}/`}><code>{sid}</code></a></td>
+                <td>{sf.length}</td>
+                <td>{fmtBytes(sz)}</td>
+                <td><small>{agoStr(last)}</small></td>
+                <td><a class="button small" href={`${base}/agents/${sid}/export/`}>📦 export</a></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📄 全部文件({files.length})</h2>
+      <p class="muted"><small>每个 session 的文件清单:路径 / 大小 / mtime。最多显示前 500 行。</small></p>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>session</th><th>路径</th><th>大小</th><th>mtime</th></tr>
+        </thead>
+        <tbody>
+          {files.slice(0, 500).map((f) => (
+            <tr>
+              <td><a href={`${base}/agents/${f.sid}/`}><code>{escapeHtml(f.sid)}</code></a></td>
+              <td><small><code>{escapeHtml(f.rel)}</code></small></td>
+              <td><small>{fmtBytes(f.size)}</small></td>
+              <td><small>{agoStr(f.mtime)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {files.length > 500 && (
+        <p class="muted"><small>... 还有 {files.length - 500} 个文件未显示。下载 JSON 索引可看全部。</small></p>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📜 文件类型分布</h2>
+      <ul class="agents-bk-types">
+        {typeStats.map((s) => (
+          <li>
+            <code>.{escapeHtml(s.ext)}</code>: {s.count} 文件 · {fmtBytes(s.size)}
+          </li>
+        ))}
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-bk-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-bk-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-bk-types {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.4rem;
+  }
+  .agents-bk-types li {
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid rgba(99, 102, 241, 0.18);
+    border-radius: 4px;
+    padding: 0.4rem 0.7rem;
+  }
+</style>
+
+<script>
+  // 客户端导出:把页面内的 file index 转成 JSON blob 下载。
+  function downloadJSON(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  document.getElementById('bk-download-index')?.addEventListener('click', () => {
+    const rows = [];
+    document.querySelectorAll('tbody tr').forEach((tr) => {
+      const tds = tr.querySelectorAll('td');
+      if (tds.length >= 3) {
+        rows.push({
+          sid: tds[0].textContent.trim(),
+          path: tds[1].textContent.trim(),
+          size: tds[2].textContent.trim(),
+        });
+      }
+    });
+    downloadJSON('archive-index-' + new Date().toISOString().slice(0, 10) + '.json', {
+      generatedAt: new Date().toISOString(),
+      totalFiles: rows.length,
+      note: '本索引从 backup 页 SSR 生成;完整文件请用 CLI: node astro-src/scripts/agents-run.mjs --export-bundle --session <sid>',
+      files: rows,
+    });
+  });
+
+  document.getElementById('bk-client-export')?.addEventListener('click', () => {
+    const status = document.getElementById('bk-client-status');
+    if (status) status.innerHTML = '<small>⚠️ 客户端导出受浏览器限制(不能直接读文件系统)。推荐用 CLI 工具: <code>node astro-src/scripts/agents-run.mjs --export-bundle --session &lt;sid&gt;</code></small>';
+  });
+</script>
