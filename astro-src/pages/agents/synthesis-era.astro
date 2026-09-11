@@ -1,0 +1,212 @@
+---
+// /agents/synthesis-era.astro — iter #218:synthesis era grouping
+//
+// 按时间分组 sessions 为 era(按周):
+//   - 每 era 的 sessions / rounds / tokens / cost
+//   - avg final score per era
+//   - era 间 score trend(质量演进)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+interface Era {
+  week: string;  // YYYY-Www
+  sessions: number;
+  rounds: number;
+  tokens: number;
+  cost: number;
+  finalScores: number[];
+  avgScore: number;
+  syntheses: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const eraMap = new Map<string, Era>();
+
+function isoWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let metaMtime = new Date();
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      metaMtime = new Date(m.createdAt ?? m.mtime ?? Date.now());
+    } catch (e) { continue; }
+    const week = isoWeek(metaMtime);
+    let era = eraMap.get(week) ?? {
+      week, sessions: 0, rounds: 0, tokens: 0, cost: 0,
+      finalScores: [], avgScore: 0, syntheses: 0,
+    };
+    era.sessions += 1;
+    const rd = join(root, sid, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      const rNum: number[] = [];
+      for (const rf of rfs) {
+        const m = rf.match(/^round_(\d+)\.json$/);
+        if (m) rNum.push(parseInt(m[1], 10));
+      }
+      if (rNum.length > 0) {
+        rNum.sort((a, b) => a - b);
+        const last = rNum[rNum.length - 1];
+        try {
+          const r = JSON.parse(await readFile(join(rd, `round_${last}.json`), 'utf8'));
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          if (arr.length > 0) {
+            const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+            era.finalScores.push(avg);
+          }
+        } catch (e) { /* */ }
+        for (const ri of rNum) {
+          try {
+            const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+            era.rounds += 1;
+            era.tokens += r.feedback?.total_tokens ?? 0;
+          } catch (e) { /* */ }
+        }
+      }
+    }
+    const sd = join(root, sid, 'synthesis');
+    if (existsSync(sd)) {
+      const sfs = await readdir(sd).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) era.syntheses += 1;
+      }
+    }
+    eraMap.set(week, era);
+  }
+}
+
+const eras = [...eraMap.values()];
+for (const e of eras) {
+  e.cost = (e.tokens / 1_000_000) * SONNET_PRICE;
+  e.avgScore = e.finalScores.length > 0 ? e.finalScores.reduce((a, b) => a + b, 0) / e.finalScores.length : 0;
+}
+eras.sort((a, b) => a.week.localeCompare(b.week));
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Synthesis Era · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / synthesis-era</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Synthesis Era <span class="muted" style="font-size:0.6em">(iter #218)</span></h1>
+      <p class="agents-sub">
+        按 ISO 周(YYYY-Www)分组 sessions,看每周活动强度 + score 质量趋势。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-se-globals">
+        <span>总 eras: <strong>{eras.length}</strong></span>
+        <span>总 sessions: <strong>{eras.reduce((s, e) => s + e.sessions, 0)}</strong></span>
+        <span>总 rounds: <strong>{eras.reduce((s, e) => s + e.rounds, 0)}</strong></span>
+        <span>总 cost: <strong>${eras.reduce((s, e) => s + e.cost, 0).toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Era 时间线</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>week</th><th>sessions</th><th>rounds</th><th>cost</th><th>avg score</th><th>synth</th><th>分布</th></tr>
+        </thead>
+        <tbody>
+          {eras.map((e) => (
+            <tr>
+              <td><code>{esc(e.week)}</code></td>
+              <td>{e.sessions}</td>
+              <td>{e.rounds}</td>
+              <td>${e.cost.toFixed(2)}</td>
+              <td>{e.avgScore > 0 ? e.avgScore.toFixed(2) : '—'}</td>
+              <td>{e.syntheses}</td>
+              <td><small>{bar(e.sessions, Math.max(...eras.map((x) => x.sessions), 1), 8)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Score 趋势(score 跨 era)</h2>
+      <pre class="agents-se-flow">{(() => {
+        const erasWithScore = eras.filter((e) => e.avgScore > 0);
+        if (erasWithScore.length === 0) return '(no data)';
+        return erasWithScore.map((e) => {
+          const bar2 = bar(e.avgScore, 10, 24);
+          return `${e.week} ${bar2}  ${e.avgScore.toFixed(2)}`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>era 间 avg score 趋势反映质量演进</li>
+        <li>空白 era = 静默期(没新 sessions)</li>
+        <li>对照 <a href={`${base}/agents/weekly-digest/`}>Weekly Digest</a> 看上周活动</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-se-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-se-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-se-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
