@@ -1,0 +1,251 @@
+---
+// /agents/about.astro — iter #86:system overview + onboarding
+//
+// 一页式介绍整个多智能体系统:
+//   - 系统目标
+//   - 3 个角色(Designer / Feedback / Gate / Modifier / Evaluator / Reviewer / Reviser)说明
+//   - 7 阶段研究 pipeline(ideation → lit review → experiment → draft → review → revise → export)
+//   - 可用页面索引
+//   - 常用 CLI 命令
+//   - 数据存储位置
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const ROLES = [
+  { emoji: '🎨', name: 'Designer', desc: '生成候选 proposals(idea / experiment / outline / paper_additions / rebuttal 等)。每个 proposal 包含 title / rationale / evidence.paperIds / type / payload。' },
+  { emoji: '🧪', name: 'Feedback', desc: '3 个 persona(methodologist / engineer / skeptic)各自打分 1-10,合成 total 与 critique 文本。' },
+  { emoji: '🚦', name: 'Gate', desc: '根据 preset 阈值把 proposals 分为 promoted / candidate / sketch / rejected 四级。' },
+  { emoji: '🔧', name: 'Modifier', desc: '把 promoted 的 proposals 落到上游模块(ideas / experiments / writings)或 archive,生成 deliverable。' },
+  { emoji: '📊', name: 'Evaluator', desc: '在 iter #69 加入,4 子分(coverage / alignment / consistency / synthesisCoverage)给 session 整体打分。' },
+  { emoji: '📝', name: 'Reviewer', desc: '迭代 review 当前 synthesis,检查引文 / 论证 / 一致性。' },
+  { emoji: '🔁', name: 'Reviser', desc: '基于 review 反馈修改 synthesis。' },
+];
+
+const PIPELINE = [
+  { emoji: '💡', stage: '1. Ideation', desc: 'Designer 产 proposal → Feedback 打分 → Gate 过滤 → Modifier 写入 ideas 表。' },
+  { emoji: '📚', stage: '2. Literature Review', desc: '从 goals / keywords 拉 arxiv 论文 → 检查 novelty / coverage。' },
+  { emoji: '🔬', stage: '3. Experiment Design', desc: '生成 experiment protocol(数据 / baseline / metric / ablation),写入 experiments 表。' },
+  { emoji: '✍️', stage: '4. Draft', desc: 'Modifier 调 paper-compiler / paper-drafter,生成 draft markdown。' },
+  { emoji: '👀', stage: '5. Review', desc: 'Reviewer 逐节 review draft,产出 critique + 改进建议。' },
+  { emoji: '🛠', stage: '6. Revise', desc: 'Reviser 根据 review 反馈重写,直到 reviewer pass。' },
+  { emoji: '📦', stage: '7. Export', desc: '导出 markdown / PDF / bib / GitHub-ready 仓库结构。' },
+];
+
+const PAGES = [
+  { path: '/agents/', emoji: '📋', name: '控制台', desc: '主入口,跑 round / 选 session / 看实时日志。' },
+  { path: '/agents/new-session/', emoji: '➕', name: '新建 session', desc: '模板式填表,生成 CLI 命令或保存为自定义模板。' },
+  { path: '/agents/auto/', emoji: '🤖', name: '自治研究模式', desc: '一键让 agent 自主迭代到收敛。' },
+  { path: '/agents/standup/', emoji: '📅', name: '每日 standup', desc: 'next actions + 最近 session 卡片。' },
+  { path: '/agents/notebook/', emoji: '📓', name: '研究手记', desc: '按时间倒序 journal 视图,1 行 TL;DR / 下一步。' },
+  { path: '/agents/heatmap/', emoji: '🔥', name: '活动热力图', desc: '过去 365 天 session/round/proposal 密度。' },
+  { path: '/agents/insights/', emoji: '🧠', name: '跨 session 学习', desc: '全局统计 + proposal type 频率 + arxiv 热度。' },
+  { path: '/agents/goals/', emoji: '📚', name: '目标模板库', desc: '5 内置模板 + localStorage 自定义 + 高频关键词。' },
+  { path: '/agents/<sid>/', emoji: '📊', name: 'Session 详情', desc: '当前 session 的 round + synthesis + 评审历史。' },
+  { path: '/agents/<sid>/score/', emoji: '📈', name: 'Session 评分', desc: 'evaluator 4 子分 dashboard + 改进建议。' },
+  { path: '/agents/<sid>/brief/', emoji: '📋', name: 'Session Brief', desc: '1 页执行摘要,可复制为 markdown。' },
+  { path: '/agents/<sid>/timeline/', emoji: '📜', name: 'Proposal Timeline', desc: '每个 proposal 在所有 round 的生命周期矩阵。' },
+  { path: '/agents/<sid>/pipeline/', emoji: '🔬', name: 'Pipeline 进度', desc: '7-stage pipeline 在 session 中的覆盖度。' },
+  { path: '/agents/<sid>/papers/', emoji: '📚', name: '论文库', desc: '所有引用的 arxiv 论文 + 引用次数 + 出现 rounds。' },
+  { path: '/agents/<sid>/deliverables/', emoji: '🛠', name: 'Deliverables', desc: 'Modifier 实际产出 + payload 详情。' },
+  { path: '/agents/<sid>/critiques/', emoji: '👀', name: '评审记录', desc: '3 persona 打分 + critique 文本。' },
+  { path: '/agents/<sid>/synthesis/', emoji: '🧠', name: 'Synthesis 列表', desc: '所有 synthesis markdown + diff 入口。' },
+  { path: '/agents/<sid>/synthesis/diff/', emoji: '🔀', name: 'Synthesis Diff', desc: '两份 synthesis 的 meta delta + topics added/removed + similarity。' },
+  { path: '/agents/<sid>/export/', emoji: '📦', name: '导出', desc: '导出 session / 整个 archive 为 JSON / markdown。' },
+  { path: '/agents/<sid>/compile/', emoji: '📄', name: '装配 paper', desc: '从 synthesis + experiments 装配完整 paper。' },
+  { path: '/agents/coverage/', emoji: '🗺️', name: 'Coverage 地图', desc: 'paper 覆盖率地图。' },
+  { path: '/agents/search/', emoji: '🔎', name: '全文搜索', desc: '跨 archive 全文搜索。' },
+  { path: '/agents/bulk/', emoji: '📦', name: 'Bulk 操作', desc: '多 session 批量管理。' },
+  { path: '/agents/compare/', emoji: '📊', name: '对比', desc: '两份 session / round 并排对比。' },
+  { path: '/agents/compare-sessions/', emoji: '🆚', name: 'Cross-session 对比', desc: '跨 session stats 对比。' },
+  { path: '/agents/pipelines/', emoji: '🔬', name: 'Pipelines 总览', desc: '跨 session 7-stage pipeline 状态。' },
+];
+
+const CLI_QUICK = [
+  { cmd: 'node astro-src/scripts/agents-run.mjs --auto "<goal>"', desc: '创建并自动跑(等价 new-session + auto)' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --auto-resume --session <sid>', desc: '从已有 session 继续跑下一轮' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --diff rounds --session <sid>', desc: '导出 rounds 之间的 diff' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --diff-syntheses --session <sid>', desc: '导出 synthesis 之间的 diff(也支持浏览器版)' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --export-md --session <sid>', desc: '导出 session markdown' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --export-bundle --session <sid>', desc: '导出 session bundle(zip / json)' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --compile-paper --session <sid>', desc: '装配 paper' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --search-arxiv "<query>"', desc: '拉新论文到 candidates' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --eval --session <sid>', desc: '只跑 evaluator,输出 JSON' },
+  { cmd: 'node astro-src/scripts/agents-run.mjs --quickstart', desc: '5 秒创建 demo session 跑 1 round' },
+];
+
+const DATA_LAYOUT = [
+  { path: 'archive/<sid>/meta.json', desc: 'session 元数据(goal / preset / created_at)' },
+  { path: 'archive/<sid>/rounds/round_NNN.json', desc: '每轮完整状态(designer / feedback / gate / modifier)' },
+  { path: 'archive/<sid>/synthesis/synthesis_NNN.md', desc: '每份 synthesis(frontmatter + markdown body)' },
+  { path: 'archive/<sid>/pipeline.json', desc: '7-stage pipeline 进度(可选)' },
+  { path: 'data/agents-archive-manifest.json', desc: 'archive 全局 manifest(被多个页面引用)' },
+  { path: 'localStorage (浏览器)', desc: '自定义 goal templates / session state 缓存' },
+];
+---
+
+<BaseLayout title="About · 多智能体研究系统">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / about</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧭 关于本系统 <span class="muted" style="font-size:0.6em">(iter #86)</span></h1>
+      <p class="agents-sub">一页式导览,告诉你这个工具有什么、能做什么、怎么开始。</p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 目标</h2>
+      <p>
+        用多智能体协作模拟研究团队的"提出 → 评审 → 改进 → 收尾"循环,在浏览器中可视化每一步,
+        把科研流程拆成可独立观察、可迭代改进的小决策,而不是只看到最终产出。
+        参考思路来自 STORM(Stanford)、AI Scientist(Sakana)。
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>👥 角色(7)</h2>
+      <div class="agents-about-grid">
+        {ROLES.map((r) => (
+          <div class="agents-about-card">
+            <span class="agents-about-emoji">{r.emoji}</span>
+            <strong>{r.name}</strong>
+            <p class="muted">{r.desc}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔬 7 阶段研究 pipeline</h2>
+      <ol class="agents-about-pipeline">
+        {PIPELINE.map((p) => (
+          <li>
+            <span class="agents-about-emoji">{p.emoji}</span>
+            <strong>{p.stage}</strong>
+            <span class="muted">— {p.desc}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📑 全部页面 (27)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>路径</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {PAGES.map((p) => (
+            <tr>
+              <td>
+                <a href={`${base}${p.path}`}>
+                  <code>{p.path}</code>
+                </a>
+                {' '}<span class="muted">{p.emoji} {p.name}</span>
+              </td>
+              <td>{p.desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⌨️ 常用 CLI 命令</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>命令</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {CLI_QUICK.map((c) => (
+            <tr>
+              <td><code>{c.cmd}</code></td>
+              <td>{c.desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📁 数据存储</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>路径</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          {DATA_LAYOUT.map((d) => (
+            <tr>
+              <td><code>{d.path}</code></td>
+              <td>{d.desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 3 步开始</h2>
+      <ol class="agents-about-steps">
+        <li><strong>新建 session:</strong> <a href={`${base}/agents/new-session/`}>new-session</a> 选模板 → 自动填 goal → 复制 CLI 到终端跑,或浏览器内 dry-run。</li>
+        <li><strong>迭代观察:</strong> 跑几轮后回 <a href={`${base}/agents/`}>控制台</a> 看每轮 proposals / 评审 / synthesis 增长。<a href={`${base}/agents/standup/`}>Standup</a> 给你自动 next actions。</li>
+        <li><strong>收尾导出:</strong> 评分 ≥ 70% 时 <a href={`${base}/agents/<sid>/export/`}>导出</a> 或 <a href={`${base}/agents/<sid>/compile/`}>装配 paper</a>。</li>
+      </ol>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快速入口</h2>
+      <p>
+        <a class="button primary" href={`${base}/agents/new-session/`}>➕ 新建 session</a>
+        <a class="button" href={`${base}/agents/auto/`}>🤖 自治模式</a>
+        <a class="button" href={`${base}/agents/standup/`}>📅 Standup</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-about-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 0.6rem;
+  }
+  .agents-about-card {
+    background: rgba(99, 102, 241, 0.08);
+    border-left: 3px solid #4f46e5;
+    border-radius: 4px;
+    padding: 0.6rem 0.8rem;
+  }
+  .agents-about-card strong { display: block; font-size: 1rem; margin: 0.2rem 0; }
+  .agents-about-card p { font-size: 0.85rem; line-height: 1.4; margin: 0.2rem 0 0; }
+  .agents-about-emoji { font-size: 1.3rem; margin-right: 0.4rem; }
+  .agents-about-pipeline {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .agents-about-pipeline li {
+    padding: 0.5rem 0;
+    border-bottom: 1px dashed rgba(255,255,255,0.08);
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .agents-about-pipeline li strong {
+    font-family: ui-monospace, monospace;
+    color: #4f46e5;
+  }
+  .agents-about-steps li {
+    padding: 0.5rem 0;
+    line-height: 1.55;
+  }
+</style>
