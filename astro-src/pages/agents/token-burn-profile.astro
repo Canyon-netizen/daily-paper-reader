@@ -1,0 +1,166 @@
+---
+// /agents/token-burn-profile.astro — iter #288:per-session token burn sparkline
+//
+// 每个 session 的 per-round token 消耗 mini sparkline:
+//   - ASCII sparkline ▁▂▃▄▅▆▇█
+//   - 显示 avg/max/total per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionBurn {
+  sid: string;
+  goal: string;
+  tokens: number[];
+  total: number;
+  avg: number;
+  max: number;
+  sparkline: string;
+}
+
+const SPARK_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessionBurn[] = [];
+
+function sparkline(values: number[]): string {
+  if (values.length === 0) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return SPARK_CHARS[0].repeat(values.length);
+  return values.map((v) => {
+    const idx = Math.min(7, Math.floor(((v - min) / (max - min)) * 7));
+    return SPARK_CHARS[idx];
+  }).join('');
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const tokens: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        tokens.push(r.feedback?.total_tokens ?? 0);
+      } catch (e) { tokens.push(0); }
+    }
+
+    const total = tokens.reduce((a, b) => a + b, 0);
+    const avg = total / tokens.length;
+    const max = Math.max(...tokens);
+    sessions.push({
+      sid, goal, tokens,
+      total, avg, max,
+      sparkline: sparkline(tokens),
+    });
+  }
+}
+
+sessions.sort((a, b) => b.total - a.total);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Token Burn Profile · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / token-burn-profile</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Token Burn Profile <span class="muted" style="font-size:0.6em">(iter #288)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 per-round token 消耗 sparkline 视图(按总 token 排序)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top {Math.min(50, sessions.length)} sessions by total tokens</h2>
+      <pre class="agents-tbp-flow">{sessions.slice(0, 50).map((s) => {
+        const goal = (s.goal ?? '').slice(0, 30);
+        return `${esc(s.sid.slice(0, 8))}  ${s.sparkline.padEnd(20)}  total=${fmtTok(s.total).padStart(6)}  avg=${fmtTok(s.avg).padStart(6)}  max=${fmtTok(s.max).padStart(6)}  ${goal}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 详细列表(top 25)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>total</th><th>avg/round</th><th>peak</th><th>sparkline</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 25).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.tokens.length}</td>
+              <td><strong>{fmtTok(s.total)}</strong></td>
+              <td>{fmtTok(s.avg)}</td>
+              <td>{fmtTok(s.max)}</td>
+              <td style="font-family:ui-monospace,monospace;font-size:1.1em">{s.sparkline}</td>
+              <td><small class="muted">{esc((s.goal ?? '').slice(0, 30))}{(s.goal ?? '').length > 30 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>sparkline 平 = 稳定消耗 / 陡 = 后期某个 round 突然暴涨</li>
+        <li>avg 高 = 整体偏贵</li>
+        <li>peak 远大于 avg = 存在"超长 round"</li>
+        <li>对照 <a href={`${base}/agents/token-density/`}>Token Density</a> 看 per-goal</li>
+        <li>对照 <a href={`${base}/agents/cost-cumulative-curve/`}>Cost Cumulative Curve</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-tbp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
