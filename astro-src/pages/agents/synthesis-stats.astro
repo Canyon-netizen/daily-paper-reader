@@ -1,0 +1,224 @@
+---
+// /agents/synthesis-stats.astro — iter #128:synthesis statistics
+//
+// 跨 session 聚合 synthesis 文件的文本统计:
+//   - 字数、行数、段落数
+//   - heading 数量(# / ## / ###)
+//   - list 数量
+//   - code block 数量
+//   - link / image 数量
+//   - 跨 session 排名(最长 / 最短 / 平均)
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SynthStats {
+  sid: string;
+  idx: number;
+  path: string;
+  mtime: number;
+  bytes: number;
+  words: number;
+  lines: number;
+  paragraphs: number;
+  h1: number;
+  h2: number;
+  h3: number;
+  lists: number;
+  codeBlocks: number;
+  links: number;
+  images: number;
+}
+
+const stats: SynthStats[] = [];
+
+function countStats(text: string, mtime: number, bytes: number, sid: string, idx: number, path: string): SynthStats {
+  const words = (text.match(/\b[\w'-]+\b/g) ?? []).length;
+  const lines = text.split('\n').length;
+  const paragraphs = text.split(/\n\s*\n/).filter((p) => p.trim().length > 0).length;
+  const h1 = (text.match(/^#\s+/gm) ?? []).length;
+  const h2 = (text.match(/^##\s+/gm) ?? []).length;
+  const h3 = (text.match(/^###\s+/gm) ?? []).length;
+  const lists = (text.match(/^[-*]\s+/gm) ?? []).length;
+  const codeBlocks = (text.match(/```/g) ?? []).length / 2;
+  const links = (text.match(/\[[^\]]+\]\([^)]+\)/g) ?? []).length;
+  const images = (text.match(/!\[[^\]]*\]\([^)]+\)/g) ?? []).length;
+  return { sid, idx, path, mtime, bytes, words, lines, paragraphs, h1, h2, h3, lists, codeBlocks, links, images };
+}
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sd = join(root, sid, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const files = await readdir(sd).catch(() => []);
+    for (const f of files) {
+      if (!/^synthesis_(\d+)\.md$/.test(f)) continue;
+      const idx = parseInt(f.match(/synthesis_(\d+)/)?.[1] ?? '0', 10);
+      const fp = join(sd, f);
+      const st = await stat(fp).catch(() => null);
+      const text = await readFile(fp, 'utf8').catch(() => '');
+      stats.push(countStats(text, st?.mtimeMs ?? 0, st?.size ?? 0, sid, idx, f));
+    }
+  }
+}
+
+stats.sort((a, b) => b.words - a.words);
+
+function avg(field: keyof SynthStats): number {
+  if (stats.length === 0) return 0;
+  return stats.reduce((s, x) => s + (x[field] as number), 0) / stats.length;
+}
+function max(field: keyof SynthStats): number {
+  return stats.reduce((m, x) => Math.max(m, x[field] as number), 0);
+}
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+function fmtDate(ts: number): string {
+  if (!ts) return '—';
+  return new Date(ts).toISOString().slice(0, 10);
+}
+function fmtKB(b: number): string {
+  if (b < 1024) return b + ' B';
+  return (b / 1024).toFixed(1) + ' KB';
+}
+---
+
+<BaseLayout title="Synthesis Stats · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / synthesis-stats</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Synthesis Stats <span class="muted" style="font-size:0.6em">(iter #128)</span></h1>
+      <p class="agents-sub">
+        跨 session 聚合每份 synthesis 文件的文本统计:字数、段落数、heading、列表、code block、链接。
+        帮你识别哪些 synthesis 太短、哪些冗长。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ss-globals">
+        <span>总 syntheses: <strong>{stats.length}</strong></span>
+        <span>avg 字数: <strong>{avg('words').toFixed(0)}</strong></span>
+        <span>avg 段落: <strong>{avg('paragraphs').toFixed(0)}</strong></span>
+        <span>avg headings: <strong>{(avg('h1') + avg('h2') + avg('h3')).toFixed(1)}</strong></span>
+        <span>max 字数: <strong>{max('words').toLocaleString()}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 最长 syntheses (Top 20)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>session</th><th>idx</th><th>字数</th><th>段落</th><th>H1</th><th>H2</th><th>H3</th><th>列表</th><th>code</th><th>links</th><th>大小</th><th>日期</th></tr>
+        </thead>
+        <tbody>
+          {stats.slice(0, 20).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td><a href={`${base}/agents/${s.sid}/synthesis/${String(s.idx).padStart(3, '0')}/`}>#{s.idx}</a></td>
+              <td><strong>{s.words.toLocaleString()}</strong></td>
+              <td>{s.paragraphs}</td>
+              <td>{s.h1}</td>
+              <td>{s.h2}</td>
+              <td>{s.h3}</td>
+              <td>{s.lists}</td>
+              <td>{s.codeBlocks}</td>
+              <td>{s.links}</td>
+              <td><small>{fmtKB(s.bytes)}</small></td>
+              <td><small>{fmtDate(s.mtime)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚠️ 最短 syntheses (Bottom 10)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>session</th><th>idx</th><th>字数</th><th>段落</th><th>列表</th><th>大小</th></tr>
+        </thead>
+        <tbody>
+          {[...stats].sort((a, b) => a.words - b.words).slice(0, 10).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a></td>
+              <td><a href={`${base}/agents/${s.sid}/synthesis/${String(s.idx).padStart(3, '0')}/`}>#{s.idx}</a></td>
+              <td><strong style="color:#ef4444">{s.words.toLocaleString()}</strong></td>
+              <td>{s.paragraphs}</td>
+              <td>{s.lists}</td>
+              <td><small>{fmtKB(s.bytes)}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 字数分布</h2>
+      <pre class="agents-ss-flow">{
+(() => {
+  const buckets = [
+    { label: '< 500 字', min: 0, max: 500, count: 0 },
+    { label: '500-1000', min: 500, max: 1000, count: 0 },
+    { label: '1000-2000', min: 1000, max: 2000, count: 0 },
+    { label: '2000-5000', min: 2000, max: 5000, count: 0 },
+    { label: '5000-10000', min: 5000, max: 10000, count: 0 },
+    { label: '10000+', min: 10000, max: 999999, count: 0 },
+  ];
+  for (const s of stats) {
+    for (const b of buckets) {
+      if (s.words >= b.min && s.words < b.max) { b.count += 1; break; }
+    }
+  }
+  const maxC = Math.max(...buckets.map((b) => b.count));
+  const bar = (n: number) => {
+    if (!maxC) return '░'.repeat(30);
+    const filled = Math.round((n / maxC) * 30);
+    return '█'.repeat(filled) + '░'.repeat(30 - filled);
+  };
+  return buckets.map((b) => `${b.label.padEnd(12)} ${bar(b.count)}  ${String(b.count).padStart(4)}`).join('\n');
+})()
+}</pre>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ss-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ss-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ss-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
