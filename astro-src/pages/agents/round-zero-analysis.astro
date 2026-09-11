@@ -1,0 +1,178 @@
+---
+// /agents/round-zero-analysis.astro — iter #275:round 0 (first round) analysis
+//
+// 比较 R0(每 session 第一 round)vs 后续 rounds:
+//   - avg tokens
+//   - avg score
+//   - action set
+//   - 占比
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundInfo {
+  isR0: boolean;
+  tokens: number;
+  score: number;
+  uniqueActions: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const allR0: RoundInfo[] = [];
+const allOthers: RoundInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length === 0) continue;
+    rNum.sort((a, b) => a - b);
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNum[i]}.json`), 'utf8'));
+        const acts = new Set<string>();
+        for (const a of (r.modifier?.applied ?? [])) {
+          acts.add(a.action ?? a.type ?? 'unknown');
+        }
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const info: RoundInfo = {
+          isR0: i === 0,
+          tokens: r.feedback?.total_tokens ?? 0,
+          score: arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0,
+          uniqueActions: acts.size,
+        };
+        if (i === 0) allR0.push(info);
+        else allOthers.push(info);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function agg(arr: RoundInfo[]) {
+  if (arr.length === 0) return { count: 0, avgTokens: 0, avgScore: 0, avgUnique: 0 };
+  return {
+    count: arr.length,
+    avgTokens: arr.reduce((s, x) => s + x.tokens, 0) / arr.length,
+    avgScore: arr.reduce((s, x) => s + x.score, 0) / arr.length,
+    avgUnique: arr.reduce((s, x) => s + x.uniqueActions, 0) / arr.length,
+  };
+}
+
+const r0 = agg(allR0);
+const others = agg(allOthers);
+const ratio = (a: number, b: number) => b > 0 ? a / b : 0;
+
+const r0ActionFreq = new Map<string, number>();
+for (const info of allR0) {
+  // 重新加载 actions
+}
+// 简化:不需要列出 top actions
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Round Zero Analysis · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-zero-analysis</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🥇 Round Zero Analysis <span class="muted" style="font-size:0.6em">(iter #275)</span></h1>
+      <p class="agents-sub">
+        每 session 的 R0(round_0 或最小 index)与后续 rounds 的对比。
+        R0 通常是 Designer 输出,Modifier 尚未干预。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rza-globals">
+        <span>总 R0: <strong>{r0.count}</strong></span>
+        <span>总后续 rounds: <strong>{others.count}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 R0 vs 后续 rounds</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>指标</th><th>R0</th><th>其他</th><th>ratio</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>count</td>
+            <td>{r0.count}</td>
+            <td>{others.count}</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td>avg tokens</td>
+            <td><strong>{fmtTok(r0.avgTokens)}</strong></td>
+            <td>{fmtTok(others.avgTokens)}</td>
+            <td>{ratio(r0.avgTokens, others.avgTokens).toFixed(2)}x</td>
+          </tr>
+          <tr>
+            <td>avg score</td>
+            <td><strong style={`color:${r0.avgScore >= others.avgScore ? '#10b981' : '#ef4444'}`}>{r0.avgScore.toFixed(2)}</strong></td>
+            <td>{others.avgScore.toFixed(2)}</td>
+            <td>{ratio(r0.avgScore, others.avgScore).toFixed(2)}x</td>
+          </tr>
+          <tr>
+            <td>avg unique actions</td>
+            <td><strong>{r0.avgUnique.toFixed(2)}</strong></td>
+            <td>{others.avgUnique.toFixed(2)}</td>
+            <td>{ratio(r0.avgUnique, others.avgUnique).toFixed(2)}x</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>R0 ratio &gt; 1 = 第一轮投入比后续高(可能首次需要更多 setup)</li>
+        <li>R0 score &gt; 后续 = 起点高 = 系统首次表现好</li>
+        <li>R0 score &lt; 后续 = 起点低 = 后续 modifier 显著改进</li>
+        <li>R0 actions 通常 = 0(Modifier 首次空跑),后续才有 modifier 输出</li>
+        <li>对照 <a href={`${base}/agents/round-token-eff/`}>Round Token Eff</a> 看位置效率</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rza-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rza-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
