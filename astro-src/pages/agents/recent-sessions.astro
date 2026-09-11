@@ -1,0 +1,181 @@
+---
+// /agents/recent-sessions.astro — iter #273:recent sessions quick view
+//
+// 列出最近创建的 25 个 sessions,带快速状态卡
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Session {
+  sid: string;
+  goal: string;
+  created: number;
+  updated: number;
+  rounds: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+  tokens: number;
+  hasSyn: boolean;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Session[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    let created = 0;
+    try {
+      const st = await stat(sp);
+      created = st.mtimeMs;
+      const mp = join(sp, 'meta.json');
+      if (existsSync(mp)) {
+        goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+      }
+    } catch (e) { /* */ }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    if (rNum.length < 1) continue;
+    rNum.sort((a, b) => a - b);
+
+    let firstScore = 0;
+    let finalScore = 0;
+    let tokens = 0;
+    let updated = 0;
+    for (let i = 0; i < rNum.length; i++) {
+      try {
+        const fp = join(rd, `round_${rNum[i]}.json`);
+        const st = await stat(fp);
+        if (st.mtimeMs > updated) updated = st.mtimeMs;
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        tokens += r.feedback?.total_tokens ?? 0;
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          if (i === rNum.length - 1) finalScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+
+    const sd = join(sp, 'synthesis');
+    const hasSyn = existsSync(sd);
+
+    sessions.push({
+      sid, goal, created, updated, rounds: rNum.length,
+      firstScore, finalScore, gain: finalScore - firstScore, tokens, hasSyn,
+    });
+  }
+}
+
+// 排序 by created desc(最近)
+sessions.sort((a, b) => b.created - a.created);
+const recent = sessions.slice(0, 25);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function fmtDate(ms: number): string {
+  if (!ms) return '-';
+  return new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Recent Sessions · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / recent-sessions</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📋 Recent Sessions <span class="muted" style="font-size:0.6em">(iter #273)</span></h1>
+      <p class="agents-sub">
+        按创建时间排序的最近 25 个 sessions。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rs-globals">
+        <span>总 sessions: <strong>{sessions.length}</strong></span>
+        <span>显示: <strong>{recent.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📋 最近 25 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>创建</th><th>更新</th><th>sid</th><th>goal</th><th>R</th><th>first</th><th>final</th><th>Δ</th><th>tokens</th><th>syn</th></tr>
+        </thead>
+        <tbody>
+          {recent.map((s) => (
+            <tr>
+              <td><small>{fmtDate(s.created)}</small></td>
+              <td><small>{fmtDate(s.updated)}</small></td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><small>{esc(s.goal.slice(0, 30))}{(s.goal ?? '').length > 30 ? '…' : ''}</small></td>
+              <td>{s.rounds}</td>
+              <td>{s.firstScore > 0 ? s.firstScore.toFixed(1) : '-'}</td>
+              <td><strong>{s.finalScore > 0 ? s.finalScore.toFixed(2) : '-'}</strong></td>
+              <td><strong style={`color:${s.gain >= 0 ? '#10b981' : '#ef4444'}`}>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</strong></td>
+              <td><small>{fmtTok(s.tokens)}</small></td>
+              <td>{s.hasSyn ? '✓' : '✗'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>按 session 目录 mtime 排序(创建时间近似)</li>
+        <li>Δ = final - first,正值表示提升</li>
+        <li>对照 <a href={`${base}/agents/`}>主控制台</a> 看全部 sessions</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
