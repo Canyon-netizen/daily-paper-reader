@@ -1,0 +1,246 @@
+---
+// /agents/transition-classifier.astro — iter #221:round transition classifier
+//
+// 每对相邻 rounds 的 transition 类型:
+//   - improving(Δ > +0.3)
+//   - stable(-0.3 ≤ Δ ≤ +0.3)
+//   - declining(Δ < -0.3)
+//   - 跨 session 统计,transition 比例
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Transition {
+  sid: string;
+  roundIdx: number;
+  prevScore: number;
+  newScore: number;
+  delta: number;
+  type: 'improving' | 'stable' | 'declining';
+}
+
+function classify(delta: number): 'improving' | 'stable' | 'declining' {
+  if (delta > 0.3) return 'improving';
+  if (delta < -0.3) return 'declining';
+  return 'stable';
+}
+
+function getAvg(r: any): number {
+  const arr: number[] = [];
+  for (const persona of r.feedback?.personas ?? []) {
+    for (const p of persona.proposals ?? []) {
+      if (typeof p.total === 'number') arr.push(p.total);
+    }
+  }
+  return arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const transitions: Transition[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    rNum.sort((a, b) => a - b);
+    if (rNum.length < 2) continue;
+    const scores: { idx: number; avg: number }[] = [];
+    for (const ri of rNum) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${ri}.json`), 'utf8'));
+        scores.push({ idx: ri, avg: getAvg(r) });
+      } catch (e) { /* */ }
+    }
+    for (let i = 1; i < scores.length; i++) {
+      const delta = scores[i].avg - scores[i - 1].avg;
+      transitions.push({
+        sid,
+        roundIdx: scores[i].idx,
+        prevScore: scores[i - 1].avg,
+        newScore: scores[i].avg,
+        delta,
+        type: classify(delta),
+      });
+    }
+  }
+}
+
+const total = transitions.length;
+const improving = transitions.filter((t) => t.type === 'improving');
+const stable = transitions.filter((t) => t.type === 'stable');
+const declining = transitions.filter((t) => t.type === 'declining');
+
+const avgDelta = total > 0 ? transitions.reduce((s, t) => s + t.delta, 0) / total : 0;
+
+// 按 transition type 分桶 — 改善幅度
+const improveDeltaBuckets = [
+  { label: 'Δ +0.3 ~ +0.5', min: 0.3, max: 0.5, count: 0 },
+  { label: 'Δ +0.5 ~ +1.0', min: 0.5, max: 1.0, count: 0 },
+  { label: 'Δ +1.0 ~ +2.0', min: 1.0, max: 2.0, count: 0 },
+  { label: 'Δ > +2.0 (大跳)', min: 2.0, max: 99, count: 0 },
+];
+for (const t of improving) {
+  for (const b of improveDeltaBuckets) {
+    if (t.delta > b.min && t.delta <= b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const declineDeltaBuckets = [
+  { label: 'Δ -0.5 ~ -0.3', min: -0.5, max: -0.3, count: 0 },
+  { label: 'Δ -1.0 ~ -0.5', min: -1.0, max: -0.5, count: 0 },
+  { label: 'Δ -2.0 ~ -1.0', min: -2.0, max: -1.0, count: 0 },
+  { label: 'Δ < -2.0 (大退)', min: -99, max: -2.0, count: 0 },
+];
+for (const t of declining) {
+  for (const b of declineDeltaBuckets) {
+    if (t.delta >= b.min && t.delta < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const topImproving = [...improving].sort((a, b) => b.delta - a.delta).slice(0, 15);
+const topDeclining = [...declining].sort((a, b) => a.delta - b.delta).slice(0, 15);
+
+function bar(n: number, max: number, width = 20): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Round Transition Classifier · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / transition-classifier</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🪜 Round Transition Classifier <span class="muted" style="font-size:0.6em">(iter #221)</span></h1>
+      <p class="agents-sub">
+        把每对相邻 rounds 分类为 improving / stable / declining。
+        看 transition 的比例与幅度分布。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-tc-globals">
+        <span>总 transitions: <strong>{total}</strong></span>
+        <span>improving: <strong style="color:#10b981">{improving.length}</strong> ({total > 0 ? ((improving.length/total)*100).toFixed(1) : '0'}%)</span>
+        <span>stable: <strong>{stable.length}</strong> ({total > 0 ? ((stable.length/total)*100).toFixed(1) : '0'}%)</span>
+        <span>declining: <strong style="color:#ef4444">{declining.length}</strong> ({total > 0 ? ((declining.length/total)*100).toFixed(1) : '0'}%)</span>
+        <span>avg Δ: <strong style={avgDelta >= 0 ? 'color:#10b981' : 'color:#ef4444'}>{avgDelta >= 0 ? '+' : ''}{avgDelta.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 改善幅度</h2>
+      <pre class="agents-tc-flow">{improveDeltaBuckets.map((b) => {
+        const max = Math.max(...improveDeltaBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(18)} ${bar(b.count, max, 20)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 退化幅度</h2>
+      <pre class="agents-tc-flow">{declineDeltaBuckets.map((b) => {
+        const max = Math.max(...declineDeltaBuckets.map((x) => x.count), 1);
+        return `${b.label.padEnd(18)} ${bar(b.count, max, 20)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 最大改善 transitions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Δ</th><th>prev → new</th><th>sid</th><th>round</th></tr>
+        </thead>
+        <tbody>
+          {topImproving.map((t) => (
+            <tr>
+              <td><strong style="color:#10b981">+{t.delta.toFixed(2)}</strong></td>
+              <td>{t.prevScore.toFixed(2)} → {t.newScore.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${t.sid}/`}><code>{esc(t.sid.slice(0, 12))}</code></a></td>
+              <td>R{t.roundIdx}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 top 15 最大退化 transitions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>Δ</th><th>prev → new</th><th>sid</th><th>round</th></tr>
+        </thead>
+        <tbody>
+          {topDeclining.map((t) => (
+            <tr>
+              <td><strong style="color:#ef4444">{t.delta.toFixed(2)}</strong></td>
+              <td>{t.prevScore.toFixed(2)} → {t.newScore.toFixed(2)}</td>
+              <td><a href={`${base}/agents/${t.sid}/`}><code>{esc(t.sid.slice(0, 12))}</code></a></td>
+              <td>R{t.roundIdx}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>improving % 高 = modifier 整体有效</li>
+        <li>declining % 高 = 需要 review feedback 信号</li>
+        <li>对照 <a href={`${base}/agents/convergence-index/`}>Convergence Index</a> 看绝对 |Δ|</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-tc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-tc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-tc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
