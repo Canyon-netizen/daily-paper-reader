@@ -1,0 +1,165 @@
+---
+// /agents/tag-cooccur.astro — iter #190:cross-session tag co-occurrence
+//
+// 跨 session 看 user-saved tags 的共现:
+//   - 读取每个 session 的 meta.tags
+//   - 计算两两 tag 共现次数
+//   - top pairs
+//   - 标签网络可视化(邻接列表)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface TagInfo {
+  name: string;
+  count: number;
+  sids: Set<string>;
+}
+
+const root = join(process.cwd(), 'archive');
+const tagMap = new Map<string, TagInfo>();
+const sessionTags = new Map<string, string[]>();
+const pairMap = new Map<string, number>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      const tags = m.tags ?? [];
+      if (Array.isArray(tags) && tags.length > 0) {
+        sessionTags.set(sid, tags);
+        for (const tag of tags) {
+          if (!tagMap.has(tag)) {
+            tagMap.set(tag, { name: tag, count: 0, sids: new Set() });
+          }
+          const t = tagMap.get(tag)!;
+          t.count += 1;
+          t.sids.add(sid);
+        }
+        // 共现
+        for (let i = 0; i < tags.length; i++) {
+          for (let j = i + 1; j < tags.length; j++) {
+            const a = tags[i];
+            const b = tags[j];
+            const pair = a < b ? `${a}|${b}` : `${b}|${a}`;
+            pairMap.set(pair, (pairMap.get(pair) ?? 0) + 1);
+          }
+        }
+      }
+    } catch (e) { /* */ }
+  }
+}
+
+const tagStats = [...tagMap.values()].sort((a, b) => b.count - a.count);
+const pairStats = [...pairMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
+const totalSessions = sessionTags.size;
+const totalTags = tagStats.reduce((s, t) => s + t.count, 0);
+const uniqueTags = tagStats.length;
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Tag Co-occurrence · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / tag-cooccur</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏷️ Tag Co-occurrence <span class="muted" style="font-size:0.6em">(iter #190)</span></h1>
+      <p class="agents-sub">
+        跨 session 看 user-saved tags 的共现。
+        高频共现 = 标签紧密相关。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-tc-globals">
+        <span>打了 tag 的 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 tag 数: <strong>{totalTags}</strong></span>
+        <span>unique tags: <strong>{uniqueTags}</strong></span>
+        <span>tag pair 数: <strong>{pairMap.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 top tags</h2>
+      <pre class="agents-tc-flow">{(() => {
+        const max = Math.max(...tagStats.map((t) => t.count), 1);
+        return tagStats.slice(0, 30).map((t) => {
+          return `#${t.name.padEnd(20)} ${bar(t.count, max, 18)}  ${String(t.count).padStart(3)} sessions`;
+        }).join('\n');
+      })()}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 top 30 共现 pairs</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>A</th><th>B</th><th>co-occur sessions</th></tr>
+        </thead>
+        <tbody>
+          {pairStats.map(([pair, count]) => {
+            const [a, b] = pair.split('|');
+            return (
+              <tr>
+                <td><code>#{a}</code></td>
+                <td><code>#{b}</code></td>
+                <td><strong>{count}</strong></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频共现 pair 可考虑合并为新 tag</li>
+        <li>如果 unique tags 太少,可考虑打更细的 tag</li>
+        <li>对照 <a href={`${base}/agents/goal-tag-affinity/`}>Goal Tag Affinity</a> 看 goal 内词的共现</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-tc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-tc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-tc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
