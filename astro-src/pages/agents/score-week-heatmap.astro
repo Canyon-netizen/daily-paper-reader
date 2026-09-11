@@ -1,0 +1,201 @@
+---
+// /agents/score-week-heatmap.astro — iter #269:round score by ISO week (heatmap)
+// 跨所有 sessions 的 rounds 按 ISO week 聚合:
+//   - 周 avg score
+//   - 周内 round 数
+//   - 颜色按 score 等级
+
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function isoWeek(ms: number): { key: string; year: number; week: number } {
+  const d = new Date(ms);
+  const onejan = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil((((d.getTime() - onejan.getTime()) / 86400000) + onejan.getDay() + 1) / 7);
+  return { key: `${d.getFullYear()}-W${week.toString().padStart(2, '0')}`, year: d.getFullYear(), week };
+}
+
+const root = join(process.cwd(), 'archive');
+const weeklyMap = new Map<string, { scoreSum: number; scoreCnt: number; rounds: number; tokens: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNum: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNum.push(parseInt(m[1], 10));
+    }
+    for (const rn of rNum) {
+      try {
+        const fp = join(rd, `round_${rn}.json`);
+        const st = await stat(fp);
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const tokens = r.feedback?.total_tokens ?? 0;
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          const { key } = isoWeek(st.mtimeMs);
+          if (!weeklyMap.has(key)) weeklyMap.set(key, { scoreSum: 0, scoreCnt: 0, rounds: 0, tokens: 0 });
+          const w = weeklyMap.get(key)!;
+          w.scoreSum += avg;
+          w.scoreCnt += 1;
+          w.rounds += 1;
+          w.tokens += tokens;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const weeks = Array.from(weeklyMap.entries())
+  .sort((a, b) => a[0].localeCompare(b[0]))
+  .map(([key, v]) => ({
+    key,
+    avgScore: v.scoreCnt > 0 ? v.scoreSum / v.scoreCnt : 0,
+    rounds: v.rounds,
+    tokens: v.tokens,
+  }));
+
+const total = weeks.length;
+const overallAvg = total > 0 ? weeks.reduce((s, w) => s + w.avgScore, 0) / total : 0;
+const maxRounds = Math.max(...weeks.map((w) => w.rounds), 1);
+
+// 颜色按 score 等级
+function scoreChar(score: number): string {
+  if (score >= 8.5) return '🟢';
+  if (score >= 7.5) return '🟩';
+  if (score >= 6.5) return '🟨';
+  if (score >= 5.5) return '🟧';
+  if (score >= 4.5) return '🟥';
+  return '⬛';
+}
+
+// 按 year-week 分组,做横向热图
+const yearsMap = new Map<number, typeof weeks>();
+for (const w of weeks) {
+  const year = parseInt(w.key.split('-')[0], 10);
+  if (!yearsMap.has(year)) yearsMap.set(year, []);
+  yearsMap.get(year)!.push(w);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(1)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Score Week Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-week-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🗓️ Score × Week Heatmap <span class="muted" style="font-size:0.6em">(iter #269)</span></h1>
+      <p class="agents-sub">
+        每 ISO 周的平均 round score。颜色:🟢 ≥ 8.5,🟩 7.5+,🟨 6.5+,🟧 5.5+,🟥 4.5+,⬛ &lt; 4.5。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-swh-globals">
+        <span>总周数: <strong>{total}</strong></span>
+        <span>avg score across weeks: <strong>{overallAvg.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🗓️ 年-周热图</h2>
+      {Array.from(yearsMap.entries()).map(([year, ws]) => (
+        <div>
+          <h3 style="font-size:1.05em;color:#4f46e5;margin-top:1rem">📅 {year}</h3>
+          <table class="agents-session-table">
+            <thead>
+              <tr><th>week</th><th>color</th><th>score</th><th>rounds</th><th>tokens</th></tr>
+            </thead>
+            <tbody>
+              {ws.map((w) => (
+                <tr>
+                  <td><code>{esc(w.key)}</code></td>
+                  <td style="font-size:1.5em">{scoreChar(w.avgScore)}</td>
+                  <td><strong style={`color:${w.avgScore >= 7.5 ? '#10b981' : w.avgScore >= 6 ? '#f59e0b' : '#ef4444'}`}>{w.avgScore.toFixed(2)}</strong></td>
+                  <td><small>{bar(w.rounds, maxRounds, 12)} {w.rounds}</small></td>
+                  <td><small>{fmtTok(w.tokens)}</small></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 trend sparkline(最近 20 周 avg score)</h2>
+      <pre class="agents-swh-flow">{weeks.slice(-20).map((w) => {
+        const bar1 = scoreChar(w.avgScore);
+        return `${w.key} ${bar1} ${w.avgScore.toFixed(2)}  (R=${w.rounds})`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>颜色越绿 = 该周 avg score 越高</li>
+        <li>对比今年 vs 去年同周可看是否有改进趋势</li>
+        <li>对照 <a href={`${base}/agents/weekly-score-trend/`}>Weekly Score Trend</a> 看统计</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-swh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-swh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-swh-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
