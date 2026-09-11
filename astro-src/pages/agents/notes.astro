@@ -1,0 +1,273 @@
+---
+// /agents/notes.astro — iter #96:session notes (browser-localStorage)
+//
+// 让用户给 session 加 markdown notes,存在浏览器 localStorage。
+// - 每行 session + notes textarea
+// - 一键导出所有 notes 为 markdown 文件
+// - 按"最近修改"排序显示
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionEntry {
+  sid: string;
+  goal: string;
+  createdAt: number;
+}
+
+const sessions: SessionEntry[] = [];
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const d = join(root, sid);
+    if (!existsSync(join(d, 'meta.json'))) continue;
+    try {
+      const meta = JSON.parse(await readFile(join(d, 'meta.json'), 'utf8'));
+      sessions.push({
+        sid,
+        goal: typeof meta.goal === 'string' ? meta.goal : '',
+        createdAt: Number(meta.created_at ?? 0),
+      });
+    } catch { /* */ }
+  }
+}
+
+sessions.sort((a, b) => b.createdAt - a.createdAt);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+---
+
+<BaseLayout title="Session Notes · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / notes</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📝 Session Notes <span class="muted" style="font-size:0.6em">(iter #96)</span></h1>
+      <p class="agents-sub">
+        给每个 session 加 markdown notes(本地浏览器,不会上传)。
+        适合记录灵感、待办、跟 agent 的对话纪要。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🛠 批量操作</h2>
+      <p>
+        <button class="button primary" id="agents-notes-export-btn">📦 导出全部 notes 为 markdown</button>
+        <button class="button" id="agents-notes-import-btn">📥 导入 markdown notes</button>
+        <input type="file" id="agents-notes-import-file" accept=".md,.markdown,text/markdown" hidden />
+      </p>
+      <p class="muted" id="agents-notes-status"></p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📂 所有 sessions ({sessions.length})</h2>
+      <p class="muted">每行一个 textarea,内容自动存到 localStorage(失焦时保存)。</p>
+      <div id="agents-notes-list">
+        {sessions.map((s) => (
+          <article class="agents-note-card" data-sid={s.sid}>
+            <header>
+              <a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a>
+              <span class="agents-note-saved muted"></span>
+            </header>
+            <p class="muted">
+              <small>goal: {escapeHtml(s.goal.length > 100 ? s.goal.slice(0, 99) + '…' : s.goal)}</small>
+            </p>
+            <textarea
+              class="agents-note-text"
+              data-sid={s.sid}
+              rows="3"
+              placeholder="# 我的 notes..."
+            ></textarea>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+        <a class="button" href={`${base}/agents/notebook/`}>📓 Notebook</a>
+        <a class="button" href={`${base}/agents/tags/`}>🏷️ Tags</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<script>
+  const STORAGE_KEY = 'dpr_agents_notes_v1';
+  const STORAGE_META = 'dpr_agents_notes_meta_v1';
+
+  type NotesMap = Record<string, string>;
+  type MetaMap = Record<string, string>; // sid → ISO timestamp
+
+  function load(): NotesMap {
+    try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') ?? {}; }
+    catch { return {}; }
+  }
+  function save(map: NotesMap) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+  }
+  function loadMeta(): MetaMap {
+    try { return JSON.parse(localStorage.getItem(STORAGE_META) ?? '{}') ?? {}; }
+    catch { return {}; }
+  }
+  function saveMeta(map: MetaMap) {
+    localStorage.setItem(STORAGE_META, JSON.stringify(map));
+  }
+
+  function showStatus(text: string, type: 'ok' | 'err' = 'ok') {
+    const el = document.getElementById('agents-notes-status');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = type === 'ok' ? '#10b981' : '#ef4444';
+  }
+
+  // 初始化:把已有 notes 填到 textarea
+  const notes = load();
+  const meta = loadMeta();
+  document.querySelectorAll<HTMLTextAreaElement>('.agents-note-text').forEach((ta) => {
+    const sid = ta.dataset.sid ?? '';
+    ta.value = notes[sid] ?? '';
+    const card = ta.closest('.agents-note-card');
+    const savedEl = card?.querySelector('.agents-note-saved');
+    if (savedEl) {
+      const ts = meta[sid];
+      if (ts) {
+        const d = new Date(ts);
+        savedEl.textContent = `· 上次保存 ${d.toLocaleString()}`;
+      }
+    }
+    // 失焦时自动保存
+    ta.addEventListener('blur', () => {
+      const cur = load();
+      const curMeta = loadMeta();
+      if (ta.value.trim().length === 0) {
+        delete cur[sid];
+        delete curMeta[sid];
+      } else {
+        cur[sid] = ta.value;
+        curMeta[sid] = new Date().toISOString();
+      }
+      save(cur);
+      saveMeta(curMeta);
+      if (savedEl) {
+        const ts = curMeta[sid];
+        if (ts) {
+          savedEl.textContent = `· 已保存 ${new Date(ts).toLocaleTimeString()}`;
+        }
+      }
+    });
+  });
+
+  // 导出全部
+  document.getElementById('agents-notes-export-btn')?.addEventListener('click', () => {
+    const all = load();
+    const entries = Object.entries(all).filter(([, v]) => v.trim().length > 0);
+    if (entries.length === 0) {
+      showStatus('没有任何 notes 可导出。', 'err');
+      return;
+    }
+    let md = `# Session Notes\n\n导出于 ${new Date().toLocaleString()}\n共 ${entries.length} 条\n\n`;
+    for (const [sid, body] of entries) {
+      md += `---\n\n## ${sid}\n\n${body}\n\n`;
+    }
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `agents-notes-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showStatus(`✅ 已导出 ${entries.length} 条 notes。`);
+  });
+
+  // 导入
+  document.getElementById('agents-notes-import-btn')?.addEventListener('click', () => {
+    document.getElementById('agents-notes-import-file')?.click();
+  });
+  document.getElementById('agents-notes-import-file')?.addEventListener('change', async (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      // 解析 markdown,按 "## <sid>" 分节
+      const sections = text.split(/^##\s+(.+)$/m);
+      const cur = load();
+      const curMeta = loadMeta();
+      let imported = 0;
+      // sections[0] 是 header (跳过),然后交替 sid / body
+      for (let i = 1; i < sections.length; i += 2) {
+        const sid = sections[i].trim();
+        const body = sections[i + 1]?.trim() ?? '';
+        if (sid && body) {
+          cur[sid] = body;
+          curMeta[sid] = new Date().toISOString();
+          imported++;
+          // 更新对应 textarea
+          const ta = document.querySelector<HTMLTextAreaElement>(`.agents-note-text[data-sid="${sid}"]`);
+          if (ta) ta.value = body;
+        }
+      }
+      save(cur);
+      saveMeta(curMeta);
+      showStatus(`✅ 已导入 ${imported} 条 notes。`);
+    } catch (err) {
+      showStatus(`❌ 导入失败: ${(err as Error).message}`, 'err');
+    }
+  });
+</script>
+
+<style>
+  .agents-note-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 0.7rem 0.9rem;
+    margin-bottom: 0.6rem;
+  }
+  .agents-note-card header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.4rem;
+  }
+  .agents-note-saved {
+    font-size: 0.78rem;
+  }
+  .agents-note-card p {
+    margin: 0.2rem 0 0.5rem;
+  }
+  .agents-note-text {
+    width: 100%;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 4px;
+    padding: 0.5rem;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+    min-height: 60px;
+    color: inherit;
+  }
+  .agents-note-text:focus {
+    outline: 2px solid rgba(99, 102, 241, 0.4);
+    border-color: #4f46e5;
+  }
+</style>
