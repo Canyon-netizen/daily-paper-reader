@@ -1,0 +1,187 @@
+---
+// /agents/milestone-320.astro — iter #320:post-300 progress (320 iters)
+// 320 = 32 × 10。32 也是 ASCII space 字符数。Just another round number.
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+
+const root = join(process.cwd(), 'archive');
+let totalSessions = 0;
+let totalRounds = 0;
+let totalTokens = 0;
+let totalSyns = 0;
+let totalActions = 0;
+let allScores: number[] = [];
+let allGains: number[] = [];
+const actionSet = new Set<string>();
+const personaSet = new Set<string>();
+let allGoals: string[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    totalSessions += 1;
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try {
+        const goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? '';
+        if (goal) allGoals.push(goal);
+      } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (existsSync(rd)) {
+      const rfs = await readdir(rd).catch(() => []);
+      const sessionScores: number[] = [];
+      for (const rf of rfs) {
+        if (!/^round_\d+\.json$/.test(rf)) continue;
+        try {
+          const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+          const tokens = r.feedback?.total_tokens ?? 0;
+          totalTokens += tokens;
+          totalRounds += 1;
+          for (const persona of r.feedback?.personas ?? []) {
+            const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+            personaSet.add(name);
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') allScores.push(p.total);
+            }
+          }
+          for (const a of (r.modifier?.applied ?? [])) {
+            const act = a.action ?? a.type ?? 'unknown';
+            actionSet.add(act);
+            totalActions += 1;
+          }
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          if (arr.length > 0) sessionScores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+        } catch (e) { /* */ }
+      }
+      if (sessionScores.length >= 2) {
+        allGains.push(sessionScores[sessionScores.length - 1] - sessionScores[0]);
+      }
+    }
+    if (existsSync(join(sp, 'synthesis'))) {
+      const sfs = await readdir(join(sp, 'synthesis')).catch(() => []);
+      for (const sf of sfs) {
+        if (sf.endsWith('.md')) totalSyns += 1;
+      }
+    }
+  }
+}
+
+const totalCost = (totalTokens / 1_000_000) * SONNET_PRICE;
+const avgScore = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
+const avgGain = allGains.length > 0 ? allGains.reduce((a, b) => a + b, 0) / allGains.length : 0;
+const sortedScores = [...allScores].sort((a, b) => a - b);
+const medianScore = allScores.length > 0 ? sortedScores[Math.floor(allScores.length / 2)] : 0;
+
+function fmtTok(t: number): string {
+  if (t > 1_000_000) return `${(t / 1_000_000).toFixed(2)}M`;
+  if (t > 1_000) return `${(t / 1_000).toFixed(0)}K`;
+  return `${t.toFixed(0)}`;
+}
+---
+
+<BaseLayout title="Milestone 320 · Agents">
+  <Navbar />
+  <main class="shell agents-shell milestone-special">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone-320</span>
+    </nav>
+
+    <header class="agents-header milestone-hero">
+      <h1>🏆 Milestone 320 — Post-300 <span class="muted" style="font-size:0.5em">(iter #320)</span></h1>
+      <p class="agents-sub">
+        300 之后的第一次里程碑。320 = 32 × 10,也是 2^6 × 5。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 系统快照</h2>
+      <div class="agents-m320-globals">
+        <span>总 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 rounds: <strong>{totalRounds.toLocaleString()}</strong></span>
+        <span>总 actions: <strong>{totalActions.toLocaleString()}</strong></span>
+        <span>总 syntheses: <strong>{totalSyns}</strong></span>
+        <span>总 tokens: <strong>{fmtTok(totalTokens)}</strong></span>
+        <span>总 cost: <strong>${totalCost.toFixed(2)}</strong></span>
+        <span>avg score: <strong>{avgScore.toFixed(2)}</strong></span>
+        <span>median score: <strong>{medianScore.toFixed(2)}</strong></span>
+        <span>avg gain: <strong>{avgGain >= 0 ? '+' : ''}{avgGain.toFixed(2)}</strong></span>
+        <span>unique actions: <strong>{actionSet.size}</strong></span>
+        <span>unique personas: <strong>{personaSet.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎉 里程碑路线</h2>
+      <ul class="milestone-timeline">
+        <li>✅ <strong>100</strong> — Centenary</li>
+        <li>✅ <strong>200</strong> — Bicentenary</li>
+        <li>✅ <strong>250</strong> — Quarter-K</li>
+        <li>✅ <strong>270</strong> — Triple Century</li>
+        <li>✅ <strong>280</strong> — Pre-300</li>
+        <li>✅ <strong>299</strong> — One Before 300</li>
+        <li>🏆 <strong>300</strong> — Triple Century Round</li>
+        <li>🎯 <strong>320</strong> — Post-300(本次)</li>
+        <li>🚀 <strong>330</strong> — 下一站</li>
+        <li>🚀 <strong>400</strong> — 四百回合</li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔗 推荐入口</h2>
+      <ul>
+        <li><a href={`${base}/agents/system-maturity/`}>System Maturity</a></li>
+        <li><a href={`${base}/agents/hall-of-fame/`}>Hall of Fame</a></li>
+        <li><a href={`${base}/agents/cost-forecast/`}>Cost Forecast</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .milestone-special {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(245, 158, 11, 0.06));
+    padding-bottom: 3rem;
+  }
+  .milestone-hero {
+    text-align: center;
+    padding: 1.5rem 0;
+  }
+  .agents-m320-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-m320-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .milestone-timeline {
+    list-style: none;
+    padding-left: 0;
+  }
+  .milestone-timeline li {
+    padding: 0.3rem 0;
+    border-left: 3px solid #4f46e5;
+    padding-left: 0.6rem;
+    margin-bottom: 0.4rem;
+  }
+</style>
