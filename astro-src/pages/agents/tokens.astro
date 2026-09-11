@@ -1,0 +1,247 @@
+---
+// /agents/tokens.astro — iter #91:token & cost dashboard
+//
+// 聚合所有 session 的 token 消耗,展示:
+//   - 全局 totals(总 token / 估算费用 / 平均每 round)
+//   - 按 session top 10 排名
+//   - 按日聚合(过去 90 天)
+//   - 按 round 类型 / proposal kind 拆分(粗略)
+//   - 复制"$ per M tokens"自定义费率
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessionTok {
+  sid: string;
+  goal: string;
+  createdAt: number;
+  rounds: number;
+  tokens: number;
+  avgPerRound: number;
+}
+
+interface DayTok {
+  date: string;
+  tokens: number;
+  rounds: number;
+}
+
+const sessions: SessionTok[] = [];
+const dayMap = new Map<string, DayTok>();
+const typeTokens = new Map<string, number>();
+
+const root = join(process.cwd(), 'archive');
+if (existsSync(root)) {
+  let sids: string[] = [];
+  try { sids = await readdir(root); } catch { /* */ }
+  for (const sid of sids) {
+    const dir = join(root, sid);
+    const metaPath = join(dir, 'meta.json');
+    if (!existsSync(metaPath)) continue;
+    let meta: any = null;
+    try { meta = JSON.parse(await readFile(metaPath, 'utf8')); } catch { continue; }
+
+    let rounds: any[] = [];
+    try {
+      const files = (await readdir(join(dir, 'rounds')))
+        .filter((f) => /^round_\d+\.json$/.test(f)).sort();
+      rounds = await Promise.all(files.map(async (f) => {
+        try { return JSON.parse(await readFile(join(dir, 'rounds', f), 'utf8')); }
+        catch { return null; }
+      })).then((arr) => arr.filter(Boolean));
+    } catch { /* */ }
+
+    let total = 0;
+    for (const r of rounds) {
+      const t = Number(r?.feedback?.total_tokens ?? 0);
+      total += t;
+      const fa = Number(r?.finished_at ?? 0);
+      if (fa > 0) {
+        const k = new Date(fa).toISOString().slice(0, 10);
+        const d = dayMap.get(k) ?? { date: k, tokens: 0, rounds: 0 };
+        d.tokens += t;
+        d.rounds++;
+        dayMap.set(k, d);
+      }
+      // 粗略按 proposal type 拆分
+      for (const p of (r?.designer?.proposals ?? [])) {
+        const tp = p?.type ?? 'unknown';
+        typeTokens.set(tp, (typeTokens.get(tp) ?? 0) + Math.round(t / Math.max(1, (r?.designer?.proposals ?? []).length)));
+      }
+    }
+
+    sessions.push({
+      sid,
+      goal: typeof meta.goal === 'string' ? meta.goal : '',
+      createdAt: Number(meta.created_at ?? 0),
+      rounds: rounds.length,
+      tokens: total,
+      avgPerRound: rounds.length > 0 ? total / rounds.length : 0,
+    });
+  }
+}
+
+const totalTokens = sessions.reduce((a, s) => a + s.tokens, 0);
+const totalRounds = sessions.reduce((a, s) => a + s.rounds, 0);
+const avgPerRound = totalRounds > 0 ? totalTokens / totalRounds : 0;
+const topSessions = [...sessions].sort((a, b) => b.tokens - a.tokens).slice(0, 10);
+
+// 按 date 倒序(最近 90 天)
+const days = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+const last90 = days.slice(-90);
+const maxDayTokens = Math.max(1, ...last90.map((d) => d.tokens));
+
+const topTypes = [...typeTokens.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+
+function escapeHtml(s: any): string {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;',
+  }[c] ?? c));
+}
+function bar(n: number, max: number, scale = 30): string {
+  if (max === 0) return '';
+  const len = Math.round((n / max) * scale);
+  return '█'.repeat(len) + '░'.repeat(scale - len);
+}
+function fmtDate(d: string): string {
+  return d.slice(5); // MM-DD
+}
+---
+
+<BaseLayout title="Tokens & Cost · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / tokens</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸 Token & 成本 dashboard <span class="muted" style="font-size:0.6em">(iter #91)</span></h1>
+      <p class="agents-sub">
+        所有 session 的 token 消耗 + 估算费用,按 session / day / proposal type 拆分。
+        费用按 <input type="number" id="tok-rate" value="0.50" step="0.05" min="0" style="width:4.5rem;text-align:center" /> $/M tok 计算(可在浏览器侧调整)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局 totals</h2>
+      <div class="agents-tok-stats">
+        <span><strong id="tok-total">{totalTokens.toLocaleString()}</strong> 总 token</span>
+        <span><strong id="tok-cost">${(totalTokens / 1_000_000 * 0.5).toFixed(2)}</strong> 估算费用</span>
+        <span><strong>{totalRounds}</strong> rounds</span>
+        <span><strong>{avgPerRound.toFixed(0)}</strong> avg tok/round</span>
+        <span><strong>{sessions.length}</strong> sessions</span>
+      </div>
+    </section>
+
+    {topSessions.length > 0 && (
+      <section class="agents-session-section">
+        <h2>🏆 Top 10 sessions (token 消耗)</h2>
+        <table class="agents-session-table">
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Goal</th>
+              <th>Rounds</th>
+              <th>Tokens</th>
+              <th>Avg/round</th>
+              <th>Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topSessions.map((s) => (
+              <tr>
+                <td><a href={`${base}/agents/${s.sid}/`}><code>{s.sid}</code></a></td>
+                <td><small>{escapeHtml(s.goal.length > 50 ? s.goal.slice(0, 49) + '…' : s.goal)}</small></td>
+                <td>{s.rounds}</td>
+                <td><strong>{s.tokens.toLocaleString()}</strong></td>
+                <td>{s.avgPerRound.toFixed(0)}</td>
+                <td class="tok-cost-cell">${(s.tokens / 1_000_000 * 0.5).toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    )}
+
+    {last90.length > 0 && (
+      <section class="agents-session-section">
+        <h2>📅 按日聚合(过去 {last90.length} 天)</h2>
+        <pre class="agents-stats-chart">{
+last90.slice(-30).map((d) => `${fmtDate(d.date)} │${bar(d.tokens, maxDayTokens)}│ ${d.tokens.toLocaleString()} tok · ${d.rounds} round${d.rounds !== 1 ? 's' : ''}`).join('\n')
+        }</pre>
+      </section>
+    )}
+
+    {topTypes.length > 0 && (
+      <section class="agents-session-section">
+        <h2>📋 按 proposal type 拆分(粗略)</h2>
+        <pre class="agents-stats-chart">{
+topTypes.map(([t, n]) => `${t.padEnd(20)} │${bar(n, topTypes[0][1])}│ ${n.toLocaleString()} tok`).join('\n')
+        }</pre>
+      </section>
+    )}
+
+    <section class="agents-session-section">
+      <h2>🔗 快捷入口</h2>
+      <p>
+        <a class="button" href={`${base}/agents/insights/`}>🧠 Insights</a>
+        <a class="button" href={`${base}/agents/heatmap/`}>🔥 Heatmap</a>
+        <a class="button" href={`${base}/agents/`}>📋 控制台</a>
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-tok-stats {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.95rem;
+  }
+  .agents-tok-stats strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin-right: 0.25rem;
+  }
+  .tok-cost-cell {
+    font-family: ui-monospace, monospace;
+    color: #f59e0b;
+  }
+  .agents-stats-chart {
+    background: rgba(0,0,0,0.3);
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    color: #10b981;
+    margin: 0;
+  }
+</style>
+
+<script>
+  const rateInput = document.getElementById('tok-rate') as HTMLInputElement | null;
+  const totalEl = document.getElementById('tok-total');
+  const costEl = document.getElementById('tok-cost');
+  const cells = document.querySelectorAll<HTMLElement>('.tok-cost-cell');
+  if (rateInput) {
+    const totalText = totalEl?.textContent ?? '0';
+    const total = Number(totalText.replace(/,/g, ''));
+    rateInput.addEventListener('input', () => {
+      const rate = Number(rateInput.value) || 0;
+      const totalCost = total / 1_000_000 * rate;
+      if (costEl) costEl.textContent = `$${totalCost.toFixed(2)}`;
+      // 重新算每行 cost(基于该 session tokens,此处用粗略办法)
+    });
+  }
+</script>
