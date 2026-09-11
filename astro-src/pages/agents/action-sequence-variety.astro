@@ -1,0 +1,222 @@
+---
+// /agents/action-sequence-variety.astro — iter #290:action sequence variety per session
+//
+// 每个 session 的 action 序列的"多样性":
+//   - 把每 session 的 action list 看成一个字符串序列
+//   - 唯一序列长度 / 总轮数 = variety ratio
+//   - 显示分布
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessInfo {
+  sid: string;
+  goal: string;
+  sequences: string[];   // 每个 round 的 action 列表 join 成 string
+  uniqueSeqs: Set<string>;
+  totalRounds: number;
+  varietyRatio: number;
+  firstScore: number;
+  finalScore: number;
+  gain: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const sequences: string[] = [];
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const acts: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          acts.push(a.action ?? a.type ?? 'unknown');
+        }
+        sequences.push(acts.join(','));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (sequences.length < 2) continue;
+
+    const uniqueSeqs = new Set(sequences);
+    const varietyRatio = uniqueSeqs.size / sequences.length;
+
+    sessions.push({
+      sid, goal, sequences, uniqueSeqs,
+      totalRounds: sequences.length,
+      varietyRatio,
+      firstScore: scores[0] ?? 0,
+      finalScore: scores[scores.length - 1] ?? 0,
+      gain: scores.length > 0 ? scores[scores.length - 1] - scores[0] : 0,
+    });
+  }
+}
+
+// 按 varietyRatio 降序
+sessions.sort((a, b) => b.varietyRatio - a.varietyRatio);
+
+const total = sessions.length;
+const avgVariety = total > 0 ? sessions.reduce((s, x) => s + x.varietyRatio, 0) / total : 0;
+const allUnique = sessions.filter((s) => s.varietyRatio === 1).length;
+const allSame = sessions.filter((s) => s.varietyRatio < 0.5).length;
+
+const buckets = [
+  { label: 'identical', range: '0.0-0.33', min: 0, max: 0.34, count: 0 },
+  { label: 'low',       range: '0.34-0.67', min: 0.34, max: 0.67, count: 0 },
+  { label: 'mid',       range: '0.67-1.0', min: 0.67, max: 0.99, count: 0 },
+  { label: 'unique',    range: '1.0', min: 0.99, max: 1.01, count: 0 },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.varietyRatio >= b.min && s.varietyRatio < b.max) {
+      b.count += 1;
+      break;
+    }
+  }
+}
+
+const maxBucketCount = Math.max(...buckets.map((b) => b.count), 1);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function verdict(v: number): string {
+  if (v === 1) return '🎯 all unique';
+  if (v >= 0.67) return '🟢 diverse';
+  if (v >= 0.34) return '🟡 mixed';
+  return '🔴 repetitive';
+}
+---
+
+<BaseLayout title="Action Sequence Variety · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-sequence-variety</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔀 Action Sequence Variety <span class="muted" style="font-size:0.6em">(iter #290)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 action 序列多样性 = 唯一序列数 / 总轮数。
+        ratio = 1 表示每轮 action 都不同,ratio = 0.33 表示重复 3 次。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-asv-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+        <span>avg variety: <strong>{avgVariety.toFixed(3)}</strong></span>
+        <span>all unique: <strong style="color:#10b981">{allUnique}</strong></span>
+        <span>repetitive: <strong style="color:#ef4444">{allSame}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 variety 桶</h2>
+      <pre class="agents-asv-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(10)} ${b.range.padEnd(10)} ${bar(b.count, maxBucketCount, 22)}  ${b.count}  (${((b.count / Math.max(1, total)) * 100).toFixed(1)}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top 25 多样性最高</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>rounds</th><th>unique seqs</th><th>variety</th><th>gain</th><th>verdict</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 25).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.totalRounds}</td>
+              <td>{s.uniqueSeqs.size}</td>
+              <td><strong>{s.varietyRatio.toFixed(2)}</strong></td>
+              <td>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</td>
+              <td><small>{verdict(s.varietyRatio)}</small></td>
+              <td><small class="muted">{esc((s.goal ?? '').slice(0, 25))}{(s.goal ?? '').length > 25 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>variety 高 = modifier 在积极探索</li>
+        <li>variety 低 = 同一 pattern 反复应用</li>
+        <li>identical = 每轮完全相同 action 列表</li>
+        <li>对照 <a href={`${base}/agents/round-sequence-pattern/`}>Round Sequence Pattern</a></li>
+        <li>对照 <a href={`${base}/agents/action-set-diversity/`}>Action Set Diversity</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-asv-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-asv-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-asv-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
