@@ -1,0 +1,167 @@
+---
+// /agents/promotion-funnel.astro — iter #203:proposal → promoted → applied funnel
+//
+// 跨所有 rounds 看转化漏斗:
+//   - proposals 总数(feedback 阶段产出)
+//   - promoted 数(gate 通过)
+//   - applied 数(modifier 实际执行)
+//   - 各步转化率
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+let totalProposals = 0;
+let totalPromoted = 0;
+let totalRejected = 0;
+let totalDeferred = 0;
+let totalApplied = 0;
+let totalRounds = 0;
+const perSession: { sid: string; p: number; pr: number; rj: number; df: number; ap: number; rounds: number }[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    let p = 0, pr = 0, rj = 0, df = 0, ap = 0, rs = 0;
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        rs += 1;
+        totalRounds += 1;
+        for (const persona of r.feedback?.personas ?? []) {
+          p += (persona.proposals ?? []).length;
+        }
+        for (const gp of r.gate?.proposals ?? []) {
+          if (gp.category === 'promoted') pr += 1;
+          if (gp.category === 'rejected') rj += 1;
+          if (gp.category === 'deferred') df += 1;
+        }
+        ap += (r.modifier?.applied ?? []).length;
+      } catch (e) { /* */ }
+    }
+    if (rs > 0) {
+      totalProposals += p;
+      totalPromoted += pr;
+      totalRejected += rj;
+      totalDeferred += df;
+      totalApplied += ap;
+      perSession.push({ sid, p, pr, rj, df, ap, rounds: rs });
+    }
+  }
+}
+
+const promoteRate = totalProposals > 0 ? (totalPromoted / totalProposals) * 100 : 0;
+const applyRate = totalPromoted > 0 ? (totalApplied / totalPromoted) * 100 : 0;
+const overallRate = totalProposals > 0 ? (totalApplied / totalProposals) * 100 : 0;
+
+// funnel bar
+function bar(pct: number, width = 40): string {
+  const filled = Math.round((pct / 100) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+// per session conversion
+const topConversion = [...perSession]
+  .filter((s) => s.p >= 5)
+  .map((s) => ({
+    ...s,
+    promoteRate: (s.pr / s.p) * 100,
+    applyRate: s.pr > 0 ? (s.ap / s.pr) * 100 : 0,
+  }))
+  .sort((a, b) => b.applyRate - a.applyRate)
+  .slice(0, 15);
+
+function esc(s: any): string {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#39;' }[c] || c));
+}
+---
+
+<BaseLayout title="Promotion Funnel · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / promotion-funnel</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌪️ Promotion Funnel <span class="muted" style="font-size:0.6em">(iter #203)</span></h1>
+      <p class="agents-sub">
+        proposals → promoted → applied 全链路转化漏斗。
+        看 gate 与 modifier 的"漏斗效率"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 总体转化漏斗</h2>
+      <pre class="agents-pf-flow">{`proposals     ${bar(100)}  ${totalProposals.toString().padStart(5)} (100%)
+↓
+promoted      ${bar(promoteRate)}  ${totalPromoted.toString().padStart(5)} (${promoteRate.toFixed(1)}%)
+↓
+applied       ${bar(applyRate)}  ${totalApplied.toString().padStart(5)} (${applyRate.toFixed(1)}% of promoted)
+
+总转化率(proposals → applied): ${overallRate.toFixed(2)}%
+
+副产品:
+  rejected:  ${totalRejected}
+  deferred:  ${totalDeferred}
+  rounds:    ${totalRounds}`}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 top 15 高 apply 转化率 sessions(≥ 5 proposals)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>p</th><th>pr</th><th>ap</th><th>promote %</th><th>apply %</th><th>rounds</th></tr>
+        </thead>
+        <tbody>
+          {topConversion.map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 14))}</code></a></td>
+              <td>{s.p}</td>
+              <td>{s.pr}</td>
+              <td><strong>{s.ap}</strong></td>
+              <td>{s.promoteRate.toFixed(0)}%</td>
+              <td><strong>{s.applyRate.toFixed(0)}%</strong></td>
+              <td>{s.rounds}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>promote % = gate 通过率</li>
+        <li>apply % = modifier 实际执行率(对 promoted)</li>
+        <li>总转化率 = (proposals → applied) 端到端</li>
+        <li>对照 <a href={`${base}/agents/refiner-effects/`}>Refiner Effects</a> 看 apply 后效果</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pf-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
