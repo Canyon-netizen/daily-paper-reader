@@ -1,0 +1,191 @@
+---
+// /agents/rounds-vs-final-score.astro — iter #304:rounds vs final score scatter
+//
+// rounds 数 vs final score:
+//   - 看 sessions 是否"做越久越好"
+//   - bucket rounds: 2-3, 4-5, 6-8, 9-12, 13+
+//   - 每个 bucket 的 avg final score
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const BUCKETS = [
+  { label: '2-3',   min: 2, max: 4, count: 0, scores: [], avg: 0, top: [] as { sid: string; score: number }[] },
+  { label: '4-5',   min: 4, max: 6, count: 0, scores: [], avg: 0, top: [] as { sid: string; score: number }[] },
+  { label: '6-8',   min: 6, max: 9, count: 0, scores: [], avg: 0, top: [] as { sid: string; score: number }[] },
+  { label: '9-12',  min: 9, max: 13, count: 0, scores: [], avg: 0, top: [] as { sid: string; score: number }[] },
+  { label: '13+',   min: 13, max: 99999, count: 0, scores: [], avg: 0, top: [] as { sid: string; score: number }[] },
+];
+
+const root = join(process.cwd(), 'archive');
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let finalScore = 0;
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${rNums[rNums.length - 1]}.json`), 'utf8'));
+      const arr: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') arr.push(p.total);
+        }
+      }
+      if (arr.length > 0) finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+    } catch (e) { continue; }
+
+    for (const b of BUCKETS) {
+      if (rNums.length >= b.min && rNums.length < b.max) {
+        b.count += 1;
+        if (finalScore > 0) b.scores.push(finalScore);
+        b.top.push({ sid, score: finalScore });
+        break;
+      }
+    }
+  }
+}
+
+for (const b of BUCKETS) {
+  b.avg = b.scores.length > 0 ? b.scores.reduce((a, x) => a + x, 0) / b.scores.length : 0;
+  b.top = b.top.sort((a, b) => b.score - a.score).slice(0, 3);
+}
+
+const total = BUCKETS.reduce((s, b) => s + b.count, 0);
+const maxBucketCount = Math.max(...BUCKETS.map((b) => b.count), 1);
+const maxAvg = Math.max(...BUCKETS.map((b) => b.avg), 1);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+---
+
+<BaseLayout title="Rounds vs Final Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / rounds-vs-final-score</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Rounds vs Final Score <span class="muted" style="font-size:0.6em">(iter #304)</span></h1>
+      <p class="agents-sub">
+        一个 session 的 rounds 数 vs final score。
+        看"做越久越好"还是"早期就到位"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rvfs-globals">
+        <span>总 sessions: <strong>{total}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 rounds bucket × final score</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>rounds</th><th>count</th><th>%</th><th>avg final score</th><th>top score</th></tr>
+        </thead>
+        <tbody>
+          {BUCKETS.map((b) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{b.label}</strong></td>
+              <td>{b.count}</td>
+              <td>{((b.count / Math.max(1, total)) * 100).toFixed(1)}%</td>
+              <td><strong>{b.avg > 0 ? b.avg.toFixed(2) : '—'}</strong></td>
+              <td>{b.top[0] ? b.top[0].score.toFixed(2) : '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 桶分布水平柱状图</h2>
+      <pre class="agents-rvfs-flow">{BUCKETS.map((b) => {
+        return `${b.label.padEnd(6)} ${bar(b.count, maxBucketCount, 22)}  ${b.count}  avg=${b.avg.toFixed(2)}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 各 bucket top 3 sessions</h2>
+      {BUCKETS.map((b) => (
+        <div style="margin-bottom:0.6rem">
+          <h3 style="margin:0.3rem 0;color:#4f46e5">{b.label} rounds (n={b.count})</h3>
+          <table class="agents-session-table">
+            <thead>
+              <tr><th>sid</th><th>final score</th></tr>
+            </thead>
+            <tbody>
+              {b.top.map((t) => (
+                <tr>
+                  <td><a href={`${base}/agents/${t.sid}/`}><code>{esc(t.sid.slice(0, 10))}</code></a></td>
+                  <td><strong>{t.score.toFixed(2)}</strong></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg 随 rounds 递增 = 多轮迭代有帮助</li>
+        <li>avg 早期就高 = 系统快速定位</li>
+        <li>13+ rounds 反而低 = 长 session 容易卡住</li>
+        <li>对照 <a href={`${base}/agents/session-lifetime/`}>Session Lifetime</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rvfs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rvfs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rvfs-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
