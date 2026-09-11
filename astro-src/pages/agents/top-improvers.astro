@@ -1,0 +1,174 @@
+---
+// /agents/top-improvers.astro — iter #292:top improvers showcase
+//
+// 排名 final - first score 增益最大的 sessions:
+//   - sparkline of score trajectory
+//   - action chain
+//   - cost summary
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const SONNET_PRICE = 6;
+const SPARK_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+interface SessInfo {
+  sid: string;
+  goal: string;
+  scores: number[];
+  gain: number;
+  cost: number;
+  actions: string[][];
+  efficiency: number; // gain / cost
+  sparkline: string;
+}
+
+function sparkline(values: number[]): string {
+  if (values.length === 0) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  if (max === min) return SPARK_CHARS[0].repeat(values.length);
+  return values.map((v) => {
+    const idx = Math.min(7, Math.floor(((v - min) / (max - min)) * 7));
+    return SPARK_CHARS[idx];
+  }).join('');
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    const actions: string[][] = [];
+    let cost = 0;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const tokens = r.feedback?.total_tokens ?? 0;
+        cost += (tokens / 1_000_000) * SONNET_PRICE;
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+        const acts: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          acts.push(a.action ?? a.type ?? 'unknown');
+        }
+        actions.push(acts);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+    const gain = scores[scores.length - 1] - scores[0];
+    if (gain <= 0) continue;
+
+    sessions.push({
+      sid, goal, scores, gain, cost, actions,
+      efficiency: cost > 0 ? gain / cost : 0,
+      sparkline: sparkline(scores),
+    });
+  }
+}
+
+sessions.sort((a, b) => b.gain - a.gain);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Top Improvers · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / top-improvers</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏅 Top Improvers <span class="muted" style="font-size:0.6em">(iter #292)</span></h1>
+      <p class="agents-sub">
+        final - first score 增益最大的 sessions,展示 score 轨迹和 action 链路。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🏅 Top {Math.min(20, sessions.length)} 增益最高 sessions</h2>
+      {sessions.slice(0, 20).map((s, i) => (
+        <div class="agents-ti-row">
+          <div class="agents-ti-header">
+            <strong style="color:#10b981">#{i + 1}</strong>
+            <a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 12))}</code></a>
+            <span>gain <strong style="color:#10b981">+{s.gain.toFixed(2)}</strong></span>
+            <span>cost <strong>${s.cost.toFixed(3)}</strong></span>
+            <span>eff <strong>{s.efficiency.toFixed(1)}</strong></span>
+            <span class="muted">— {esc((s.goal ?? '').slice(0, 60))}{(s.goal ?? '').length > 60 ? '…' : ''}</span>
+          </div>
+          <div class="agents-ti-sparkline">
+            {s.sparkline} ({s.scores.map((sc) => sc.toFixed(1)).join(' → ')})
+          </div>
+          <div class="agents-ti-actions">
+            <small>actions: {s.actions.map((a, j) => (
+              <span style="margin-right:0.4rem">[R{j + 1}]: {a.length === 0 ? '∅' : a.map((x) => esc(x)).join(', ')}</span>
+            ))}</small>
+          </div>
+        </div>
+      ))}
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ti-row {
+    border-left: 3px solid #4f46e5;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.6rem;
+    background: rgba(255,255,255,0.02);
+    border-radius: 4px;
+  }
+  .agents-ti-header {
+    display: flex;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+    align-items: baseline;
+  }
+  .agents-ti-sparkline {
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.95rem;
+    color: #94a3b8;
+    margin: 0.3rem 0;
+  }
+  .agents-ti-actions {
+    font-size: 0.78rem;
+    color: #c9d1d9;
+  }
+</style>
