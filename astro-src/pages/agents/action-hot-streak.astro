@@ -1,0 +1,245 @@
+---
+// /agents/action-hot-streak.astro — iter #334:longest consecutive action streak per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessStreak {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  longestStreak: number;
+  streakAction: string;
+  allStreaks: { action: string; length: number }[];
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessStreak[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const primaryActions: string[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const applied = r.modifier?.applied ?? [];
+        const act = applied[0]?.action ?? applied[0]?.type ?? 'noop';
+        primaryActions.push(act);
+      } catch (e) { primaryActions.push('noop'); }
+    }
+
+    // Compute streaks
+    const allStreaks: { action: string; length: number }[] = [];
+    let curAction = primaryActions[0];
+    let curLen = 1;
+    for (let i = 1; i < primaryActions.length; i++) {
+      if (primaryActions[i] === curAction) {
+        curLen += 1;
+      } else {
+        allStreaks.push({ action: curAction, length: curLen });
+        curAction = primaryActions[i];
+        curLen = 1;
+      }
+    }
+    allStreaks.push({ action: curAction, length: curLen });
+
+    if (allStreaks.length === 0) continue;
+    const longest = allStreaks.reduce((m, s) => s.length > m.length ? s : m, allStreaks[0]);
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: primaryActions.length,
+      longestStreak: longest.length,
+      streakAction: longest.action,
+      allStreaks,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.longestStreak - a.longestStreak);
+
+const total = sessions.length;
+const avgStreak = total > 0 ? sessions.reduce((s, x) => s + x.longestStreak, 0) / total : 0;
+
+// Action × streak length distribution
+const actionStreakMap = new Map<string, number[]>();
+for (const s of sessions) {
+  for (const streak of s.allStreaks) {
+    if (!actionStreakMap.has(streak.action)) actionStreakMap.set(streak.action, []);
+    actionStreakMap.get(streak.action)!.push(streak.length);
+  }
+}
+
+interface ActionStreakInfo {
+  action: string;
+  streakCount: number;
+  avgLen: number;
+  maxLen: number;
+  longStreaks: number;
+}
+
+const actionStats: ActionStreakInfo[] = [];
+for (const [action, lens] of actionStreakMap.entries()) {
+  const longStreaks = lens.filter((l) => l >= 3).length;
+  const avg = lens.reduce((s, l) => s + l, 0) / lens.length;
+  const max = Math.max(...lens);
+  actionStats.push({ action, streakCount: lens.length, avgLen: avg, maxLen: max, longStreaks });
+}
+actionStats.sort((a, b) => b.maxLen - a.maxLen);
+
+const buckets = [
+  { label: 'streak=1 (no repeat)', min: 1, max: 2, count: 0 },
+  { label: 'streak=2', min: 2, max: 3, count: 0 },
+  { label: 'streak=3', min: 3, max: 4, count: 0 },
+  { label: 'streak=4', min: 4, max: 5, count: 0 },
+  { label: 'streak=5+', min: 5, max: Infinity, count: 0 },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.longestStreak >= b.min && s.longestStreak < b.max) { b.count += 1; break; }
+  }
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Hot Streak · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-hot-streak</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Action Hot Streak <span class="muted" style="font-size:0.6em">(iter #334)</span></h1>
+      <p class="agents-sub">
+        每个 session 中,同一 action 连续出现的最长 streak。
+        高 streak = 系统持续走同一套路。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ahs-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>avg longest streak: <strong>{avgStreak.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Longest Streak 分布</h2>
+      <pre class="agents-ahs-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(24)} ${bar(b.count, Math.max(...buckets.map((x) => x.count), 1), 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top 15 sessions by longest streak</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>rounds</th><th>longest</th><th>action</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 15).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.totalRounds}</td>
+              <td><strong style="color:#f59e0b">{s.longestStreak}</strong></td>
+              <td><code>{esc(s.streakAction)}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 22))}{s.goal.length > 22 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Action × Streak stats</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>streak count</th><th>avg len</th><th>max len</th><th>long (≥3) streaks</th></tr>
+        </thead>
+        <tbody>
+          {actionStats.slice(0, 15).map((a) => (
+            <tr>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{a.streakCount}</td>
+              <td>{a.avgLen.toFixed(2)}</td>
+              <td><strong>{a.maxLen}</strong></td>
+              <td><strong style={a.longStreaks > 0 ? 'color:#ef4444' : 'color:#10b981'}>{a.longStreaks}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>longest streak &gt; 3 = 系统在该 session 卡在某一套路</li>
+        <li>长 streak 多发生在某一 action 收益递减却还在反复使用时</li>
+        <li>对照 <a href={`${base}/agents/modifier-noop-rate/`}>Modifier No-op Rate</a></li>
+        <li>对照 <a href={`${base}/agents/action-transition-matrix/`}>Action Transition Matrix</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ahs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ahs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ahs-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
