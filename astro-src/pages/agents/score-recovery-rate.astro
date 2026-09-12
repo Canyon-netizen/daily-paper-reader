@@ -1,0 +1,220 @@
+---
+// /agents/score-recovery-rate.astro — iter #354:recovery from negative gain
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessRecovery {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  negativeGains: number;
+  recoveredWithin: number;
+  recoveryRate: number;
+  avgRecoveryTime: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessRecovery[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 3) continue;
+
+    const gains: number[] = [];
+    for (let i = 1; i < scores.length; i++) gains.push(scores[i] - scores[i - 1]);
+
+    let negCount = 0;
+    let recovered = 0;
+    let totalRecoveryTime = 0;
+    for (let i = 0; i < gains.length; i++) {
+      if (gains[i] < -0.05) {
+        negCount += 1;
+        // Look forward for first positive gain that exceeds the drop
+        const target = scores[i] - gains[i] + 0.05; // score level right before the dip
+        for (let j = i + 1; j < scores.length; j++) {
+          if (scores[j] >= target) {
+            recovered += 1;
+            totalRecoveryTime += j - i;
+            break;
+          }
+        }
+      }
+    }
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: scores.length,
+      negativeGains: negCount,
+      recoveredWithin: recovered,
+      recoveryRate: negCount > 0 ? recovered / negCount : 1.0,
+      avgRecoveryTime: recovered > 0 ? totalRecoveryTime / recovered : 0,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.recoveryRate - a.recoveryRate);
+
+const total = sessions.length;
+const totalNeg = sessions.reduce((s, x) => s + x.negativeGains, 0);
+const totalRec = sessions.reduce((s, x) => s + x.recoveredWithin, 0);
+const globalRecoveryRate = totalNeg > 0 ? totalRec / totalNeg : 1.0;
+const avgRecTime = totalRec > 0 ? sessions.reduce((s, x) => s + (x.negativeGains > 0 && x.recoveredWithin > 0 ? x.avgRecoveryTime : 0), 0) / sessions.filter((s) => s.recoveredWithin > 0).length : 0;
+
+// Bucket
+const buckets = [
+  { label: 'always recovers (100%)', min: 0.999, max: 1.01, count: 0 },
+  { label: 'mostly recovers (75-99%)', min: 0.75, max: 0.999, count: 0 },
+  { label: 'half (25-75%)', min: 0.25, max: 0.75, count: 0 },
+  { label: 'rarely recovers (1-25%)', min: 0.001, max: 0.25, count: 0 },
+  { label: 'never recovers (0%)', min: -0.001, max: 0.001, count: 0 },
+  { label: 'no negative gains', min: -0.001, max: 0, count: 0, label2: 'no-neg' },
+];
+for (const s of sessions) {
+  if (s.negativeGains === 0) buckets[5].count += 1;
+  else if (s.recoveryRate === 1) buckets[0].count += 1;
+  else if (s.recoveryRate >= 0.75) buckets[1].count += 1;
+  else if (s.recoveryRate >= 0.25) buckets[2].count += 1;
+  else if (s.recoveryRate > 0) buckets[3].count += 1;
+  else buckets[4].count += 1;
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Recovery Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-recovery-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🩹 Score Recovery Rate <span class="muted" style="font-size:0.6em">(iter #354)</span></h1>
+      <p class="agents-sub">
+        session 中,负 gain 之后回到正轨的比例 + 平均恢复时间。
+        高 recovery = 系统能从回退中反弹。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-srr-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>total negative events: <strong style="color:#ef4444">{totalNeg}</strong></span>
+        <span>total recovered: <strong style="color:#10b981">{totalRec}</strong></span>
+        <span>global recovery rate: <strong style={`color:${globalRecoveryRate >= 0.7 ? '#10b981' : globalRecoveryRate >= 0.4 ? '#f59e0b' : '#ef4444'}`}>{(globalRecoveryRate * 100).toFixed(1)}%</strong></span>
+        <span>avg recovery time: <strong>{avgRecTime.toFixed(2)} rounds</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Recovery rate 桶分布</h2>
+      <pre class="agents-srr-flow">{buckets.map((b) => `${b.label.padEnd(28)} ${bar(b.count, Math.max(...buckets.map((x) => x.count), 1), 22)}  ${b.count}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💪 Top 10 best-recovering sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>neg</th><th>rec</th><th>rate</th><th>avg rec time</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.filter((s) => s.negativeGains > 0).slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.negativeGains}</td>
+              <td>{s.recoveredWithin}</td>
+              <td><strong style="color:#10b981">{(s.recoveryRate * 100).toFixed(0)}%</strong></td>
+              <td>{s.avgRecoveryTime > 0 ? s.avgRecoveryTime.toFixed(1) : '—'}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>recovery rate &gt; 75% = 系统反弹能力强</li>
+        <li>recovery rate &lt; 25% = 系统陷入回退难走出</li>
+        <li>avg recovery time &lt; 2 = 系统快速调整</li>
+        <li>对照 <a href={`${base}/agents/stagnation-runs/`}>Stagnation Runs</a></li>
+        <li>对照 <a href={`${base}/agents/score-plateau-detector/`}>Score Plateau Detector</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-srr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-srr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-srr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
