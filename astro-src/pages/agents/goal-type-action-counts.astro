@@ -1,0 +1,164 @@
+---
+// /agents/goal-type-action-counts.astro — iter #361:actions per round per goal type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan'],
+  other: [],
+};
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+const root = join(process.cwd(), 'archive');
+const types = Object.keys(TYPE_KEYWORDS);
+interface TypeActStats { type: string; sessions: number; rounds: number; actions: number; actsPerRound: number; actsPerSession: number; }
+const typeStats: TypeActStats[] = types.map((t) => ({ type: t, sessions: 0, rounds: 0, actions: 0, actsPerRound: 0, actsPerSession: 0 }));
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    let roundCount = 0;
+    let actionCount = 0;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        roundCount += 1;
+        actionCount += (r.modifier?.applied ?? []).length;
+      } catch (e) { /* */ }
+    }
+    const stats = typeStats.find((s) => s.type === type);
+    if (stats) {
+      stats.sessions += 1;
+      stats.rounds += roundCount;
+      stats.actions += actionCount;
+    }
+  }
+}
+
+for (const s of typeStats) {
+  s.actsPerRound = s.rounds > 0 ? s.actions / s.rounds : 0;
+  s.actsPerSession = s.sessions > 0 ? s.actions / s.sessions : 0;
+}
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Type Action Counts · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-action-counts</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Goal Type Action Counts <span class="muted" style="font-size:0.6em">(iter #361)</span></h1>
+      <p class="agents-sub">
+        每 goal type 的 total actions / rounds + avg actions per session。
+        衡量该类型 session 的"动作密度"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gtac-globals">
+        <span>total sessions: <strong>{typeStats.reduce((s, x) => s + x.sessions, 0)}</strong></span>
+        <span>total rounds: <strong>{typeStats.reduce((s, x) => s + x.rounds, 0)}</strong></span>
+        <span>total actions: <strong>{typeStats.reduce((s, x) => s + x.actions, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 各 type 动作密度</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>sessions</th><th>rounds</th><th>actions</th><th>acts/round</th><th>acts/session</th><th>density bar</th></tr>
+        </thead>
+        <tbody>
+          {typeStats.map((s) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{esc(s.type)}</strong></td>
+              <td>{s.sessions}</td>
+              <td>{s.rounds}</td>
+              <td>{s.actions}</td>
+              <td><strong style={`color:${s.actsPerRound >= 1.5 ? '#10b981' : s.actsPerRound >= 1.0 ? '#f59e0b' : '#ef4444'}`}>{s.actsPerRound.toFixed(2)}</strong></td>
+              <td>{s.actsPerSession.toFixed(2)}</td>
+              <td><code>{bar(s.actsPerRound, Math.max(...typeStats.map((x) => x.actsPerRound), 1), 18)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>acts/round &gt; 1.5 = 系统在该 type 每轮多次干预</li>
+        <li>acts/round ≈ 1 = 系统在该 type 每次一处修改</li>
+        <li>acts/round &lt; 0.7 = 系统在该 type 经常 no-op</li>
+        <li>对照 <a href={`${base}/agents/goal-type-score-matrix/`}>Goal Type × Score Matrix</a></li>
+        <li>对照 <a href={`${base}/agents/goal-type-action-affinity/`}>Goal Type Action Affinity</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtac-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtac-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
