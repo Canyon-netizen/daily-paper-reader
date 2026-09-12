@@ -1,0 +1,231 @@
+---
+// /agents/goal-keyword-diversity.astro — iter #329:goal keyword diversity
+//
+// 看每个 session 的 goal 文本的 type-token 比 (TTR),以及 unique token 数量。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface GoalInfo {
+  sid: string;
+  goal: string;
+  totalTokens: number;
+  uniqueTokens: number;
+  ttr: number;
+  charLen: number;
+}
+
+const CN_RE = /[一-鿿]/;
+
+function tokenize(goal: string): string[] {
+  if (!goal) return [];
+  const tokens: string[] = [];
+  // Chinese: split into 2-char windows + single chars
+  const segments = goal.split(/\s+/);
+  for (const seg of segments) {
+    if (CN_RE.test(seg)) {
+      // Chinese segment: emit bigrams + individual chars
+      const chars = Array.from(seg);
+      for (let i = 0; i + 2 <= chars.length; i++) {
+        tokens.push(chars.slice(i, i + 2).join(''));
+      }
+      for (const c of chars) tokens.push(c);
+    } else if (seg) {
+      tokens.push(seg.toLowerCase().replace(/[^\w]/g, ''));
+    }
+  }
+  return tokens.filter((t) => t.length > 0);
+}
+
+const root = join(process.cwd(), 'archive');
+const all: GoalInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal || goal.length < 5) continue;
+    const tokens = tokenize(goal);
+    if (tokens.length < 3) continue;
+    const unique = new Set(tokens);
+    all.push({
+      sid,
+      goal,
+      totalTokens: tokens.length,
+      uniqueTokens: unique.size,
+      ttr: unique.size / tokens.length,
+      charLen: goal.length,
+    });
+  }
+}
+
+all.sort((a, b) => b.ttr - a.ttr);
+
+const total = all.length;
+const avgTtr = total > 0 ? all.reduce((s, a) => s + a.ttr, 0) / total : 0;
+const sortedTtr = [...all].sort((a, b) => a.ttr - b.ttr);
+const medianTtr = total > 0 ? sortedTtr[Math.floor(total / 2)].ttr : 0;
+const avgUnique = total > 0 ? all.reduce((s, a) => s + a.uniqueTokens, 0) / total : 0;
+const avgLen = total > 0 ? all.reduce((s, a) => s + a.charLen, 0) / total : 0;
+
+// Pearson correlation: charLen vs ttr
+let pearsonN = 0;
+let pearsonSumX = 0, pearsonSumY = 0, pearsonSumXX = 0, pearsonSumYY = 0, pearsonSumXY = 0;
+for (const a of all) {
+  pearsonN += 1;
+  pearsonSumX += a.charLen;
+  pearsonSumY += a.ttr;
+  pearsonSumXX += a.charLen * a.charLen;
+  pearsonSumYY += a.ttr * a.ttr;
+  pearsonSumXY += a.charLen * a.ttr;
+}
+const denom = Math.sqrt((pearsonN * pearsonSumXX - pearsonSumX ** 2) * (pearsonN * pearsonSumYY - pearsonSumY ** 2));
+const pearson = denom !== 0 ? (pearsonN * pearsonSumXY - pearsonSumX * pearsonSumY) / denom : 0;
+
+const ttrBuckets = [
+  { label: 'concentrated (<0.30)', min: 0, max: 0.30, count: 0 },
+  { label: 'normal (0.30-0.50)', min: 0.30, max: 0.50, count: 0 },
+  { label: 'diverse (0.50-0.70)', min: 0.50, max: 0.70, count: 0 },
+  { label: 'rich (0.70+)', min: 0.70, max: Infinity, count: 0 },
+];
+for (const a of all) {
+  for (const b of ttrBuckets) {
+    if (a.ttr >= b.min && a.ttr < b.max) { b.count += 1; break; }
+  }
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Keyword Diversity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-keyword-diversity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📖 Goal Keyword Diversity <span class="muted" style="font-size:0.6em">(iter #329)</span></h1>
+      <p class="agents-sub">
+        TTR (type-token ratio) = unique_tokens / total_tokens。
+        高 TTR = goal 描述用词多样;低 TTR = 重复用词。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gkd-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>avg TTR: <strong>{avgTtr.toFixed(3)}</strong></span>
+        <span>median TTR: <strong>{medianTtr.toFixed(3)}</strong></span>
+        <span>avg unique: <strong>{avgUnique.toFixed(1)}</strong></span>
+        <span>avg chars: <strong>{avgLen.toFixed(0)}</strong></span>
+        <span>Pearson(charLen,TTR): <strong style={`color:${pearson >= 0 ? '#10b981' : '#ef4444'}`}>{pearson.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 TTR 桶分布</h2>
+      <pre class="agents-gkd-flow">{ttrBuckets.map((b) => {
+        return `${b.label.padEnd(24)} ${bar(b.count, Math.max(...ttrBuckets.map((x) => x.count), 1), 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📝 Top 15 最 diverse</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>chars</th><th>tokens</th><th>unique</th><th>TTR</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {all.slice(0, 15).map((a, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${a.sid}/`}><code>{esc(a.sid.slice(0, 10))}</code></a></td>
+              <td>{a.charLen}</td>
+              <td>{a.totalTokens}</td>
+              <td>{a.uniqueTokens}</td>
+              <td><strong style="color:#10b981">{a.ttr.toFixed(3)}</strong></td>
+              <td><small class="muted">{esc(a.goal.slice(0, 22))}{a.goal.length > 22 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🪨 Bottom 10 最集中</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>chars</th><th>tokens</th><th>unique</th><th>TTR</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {all.slice().reverse().slice(0, 10).map((a, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${a.sid}/`}><code>{esc(a.sid.slice(0, 10))}</code></a></td>
+              <td>{a.charLen}</td>
+              <td>{a.totalTokens}</td>
+              <td>{a.uniqueTokens}</td>
+              <td><strong style="color:#ef4444">{a.ttr.toFixed(3)}</strong></td>
+              <td><small class="muted">{esc(a.goal.slice(0, 22))}{a.goal.length > 22 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>TTR 高 = goal 描述用词丰富(可能更具体)</li>
+        <li>TTR 低 = goal 重复关键词多(可能用模板)</li>
+        <li>charLen vs TTR 显著负相关 = 越长越重复(可能堆词)</li>
+        <li>对照 <a href={`${base}/agents/goal-length-distribution/`}>Goal Length Distribution</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gkd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gkd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gkd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
