@@ -1,0 +1,205 @@
+---
+// /agents/action-trigram-lift.astro — iter #326:action trigram (3-gram) lift
+//
+// 看 3-gram action 序列的高 lift 组合
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessGain {
+  sid: string;
+  trigrams: string[];
+  gains: number[];
+  avgGain: number;
+  totalRounds: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessGain[] = [];
+const allTrigrams: string[][] = [];
+const allGains: number[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 4) continue;
+    rNums.sort((a, b) => a - b);
+
+    const roundActs: string[][] = [];
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        scores.push(score);
+        const acts: string[] = [];
+        const seen = new Set<string>();
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!seen.has(act)) { seen.add(act); acts.push(act); }
+        }
+        roundActs.push(acts);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 4) continue;
+
+    const trigrams: string[] = [];
+    const gains: number[] = [];
+    for (let i = 0; i + 3 <= roundActs.length; i++) {
+      const tri = roundActs.slice(i, i + 3).map((a) => a.sort().join('+')).join('|');
+      trigrams.push(tri);
+      const gain = scores[i + 2] - scores[i];
+      gains.push(gain);
+      allTrigrams.push([roundActs[i], roundActs[i + 1], roundActs[i + 2]].map((a) => a.sort().join('+')).join('|'));
+      allGains.push(gain);
+    }
+    sessions.push({
+      sid, trigrams, gains,
+      avgGain: gains.length > 0 ? gains.reduce((a, b) => a + b, 0) / gains.length : 0,
+      totalRounds: rNums.length,
+    });
+  }
+}
+
+// 3-gram → total gain / count
+const triMap = new Map<string, { count: number; totalGain: number; avgGain: number }>();
+for (let i = 0; i < allTrigrams.length; i++) {
+  const t = allTrigrams[i];
+  if (!triMap.has(t)) triMap.set(t, { count: 0, totalGain: 0, avgGain: 0 });
+  const m = triMap.get(t)!;
+  m.count += 1;
+  m.totalGain += allGains[i];
+}
+const globalAvgGain = allGains.length > 0 ? allGains.reduce((a, b) => a + b, 0) / allGains.length : 0;
+
+interface LiftInfo {
+  trigram: string;
+  count: number;
+  avgGain: number;
+  lift: number;
+}
+
+const liftArr: LiftInfo[] = [];
+for (const [tri, info] of triMap.entries()) {
+  if (info.count < 3) continue;
+  info.avgGain = info.totalGain / info.count;
+  const lift = globalAvgGain !== 0 ? info.avgGain - globalAvgGain : 0;
+  liftArr.push({ trigram: tri, count: info.count, avgGain: info.avgGain, lift });
+}
+
+liftArr.sort((a, b) => b.lift - a.lift);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Trigram Lift · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-trigram-lift</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔗 Action Trigram Lift <span class="muted" style="font-size:0.6em">(iter #326)</span></h1>
+      <p class="agents-sub">
+        3 轮 action 序列的 lift = 该序列的 avg gain - 全局 avg gain。
+        高 lift = 系统走这个套路特别有效。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-atl-globals">
+        <span>3-gram 总数: <strong>{liftArr.length}</strong></span>
+        <span>global avg gain: <strong>{globalAvgGain >= 0 ? '+' : ''}{globalAvgGain.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 Top 15 高 lift 序列</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>trigram (round 1 → 2 → 3)</th><th>count</th><th>avg gain</th><th>lift</th></tr>
+        </thead>
+        <tbody>
+          {liftArr.slice(0, 15).map((t, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><small><code>{esc(t.trigram)}</code></small></td>
+              <td>{t.count}</td>
+              <td><strong style="color:#10b981">{t.avgGain >= 0 ? '+' : ''}{t.avgGain.toFixed(3)}</strong></td>
+              <td><strong style="color:#10b981">{t.lift >= 0 ? '+' : ''}{t.lift.toFixed(3)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💥 Bottom 10 低 lift 序列</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>trigram</th><th>count</th><th>avg gain</th><th>lift</th></tr>
+        </thead>
+        <tbody>
+          {liftArr.slice().sort((a, b) => a.lift - b.lift).slice(0, 10).map((t, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><small><code>{esc(t.trigram)}</code></small></td>
+              <td>{t.count}</td>
+              <td><strong style="color:#ef4444">{t.avgGain >= 0 ? '+' : ''}{t.avgGain.toFixed(3)}</strong></td>
+              <td><strong style="color:#ef4444">{t.lift >= 0 ? '+' : ''}{t.lift.toFixed(3)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>lift &gt; 0.3 = 显著优于平均</li>
+        <li>lift &lt; -0.3 = 显著低于平均</li>
+        <li>对照 <a href={`${base}/agents/action-trigram/`}>Action Trigram</a></li>
+        <li>对照 <a href={`${base}/agents/round-sequence-pattern/`}>Round Sequence Pattern</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-atl-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-atl-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
