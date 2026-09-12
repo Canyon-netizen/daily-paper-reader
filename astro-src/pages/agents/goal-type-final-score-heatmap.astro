@@ -1,0 +1,201 @@
+---
+// /agents/goal-type-final-score-heatmap.astro — iter #349:goal type × final score heatmap
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan'],
+  other: [],
+};
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+const root = join(process.cwd(), 'archive');
+const types = Object.keys(TYPE_KEYWORDS);
+const scoreCols = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]; // decile buckets 0-1, 1-2, ..., 9-10
+const matrix: Record<string, Record<number, number>> = {};
+const colTotal: Record<number, number> = {};
+const rowTotal: Record<string, number> = {};
+for (const t of types) {
+  matrix[t] = {};
+  for (const c of scoreCols) matrix[t][c] = 0;
+  rowTotal[t] = 0;
+}
+for (const c of scoreCols) colTotal[c] = 0;
+
+let totalSessions = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+    const lastRn = rNums[rNums.length - 1];
+
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${lastRn}.json`), 'utf8'));
+      const arr: number[] = [];
+      for (const persona of r.feedback?.personas ?? []) {
+        for (const p of persona.proposals ?? []) {
+          if (typeof p.total === 'number') arr.push(p.total);
+        }
+      }
+      if (arr.length === 0) continue;
+      const finalScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+      const decile = Math.max(0, Math.min(9, Math.floor(finalScore)));
+      matrix[type][decile] = (matrix[type][decile] ?? 0) + 1;
+      rowTotal[type] = (rowTotal[type] ?? 0) + 1;
+      colTotal[decile] = (colTotal[decile] ?? 0) + 1;
+      totalSessions += 1;
+    } catch (e) { /* */ }
+  }
+}
+
+const grandTotal = totalSessions;
+const maxCell = Math.max(1, ...types.flatMap((t) => scoreCols.map((c) => matrix[t][c])));
+
+function cellBg(n: number): string {
+  if (n === 0) return 'transparent';
+  const r = n / maxCell;
+  if (r >= 0.6) return '#10b981';
+  if (r >= 0.3) return '#34d399';
+  if (r >= 0.1) return '#fbbf24';
+  if (r >= 0.03) return '#fed7aa';
+  return '#fef3c7';
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Type × Final Score Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-final-score-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🟦 Goal Type × Final Score Heatmap <span class="muted" style="font-size:0.6em">(iter #349)</span></h1>
+      <p class="agents-sub">
+        行 = goal type,列 = final score 的 10 分位 (0-1→0-2→...→9-10)。
+        看哪种 goal 类型最容易拿到高分。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gtsh-globals">
+        <span>sessions: <strong>{totalSessions}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🟦 Heatmap (type × score decile)</h2>
+      <table class="agents-session-table" style="font-size:0.75rem">
+        <thead>
+          <tr>
+            <th>type \ score</th>
+            {scoreCols.map((c) => <th>{c}-{c + 1}</th>)}
+            <th>total</th>
+            <th>avg</th>
+          </tr>
+        </thead>
+        <tbody>
+          {types.map((t) => {
+            let totalScore = 0;
+            for (const c of scoreCols) {
+              const n = matrix[t][c] ?? 0;
+              totalScore += n * (c + 0.5);
+            }
+            const avg = rowTotal[t] > 0 ? totalScore / rowTotal[t] : 0;
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{esc(t)}</strong></td>
+                {scoreCols.map((c) => {
+                  const n = matrix[t][c] ?? 0;
+                  return (
+                    <td style={`background:${cellBg(n)};text-align:center;font-weight:600`}>
+                      {n > 0 ? n : '·'}
+                    </td>
+                  );
+                })}
+                <td><strong>{rowTotal[t]}</strong></td>
+                <td><strong>{avg.toFixed(2)}</strong></td>
+              </tr>
+            );
+          })}
+          <tr style="border-top:2px solid #4f46e5">
+            <td><strong>total</strong></td>
+            {scoreCols.map((c) => <td><strong>{colTotal[c] ?? 0}</strong></td>)}
+            <td><strong>{grandTotal}</strong></td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>某 type 在 8-10 列热 = 该 type 经常高分</li>
+        <li>某 type 在 0-2 列热 = 该 type 通常低分</li>
+        <li>对照 <a href={`${base}/agents/goal-type-score-matrix/`}>Goal Type × Score Matrix</a></li>
+        <li>对照 <a href={`${base}/agents/goal-type-token-density/`}>Goal Type Token Density</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtsh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtsh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
