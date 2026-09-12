@@ -1,0 +1,215 @@
+---
+// /agents/round-delta-sign-heatmap.astro — iter #348:round delta sign heatmap (prev sign × current sign)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function sign(x: number): -1 | 0 | 1 {
+  if (x > 0.02) return 1;
+  if (x < -0.02) return -1;
+  return 0;
+}
+
+const root = join(process.cwd(), 'archive');
+const matrix: Record<string, number> = {};
+const signs: (-1 | 0 | 1)[] = [-1, 0, 1];
+const labels = ['-', '0', '+'];
+for (const prev of signs) for (const cur of signs) matrix[`${prev},${cur}`] = 0;
+
+let totalTransitions = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+
+    for (let i = 1; i < scores.length; i++) {
+      const prevSign = sign(scores[i - 1] - (scores[i - 2] ?? scores[i - 1]));
+      const curSign = sign(scores[i] - scores[i - 1]);
+      const key = `${prevSign},${curSign}`;
+      matrix[key] = (matrix[key] ?? 0) + 1;
+      totalTransitions += 1;
+    }
+  }
+}
+
+function cellBg(n: number, max: number): string {
+  if (n === 0) return '#1f2937';
+  const ratio = n / max;
+  if (ratio >= 0.6) return '#10b981';
+  if (ratio >= 0.3) return '#34d399';
+  if (ratio >= 0.10) return '#fbbf24';
+  if (ratio >= 0.03) return '#fb923c';
+  return '#fca5a5';
+}
+
+const maxCell = Math.max(1, ...Object.values(matrix));
+const totalSess = totalTransitions;
+
+function fmtCell(key: string): { label: string; pct: number } {
+  const n = matrix[key] ?? 0;
+  return { label: n.toString(), pct: totalSess > 0 ? n / totalSess : 0 };
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Delta Sign Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-delta-sign-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🟦 Round Delta Sign Heatmap <span class="muted" style="font-size:0.6em">(iter #348)</span></h1>
+      <p class="agents-sub">
+        行 = 上一 round 的 gain 符号 (−/0/+),列 = 当前 round 的 gain 符号。
+        对角线 = 持续同向;反对角线 = 反转。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rdsh-globals">
+        <span>total transitions: <strong>{totalSess}</strong></span>
+        <span>max cell: <strong>{maxCell}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🟦 Sign Transition Matrix</h2>
+      <table class="agents-session-table" style="font-size:0.85rem">
+        <thead>
+          <tr>
+            <th>prev \ current</th>
+            {labels.map((l) => <th>{l}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {signs.map((prev, i) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{labels[i]}</strong></td>
+              {signs.map((cur, j) => {
+                const key = `${prev},${cur}`;
+                const cell = fmtCell(key);
+                return (
+                  <td style={`background:${cellBg(matrix[key], maxCell)};text-align:center;font-weight:600;color:#0f172a`}>
+                    {cell.label}
+                    <br />
+                    <small>{(cell.pct * 100).toFixed(1)}%</small>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Key 解读</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>key</th><th>含义</th><th>次数</th><th>占比</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>+, +</strong></td>
+            <td>连续正向(系统稳定进步)</td>
+            <td><strong style="color:#10b981">{matrix['1,1']}</strong></td>
+            <td>{totalSess > 0 ? ((matrix['1,1'] / totalSess) * 100).toFixed(1) : '0.0'}%</td>
+          </tr>
+          <tr>
+            <td><strong>−, −</strong></td>
+            <td>连续负向(系统持续退步)</td>
+            <td><strong style="color:#ef4444">{matrix['-1,-1']}</strong></td>
+            <td>{totalSess > 0 ? ((matrix['-1,-1'] / totalSess) * 100).toFixed(1) : '0.0'}%</td>
+          </tr>
+          <tr>
+            <td><strong>+, −</strong></td>
+            <td>改进后回退</td>
+            <td><strong style="color:#f59e0b">{matrix['1,-1']}</strong></td>
+            <td>{totalSess > 0 ? ((matrix['1,-1'] / totalSess) * 100).toFixed(1) : '0.0'}%</td>
+          </tr>
+          <tr>
+            <td><strong>−, +</strong></td>
+            <td>回退后反弹</td>
+            <td><strong style="color:#10b981">{matrix['-1,1']}</strong></td>
+            <td>{totalSess > 0 ? ((matrix['-1,1'] / totalSess) * 100).toFixed(1) : '0.0'}%</td>
+          </tr>
+          <tr>
+            <td><strong>0, +</strong></td>
+            <td>平台后进步</td>
+            <td>{matrix['0,1']}</td>
+            <td>{totalSess > 0 ? ((matrix['0,1'] / totalSess) * 100).toFixed(1) : '0.0'}%</td>
+          </tr>
+          <tr>
+            <td><strong>+, 0</strong></td>
+            <td>进步后停滞</td>
+            <td>{matrix['1,0']}</td>
+            <td>{totalSess > 0 ? ((matrix['1,0'] / totalSess) * 100).toFixed(1) : '0.0'}%</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>(+,+) 高 = 系统大部分时间是连续上升</li>
+        <li>(+,−) 高 = 系统"改进-回退"频繁</li>
+        <li>(−,+) 高 = 系统有"反弹"能力</li>
+        <li>对照 <a href={`${base}/agents/score-velocity/`}>Score Velocity</a></li>
+        <li>对照 <a href={`${base}/agents/round-improvement-statistics/`}>Round Improvement Statistics</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rdsh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rdsh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
