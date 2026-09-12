@@ -1,0 +1,239 @@
+---
+// /agents/cost-density.astro — iter #340:cost density (per action vs per round)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessCost {
+  sid: string;
+  goal: string;
+  rounds: number;
+  actions: number;
+  totalCost: number;
+  costPerRound: number;
+  costPerAction: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessCost[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    let totalCost = 0;
+    let totalActions = 0;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        totalActions += (r.modifier?.applied ?? []).length;
+        // Look for cost in various places
+        if (typeof r.cost === 'number') totalCost += r.cost;
+        if (typeof r.tokens === 'number') totalCost += r.tokens;
+        if (typeof r.totalTokens === 'number') totalCost += r.totalTokens;
+        if (r.usage) totalCost += (r.usage.input_tokens ?? 0) + (r.usage.output_tokens ?? 0);
+        // Per-persona costs
+        for (const p of r.personas ?? []) {
+          if (typeof p.cost === 'number') totalCost += p.cost;
+        }
+        // design/feedback/modifier sub-costs
+        for (const sub of [r.designer, r.feedback, r.modifier, r.evaluator, r.reviewer]) {
+          if (sub && typeof sub.cost === 'number') totalCost += sub.cost;
+          if (sub && typeof sub.tokens === 'number') totalCost += sub.tokens;
+        }
+      } catch (e) { /* */ }
+    }
+
+    if (totalCost === 0 && totalActions === 0) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      rounds: rNums.length,
+      actions: totalActions,
+      totalCost,
+      costPerRound: rNums.length > 0 ? totalCost / rNums.length : 0,
+      costPerAction: totalActions > 0 ? totalCost / totalActions : 0,
+    });
+  }
+}
+
+const valid = sessions.filter((s) => s.totalCost > 0);
+valid.sort((a, b) => b.costPerRound - a.costPerRound);
+
+const totalRounds = sessions.reduce((s, x) => s + x.rounds, 0);
+const totalActions = sessions.reduce((s, x) => s + x.actions, 0);
+const totalCost = valid.reduce((s, x) => s + x.totalCost, 0);
+const avgCPR = valid.length > 0 ? valid.reduce((s, x) => s + x.costPerRound, 0) / valid.length : 0;
+const avgCPA = valid.length > 0 ? valid.reduce((s, x) => s + x.costPerAction, 0) / valid.length : 0;
+
+// cost-per-round bucket
+const cprBuckets = [
+  { label: 'cheap (<1k)', min: 0, max: 1000, count: 0 },
+  { label: 'normal (1k-5k)', min: 1000, max: 5000, count: 0 },
+  { label: 'high (5k-20k)', min: 5000, max: 20000, count: 0 },
+  { label: 'premium (20k-100k)', min: 20000, max: 100000, count: 0 },
+  { label: 'extreme (100k+)', min: 100000, max: Infinity, count: 0 },
+];
+for (const s of valid) {
+  for (const b of cprBuckets) {
+    if (s.costPerRound >= b.min && s.costPerRound < b.max) { b.count += 1; break; }
+  }
+}
+
+// Top 10 most expensive per round
+const topCPR = valid.slice(0, 10);
+// Top 10 most expensive per action
+const topCPA = [...valid].sort((a, b) => b.costPerAction - a.costPerAction).slice(0, 10);
+
+function fmt(n: number): string {
+  if (n > 1000000) return `${(n / 1000000).toFixed(2)}M`;
+  if (n > 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Cost Density · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / cost-density</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💸 Cost Density <span class="muted" style="font-size:0.6em">(iter #340)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 cost-per-round 和 cost-per-action 分布。
+        区分"轮次贵"和"动作贵"两种模式。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-cd-globals">
+        <span>sessions w/ cost: <strong>{valid.length}</strong></span>
+        <span>total rounds: <strong>{totalRounds}</strong></span>
+        <span>total actions: <strong>{totalActions}</strong></span>
+        <span>total cost: <strong>{fmt(totalCost)}</strong></span>
+        <span>avg cost/round: <strong>{fmt(avgCPR)}</strong></span>
+        <span>avg cost/action: <strong>{fmt(avgCPA)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Cost-per-round 桶分布</h2>
+      <pre class="agents-cd-flow">{cprBuckets.map((b) => `${b.label.padEnd(22)} ${bar(b.count, Math.max(...cprBuckets.map((x) => x.count), 1), 22)}  ${b.count}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💰 Top 10 最贵 per round</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>cost</th><th>rounds</th><th>$/round</th><th>$/action</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topCPR.map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{fmt(s.totalCost)}</td>
+              <td>{s.rounds}</td>
+              <td><strong style="color:#ef4444">{fmt(s.costPerRound)}</strong></td>
+              <td>{fmt(s.costPerAction)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💰 Top 10 最贵 per action</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>actions</th><th>$/action</th><th>$/round</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topCPA.map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.actions}</td>
+              <td><strong style="color:#f59e0b">{fmt(s.costPerAction)}</strong></td>
+              <td>{fmt(s.costPerRound)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>$/round 高 = 单 round 烧钱</li>
+        <li>$/action 高 = 每次 modifier 操作烧钱</li>
+        <li>两者差异大 = 大部分 cost 在"非 action"流程(design/feedback/eval)</li>
+        <li>对照 <a href={`${base}/agents/cost-by-action/`}>Cost By Action</a></li>
+        <li>对照 <a href={`${base}/agents/cost-per-score-point/`}>Cost Per Score Point</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-cd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-cd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-cd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
