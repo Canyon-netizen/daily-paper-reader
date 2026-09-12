@@ -1,0 +1,225 @@
+---
+// /agents/score-volatility-time.astro — iter #336:score volatility over time (rolling stdev)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function isoWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+}
+
+const root = join(process.cwd(), 'archive');
+interface WeekStats {
+  week: string;
+  scores: number[];
+  finalScores: number[];
+}
+const weekMap = new Map<string, WeekStats>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+
+    let created: Date;
+    const r1 = join(rd, 'round_1.json');
+    if (existsSync(r1)) {
+      created = statSync(r1).mtime;
+    } else {
+      try { created = statSync(sp).mtime; } catch (e) { continue; }
+    }
+    const week = isoWeek(created);
+    if (!weekMap.has(week)) weekMap.set(week, { week, scores: [], finalScores: [] });
+    const ws = weekMap.get(week)!;
+
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    rNums.sort((a, b) => a - b);
+
+    let lastScore = 0;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          ws.scores.push(avg);
+          lastScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    if (lastScore > 0) ws.finalScores.push(lastScore);
+  }
+}
+
+const weeks = [...weekMap.values()].sort((a, b) => a.week.localeCompare(b.week));
+
+interface WeekVol {
+  week: string;
+  sessions: number;
+  meanScore: number;
+  stdevScore: number;
+  meanFinal: number;
+  rollingStdev4w: number;
+}
+
+function stdev(arr: number[]): number {
+  if (arr.length < 2) return 0;
+  const m = arr.reduce((s, v) => s + v, 0) / arr.length;
+  const v = arr.reduce((s, x) => s + (x - m) ** 2, 0) / (arr.length - 1);
+  return Math.sqrt(v);
+}
+
+const enriched: WeekVol[] = [];
+for (let i = 0; i < weeks.length; i++) {
+  const w = weeks[i];
+  const mean = w.finalScores.length > 0 ? w.finalScores.reduce((s, v) => s + v, 0) / w.finalScores.length : 0;
+  const sd = stdev(w.finalScores);
+  const start = Math.max(0, i - 3);
+  const slice: number[] = [];
+  for (let j = start; j <= i; j++) slice.push(...weeks[j].finalScores);
+  const rolling4w = stdev(slice);
+  enriched.push({
+    week: w.week,
+    sessions: w.finalScores.length,
+    meanScore: mean,
+    stdevScore: sd,
+    meanFinal: mean,
+    rollingStdev4w: rolling4w,
+  });
+}
+
+function sparkline(arr: number[], width = 30): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const mn = Math.min(...arr);
+  const mx = Math.max(...arr);
+  const range = mx - mn || 1;
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - mn) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Volatility Over Time · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-volatility-time</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Score Volatility Over Time <span class="muted" style="font-size:0.6em">(iter #336)</span></h1>
+      <p class="agents-sub">
+        每周 final score 的 mean + stdev + 4 周 rolling stdev (volatility)。
+        volatility 高 = 系统输出不稳定。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📈 Rolling 4w stdev</h2>
+      <pre class="agents-svt-flow">{sparkline(enriched.map((w) => w.rollingStdev4w), 36)}</pre>
+      <p class="muted">▁..█ = 4 周 rolling stdev(高 = 输出波动大)</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 周度 mean score</h2>
+      <pre class="agents-svt-flow">{sparkline(enriched.map((w) => w.meanScore), 36)}</pre>
+      <p class="muted">▁..█ = 周度 mean final score</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 周表(最新 24 周)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>week</th><th>n</th><th>mean</th><th>stdev</th><th>rolling stdev 4w</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {enriched.slice(-24).map((w) => (
+            <tr>
+              <td><code>{esc(w.week)}</code></td>
+              <td>{w.sessions}</td>
+              <td>{w.meanScore.toFixed(2)}</td>
+              <td>{w.stdevScore.toFixed(3)}</td>
+              <td><strong style={`color:${w.rollingStdev4w >= 1.0 ? '#ef4444' : w.rollingStdev4w >= 0.5 ? '#f59e0b' : '#10b981'}`}>{w.rollingStdev4w.toFixed(3)}</strong></td>
+              <td><code>{bar(w.rollingStdev4w, 2.0, 14)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rolling stdev 上升 = 系统输出越来越不稳定</li>
+        <li>rolling stdev 稳定低 = 系统输出一致</li>
+        <li>对照 <a href={`${base}/agents/session-creation-time/`}>Session Creation Time</a></li>
+        <li>对照 <a href={`${base}/agents/final-score-decile/`}>Final Score Decile</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-svt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-svt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-svt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
