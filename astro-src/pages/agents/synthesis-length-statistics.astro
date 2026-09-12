@@ -1,0 +1,179 @@
+---
+// /agents/synthesis-length-statistics.astro — iter #327:synthesis length statistics
+//
+// 各 session 的 synthesis 文件长度统计:
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SynInfo {
+  sid: string;
+  goal: string;
+  totalChars: number;
+  fileCount: number;
+  longest: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const all: SynInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const sd = join(sp, 'synthesis');
+    if (!existsSync(sd)) continue;
+    const sfs = await readdir(sd).catch(() => []);
+    let totalChars = 0;
+    let longest = 0;
+    for (const sf of sfs) {
+      if (!sf.endsWith('.md')) continue;
+      try {
+        const text = await readFile(join(sd, sf), 'utf8');
+        totalChars += text.length;
+        if (text.length > longest) longest = text.length;
+      } catch (e) { /* */ }
+    }
+    if (totalChars > 0) {
+      all.push({ sid, goal, totalChars, fileCount: sfs.filter((s) => s.endsWith('.md')).length, longest });
+    }
+  }
+}
+
+all.sort((a, b) => b.totalChars - a.totalChars);
+
+const totalSessions = all.length;
+const totalChars = all.reduce((s, a) => s + a.totalChars, 0);
+const avgChars = totalSessions > 0 ? totalChars / totalSessions : 0;
+const sortedByChars = [...all].sort((a, b) => a.totalChars - b.totalChars);
+const medianChars = totalSessions > 0 ? sortedByChars[Math.floor(totalSessions / 2)].totalChars : 0;
+const longestOverall = Math.max(...all.map((a) => a.longest), 0);
+
+const buckets = [
+  { label: 'tiny (<500)', min: 0, max: 500, count: 0 },
+  { label: 'small (500-2k)', min: 500, max: 2000, count: 0 },
+  { label: 'medium (2k-10k)', min: 2000, max: 10000, count: 0 },
+  { label: 'large (10k-50k)', min: 10000, max: 50000, count: 0 },
+  { label: 'huge (50k+)', min: 50000, max: Infinity, count: 0 },
+];
+for (const a of all) {
+  for (const b of buckets) {
+    if (a.totalChars >= b.min && a.totalChars < b.max) { b.count += 1; break; }
+  }
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+function fmt(n: number): string {
+  if (n > 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Synthesis Length Statistics · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / synthesis-length-statistics</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📝 Synthesis Length Statistics <span class="muted" style="font-size:0.6em">(iter #327)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 synthesis 文件字符总数 + 最长单文件。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sls-globals">
+        <span>有 synthesis 的 sessions: <strong>{totalSessions}</strong></span>
+        <span>总 chars: <strong>{fmt(totalChars)}</strong></span>
+        <span>avg: <strong>{fmt(avgChars)}</strong></span>
+        <span>median: <strong>{fmt(medianChars)}</strong></span>
+        <span>max single file: <strong>{fmt(longestOverall)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 长度桶分布</h2>
+      <pre class="agents-sls-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(20)} ${bar(b.count, Math.max(...buckets.map((x) => x.count), 1), 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📝 Top 15 最长 synthesis</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>files</th><th>total chars</th><th>longest</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {all.slice(0, 15).map((a, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${a.sid}/`}><code>{esc(a.sid.slice(0, 10))}</code></a></td>
+              <td>{a.fileCount}</td>
+              <td><strong>{fmt(a.totalChars)}</strong></td>
+              <td>{fmt(a.longest)}</td>
+              <td><small class="muted">{esc((a.goal ?? '').slice(0, 25))}{(a.goal ?? '').length > 25 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>长的 synthesis = 多 round 精炼最终结果</li>
+        <li>短的 synthesis = 系统快速总结</li>
+        <li>对照 <a href={`${base}/agents/synthesis-stats/`}>Synthesis Stats</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sls-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sls-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sls-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
