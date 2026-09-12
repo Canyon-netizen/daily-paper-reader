@@ -1,0 +1,233 @@
+---
+// /agents/action-transition-matrix.astro — iter #331:action transition matrix
+//
+// 看相邻 round 之间 action 类型的转换概率。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessActions {
+  sid: string;
+  roundActions: string[][];
+}
+
+const root = join(process.cwd(), 'archive');
+const allSessions: SessActions[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const roundActions: string[][] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const seen = new Set<string>();
+        const acts: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!seen.has(act)) { seen.add(act); acts.push(act); }
+        }
+        roundActions.push(acts);
+      } catch (e) { /* */ }
+    }
+    if (roundActions.length >= 2) allSessions.push({ sid, roundActions });
+  }
+}
+
+// Build a→b transition matrix using "primary action" per round (first action)
+const primaryMap = new Map<string, number>();
+const transMap = new Map<string, Map<string, number>>();
+
+for (const s of allSessions) {
+  const primaries = s.roundActions.map((acts) => acts[0] ?? 'noop');
+  primaryMap.set(primaries[0], (primaryMap.get(primaries[0]) ?? 0) + 1);
+  for (let i = 1; i < primaries.length; i++) {
+    const from = primaries[i - 1];
+    const to = primaries[i];
+    if (!transMap.has(from)) transMap.set(from, new Map());
+    const inner = transMap.get(from)!;
+    inner.set(to, (inner.get(to) ?? 0) + 1);
+  }
+}
+
+const actions = [...new Set([...primaryMap.keys(), ...[...transMap.values()].flatMap((m) => [...m.keys()])])].sort();
+const maxActionName = Math.max(...actions.map((a) => a.length), 6);
+
+function rowProb(from: string): Map<string, number> {
+  const inner = transMap.get(from);
+  const result = new Map<string, number>();
+  if (!inner) {
+    for (const a of actions) result.set(a, 0);
+    return result;
+  }
+  let total = 0;
+  for (const v of inner.values()) total += v;
+  for (const a of actions) {
+    const c = inner.get(a) ?? 0;
+    result.set(a, total > 0 ? c / total : 0);
+  }
+  return result;
+}
+
+function cellColor(p: number): string {
+  if (p >= 0.5) return '#10b981';
+  if (p >= 0.25) return '#84cc16';
+  if (p >= 0.10) return '#eab308';
+  if (p >= 0.05) return '#f97316';
+  return 'transparent';
+}
+
+const topSelfLoops: { from: string; to: string; count: number }[] = [];
+const topCrossTrans: { from: string; to: string; count: number }[] = [];
+
+for (const [from, inner] of transMap.entries()) {
+  let total = 0;
+  for (const v of inner.values()) total += v;
+  for (const [to, c] of inner.entries()) {
+    if (from === to) topSelfLoops.push({ from, to, count: c });
+    else topCrossTrans.push({ from, to, count: c });
+  }
+}
+topSelfLoops.sort((a, b) => b.count - a.count);
+topCrossTrans.sort((a, b) => b.count - a.count);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Transition Matrix · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-transition-matrix</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔀 Action Transition Matrix <span class="muted" style="font-size:0.6em">(iter #331)</span></h1>
+      <p class="agents-sub">
+        P(b | a) = 在 a 之后下一 round 用 b 的概率。
+        对角线 = self-loop(系统重复同一 action)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-atm-globals">
+        <span>distinct actions: <strong>{actions.length}</strong></span>
+        <span>sessions: <strong>{allSessions.length}</strong></span>
+        <span>transitions: <strong>{[...transMap.values()].reduce((s, m) => s + [...m.values()].reduce((ss, v) => ss + v, 0), 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🟦 转换概率矩阵 P(to | from)</h2>
+      {actions.length > 0 && actions.length <= 20 && (
+        <table class="agents-session-table" style="font-size:0.7rem">
+          <thead>
+            <tr>
+              <th>from \ to</th>
+              {actions.map((a) => <th>{a}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {actions.map((from) => (
+              <tr>
+                <td><strong style="color:#4f46e5">{esc(from)}</strong></td>
+                {actions.map((to) => {
+                  const inner = transMap.get(from);
+                  const c = inner?.get(to) ?? 0;
+                  const total = inner ? [...inner.values()].reduce((s, v) => s + v, 0) : 0;
+                  const p = total > 0 ? c / total : 0;
+                  const bg = cellColor(p);
+                  return (
+                    <td style={`background:${bg};text-align:center`}>
+                      {p > 0.001 ? p.toFixed(2) : '·'}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {actions.length > 20 && (
+        <p class="muted">action 数量过多 ({actions.length}),跳过矩阵展示,改看 top 转换。</p>
+      )}
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔁 Top 8 self-loops (a → a)</h2>
+      <pre class="agents-atm-flow">{topSelfLoops.slice(0, 8).map((t) => {
+        return `${(t.from + ' → ' + t.to).padEnd(maxActionName * 2 + 5)} ${bar(t.count, Math.max(...topSelfLoops.map((x) => x.count), 1), 18)}  ${t.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔀 Top 10 cross transitions</h2>
+      <pre class="agents-atm-flow">{topCrossTrans.slice(0, 10).map((t) => {
+        return `${(t.from + ' → ' + t.to).padEnd(maxActionName * 2 + 5)} ${bar(t.count, Math.max(...topCrossTrans.slice(0, 10).map((x) => x.count), 1), 18)}  ${t.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高 self-loop = 系统倾向于在同一 action 上重复(可能 stuck)</li>
+        <li>高 cross transition (a → b) = 系统学习的标准流程</li>
+        <li>空行多 = 系统决策分散</li>
+        <li>对照 <a href={`${base}/agents/action-sequence-variety/`}>Action Sequence Variety</a></li>
+        <li>对照 <a href={`${base}/agents/modifier-decision-by-position/`}>Modifier Decision by Position</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-atm-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-atm-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-atm-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
