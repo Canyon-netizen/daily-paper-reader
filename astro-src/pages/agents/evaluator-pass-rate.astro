@@ -1,0 +1,238 @@
+---
+// /agents/evaluator-pass-rate.astro — iter #343:evaluator pass-rate per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessEval {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  passCount: number;
+  failCount: number;
+  passRate: number;
+  passScores: number[];
+  failScores: number[];
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessEval[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    let pass = 0;
+    let fail = 0;
+    const passScores: number[] = [];
+    const failScores: number[] = [];
+
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const evalResult = r.evaluator ?? r.eval ?? {};
+        // Compute score for the round
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        const score = arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+
+        // Determine pass/fail
+        let isPass = false;
+        if (typeof evalResult.pass === 'boolean') isPass = evalResult.pass;
+        else if (typeof evalResult.passed === 'boolean') isPass = evalResult.passed;
+        else if (typeof evalResult.status === 'string') isPass = evalResult.status.toLowerCase().includes('pass');
+        else if (typeof evalResult.verdict === 'string') isPass = evalResult.verdict.toLowerCase().includes('pass');
+        else continue;
+
+        if (isPass) { pass += 1; if (score > 0) passScores.push(score); }
+        else { fail += 1; if (score > 0) failScores.push(score); }
+      } catch (e) { /* */ }
+    }
+    if (pass + fail === 0) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: pass + fail,
+      passCount: pass,
+      failCount: fail,
+      passRate: pass / (pass + fail),
+      passScores,
+      failScores,
+    });
+  }
+}
+
+const total = sessions.length;
+const allPassRounds = sessions.reduce((s, x) => s + x.passCount, 0);
+const allFailRounds = sessions.reduce((s, x) => s + x.failCount, 0);
+const globalPassRate = (allPassRounds + allFailRounds) > 0 ? allPassRounds / (allPassRounds + allFailRounds) : 0;
+
+const allPassScores = sessions.flatMap((s) => s.passScores);
+const allFailScores = sessions.flatMap((s) => s.failScores);
+const avgPassScore = allPassScores.length > 0 ? allPassScores.reduce((s, v) => s + v, 0) / allPassScores.length : 0;
+const avgFailScore = allFailScores.length > 0 ? allFailScores.reduce((s, v) => s + v, 0) / allFailScores.length : 0;
+
+sessions.sort((a, b) => b.passRate - a.passRate);
+
+// pass-rate buckets
+const buckets = [
+  { label: '0% pass (all fail)', min: 0, max: 0.001, count: 0 },
+  { label: '1-25%', min: 0.001, max: 0.25, count: 0 },
+  { label: '25-50%', min: 0.25, max: 0.50, count: 0 },
+  { label: '50-75%', min: 0.50, max: 0.75, count: 0 },
+  { label: '75-99%', min: 0.75, max: 1.0, count: 0 },
+  { label: '100% (all pass)', min: 1.0, max: 1.001, count: 0 },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.passRate >= b.min && s.passRate < b.max) { b.count += 1; break; }
+  }
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Evaluator Pass-Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / evaluator-pass-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>✅ Evaluator Pass-Rate <span class="muted" style="font-size:0.6em">(iter #343)</span></h1>
+      <p class="agents-sub">
+        每个 session 中 evaluator 的 pass/fail 比例 + 平均 pass 时 / fail 时分数。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-epr-globals">
+        <span>sessions w/ eval: <strong>{total}</strong></span>
+        <span>total pass rounds: <strong style="color:#10b981">{allPassRounds}</strong></span>
+        <span>total fail rounds: <strong style="color:#ef4444">{allFailRounds}</strong></span>
+        <span>global pass rate: <strong style={`color:${globalPassRate >= 0.7 ? '#10b981' : globalPassRate >= 0.4 ? '#f59e0b' : '#ef4444'}`}>{(globalPassRate * 100).toFixed(1)}%</strong></span>
+        <span>avg pass score: <strong>{avgPassScore.toFixed(2)}</strong></span>
+        <span>avg fail score: <strong>{avgFailScore.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Pass-rate 分布</h2>
+      <pre class="agents-epr-flow">{buckets.map((b) => `${b.label.padEnd(24)} ${bar(b.count, Math.max(...buckets.map((x) => x.count), 1), 22)}  ${b.count}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>✅ Top 10 100% pass sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>pass / fail</th><th>pass rate</th><th>avg pass score</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.filter((s) => s.passRate === 1).slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.passCount} / {s.failCount}</td>
+              <td><strong style="color:#10b981">{(s.passRate * 100).toFixed(0)}%</strong></td>
+              <td>{s.passScores.length > 0 ? (s.passScores.reduce((a, b) => a + b, 0) / s.passScores.length).toFixed(2) : '—'}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 22))}{s.goal.length > 22 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>❌ Bottom 10 0% pass sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>pass / fail</th><th>pass rate</th><th>avg fail score</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().filter((s) => s.failCount > 0 && s.passCount === 0).slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.passCount} / {s.failCount}</td>
+              <td><strong style="color:#ef4444">{(s.passRate * 100).toFixed(0)}%</strong></td>
+              <td>{s.failScores.length > 0 ? (s.failScores.reduce((a, b) => a + b, 0) / s.failScores.length).toFixed(2) : '—'}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 22))}{s.goal.length > 22 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>global pass rate 高 = 评估器较宽松</li>
+        <li>global pass rate 低 = 评估器较严格</li>
+        <li>pass 时 avg score &gt; fail 时 avg score = 评估器有判别力</li>
+        <li>对照 <a href={`${base}/agents/avg-round-score/`}>Avg Round Score</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-epr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-epr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-epr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
