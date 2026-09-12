@@ -1,0 +1,166 @@
+---
+// /agents/round-improvement-statistics.astro — iter #325:round improvement statistics
+//
+// 全局 round-level gain 统计:
+//   - avg gain / median gain / positive ratio
+//   - 最好的 round (最大正向 gain) / 最坏的 round (最大负向 gain)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface GainEvent {
+  sid: string;
+  round: number;
+  gain: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const gains: GainEvent[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+    for (let i = 1; i < scores.length; i++) {
+      gains.push({ sid, round: rNums[i], gain: scores[i] - scores[i - 1] });
+    }
+  }
+}
+
+const total = gains.length;
+const sorted = [...gains].sort((a, b) => a.gain - b.gain);
+const positive = gains.filter((g) => g.gain > 0).length;
+const negative = gains.filter((g) => g.gain < 0).length;
+const zero = gains.filter((g) => g.gain === 0).length;
+const avg = total > 0 ? gains.reduce((s, g) => s + g.gain, 0) / total : 0;
+const median = total > 0 ? sorted[Math.floor(total / 2)].gain : 0;
+
+const top10 = [...gains].sort((a, b) => b.gain - a.gain).slice(0, 10);
+const worst10 = [...gains].sort((a, b) => a.gain - b.gain).slice(0, 10);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Improvement Statistics · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-improvement-statistics</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Round Improvement Statistics <span class="muted" style="font-size:0.6em">(iter #325)</span></h1>
+      <p class="agents-sub">
+        每个 round-to-round 的 gain 分布,以及最 best / worst 跳跃。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ris-globals">
+        <span>总 gains: <strong>{total}</strong></span>
+        <span>positive: <strong style="color:#10b981">{positive}</strong>({((positive / Math.max(1, total)) * 100).toFixed(1)}%)</span>
+        <span>negative: <strong style="color:#ef4444">{negative}</strong>({((negative / Math.max(1, total)) * 100).toFixed(1)}%)</span>
+        <span>zero: <strong>{zero}</strong></span>
+        <span>avg gain: <strong>{avg >= 0 ? '+' : ''}{avg.toFixed(3)}</strong></span>
+        <span>median: <strong>{median >= 0 ? '+' : ''}{median.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 Top 10 最大跳跃</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>round</th><th>gain</th></tr>
+        </thead>
+        <tbody>
+          {top10.map((g, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${g.sid}/`}><code>{esc(g.sid.slice(0, 10))}</code></a></td>
+              <td>R{g.round}</td>
+              <td><strong style="color:#10b981">+{g.gain.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💥 Bottom 10 最大退步</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>round</th><th>gain</th></tr>
+        </thead>
+        <tbody>
+          {worst10.map((g, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${g.sid}/`}><code>{esc(g.sid.slice(0, 10))}</code></a></td>
+              <td>R{g.round}</td>
+              <td><strong style="color:#ef4444">{g.gain.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>positive ratio &gt; 50% = 系统整体改进方向对</li>
+        <li>top gain 高 = 系统能产生"质变" round</li>
+        <li>bottom gain 低 = 系统会偶尔"严重退步"</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+        <li>对照 <a href={`${base}/agents/round-position-gain/`}>Round Position Gain</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ris-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ris-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
