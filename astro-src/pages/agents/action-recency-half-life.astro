@@ -1,0 +1,207 @@
+---
+// /agents/action-recency-half-life.astro — iter #346:action recency (last K sessions usage)
+
+import { statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessActs {
+  sid: string;
+  created: number;
+  primary: string;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessActs[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    const firstRn = rNums[0];
+    let primary = 'noop';
+    try {
+      const r = JSON.parse(await readFile(join(rd, `round_${firstRn}.json`), 'utf8'));
+      const applied = r.modifier?.applied ?? [];
+      primary = applied[0]?.action ?? applied[0]?.type ?? 'noop';
+    } catch (e) { /* */ }
+
+    let created = 0;
+    const r1 = join(rd, `round_${firstRn}.json`);
+    if (existsSync(r1)) {
+      created = statSync(r1).mtime.getTime();
+    }
+    sessions.push({ sid, created, primary });
+  }
+}
+
+sessions.sort((a, b) => b.created - a.created);
+
+const total = sessions.length;
+const recentWindow = Math.min(50, total);
+const recent = sessions.slice(0, recentWindow);
+
+// Count primary in recent window
+const countRecent = new Map<string, number>();
+for (const s of recent) countRecent.set(s.primary, (countRecent.get(s.primary) ?? 0) + 1);
+
+const allActionSet = new Set<string>();
+for (const s of sessions) allActionSet.add(s.primary);
+
+// Compute action count in last K (K = 5, 10, 20, 50)
+const windows = [5, 10, 20, 50];
+interface ActionRec {
+  action: string;
+  count5: number;
+  count10: number;
+  count20: number;
+  count50: number;
+  totalAll: number;
+  halfLifeK: number;
+}
+
+const recArr: ActionRec[] = [];
+for (const a of allActionSet) {
+  let c5 = 0, c10 = 0, c20 = 0, c50 = 0;
+  for (let i = 0; i < sessions.length; i++) {
+    if (sessions[i].primary !== a) continue;
+    if (i < 5) c5 += 1;
+    if (i < 10) c10 += 1;
+    if (i < 20) c20 += 1;
+    if (i < 50) c50 += 1;
+  }
+  const totalAll = sessions.filter((s) => s.primary === a).length;
+
+  // Half-life: smallest K where countK / totalAll >= 0.5 (50%+ of usage is in recent K)
+  let halfLife = Infinity;
+  if (totalAll > 0) {
+    if (c5 / totalAll >= 0.5) halfLife = 5;
+    else if (c10 / totalAll >= 0.5) halfLife = 10;
+    else if (c20 / totalAll >= 0.5) halfLife = 20;
+    else if (c50 / totalAll >= 0.5) halfLife = 50;
+  }
+
+  recArr.push({
+    action: a,
+    count5: c5, count10: c10, count20: c20, count50: c50,
+    totalAll,
+    halfLifeK: halfLife,
+  });
+}
+
+recArr.sort((a, b) => b.count10 - a.count10);
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Recency Half-life · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-recency-half-life</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Action Recency Half-life <span class="muted" style="font-size:0.6em">(iter #346)</span></h1>
+      <p class="agents-sub">
+        按时间排序后,每个 action 在最近 K 个 session 中的使用频次。
+        高 recency = 系统最近爱用这个 action。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-arh-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>recent window: <strong>{recentWindow}</strong></span>
+        <span>distinct actions (primary): <strong>{allActionSet.size}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Action recency (last 5/10/20/50)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>K=5</th><th>K=10</th><th>K=20</th><th>K=50</th><th>total</th><th>half-life</th></tr>
+        </thead>
+        <tbody>
+          {recArr.slice(0, 18).map((a) => (
+            <tr>
+              <td><code>{esc(a.action)}</code></td>
+              <td>{a.count5 > 0 ? <strong style="color:#10b981">{a.count5}</strong> : <span class="muted">0</span>}</td>
+              <td>{a.count10 > 0 ? <strong style="color:#10b981">{a.count10}</strong> : <span class="muted">0</span>}</td>
+              <td>{a.count20}</td>
+              <td>{a.count50}</td>
+              <td>{a.totalAll}</td>
+              <td>{a.halfLifeK === Infinity ? <span class="muted">∞</span> : a.halfLifeK}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Recent window bar (last 10)</h2>
+      <pre class="agents-arh-flow">{recArr.slice(0, 15).map((a) => `${a.action.padEnd(20)} ${bar(a.count10, Math.max(...recArr.map((x) => x.count10), 1), 14)}  ${a.count10}/10`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>count5 高 = 最近 5 个 session 集中用这个 action(可能 hot)</li>
+        <li>half-life 小 = 该 action 历史占比集中(可能新引入)</li>
+        <li>对照 <a href={`${base}/agents/action-diversity-sessions/`}>Action Diversity Across Sessions</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-arh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-arh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-arh-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
