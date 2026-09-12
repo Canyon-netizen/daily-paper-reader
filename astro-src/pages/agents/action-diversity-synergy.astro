@@ -1,0 +1,197 @@
+---
+// /agents/action-diversity-synergy.astro — iter #353:action combo synergy (highest-gain combos)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ComboInfo {
+  combo: string;
+  count: number;
+  avgGain: number;
+  totalGain: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const comboMap = new Map<string, { count: number; totalGain: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const roundActs: string[][] = [];
+    const gains: number[] = [];
+    for (let i = 0; i < rNums.length; i++) {
+      const rn = rNums[i];
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const seen = new Set<string>();
+        const acts: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!seen.has(act)) { seen.add(act); acts.push(act); }
+        }
+        roundActs.push(acts);
+        // gain measured at the next round for the just-finished round's actions
+        if (i + 1 < rNums.length) {
+          const nextR = JSON.parse(await readFile(join(rd, `round_${rNums[i + 1]}.json`), 'utf8'));
+          const arr: number[] = [];
+          for (const persona of r.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr.push(p.total);
+            }
+          }
+          const arr2: number[] = [];
+          for (const persona of nextR.feedback?.personas ?? []) {
+            for (const p of persona.proposals ?? []) {
+              if (typeof p.total === 'number') arr2.push(p.total);
+            }
+          }
+          if (arr.length > 0 && arr2.length > 0) {
+            const s1 = arr.reduce((a, b) => a + b, 0) / arr.length;
+            const s2 = arr2.reduce((a, b) => a + b, 0) / arr2.length;
+            gains.push(s2 - s1);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+    // Pair up: each combo at round i is paired with gain[i] (gain from this round to next)
+    if (gains.length === 0 || gains.length !== roundActs.length - 1) continue;
+    for (let i = 0; i < gains.length; i++) {
+      const acts = roundActs[i].slice().sort();
+      if (acts.length === 0) continue;
+      const combo = acts.join('+');
+      if (!comboMap.has(combo)) comboMap.set(combo, { count: 0, totalGain: 0 });
+      const c = comboMap.get(combo)!;
+      c.count += 1;
+      c.totalGain += gains[i];
+    }
+  }
+}
+
+const combos: ComboInfo[] = [];
+for (const [combo, info] of comboMap.entries()) {
+  if (info.count < 3) continue;
+  combos.push({
+    combo,
+    count: info.count,
+    avgGain: info.totalGain / info.count,
+    totalGain: info.totalGain,
+  });
+}
+
+combos.sort((a, b) => b.avgGain - a.avgGain);
+const topByAvgGain = combos.slice(0, 15);
+const topByTotalGain = [...combos].sort((a, b) => b.totalGain - a.totalGain).slice(0, 10);
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Synergy Score · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-diversity-synergy</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>✨ Action Synergy Score <span class="muted" style="font-size:0.6em">(iter #353)</span></h1>
+      <p class="agents-sub">
+        每个 action combo 的 avg gain (作用后的 round-to-round gain)。
+        高 avg gain = 这套组合特别有效。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ass-globals">
+        <span>combos (≥3 uses): <strong>{combos.length}</strong></span>
+        <span>max avg gain: <strong>{combos.length > 0 ? combos[0].avgGain.toFixed(3) : '—'}</strong></span>
+        <span>min avg gain: <strong>{combos.length > 0 ? combos[combos.length - 1].avgGain.toFixed(3) : '—'}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 Top 15 by avg gain</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>combo</th><th>count</th><th>avg gain</th><th>total gain</th></tr>
+        </thead>
+        <tbody>
+          {topByAvgGain.map((c) => (
+            <tr>
+              <td><code>{esc(c.combo)}</code></td>
+              <td>{c.count}</td>
+              <td><strong style="color:#10b981">+{c.avgGain.toFixed(3)}</strong></td>
+              <td>+{c.totalGain.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Top 10 by total gain</h2>
+      <pre class="agents-ass-flow">{topByTotalGain.map((c) => `${c.combo.padEnd(60)} ${bar(c.totalGain, Math.max(...topByTotalGain.map((x) => x.totalGain), 1), 14)}  +${c.totalGain.toFixed(1)}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg gain &gt; +0.5 = 高效组合</li>
+        <li>avg gain &lt; -0.5 = 拖累组合</li>
+        <li>对照 <a href={`${base}/agents/action-co-occurrence/`}>Action Co-occurrence</a></li>
+        <li>对照 <a href={`${base}/agents/action-trigram-lift/`}>Action Trigram Lift</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ass-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ass-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ass-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
