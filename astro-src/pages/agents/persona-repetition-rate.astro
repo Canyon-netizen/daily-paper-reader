@@ -1,0 +1,217 @@
+---
+// /agents/persona-repetition-rate.astro — iter #345:proposal repetition per persona per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaRep {
+  persona: string;
+  sessionCount: number;
+  totalProposals: number;
+  uniqueProposals: number;
+  repetitionRate: number;
+}
+
+interface SessRep {
+  sid: string;
+  goal: string;
+  personas: PersonaRep[];
+  overallRate: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessRep[] = [];
+const personaGlobal = new Map<string, PersonaRep>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    const personaProposals = new Map<string, string[]>();
+
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          if (!personaProposals.has(name)) personaProposals.set(name, []);
+          for (const p of persona.proposals ?? []) {
+            const key = `${(p.text ?? '').trim()}|${(p.note ?? '').trim()}|${typeof p.total === 'number' ? p.total.toFixed(2) : ''}`;
+            personaProposals.get(name)!.push(key);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+
+    if (personaProposals.size === 0) continue;
+
+    const personas: PersonaRep[] = [];
+    let totalAll = 0;
+    let totalDup = 0;
+    for (const [name, props] of personaProposals.entries()) {
+      const total = props.length;
+      const uniq = new Set(props).size;
+      const dup = total - uniq;
+      const rate = total > 0 ? dup / total : 0;
+      personas.push({
+        persona: name,
+        sessionCount: 1,
+        totalProposals: total,
+        uniqueProposals: uniq,
+        repetitionRate: rate,
+      });
+      totalAll += total;
+      totalDup += dup;
+
+      if (!personaGlobal.has(name)) {
+        personaGlobal.set(name, { persona: name, sessionCount: 0, totalProposals: 0, uniqueProposals: 0, repetitionRate: 0 });
+      }
+      const g = personaGlobal.get(name)!;
+      g.sessionCount += 1;
+      g.totalProposals += total;
+      g.uniqueProposals += uniq;
+    }
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      personas,
+      overallRate: totalAll > 0 ? totalDup / totalAll : 0,
+    });
+  }
+}
+
+// Compute global repetition rate
+for (const p of personaGlobal.values()) {
+  const dup = p.totalProposals - p.uniqueProposals;
+  p.repetitionRate = p.totalProposals > 0 ? dup / p.totalProposals : 0;
+}
+
+const globalArr = [...personaGlobal.values()].sort((a, b) => b.repetitionRate - a.repetitionRate);
+const totalReps = sessions.reduce((s, x) => s + x.personas.reduce((ss, p) => ss + p.totalProposals, 0), 0);
+const totalDup = sessions.reduce((s, x) => s + x.personas.reduce((ss, p) => ss + (p.totalProposals - p.uniqueProposals), 0), 0);
+const globalRepRate = totalReps > 0 ? totalDup / totalReps : 0;
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Persona Repetition Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-repetition-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔁 Persona Repetition Rate <span class="muted" style="font-size:0.6em">(iter #345)</span></h1>
+      <p class="agents-sub">
+        各 persona 在所有 session 中,提出重复 proposal (text/note/score 完全相同) 的比例。
+        高 = persona 反复提同样的意见。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-prr-globals">
+        <span>sessions: <strong>{sessions.length}</strong></span>
+        <span>personas (global): <strong>{personaGlobal.size}</strong></span>
+        <span>total proposals: <strong>{totalReps}</strong></span>
+        <span>duplicates: <strong style="color:#f59e0b">{totalDup}</strong></span>
+        <span>global repetition rate: <strong style={`color:${globalRepRate >= 0.3 ? '#ef4444' : globalRepRate >= 0.15 ? '#f59e0b' : '#10b981'}`}>{(globalRepRate * 100).toFixed(1)}%</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Persona × Repetition (global)</h2>
+      <pre class="agents-prr-flow">{globalArr.slice(0, 20).map((p) => {
+        return `${p.persona.padEnd(22)} ${bar(p.repetitionRate, 1.0, 18)}  ${(p.repetitionRate * 100).toFixed(1)}%  (${p.uniqueProposals}/${p.totalProposals} unique)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔁 Top 10 sessions with highest repetition</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>overall rate</th><th>rounds</th><th>personas</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {[...sessions].sort((a, b) => b.overallRate - a.overallRate).slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><strong style="color:#ef4444">{(s.overallRate * 100).toFixed(0)}%</strong></td>
+              <td>{s.personas.reduce((ss, p) => ss + p.totalProposals, 0)} proposals</td>
+              <td>{s.personas.length}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 22))}{s.goal.length > 22 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>rep rate &gt; 30% = 该 persona 经常重复自己</li>
+        <li>rep rate &lt; 5% = 该 persona 每次都有新意</li>
+        <li>对照 <a href={`${base}/agents/persona-score-distribution/`}>Persona Score Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/persona-round-share/`}>Persona Round Share</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-prr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-prr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-prr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
