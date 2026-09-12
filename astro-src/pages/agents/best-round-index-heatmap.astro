@@ -1,0 +1,233 @@
+---
+// /agents/best-round-index-heatmap.astro — iter #342:best round index heatmap per session
+//
+// 每个 session 找出 gain 最大的 round index,然后用 heatmap 显示分布。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessBest {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  gains: number[];
+  bestRound: number;
+  bestGain: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessBest[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+
+    const gains: number[] = [];
+    for (let i = 1; i < scores.length; i++) gains.push(scores[i] - scores[i - 1]);
+
+    let bestIdx = 0;
+    let bestVal = gains[0];
+    for (let i = 1; i < gains.length; i++) {
+      if (gains[i] > bestVal) { bestVal = gains[i]; bestIdx = i; }
+    }
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: scores.length,
+      gains,
+      bestRound: bestIdx + 1, // round index (1-based, gain observed AT this round)
+      bestGain: bestVal,
+    });
+  }
+}
+
+const total = sessions.length;
+
+// Distribution by bestRound
+const maxBestRound = Math.max(...sessions.map((s) => s.bestRound), 1);
+const bestRoundDist: { round: number; count: number; avgGain: number }[] = [];
+for (let r = 1; r <= maxBestRound; r++) {
+  const subset = sessions.filter((s) => s.bestRound === r);
+  bestRoundDist.push({
+    round: r,
+    count: subset.length,
+    avgGain: subset.length > 0 ? subset.reduce((s, x) => s + x.bestGain, 0) / subset.length : 0,
+  });
+}
+
+// Grouped by total rounds
+const byTotalRounds = new Map<number, SessBest[]>();
+for (const s of sessions) {
+  if (!byTotalRounds.has(s.totalRounds)) byTotalRounds.set(s.totalRounds, []);
+  byTotalRounds.get(s.totalRounds)!.push(s);
+}
+
+const totalRoundsList = [...byTotalRounds.keys()].sort((a, b) => a - b);
+
+// heatmap data: rows = totalRounds 2..max, cols = bestRound position 1..max
+const maxCols = Math.max(...totalRoundsList, 1);
+const matrix: number[][] = [];
+for (let r = 2; r <= maxCols; r++) {
+  const row: number[] = [];
+  for (let c = 1; c <= r - 1; c++) {
+    const subset = byTotalRounds.get(r) ?? [];
+    const matching = subset.filter((s) => s.bestRound === c).length;
+    row.push(matching);
+  }
+  matrix.push(row);
+}
+
+const maxCell = Math.max(1, ...matrix.flat());
+
+function cellBg(v: number): string {
+  if (v === 0) return 'transparent';
+  const ratio = v / maxCell;
+  if (ratio >= 0.5) return '#10b981';
+  if (ratio >= 0.25) return '#34d399';
+  if (ratio >= 0.10) return '#fbbf24';
+  return '#fed7aa';
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Best Round Index Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / best-round-index-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Best Round Index Heatmap <span class="muted" style="font-size:0.6em">(iter #342)</span></h1>
+      <p class="agents-sub">
+        行 = session 的总 round 数,列 = 出现最大 gain 的 round index。
+        对角线上的 session 表示最后一轮是"质变 round"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-brh-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>max best round: <strong>{maxBestRound}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Best round 分布</h2>
+      <pre class="agents-brh-flow">{bestRoundDist.filter((x) => x.count > 0).map((b) => `${'R' + b.round.toString().padEnd(4)} ${bar(b.count, Math.max(...bestRoundDist.map((x) => x.count), 1), 22)}  ${b.count}  avg gain ${b.avgGain >= 0 ? '+' : ''}${b.avgGain.toFixed(2)}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🟦 Heatmap (totalRounds × bestRound position)</h2>
+      <table class="agents-session-table" style="font-size:0.7rem">
+        <thead>
+          <tr>
+            <th>totalR \ bestR</th>
+            {Array.from({ length: maxCols }, (_, i) => i + 1).map((c) => <th>R{c}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {matrix.map((row, rIdx) => {
+            const totalR = rIdx + 2;
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">R{totalR}</strong></td>
+                {Array.from({ length: maxCols }, (_, i) => i + 1).map((c) => {
+                  if (c >= totalR) return <td><span class="muted">-</span></td>;
+                  const v = row[c - 1] ?? 0;
+                  return (
+                    <td style={`background:${cellBg(v)};text-align:center;font-weight:600`}>
+                      {v > 0 ? v : '·'}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>对角线(最后一列) = 系统最后一轮才质变(可能需要更多 round)</li>
+        <li>前面列 = 早期就质变(早期 round 效果好)</li>
+        <li>对照 <a href={`${base}/agents/round-position-gain/`}>Round Position Gain</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-brh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-brh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-brh-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
