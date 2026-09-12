@@ -1,0 +1,228 @@
+---
+// /agents/goal-embedding-diversity.astro — iter #335:weekly goal embedding diversity
+//
+// 把每个 session 的 goal token 化,按 ISO week 分组,看每周的 unique token 集合大小 + Jaccard 与上周的重合度。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const CN_RE = /[一-鿿]/;
+
+function isoWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+}
+
+function tokenize(goal: string): string[] {
+  if (!goal) return [];
+  const tokens: string[] = [];
+  const segments = goal.split(/\s+/);
+  for (const seg of segments) {
+    if (CN_RE.test(seg)) {
+      const chars = Array.from(seg);
+      for (let i = 0; i + 2 <= chars.length; i++) {
+        tokens.push(chars.slice(i, i + 2).join(''));
+      }
+      for (const c of chars) tokens.push(c);
+    } else if (seg) {
+      const t = seg.toLowerCase().replace(/[^\w]/g, '');
+      if (t) tokens.push(t);
+    }
+  }
+  return tokens;
+}
+
+const root = join(process.cwd(), 'archive');
+interface WeekData {
+  week: string;
+  sessions: number;
+  uniqueTokens: Set<string>;
+  totalTokens: number;
+}
+const weekMap = new Map<string, WeekData>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    }
+    if (!goal) continue;
+    // Use round_1 mtime as proxy for creation time
+    const r1 = join(sp, 'rounds', 'round_1.json');
+    let created: Date;
+    if (existsSync(r1)) {
+      created = statSync(r1).mtime;
+    } else {
+      try { created = statSync(sp).mtime; } catch (e) { continue; }
+    }
+    const week = isoWeek(created);
+    const tokens = tokenize(goal);
+    if (!weekMap.has(week)) {
+      weekMap.set(week, { week, sessions: 0, uniqueTokens: new Set(), totalTokens: 0 });
+    }
+    const wd = weekMap.get(week)!;
+    wd.sessions += 1;
+    wd.totalTokens += tokens.length;
+    for (const t of tokens) wd.uniqueTokens.add(t);
+  }
+}
+
+const weeks = [...weekMap.values()].sort((a, b) => a.week.localeCompare(b.week));
+
+// Pairwise Jaccard with previous week
+interface WeekJaccard extends WeekData {
+  jaccardPrev: number;
+  newTokens: number;
+}
+const enriched: WeekJaccard[] = [];
+for (let i = 0; i < weeks.length; i++) {
+  const w = weeks[i];
+  if (i === 0) {
+    enriched.push({ ...w, jaccardPrev: 1.0, newTokens: w.uniqueTokens.size });
+  } else {
+    const prev = weeks[i - 1];
+    const inter = new Set([...w.uniqueTokens].filter((t) => prev.uniqueTokens.has(t)));
+    const union = new Set([...w.uniqueTokens, ...prev.uniqueTokens]);
+    const j = union.size > 0 ? inter.size / union.size : 0;
+    const newT = [...w.uniqueTokens].filter((t) => !prev.uniqueTokens.has(t)).length;
+    enriched.push({ ...w, jaccardPrev: j, newTokens: newT });
+  }
+}
+
+function sparkline(arr: number[], width = 24): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const mn = Math.min(...arr);
+  const mx = Math.max(...arr);
+  const range = mx - mn || 1;
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - mn) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Embedding Diversity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-embedding-diversity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Goal Embedding Diversity (Weekly) <span class="muted" style="font-size:0.6em">(iter #335)</span></h1>
+      <p class="agents-sub">
+        按 ISO week 分组,看每周 goal 描述的 unique token 集合大小,
+        以及与上周的 Jaccard 相似度。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ged-globals">
+        <span>weeks: <strong>{enriched.length}</strong></span>
+        <span>total sessions: <strong>{enriched.reduce((s, w) => s + w.sessions, 0)}</strong></span>
+        <span>avg jaccard vs prev: <strong>{(enriched.length > 1 ? enriched.slice(1).reduce((s, w) => s + w.jaccardPrev, 0) / (enriched.length - 1) : 0).toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Unique Tokens Sparkline</h2>
+      <pre class="agents-ged-flow">{sparkline(enriched.map((w) => w.uniqueTokens.size), 32)}</pre>
+      <p class="muted">▁..█ = unique token count by week</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 周表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>week</th><th>sessions</th><th>total tokens</th><th>unique</th><th>jaccard vs prev</th><th>new tokens</th></tr>
+        </thead>
+        <tbody>
+          {enriched.slice(-20).map((w) => (
+            <tr>
+              <td><code>{esc(w.week)}</code></td>
+              <td>{w.sessions}</td>
+              <td>{w.totalTokens}</td>
+              <td><strong>{w.uniqueTokens.size}</strong></td>
+              <td>
+                {w.jaccardPrev === 1.0 ? <span class="muted">—</span> : (
+                  <span style={`color:${w.jaccardPrev < 0.3 ? '#10b981' : w.jaccardPrev < 0.6 ? '#f59e0b' : '#ef4444'}`}>
+                    {w.jaccardPrev.toFixed(2)}
+                  </span>
+                )}
+              </td>
+              <td>
+                {w.newTokens > 0 ? `${w.newTokens} new` : <span class="muted">—</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>Jaccard &lt; 0.3 = 话题明显转向</li>
+        <li>Jaccard &gt; 0.6 = 话题保持一致</li>
+        <li>new tokens = 当周新出现的话题</li>
+        <li>对照 <a href={`${base}/agents/session-creation-time/`}>Session Creation Time</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ged-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ged-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ged-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
