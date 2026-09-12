@@ -1,0 +1,203 @@
+---
+// /agents/goal-topic-weekly-drift.astro — iter #358:top tokens per week + drift vs prev week
+
+import { readFile, readdir, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile as readFileAsync, readdir as readdirAsync } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const CN_RE = /[一-鿿]/;
+
+function isoWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+}
+
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are', 'be', 'this', 'that', 'it', 'as', 'by', 'from', 'this', 'that', 'these', 'those']);
+
+function tokenize(goal: string): string[] {
+  if (!goal) return [];
+  const tokens: string[] = [];
+  for (const seg of goal.split(/\s+/)) {
+    if (CN_RE.test(seg)) {
+      const chars = Array.from(seg);
+      for (let i = 0; i + 2 <= chars.length; i++) tokens.push(chars.slice(i, i + 2).join(''));
+      for (const c of chars) tokens.push(c);
+    } else {
+      const t = seg.toLowerCase().replace(/[^\w]/g, '');
+      if (t && t.length > 2 && !STOP.has(t)) tokens.push(t);
+    }
+  }
+  return tokens;
+}
+
+const root = join(process.cwd(), 'archive');
+interface WeekFreq { week: string; sessions: number; freq: Map<string, number>; top: { token: string; count: number }[]; drift: number; }
+const weekMap = new Map<string, WeekFreq>();
+
+if (existsSync(root)) {
+  const sids = await readdirAsync(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    let created: Date | null = null;
+    const r1 = join(rd, 'round_1.json');
+    if (existsSync(r1)) {
+      try { created = statSync(r1).mtime; } catch (e) { /* */ }
+    }
+    if (!created) continue;
+    const week = isoWeek(created);
+    if (!weekMap.has(week)) weekMap.set(week, { week, sessions: 0, freq: new Map(), top: [], drift: 0 });
+    const wf = weekMap.get(week)!;
+    wf.sessions += 1;
+
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFileAsync(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    for (const t of tokenize(goal)) {
+      wf.freq.set(t, (wf.freq.get(t) ?? 0) + 1);
+    }
+  }
+}
+
+const weeks = [...weekMap.values()].sort((a, b) => a.week.localeCompare(b.week));
+
+// Top 8 per week + drift
+for (let i = 0; i < weeks.length; i++) {
+  const w = weeks[i];
+  w.top = [...w.freq.entries()]
+    .map(([token, count]) => ({ token, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+
+  if (i > 0) {
+    const prev = weeks[i - 1];
+    // Drift = 1 - overlap/avg(top8 sizes)
+    const intersection = w.top.filter((t) => prev.top.some((p) => p.token === t.token)).length;
+    const overlap = intersection / Math.max(1, Math.min(w.top.length, prev.top.length));
+    w.drift = 1 - overlap;
+  } else {
+    w.drift = 0;
+  }
+}
+
+function sparkline(arr: number[], width = 18): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const mn = Math.min(...arr);
+  const mx = Math.max(...arr);
+  const range = mx - mn || 1;
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - mn) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Topic Weekly Drift · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-topic-weekly-drift</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🌀 Goal Topic Weekly Drift <span class="muted" style="font-size:0.6em">(iter #358)</span></h1>
+      <p class="agents-sub">
+        每周的 top-8 token + drift = 与上周 top-8 的 1-重合度。
+        高 drift = 话题明显切换。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gtwd-globals">
+        <span>weeks: <strong>{weeks.length}</strong></span>
+        <span>avg drift: <strong>{(weeks.slice(1).reduce((s, w) => s + w.drift, 0) / Math.max(1, weeks.length - 1)).toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Drift sparkline</h2>
+      <pre class="agents-gtwd-flow">{sparkline(weeks.map((w) => w.drift), 32)}</pre>
+      <p class="muted">▁..█ = 与上周 top-8 重合度的反指标(高 = 话题切换)</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 周表(最新 14 周)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>week</th><th>n</th><th>top-8 tokens</th><th>drift</th></tr>
+        </thead>
+        <tbody>
+          {weeks.slice(-14).map((w) => (
+            <tr>
+              <td><code>{esc(w.week)}</code></td>
+              <td>{w.sessions}</td>
+              <td>
+                <small>
+                  {w.top.slice(0, 6).map((t) => <span style="margin-right:0.4em"><strong>{esc(t.token)}</strong>({t.count})</span>)}
+                </small>
+              </td>
+              <td><strong style={`color:${w.drift >= 0.5 ? '#ef4444' : w.drift >= 0.3 ? '#f59e0b' : '#10b981'}`}>{(w.drift * 100).toFixed(0)}%</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>drift &gt; 50% = 话题明显转向(新主题)</li>
+        <li>drift &lt; 20% = 话题保持一致(同主题)</li>
+        <li>对照 <a href={`${base}/agents/goal-embedding-diversity/`}>Goal Embedding Diversity</a></li>
+        <li>对照 <a href={`${base}/agents/session-creation-time/`}>Session Creation Time</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtwd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtwd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gtwd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
