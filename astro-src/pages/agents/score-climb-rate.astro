@@ -1,0 +1,241 @@
+---
+// /agents/score-climb-rate.astro — iter #347:score climb rate (per minute)
+
+import { statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessClimb {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  startScore: number;
+  endScore: number;
+  gain: number;
+  durationMs: number;
+  climbRate: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessClimb[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let firstScore = 0;
+    let lastScore = 0;
+    let firstMtime = 0;
+    let lastMtime = 0;
+    for (let i = 0; i < rNums.length; i++) {
+      const rn = rNums[i];
+      const fp = join(rd, `round_${rn}.json`);
+      let mtime = 0;
+      try { mtime = statSync(fp).mtime.getTime(); } catch (e) { continue; }
+      try {
+        const r = JSON.parse(await readFile(fp, 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (firstScore === 0) firstScore = avg;
+          lastScore = avg;
+          if (firstMtime === 0) firstMtime = mtime;
+          lastMtime = mtime;
+        }
+      } catch (e) { /* */ }
+    }
+    if (firstScore === 0) continue;
+    const durationMs = Math.max(1, lastMtime - firstMtime);
+    const gain = lastScore - firstScore;
+    const climbRate = (gain / durationMs) * 60000; // per minute
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: rNums.length,
+      startScore: firstScore,
+      endScore: lastScore,
+      gain,
+      durationMs,
+      climbRate,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.climbRate - a.climbRate);
+
+const total = sessions.length;
+const avgClimb = sessions.length > 0 ? sessions.reduce((s, x) => s + x.climbRate, 0) / sessions.length : 0;
+const totalDurationMin = sessions.reduce((s, x) => s + x.durationMs, 0) / 60000;
+const totalGain = sessions.reduce((s, x) => s + x.gain, 0);
+const overallClimbRate = totalDurationMin > 0 ? totalGain / totalDurationMin : 0;
+
+// bucket
+const buckets = [
+  { label: 'fast (>0.1/min)', min: 0.1, max: Infinity, count: 0 },
+  { label: 'normal (0.01-0.1)', min: 0.01, max: 0.1, count: 0 },
+  { label: 'slow (0-0.01)', min: 0, max: 0.01, count: 0 },
+  { label: 'flat (0)', min: -0.0001, max: 0, count: 0 },
+  { label: 'negative (<0)', min: -Infinity, max: -0.0001, count: 0 },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.climbRate >= b.min && s.climbRate < b.max) { b.count += 1; break; }
+  }
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function fmtMs(ms: number): string {
+  if (ms > 3600000) return `${(ms / 3600000).toFixed(1)}h`;
+  if (ms > 60000) return `${(ms / 60000).toFixed(1)}m`;
+  return `${(ms / 1000).toFixed(0)}s`;
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Climb Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-climb-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⛰️ Score Climb Rate <span class="muted" style="font-size:0.6em">(iter #347)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 score 提升速度 = gain / duration (score per minute)。
+        高 = 系统在短时间内大幅进步;低 = 慢工出细活。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-scr-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>total duration: <strong>{totalDurationMin.toFixed(1)} min</strong></span>
+        <span>total gain: <strong>{totalGain >= 0 ? '+' : ''}{totalGain.toFixed(1)}</strong></span>
+        <span>overall climb rate: <strong style={`color:${overallClimbRate >= 0.05 ? '#10b981' : overallClimbRate >= 0.01 ? '#f59e0b' : '#ef4444'}`}>{overallClimbRate.toFixed(3)}</strong> /min</span>
+        <span>avg climb rate: <strong>{avgClimb.toFixed(3)}</strong> /min</span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Climb-rate 桶分布</h2>
+      <pre class="agents-scr-flow">{buckets.map((b) => `${b.label.padEnd(24)} ${bar(b.count, Math.max(...buckets.map((x) => x.count), 1), 22)}  ${b.count}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 Top 12 fastest climbers</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>climb /min</th><th>gain</th><th>duration</th><th>rounds</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 12).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><strong style="color:#10b981">{s.climbRate.toFixed(3)}</strong></td>
+              <td><strong style={`color:${s.gain >= 0 ? '#10b981' : '#ef4444'}`}>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</strong></td>
+              <td>{fmtMs(s.durationMs)}</td>
+              <td>{s.totalRounds}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🐌 Top 8 slowest climbers</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>climb /min</th><th>gain</th><th>duration</th><th>rounds</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 8).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><strong style={`color:${s.climbRate < 0 ? '#ef4444' : '#f59e0b'}`}>{s.climbRate.toFixed(3)}</strong></td>
+              <td><strong style={`color:${s.gain >= 0 ? '#10b981' : '#ef4444'}`}>{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</strong></td>
+              <td>{fmtMs(s.durationMs)}</td>
+              <td>{s.totalRounds}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>climb rate &gt; 0.1 = 系统在 1 分钟内提升 0.1+ score</li>
+        <li>climb rate 接近 0 = 长时间无进展</li>
+        <li>climb rate &lt; 0 = 系统在退化</li>
+        <li>对照 <a href={`${base}/agents/score-convergence-speed/`}>Score Convergence Speed</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-scr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-scr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-scr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
