@@ -1,0 +1,209 @@
+---
+// /agents/round-score-percentile-bands.astro — iter #356:weekly percentile bands of round scores
+
+import { readFile, readdir, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile as readFileAsync, readdir as readdirAsync } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function isoWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+}
+
+function percentile(arr: number[], p: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  return sorted[idx];
+}
+
+const root = join(process.cwd(), 'archive');
+interface WeekScore { week: string; scores: number[]; }
+const weekMap = new Map<string, WeekScore>();
+
+if (existsSync(root)) {
+  const sids = await readdirAsync(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdirAsync(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    let created: Date | null = null;
+    try { created = statSync(join(rd, `round_${rNums[0]}.json`)).mtime; } catch (e) { /* */ }
+    if (!created) continue;
+    const week = isoWeek(created);
+
+    if (!weekMap.has(week)) weekMap.set(week, { week, scores: [] });
+    const ws = weekMap.get(week)!;
+
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFileAsync(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) ws.scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const weeks = [...weekMap.values()].sort((a, b) => a.week.localeCompare(b.week));
+
+interface WeekBand { week: string; n: number; p10: number; p25: number; p50: number; p75: number; p90: number; mean: number; }
+const bands: WeekBand[] = [];
+for (const w of weeks) {
+  if (w.scores.length === 0) continue;
+  const mean = w.scores.reduce((s, v) => s + v, 0) / w.scores.length;
+  bands.push({
+    week: w.week,
+    n: w.scores.length,
+    p10: percentile(w.scores, 10),
+    p25: percentile(w.scores, 25),
+    p50: percentile(w.scores, 50),
+    p75: percentile(w.scores, 75),
+    p90: percentile(w.scores, 90),
+    mean,
+  });
+}
+
+function sparkline(arr: number[], width = 18): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const mn = Math.min(...arr);
+  const mx = Math.max(...arr);
+  const range = mx - mn || 1;
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - mn) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Score Percentile Bands · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-score-percentile-bands</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Round Score Percentile Bands <span class="muted" style="font-size:0.6em">(iter #356)</span></h1>
+      <p class="agents-sub">
+        每周所有 round score 的 10/25/50/75/90 百分位曲线。
+        看 score 分布随时间的整体漂移。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rspb-globals">
+        <span>weeks: <strong>{bands.length}</strong></span>
+        <span>total rounds: <strong>{bands.reduce((s, b) => s + b.n, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 P50 (median) sparkline</h2>
+      <pre class="agents-rspb-flow">{sparkline(bands.map((b) => b.p50), 32)}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 P10 (low) sparkline</h2>
+      <pre class="agents-rspb-flow">{sparkline(bands.map((b) => b.p10), 32)}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 P90 (high) sparkline</h2>
+      <pre class="agents-rspb-flow">{sparkline(bands.map((b) => b.p90), 32)}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 周度分位表(最新 18 周)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>week</th><th>n</th><th>p10</th><th>p25</th><th>p50</th><th>p75</th><th>p90</th><th>mean</th></tr>
+        </thead>
+        <tbody>
+          {bands.slice(-18).map((b) => (
+            <tr>
+              <td><code>{esc(b.week)}</code></td>
+              <td>{b.n}</td>
+              <td>{b.p10.toFixed(2)}</td>
+              <td>{b.p25.toFixed(2)}</td>
+              <td><strong>{b.p50.toFixed(2)}</strong></td>
+              <td>{b.p75.toFixed(2)}</td>
+              <td>{b.p90.toFixed(2)}</td>
+              <td>{b.mean.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>P50 上升 = 中位数整体提高</li>
+        <li>P90 - P10 扩大 = 系统输出越来越分散</li>
+        <li>P10 上升 = 系统最差情况也在改善</li>
+        <li>对照 <a href={`${base}/agents/score-volatility-time/`}>Score Volatility Over Time</a></li>
+        <li>对照 <a href={`${base}/agents/session-creation-time/`}>Session Creation Time</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rspb-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rspb-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rspb-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
