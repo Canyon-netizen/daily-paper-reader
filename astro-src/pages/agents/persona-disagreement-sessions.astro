@@ -1,0 +1,156 @@
+---
+// /agents/persona-disagreement-sessions.astro — iter #324:persona disagreement sessions
+//
+// 找出 persona 评分差异最大的 sessions:
+//   - 同一 session 内 persona 之间 score 的 max - min
+//   - top 20 "最不一致" sessions
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Disagreement {
+  sid: string;
+  goal: string;
+  rounds: number;
+  avgDisagreement: number;
+  maxDisagreement: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const arr: Disagreement[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    let goal = '';
+    const mp = join(sp, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let sumDiff = 0;
+    let maxDiff = 0;
+    let counted = 0;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const scores: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          const arr: number[] = [];
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+          if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+        }
+        if (scores.length >= 2) {
+          const diff = Math.max(...scores) - Math.min(...scores);
+          sumDiff += diff;
+          maxDiff = Math.max(maxDiff, diff);
+          counted += 1;
+        }
+      } catch (e) { /* */ }
+    }
+    if (counted > 0) {
+      arr.push({
+        sid, goal,
+        rounds: rNums.length,
+        avgDisagreement: sumDiff / counted,
+        maxDisagreement: maxDiff,
+      });
+    }
+  }
+}
+
+arr.sort((a, b) => b.maxDisagreement - a.maxDisagreement);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Persona Disagreement Sessions · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-disagreement-sessions</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔥 Persona Disagreement Sessions <span class="muted" style="font-size:0.6em">(iter #324)</span></h1>
+      <p class="agents-sub">
+        哪些 sessions 里 persona 评分差异最大? max - min 的 top 20。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pds-globals">
+        <span>分析 sessions: <strong>{arr.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 20 最大分歧 sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>rounds</th><th>avg diff</th><th>max diff</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {arr.slice(0, 20).map((d, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${d.sid}/`}><code>{esc(d.sid.slice(0, 10))}</code></a></td>
+              <td>{d.rounds}</td>
+              <td>{d.avgDisagreement.toFixed(2)}</td>
+              <td><strong style="color:#ef4444">{d.maxDisagreement.toFixed(2)}</strong></td>
+              <td><small class="muted">{esc((d.goal ?? '').slice(0, 30))}{(d.goal ?? '').length > 30 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>max diff &gt; 3 = 该 session 里 persona 严重分歧</li>
+        <li>avg diff 持续高 = 整 session 都有分歧</li>
+        <li>对照 <a href={`${base}/agents/persona-score-bias/`}>Persona Score Bias</a></li>
+        <li>对照 <a href={`${base}/agents/persona-agreement/`}>Persona Agreement</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pds-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pds-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
