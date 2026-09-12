@@ -1,0 +1,184 @@
+---
+// /agents/action-round-position-entropy.astro — iter #359:entropy of action distribution per round position
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function shannon(arr: number[]): number {
+  const total = arr.reduce((s, v) => s + v, 0);
+  if (total === 0) return 0;
+  let h = 0;
+  for (const v of arr) {
+    if (v === 0) continue;
+    const p = v / total;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+const root = join(process.cwd(), 'archive');
+const positionMap = new Map<number, Map<string, number>>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    for (let i = 0; i < rNums.length; i++) {
+      const rn = rNums[i];
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const seen = new Set<string>();
+        const acts: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!seen.has(act)) { seen.add(act); acts.push(act); }
+        }
+        const pos = i + 1;
+        if (!positionMap.has(pos)) positionMap.set(pos, new Map());
+        const inner = positionMap.get(pos)!;
+        for (const a of acts) {
+          inner.set(a, (inner.get(a) ?? 0) + 1);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+interface PosInfo {
+  pos: number;
+  total: number;
+  distinct: number;
+  entropy: number;
+  maxEntropy: number;
+  normalized: number;
+  topActions: { action: string; count: number; pct: number }[];
+}
+
+const posArr: PosInfo[] = [];
+for (const [pos, inner] of positionMap.entries()) {
+  const counts = [...inner.values()];
+  const total = counts.reduce((s, v) => s + v, 0);
+  const distinct = inner.size;
+  const entropy = shannon(counts);
+  const maxEntropy = distinct > 1 ? Math.log2(distinct) : 1;
+  const topActions = [...inner.entries()]
+    .map(([action, count]) => ({ action, count, pct: total > 0 ? count / total : 0 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+  posArr.push({ pos, total, distinct, entropy, maxEntropy, normalized: maxEntropy > 0 ? entropy / maxEntropy : 0, topActions });
+}
+posArr.sort((a, b) => a.pos - b.pos);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Round Position Entropy · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-round-position-entropy</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎲 Action Round Position Entropy <span class="muted" style="font-size:0.6em">(iter #359)</span></h1>
+      <p class="agents-sub">
+        每个 round position 的 action 分布 Shannon entropy。
+        高 = 该位置 action 多样;低 = 集中于少数 action。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 Position-wise entropy</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>pos</th><th>n</th><th>distinct</th><th>entropy</th><th>normalized</th><th>top-3</th></tr>
+        </thead>
+        <tbody>
+          {posArr.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">R{p.pos}</strong></td>
+              <td>{p.total}</td>
+              <td>{p.distinct}</td>
+              <td><strong>{p.entropy.toFixed(2)}</strong></td>
+              <td>
+                <span style={`color:${p.normalized >= 0.7 ? '#10b981' : p.normalized >= 0.4 ? '#f59e0b' : '#ef4444'}`}>
+                  {(p.normalized * 100).toFixed(0)}%
+                </span>
+              </td>
+              <td>
+                <small>
+                  {p.topActions.map((a) => <span style="margin-right:0.3em">{esc(a.action)}({a.count})</span>)}
+                </small>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Entropy bar (across positions)</h2>
+      <pre class="agents-arpe-flow">{posArr.map((p) => `R${p.pos.toString().padEnd(3)} ${bar(p.entropy, Math.max(...posArr.map((x) => x.entropy), 1), 22)}  ${p.entropy.toFixed(2)}  norm=${(p.normalized * 100).toFixed(0)}%`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>normalized &gt; 70% = 该位置 action 高度多样</li>
+        <li>normalized &lt; 30% = 该位置几乎固定使用某个 action</li>
+        <li>对照 <a href={`${base}/agents/modifier-decision-by-position/`}>Modifier Decision by Position</a></li>
+        <li>对照 <a href={`${base}/agents/action-diversity-sessions/`}>Action Diversity Across Sessions</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-arpe-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-arpe-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-arpe-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
