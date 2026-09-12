@@ -1,0 +1,215 @@
+---
+// /agents/goal-type-round-count-heatmap.astro — iter #332:goal type × round count heatmap
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', '分析', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan'],
+  other: [],
+};
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+const root = join(process.cwd(), 'archive');
+const matrix: Record<string, Record<number, number>> = {};
+const types = Object.keys(TYPE_KEYWORDS);
+const buckets = [2, 3, 4, 5, 6];
+for (const t of types) {
+  matrix[t] = {};
+  for (const b of buckets) matrix[t][b] = 0;
+}
+let totalSessions = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    let count = 0;
+    for (const rf of rfs) {
+      if (/^round_\d+\.json$/.test(rf)) count += 1;
+    }
+    if (count < 2) continue;
+    totalSessions += 1;
+    const bucket = count >= 6 ? 6 : count;
+    matrix[type][bucket] = (matrix[type][bucket] ?? 0) + 1;
+  }
+}
+
+// Marginal totals per type and per bucket
+const rowTotal: Record<string, number> = {};
+const colTotal: Record<number, number> = {};
+for (const t of types) {
+  rowTotal[t] = 0;
+  for (const b of buckets) rowTotal[t] += matrix[t][b];
+}
+for (const b of buckets) {
+  colTotal[b] = 0;
+  for (const t of types) colTotal[b] += matrix[t][b];
+}
+
+const grandTotal = Object.values(rowTotal).reduce((s, v) => s + v, 0);
+const maxCount = Math.max(...types.flatMap((t) => buckets.map((b) => matrix[t][b])), 1);
+
+function cellBg(count: number): string {
+  const ratio = count / maxCount;
+  if (ratio >= 0.75) return '#10b981';
+  if (ratio >= 0.50) return '#34d399';
+  if (ratio >= 0.30) return '#fbbf24';
+  if (ratio >= 0.10) return '#fb923c';
+  if (count > 0) return '#fca5a5';
+  return 'transparent';
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Type × Round Count Heatmap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-round-count-heatmap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🟦 Goal Type × Round Count Heatmap <span class="muted" style="font-size:0.6em">(iter #332)</span></h1>
+      <p class="agents-sub">
+        行 = goal type,列 = round count,值 = session 数。
+        看每种 goal 类型倾向于跑多少轮。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gtrh-globals">
+        <span>total sessions: <strong>{totalSessions}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🟦 热力图 (type × rounds)</h2>
+      <table class="agents-session-table" style="font-size:0.85rem">
+        <thead>
+          <tr>
+            <th>type \ rounds</th>
+            {buckets.map((b) => <th>{b}{b === 6 ? '+' : ''}</th>)}
+            <th>total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {types.map((t) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{esc(t)}</strong></td>
+              {buckets.map((b) => {
+                const c = matrix[t][b] ?? 0;
+                return (
+                  <td style={`background:${cellBg(c)};text-align:center;font-weight:600`}>
+                    {c > 0 ? c : '·'}
+                  </td>
+                );
+              })}
+              <td><strong>{rowTotal[t]}</strong></td>
+            </tr>
+          ))}
+          <tr style="border-top:2px solid #4f46e5">
+            <td><strong>total</strong></td>
+            {buckets.map((b) => <td><strong>{colTotal[b] ?? 0}</strong></td>)}
+            <td><strong>{grandTotal}</strong></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 每种 type 的 avg rounds</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>avg rounds</th><th>分布</th></tr>
+        </thead>
+        <tbody>
+          {types.map((t) => {
+            let totalR = 0, totalN = 0;
+            for (const b of buckets) {
+              const c = matrix[t][b] ?? 0;
+              totalR += c * b;
+              totalN += c;
+            }
+            const avg = totalN > 0 ? totalR / totalN : 0;
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{esc(t)}</strong></td>
+                <td>{avg.toFixed(2)}</td>
+                <td>
+                  <code>
+                    {buckets.map((b) => {
+                      const c = matrix[t][b] ?? 0;
+                      const pct = totalN > 0 ? (c / totalN) : 0;
+                      const filled = Math.round(pct * 8);
+                      return `${b}R:${'█'.repeat(filled)}${'░'.repeat(8 - filled)} `;
+                    }).join('')}
+                  </code>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>type × 6+ 桶热 = 该 type 经常需要长跑</li>
+        <li>type × 2 桶热 = 该 type 通常快速收敛</li>
+        <li>对照 <a href={`${base}/agents/goal-type-score-matrix/`}>Goal Type × Score Matrix</a></li>
+        <li>对照 <a href={`${base}/agents/goal-length-distribution/`}>Goal Length Distribution</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtrh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtrh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
