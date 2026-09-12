@@ -1,0 +1,169 @@
+---
+// /agents/action-co-occurrence.astro — iter #352:pairwise action co-occurrence in rounds
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+const pairMap = new Map<string, number>();
+const singleMap = new Map<string, number>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const seen = new Set<string>();
+        const acts: string[] = [];
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (!seen.has(act)) { seen.add(act); acts.push(act); singleMap.set(act, (singleMap.get(act) ?? 0) + 1); }
+        }
+        acts.sort();
+        for (let i = 0; i < acts.length; i++) {
+          for (let j = i + 1; j < acts.length; j++) {
+            const key = `${acts[i]}|${acts[j]}`;
+            pairMap.set(key, (pairMap.get(key) ?? 0) + 1);
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const pairs = [...pairMap.entries()]
+  .map(([key, count]) => {
+    const [a, b] = key.split('|');
+    const ea = singleMap.get(a) ?? 0;
+    const eb = singleMap.get(b) ?? 0;
+    // PMI: log2(P(a,b) / (P(a) * P(b)))
+    let pmi = 0;
+    if (ea > 0 && eb > 0 && count > 0) {
+      const total = [...singleMap.values()].reduce((s, v) => s + v, 0);
+      const pab = count / total;
+      const pa = ea / total;
+      const pb = eb / total;
+      pmi = Math.log2(pab / (pa * pb));
+    }
+    return { a, b, count, pmi };
+  })
+  .filter((p) => p.count >= 3);
+
+pairs.sort((a, b) => b.pmi - a.pmi);
+
+const topByCount = [...pairs].sort((a, b) => b.count - a.count).slice(0, 12);
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Co-occurrence · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-co-occurrence</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🤝 Action Co-occurrence <span class="muted" style="font-size:0.6em">(iter #352)</span></h1>
+      <p class="agents-sub">
+        同一 round 中成对出现的 action PMI (pointwise mutual information)。
+        高 PMI = 强相关(总是一起用);低/负 PMI = 互斥。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-aco-globals">
+        <span>distinct actions: <strong>{singleMap.size}</strong></span>
+        <span>action pairs (≥3): <strong>{pairs.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 12 by PMI</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action A</th><th>action B</th><th>count</th><th>PMI</th></tr>
+        </thead>
+        <tbody>
+          {pairs.slice(0, 12).map((p) => (
+            <tr>
+              <td><code>{esc(p.a)}</code></td>
+              <td><code>{esc(p.b)}</code></td>
+              <td>{p.count}</td>
+              <td><strong style={`color:${p.pmi >= 1.5 ? '#10b981' : p.pmi >= 0.5 ? '#fbbf24' : '#ef4444'}`}>{p.pmi.toFixed(2)}</strong></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Top 12 by frequency</h2>
+      <pre class="agents-aco-flow">{topByCount.map((p) => `${(p.a + ' + ' + p.b).padEnd(48)} ${bar(p.count, Math.max(...topByCount.map((x) => x.count), 1), 14)}  ${p.count} (PMI ${p.pmi.toFixed(2)})`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>PMI &gt; 1.5 = 强协同(几乎总是一起出现)</li>
+        <li>PMI ≈ 0 = 偶然同时出现</li>
+        <li>PMI &lt; 0 = 互斥(系统避免同时用)</li>
+        <li>对照 <a href={`${base}/agents/action-pair-win-rate/`}>Action Pair Win Rate</a></li>
+        <li>对照 <a href={`${base}/agents/action-pair-cost/`}>Action Pair Cost</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-aco-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-aco-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-aco-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
