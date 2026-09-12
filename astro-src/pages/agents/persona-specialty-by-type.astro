@@ -1,0 +1,172 @@
+---
+// /agents/persona-specialty-by-type.astro — iter #328:persona specialty per goal type
+//
+// 各 persona 在不同 goal type 上的 avg score,看 persona 擅长什么
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', '分析', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan'],
+  other: [],
+};
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+interface ScoreEvent {
+  type: string;
+  persona: string;
+  score: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const events: ScoreEvent[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!/^round_\d+\.json$/.test(rf)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          const arr: number[] = [];
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+          if (arr.length > 0) {
+            events.push({ type, persona: name, score: arr.reduce((a, b) => a + b, 0) / arr.length });
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// persona → { type → avg score / count }
+const personaType = new Map<string, Map<string, { sum: number; count: number }>>();
+const typeAverages = new Map<string, { sum: number; count: number }>();
+
+for (const e of events) {
+  if (!personaType.has(e.persona)) personaType.set(e.persona, new Map());
+  const inner = personaType.get(e.persona)!;
+  if (!inner.has(e.type)) inner.set(e.type, { sum: 0, count: 0 });
+  inner.get(e.type)!.sum += e.score;
+  inner.get(e.type)!.count += 1;
+
+  if (!typeAverages.has(e.type)) typeAverages.set(e.type, { sum: 0, count: 0 });
+  const tAvg = typeAverages.get(e.type)!;
+  tAvg.sum += e.score;
+  tAvg.count += 1;
+}
+
+const personas = [...personaType.keys()].sort();
+const types = Object.keys(TYPE_KEYWORDS);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function liftColor(l: number): string {
+  if (l >= 0.5) return '#10b981';
+  if (l <= -0.5) return '#ef4444';
+  return '#94a3b8';
+}
+---
+
+<BaseLayout title="Persona Specialty by Type · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-specialty-by-type</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Persona Specialty by Type <span class="muted" style="font-size:0.6em">(iter #328)</span></h1>
+      <p class="agents-sub">
+        各 persona 在不同 goal type 上的 avg score + lift(相对该 type 全局均值)。
+        lift 高 = persona 擅长该 type。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🎯 Lift 矩阵(persona × type)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr>
+            <th>persona \ type</th>
+            {types.map((t) => <th>{t}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {personas.map((p) => (
+            <tr>
+              <td><strong style="color:#4f46e5">{esc(p)}</strong></td>
+              {types.map((t) => {
+                const info = personaType.get(p)?.get(t);
+                if (!info || info.count < 3) return <td><span class="muted">·</span></td>;
+                const avg = info.sum / info.count;
+                const tAvg = typeAverages.get(t);
+                const typeAvg = tAvg ? tAvg.sum / tAvg.count : avg;
+                const lift = avg - typeAvg;
+                return (
+                  <td style={`color:${liftColor(lift)}`}>
+                    <strong>{lift >= 0 ? '+' : ''}{lift.toFixed(2)}</strong>
+                    <br />
+                    <small class="muted">avg={avg.toFixed(2)} n={info.count}</small>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>lift ≥ +0.5 = 该 persona 在该 type 上显著高分</li>
+        <li>lift ≤ -0.5 = 该 persona 在该 type 上显著低分(可能领域不熟)</li>
+        <li>对照 <a href={`${base}/agents/persona-score-bias/`}>Persona Score Bias</a></li>
+        <li>对照 <a href={`${base}/agents/goal-type-score-matrix/`}>Goal Type × Score Matrix</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+</style>
