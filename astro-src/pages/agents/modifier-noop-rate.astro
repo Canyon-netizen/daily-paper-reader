@@ -1,0 +1,196 @@
+---
+// /agents/modifier-noop-rate.astro — iter #333:modifier no-op rate per session
+//
+// 看每个 session 中,modifier 没 apply action 的 round 比例。
+// 高 = modifier 经常选择不修改。
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessNoop {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  noopRounds: number;
+  noopRate: number;
+  appliedCounts: number[];
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessNoop[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    let noopCount = 0;
+    const appliedCounts: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const applied = r.modifier?.applied ?? [];
+        appliedCounts.push(applied.length);
+        if (applied.length === 0) noopCount += 1;
+      } catch (e) { /* */ }
+    }
+    if (appliedCounts.length === 0) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: appliedCounts.length,
+      noopRounds: noopCount,
+      noopRate: noopCount / appliedCounts.length,
+      appliedCounts,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.noopRate - a.noopRate);
+
+const total = sessions.length;
+const totalRounds = sessions.reduce((s, x) => s + x.totalRounds, 0);
+const totalNoop = sessions.reduce((s, x) => s + x.noopRounds, 0);
+const globalRate = totalRounds > 0 ? totalNoop / totalRounds : 0;
+
+const sessionsWithNoop = sessions.filter((s) => s.noopRounds > 0).length;
+const sessionsAllNoop = sessions.filter((s) => s.noopRounds === s.totalRounds).length;
+const sessionsNoNoop = sessions.filter((s) => s.noopRounds === 0).length;
+
+const buckets = [
+  { label: '0% (all applied)', min: 0, max: 0.001, count: 0 },
+  { label: '1-25%', min: 0.001, max: 0.25, count: 0 },
+  { label: '25-50%', min: 0.25, max: 0.50, count: 0 },
+  { label: '50-75%', min: 0.50, max: 0.75, count: 0 },
+  { label: '75-99%', min: 0.75, max: 1.0, count: 0 },
+  { label: '100% (all noop)', min: 1.0, max: 1.001, count: 0 },
+];
+for (const s of sessions) {
+  for (const b of buckets) {
+    if (s.noopRate >= b.min && s.noopRate < b.max) { b.count += 1; break; }
+  }
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Modifier No-op Rate · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / modifier-noop-rate</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🚫 Modifier No-op Rate <span class="muted" style="font-size:0.6em">(iter #333)</span></h1>
+      <p class="agents-sub">
+        modifier 在 round 中没 apply 任何 action 的比例。
+        高 = 修改器经常"想不出办法"。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-mnr-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>total rounds: <strong>{totalRounds}</strong></span>
+        <span>global noop rate: <strong style={`color:${globalRate >= 0.4 ? '#ef4444' : globalRate >= 0.2 ? '#f59e0b' : '#10b981'}`}>{(globalRate * 100).toFixed(1)}%</strong></span>
+        <span>sessions w/ ≥1 noop: <strong>{sessionsWithNoop}</strong> ({total > 0 ? ((sessionsWithNoop / total) * 100).toFixed(1) : '0.0'}%)</span>
+        <span>all-noop sessions: <strong style="color:#ef4444">{sessionsAllNoop}</strong></span>
+        <span>zero-noop sessions: <strong style="color:#10b981">{sessionsNoNoop}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 No-op 率分布</h2>
+      <pre class="agents-mnr-flow">{buckets.map((b) => {
+        return `${b.label.padEnd(24)} ${bar(b.count, Math.max(...buckets.map((x) => x.count), 1), 22)}  ${b.count}`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚫 Top 15 highest noop sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>noop / rounds</th><th>rate</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 15).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td>{s.noopRounds} / {s.totalRounds}</td>
+              <td><strong style="color:#ef4444">{(s.noopRate * 100).toFixed(0)}%</strong></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 25))}{s.goal.length > 25 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>noop rate &gt; 50% = modifier 经常"卡壳"</li>
+        <li>all-noop sessions = modifier 完全没起作用</li>
+        <li>zero-noop sessions = modifier 始终行动</li>
+        <li>对照 <a href={`${base}/agents/modifier-decision-by-position/`}>Modifier Decision by Position</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-mnr-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-mnr-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-mnr-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
