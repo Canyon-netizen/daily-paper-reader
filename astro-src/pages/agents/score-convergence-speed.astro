@@ -1,0 +1,216 @@
+---
+// /agents/score-convergence-speed.astro — iter #339:rounds needed to reach 80/90/95% of final
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Convergence {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  startScore: number;
+  endScore: number;
+  finalGain: number;
+  round80: number;
+  round90: number;
+  round95: number;
+  converged: boolean;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: Convergence[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+
+    const start = scores[0];
+    const end = scores[scores.length - 1];
+    const gain = end - start;
+
+    // Compute thresholds relative to start
+    const t80 = start + 0.80 * gain;
+    const t90 = start + 0.90 * gain;
+    const t95 = start + 0.95 * gain;
+
+    let r80 = -1, r90 = -1, r95 = -1;
+    for (let i = 0; i < scores.length; i++) {
+      if (r80 === -1 && scores[i] >= t80) r80 = i + 1;
+      if (r90 === -1 && scores[i] >= t90) r90 = i + 1;
+      if (r95 === -1 && scores[i] >= t95) r95 = i + 1;
+    }
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: scores.length,
+      startScore: start,
+      endScore: end,
+      finalGain: gain,
+      round80: r80 === -1 ? scores.length : r80,
+      round90: r90 === -1 ? scores.length : r90,
+      round95: r95 === -1 ? scores.length : r95,
+      converged: gain > 0,
+    });
+  }
+}
+
+const conv = sessions.filter((s) => s.converged);
+const avgR80 = conv.length > 0 ? conv.reduce((s, x) => s + x.round80, 0) / conv.length : 0;
+const avgR90 = conv.length > 0 ? conv.reduce((s, x) => s + x.round90, 0) / conv.length : 0;
+const avgR95 = conv.length > 0 ? conv.reduce((s, x) => s + x.round95, 0) / conv.length : 0;
+const totalSessions = sessions.length;
+const convergedSessions = conv.length;
+const noGainSessions = totalSessions - convergedSessions;
+
+// Distribution per threshold
+function dist(roundArr: number[]): { label: string; count: number; pct: number }[] {
+  const buckets = [
+    { label: 'R1', min: 1, max: 2, count: 0 },
+    { label: 'R2', min: 2, max: 3, count: 0 },
+    { label: 'R3', min: 3, max: 4, count: 0 },
+    { label: 'R4', min: 4, max: 5, count: 0 },
+    { label: 'R5+', min: 5, max: Infinity, count: 0 },
+  ];
+  for (const r of roundArr) {
+    for (const b of buckets) {
+      if (r >= b.min && r < b.max) { b.count += 1; break; }
+    }
+  }
+  return buckets.map((b) => ({ label: b.label, count: b.count, pct: roundArr.length > 0 ? b.count / roundArr.length : 0 }));
+}
+
+const r80Arr = conv.map((s) => s.round80);
+const r90Arr = conv.map((s) => s.round90);
+const r95Arr = conv.map((s) => s.round95);
+
+const dist80 = dist(r80Arr);
+const dist90 = dist(r90Arr);
+const dist95 = dist(r95Arr);
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Convergence Speed · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-convergence-speed</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🚀 Score Convergence Speed <span class="muted" style="font-size:0.6em">(iter #339)</span></h1>
+      <p class="agents-sub">
+        每个 session 达到 final_score 的 80% / 90% / 95% 需要多少 round。
+        低 = 系统快速收敛;高 = 系统反复微调。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-scs-globals">
+        <span>total sessions: <strong>{totalSessions}</strong></span>
+        <span>converged (gain&gt;0): <strong>{convergedSessions}</strong></span>
+        <span>no-gain sessions: <strong style="color:#ef4444">{noGainSessions}</strong></span>
+        <span>avg rounds to 80%: <strong>{avgR80.toFixed(2)}</strong></span>
+        <span>avg rounds to 90%: <strong>{avgR90.toFixed(2)}</strong></span>
+        <span>avg rounds to 95%: <strong>{avgR95.toFixed(2)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 80% 阈值分布</h2>
+      <pre class="agents-scs-flow">{dist80.map((b) => `${b.label.padEnd(6)} ${bar(b.count, Math.max(...dist80.map((x) => x.count), 1), 22)}  ${b.count} (${(b.pct * 100).toFixed(0)}%)`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 90% 阈值分布</h2>
+      <pre class="agents-scs-flow">{dist90.map((b) => `${b.label.padEnd(6)} ${bar(b.count, Math.max(...dist90.map((x) => x.count), 1), 22)}  ${b.count} (${(b.pct * 100).toFixed(0)}%)`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 95% 阈值分布</h2>
+      <pre class="agents-scs-flow">{dist95.map((b) => `${b.label.padEnd(6)} ${bar(b.count, Math.max(...dist95.map((x) => x.count), 1), 22)}  ${b.count} (${(b.pct * 100).toFixed(0)}%)`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>95% round = 5:大多数 session 在第 5 轮之前就达到 95% 目标</li>
+        <li>no-gain = session 没有任何改进</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+        <li>对照 <a href={`${base}/agents/stagnation-runs/`}>Stagnation Runs</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-scs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-scs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-scs-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
