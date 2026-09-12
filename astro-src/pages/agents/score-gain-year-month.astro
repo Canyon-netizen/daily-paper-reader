@@ -1,0 +1,221 @@
+---
+// /agents/score-gain-year-month.astro — iter #360:gain distribution per year and month
+
+import { readFile, readdir, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile as readFileAsync, readdir as readdirAsync } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+interface Month { ym: string; sessions: number; totalGain: number; avgGain: number; totalRounds: number; }
+const monthMap = new Map<string, Month>();
+
+if (existsSync(root)) {
+  const sids = await readdirAsync(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdirAsync(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    let created: Date | null = null;
+    const r1 = join(rd, `round_${rNums[0]}.json`);
+    if (existsSync(r1)) {
+      try { created = statSync(r1).mtime; } catch (e) { /* */ }
+    }
+    if (!created) continue;
+    const ym = `${created.getFullYear()}-${(created.getMonth() + 1).toString().padStart(2, '0')}`;
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFileAsync(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 1) continue;
+    const gain = scores[scores.length - 1] - scores[0];
+
+    if (!monthMap.has(ym)) monthMap.set(ym, { ym, sessions: 0, totalGain: 0, avgGain: 0, totalRounds: 0 });
+    const m = monthMap.get(ym)!;
+    m.sessions += 1;
+    m.totalGain += gain;
+    m.totalRounds += scores.length;
+  }
+}
+
+const months = [...monthMap.values()].sort((a, b) => a.ym.localeCompare(b.ym));
+for (const m of months) {
+  m.avgGain = m.sessions > 0 ? m.totalGain / m.sessions : 0;
+}
+
+// Yearly rollup
+interface YearStats { year: string; sessions: number; totalGain: number; avgGain: number; totalRounds: number; }
+const yearMap = new Map<string, YearStats>();
+for (const m of months) {
+  const y = m.ym.split('-')[0];
+  if (!yearMap.has(y)) yearMap.set(y, { year: y, sessions: 0, totalGain: 0, avgGain: 0, totalRounds: 0 });
+  const ys = yearMap.get(y)!;
+  ys.sessions += m.sessions;
+  ys.totalGain += m.totalGain;
+  ys.totalRounds += m.totalRounds;
+}
+for (const ys of yearMap.values()) {
+  ys.avgGain = ys.sessions > 0 ? ys.totalGain / ys.sessions : 0;
+}
+const years = [...yearMap.values()].sort((a, b) => a.year.localeCompare(b.year));
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function sparkline(arr: number[], width = 18): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const mn = Math.min(...arr);
+  const mx = Math.max(...arr);
+  const range = mx - mn || 1;
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - mn) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Gain Year-Month · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-gain-year-month</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Score Gain Year-Month <span class="muted" style="font-size:0.6em">(iter #360)</span></h1>
+      <p class="agents-sub">
+        按 ISO year-month 聚合 session gain,看月度进展 + 年度汇总。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sgym-globals">
+        <span>months: <strong>{months.length}</strong></span>
+        <span>years: <strong>{years.length}</strong></span>
+        <span>total sessions: <strong>{months.reduce((s, m) => s + m.sessions, 0)}</strong></span>
+        <span>total gain: <strong>{months.reduce((s, m) => s + m.totalGain, 0).toFixed(1)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Yearly sessions</h2>
+      <pre class="agents-sgym-flow">{sparkline(years.map((y) => y.sessions), 24)}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Yearly avg gain</h2>
+      <pre class="agents-sgym-flow">{sparkline(years.map((y) => y.avgGain), 24)}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 年度汇总</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>year</th><th>sessions</th><th>total gain</th><th>avg gain</th><th>total rounds</th></tr>
+        </thead>
+        <tbody>
+          {years.map((y) => (
+            <tr>
+              <td><code>{esc(y.year)}</code></td>
+              <td><strong>{y.sessions}</strong></td>
+              <td>{y.totalGain >= 0 ? '+' : ''}{y.totalGain.toFixed(1)}</td>
+              <td><strong style={`color:${y.avgGain >= 0 ? '#10b981' : '#ef4444'}`}>{y.avgGain >= 0 ? '+' : ''}{y.avgGain.toFixed(2)}</strong></td>
+              <td>{y.totalRounds}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 月度表(最新 18 个月)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>month</th><th>n</th><th>avg gain</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {months.slice(-18).map((m) => (
+            <tr>
+              <td><code>{esc(m.ym)}</code></td>
+              <td>{m.sessions}</td>
+              <td><strong style={`color:${m.avgGain >= 0 ? '#10b981' : '#ef4444'}`}>{m.avgGain >= 0 ? '+' : ''}{m.avgGain.toFixed(2)}</strong></td>
+              <td><code>{bar(m.sessions, Math.max(...months.map((x) => x.sessions), 1), 18)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>year avg gain 趋势 = 长期系统效率</li>
+        <li>month n 变化 = 系统使用频率</li>
+        <li>对照 <a href={`${base}/agents/session-creation-time/`}>Session Creation Time</a></li>
+        <li>对照 <a href={`${base}/agents/score-volatility-time/`}>Score Volatility Over Time</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sgym-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sgym-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-sgym-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
