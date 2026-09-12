@@ -1,0 +1,163 @@
+---
+// /agents/goal-type-action-affinity.astro — iter #357:preferred action per goal type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const TYPE_KEYWORDS: Record<string, string[]> = {
+  research: ['论文', '研究', '调研', 'paper', 'research', 'survey', 'review'],
+  code: ['代码', '实现', '编程', 'code', 'implement', 'build', 'develop', 'api'],
+  write: ['写', '文章', '博客', 'write', 'essay', 'blog', 'draft'],
+  analyze: ['分析', '统计', 'analyze', 'analysis', 'statistics', 'metrics'],
+  design: ['设计', '架构', 'design', 'architecture', 'plan'],
+  other: [],
+};
+
+function classifyGoal(goal: string): string {
+  const gl = goal.toLowerCase();
+  for (const [type, kws] of Object.entries(TYPE_KEYWORDS)) {
+    if (type === 'other') continue;
+    for (const kw of kws) {
+      if (gl.includes(kw.toLowerCase())) return type;
+    }
+  }
+  return 'other';
+}
+
+const root = join(process.cwd(), 'archive');
+const types = Object.keys(TYPE_KEYWORDS);
+const typeActionMap: Record<string, Map<string, number>> = {};
+for (const t of types) typeActionMap[t] = new Map();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const sp = join(root, sid);
+    if (!existsSync(sp)) continue;
+    const mp = join(sp, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const type = classifyGoal(goal);
+    const rd = join(sp, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          typeActionMap[type].set(act, (typeActionMap[type].get(act) ?? 0) + 1);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// Compute top-3 actions per type
+interface TypeTop { type: string; actions: { action: string; count: number; pct: number }[]; total: number; }
+const topPerType: TypeTop[] = [];
+for (const t of types) {
+  const arr = [...typeActionMap[t].entries()]
+    .map(([action, count]) => ({ action, count, pct: 0 }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+  const total = [...typeActionMap[t].values()].reduce((s, v) => s + v, 0);
+  for (const a of arr) a.pct = total > 0 ? a.count / total : 0;
+  topPerType.push({ type: t, actions: arr, total });
+}
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Type Action Affinity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-action-affinity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧲 Goal Type Action Affinity <span class="muted" style="font-size:0.6em">(iter #357)</span></h1>
+      <p class="agents-sub">
+        每 goal type 中 action 出现频次 top 5。
+        看哪种 goal 类型倾向用哪类 action。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gtaa-globals">
+        <span>types: <strong>{types.length}</strong></span>
+        <span>total actions used: <strong>{Object.values(typeActionMap).reduce((s, m) => s + [...m.values()].reduce((ss, v) => ss + v, 0), 0)}</strong></span>
+      </div>
+    </section>
+
+    {types.map((t) => {
+      const info = topPerType.find((x) => x.type === t);
+      if (!info || info.total === 0) return null;
+      return (
+        <section class="agents-session-section">
+          <h2>🧭 Type = {esc(t)} <span class="muted" style="font-size:0.7em">(total: {info.total})</span></h2>
+          <pre class="agents-gtaa-flow">{info.actions.map((a) => `${a.action.padEnd(28)} ${bar(a.count, Math.max(...info.actions.map((x) => x.count), 1), 22)}  ${a.count} (${(a.pct * 100).toFixed(1)}%)`).join('\n')}</pre>
+        </section>
+      );
+    })}
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>看每 type 的 top-1 action 是否符合直觉(research → 文献检索)</li>
+        <li>对照 <a href={`${base}/agents/goal-type-score-matrix/`}>Goal Type × Score Matrix</a></li>
+        <li>对照 <a href={`${base}/agents/persona-specialty-by-type/`}>Persona Specialty by Type</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtaa-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gtaa-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gtaa-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
