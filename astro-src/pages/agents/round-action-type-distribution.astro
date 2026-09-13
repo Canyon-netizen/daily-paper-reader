@@ -1,0 +1,203 @@
+---
+// /agents/round-action-type-distribution.astro — iter #366:action type categorization (modify/add/remove/etc.)
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function categorize(action: string): string {
+  const a = action.toLowerCase();
+  if (/add|insert|append|create|new/.test(a)) return 'add';
+  if (/remov|delete|drop|strip|clear/.test(a)) return 'remove';
+  if (/replac|substitut|swap/.test(a)) return 'replace';
+  if (/reorder|sort|arrang/.test(a)) return 'reorder';
+  if (/expand|extend|enlarge|elaborat/.test(a)) return 'expand';
+  if (/compress|shorten|tighten|trim/.test(a)) return 'compress';
+  if (/restructur|refactor|reorgani/.test(a)) return 'restructure';
+  if (/polish|refine|tweak|fine/.test(a)) return 'polish';
+  if (/experiment|test|trial/.test(a)) return 'experiment';
+  return 'other';
+}
+
+const CATEGORIES = ['add', 'remove', 'replace', 'reorder', 'expand', 'compress', 'restructure', 'polish', 'experiment', 'other'];
+
+const root = join(process.cwd(), 'archive');
+const categoryCounts: Record<string, number> = {};
+const categoryByRound: Record<string, number> = {};
+for (const c of CATEGORIES) { categoryCounts[c] = 0; categoryByRound[c] = 0; }
+let totalRounds = 0;
+
+const examplesByCategory: Record<string, { action: string; sid: string }[]> = {};
+for (const c of CATEGORIES) examplesByCategory[c] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const seen = new Set<string>();
+        const cats = new Set<string>();
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (seen.has(act)) continue;
+          seen.add(act);
+          const cat = categorize(act);
+          categoryCounts[cat] = (categoryCounts[cat] ?? 0) + 1;
+          cats.add(cat);
+          if ((examplesByCategory[cat] ?? []).length < 3) {
+            examplesByCategory[cat].push({ action: act, sid });
+          }
+        }
+        for (const c of cats) categoryByRound[c] = (categoryByRound[c] ?? 0) + 1;
+        totalRounds += 1;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const total = Object.values(categoryCounts).reduce((s, v) => s + v, 0);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Action Type Distribution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-action-type-distribution</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📚 Round Action Type Distribution <span class="muted" style="font-size:0.6em">(iter #366)</span></h1>
+      <p class="agents-sub">
+        按 action 名关键词分类:add / remove / replace / reorder / expand / compress /
+        restructure / polish / experiment / other。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ratd-globals">
+        <span>rounds scanned: <strong>{totalRounds}</strong></span>
+        <span>total actions: <strong>{total}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Category 分布</h2>
+      <pre class="agents-ratd-flow">{CATEGORIES.map((c) => {
+        const cnt = categoryCounts[c] ?? 0;
+        const pct = total > 0 ? ((cnt / total) * 100).toFixed(1) : '0.0';
+        return `${c.padEnd(14)} ${bar(cnt, Math.max(...Object.values(categoryCounts), 1), 22)}  ${cnt.toString().padStart(5)} (${pct}%)`;
+      }).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 各 category 在多少 round 中出现</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>category</th><th>rounds</th><th>avg per round</th></tr>
+        </thead>
+        <tbody>
+          {CATEGORIES.map((c) => {
+            const rounds = categoryByRound[c] ?? 0;
+            const total = categoryCounts[c] ?? 0;
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{c}</strong></td>
+                <td>{rounds}</td>
+                <td>{rounds > 0 ? (total / rounds).toFixed(2) : '0'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📝 各 category 示例</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>category</th><th>examples</th></tr>
+        </thead>
+        <tbody>
+          {CATEGORIES.map((c) => {
+            const examples = examplesByCategory[c] ?? [];
+            if (examples.length === 0) return null;
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{c}</strong></td>
+                <td>
+                  <small>
+                    {examples.map((e) => <code style="margin-right:0.4em">{esc(e.action)}</code>)}
+                  </small>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>add / remove 多 = 系统频繁增减内容</li>
+        <li>polish 多 = 系统注重精修</li>
+        <li>restructure 多 = 系统大幅重做</li>
+        <li>对照 <a href={`${base}/agents/action-distribution-entropy/`}>Action Distribution Entropy</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ratd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ratd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-ratd-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
