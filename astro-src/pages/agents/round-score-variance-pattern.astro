@@ -1,0 +1,194 @@
+---
+// /agents/round-score-variance-pattern.astro — iter #395:per-round-position score std
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundStat {
+  pos: number;
+  scores: number[];
+  mean: number;
+  std: number;
+  count: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const posMap = new Map<number, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    for (let i = 0; i < rNums.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNums[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length === 0) continue;
+        const score = arr.reduce((a, b) => a + b, 0) / arr.length;
+        const pos = i + 1;
+        if (!posMap.has(pos)) posMap.set(pos, []);
+        posMap.get(pos)!.push(score);
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const stats: RoundStat[] = [];
+for (const [pos, scores] of posMap.entries()) {
+  if (scores.length < 3) continue;
+  const mean = scores.reduce((s, v) => s + v, 0) / scores.length;
+  const variance = scores.reduce((s, v) => s + (v - mean) ** 2, 0) / scores.length;
+  stats.push({
+    pos,
+    scores,
+    mean,
+    std: Math.sqrt(variance),
+    count: scores.length,
+  });
+}
+stats.sort((a, b) => a.pos - b.pos);
+
+const maxPos = stats.length > 0 ? Math.max(...stats.map((s) => s.pos)) : 0;
+const totalSessions = stats.length > 0 ? Math.max(...stats.map((s) => s.count)) : 0;
+
+function sparkline(arr: number[], width = 20): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  const lo = Math.min(...arr);
+  const hi = Math.max(...arr);
+  const range = hi - lo || 1;
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - lo) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function bar(n: number, max: number, width = 12): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Score Variance Pattern · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-score-variance-pattern</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Round Score Variance Pattern <span class="muted" style="font-size:0.6em">(iter #395)</span></h1>
+      <p class="agents-sub">
+        每 round position 上 score 的 std(跨所有 session 同位置的 score 集合)。
+        看 score 方差是否随 round 数变化。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rsvp-globals">
+        <span>positions tracked: <strong>{stats.length}</strong></span>
+        <span>max position: <strong>{maxPos}</strong></span>
+        <span>max sample count: <strong>{totalSessions}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Mean sparkline</h2>
+      <pre class="agents-rsvp-flow">{sparkline(stats.map((s) => s.mean), 32)}</pre>
+      <p class="muted">▁..█ = per-round avg score</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Std sparkline</h2>
+      <pre class="agents-rsvp-flow">{sparkline(stats.map((s) => s.std), 32)}</pre>
+      <p class="muted">▁..█ = per-round score std(高 = 该 round 上 session 表现差异大)</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📐 Per-position stats</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>round #</th><th>n</th><th>mean</th><th>std</th><th>bar (std)</th></tr>
+        </thead>
+        <tbody>
+          {stats.slice(0, 30).map((s) => (
+            <tr>
+              <td><strong>{s.pos}</strong></td>
+              <td>{s.count}</td>
+              <td style={`color:${s.mean >= 7 ? '#10b981' : s.mean >= 5 ? '#f59e0b' : '#ef4444'}`}>{s.mean.toFixed(2)}</td>
+              <td>{s.std.toFixed(2)}</td>
+              <td><code>{bar(s.std, Math.max(...stats.map((x) => x.std)), 14)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>std 在前几轮高 = session 起点差异大</li>
+        <li>std 在末轮低 = 系统让所有 session 都收敛到相似分数(可能 gate 强制归一)</li>
+        <li>对照 <a href={`${base}/agents/round-score-percentile-bands/`}>Round Score Percentile Bands</a></li>
+        <li>对照 <a href={`${base}/agents/round-trajectory-type/`}>Round Trajectory Type</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rsvp-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rsvp-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+  .agents-rsvp-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
