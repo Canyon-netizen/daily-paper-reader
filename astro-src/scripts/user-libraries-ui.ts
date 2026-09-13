@@ -1247,9 +1247,10 @@ function setupNewLibraryModal(): void {
       nameInput.classList.remove('lib-input--error');
     }
     if (!statement) {
-      stmtErr.textContent = '请填写一句话方向描述';
-      stmtInput.classList.add('lib-textarea--error');
-      bad = true;
+      // 可选 —— AI 访谈完成后会在 summary 页点「应用到表单」时回填。
+      // 用户也可以空着提交,系统会用空字符串 / library 名 fallback。
+      stmtErr.textContent = '';
+      stmtInput.classList.remove('lib-textarea--error');
     } else if (statement.length > 200) {
       stmtErr.textContent = '方向描述不能超过 200 字';
       stmtInput.classList.add('lib-textarea--error');
