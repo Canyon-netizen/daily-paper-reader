@@ -1,0 +1,172 @@
+---
+// /agents/goal-type-cost-efficiency.astro — iter #385:cost-per-gain by goal type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface TypeEff {
+  type: string;
+  sessions: number;
+  avgCost: number;
+  avgGain: number;
+  avgCostPerGain: number;
+  totalCost: number;
+  totalGain: number;
+  efficiency: number; // gain / cost
+}
+
+const root = join(process.cwd(), 'archive');
+const typeMap = new Map<string, { cost: number; gain: number }[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let cost = 0;
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          if (typeof a.cost === 'number') cost += a.cost;
+        }
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { scores.push(0); }
+    }
+    const gain = scores[scores.length - 1] - scores[0];
+
+    let type = 'unknown';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { type = JSON.parse(await readFile(mp, 'utf8')).type ?? 'unknown'; } catch (e) { /* */ }
+    }
+    if (!typeMap.has(type)) typeMap.set(type, []);
+    typeMap.get(type)!.push({ cost, gain });
+  }
+}
+
+const results: TypeEff[] = [];
+for (const [type, arr] of typeMap.entries()) {
+  if (arr.length < 2) continue;
+  const totalCost = arr.reduce((s, x) => s + x.cost, 0);
+  const totalGain = arr.reduce((s, x) => s + x.gain, 0);
+  const avgCost = totalCost / arr.length;
+  const avgGain = totalGain / arr.length;
+  results.push({
+    type,
+    sessions: arr.length,
+    avgCost,
+    avgGain,
+    avgCostPerGain: avgGain > 0 ? avgCost / avgGain : Infinity,
+    totalCost,
+    totalGain,
+    efficiency: totalCost > 0 ? totalGain / totalCost : 0,
+  });
+}
+results.sort((a, b) => b.efficiency - a.efficiency);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Type Cost Efficiency · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-cost-efficiency</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💎 Goal Type Cost Efficiency <span class="muted" style="font-size:0.6em">(iter #385)</span></h1>
+      <p class="agents-sub">
+        每个 goal type 的 cost / gain 比率。
+        高 efficiency(gain/cost)= 该类任务性价比高;低 = 烧钱不出活。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>💎 Type × efficiency</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>sessions</th><th>avg cost</th><th>avg gain</th><th>cost/gain</th><th>gain/cost</th><th>total cost</th><th>total gain</th></tr>
+        </thead>
+        <tbody>
+          {results.map((r) => (
+            <tr>
+              <td><code>{esc(r.type)}</code></td>
+              <td>{r.sessions}</td>
+              <td>${r.avgCost.toFixed(2)}</td>
+              <td style={`color:${r.avgGain >= 0 ? '#10b981' : '#ef4444'}`}><strong>{r.avgGain >= 0 ? '+' : ''}{r.avgGain.toFixed(2)}</strong></td>
+              <td>{r.avgCostPerGain === Infinity ? '∞' : `$${r.avgCostPerGain.toFixed(2)}`}</td>
+              <td><strong style={`color:${r.efficiency > 0.5 ? '#10b981' : r.efficiency > 0.1 ? '#f59e0b' : '#ef4444'}`}>{r.efficiency.toFixed(3)}</strong></td>
+              <td>${r.totalCost.toFixed(2)}</td>
+              <td style={`color:${r.totalGain >= 0 ? '#10b981' : '#ef4444'}`}>{r.totalGain >= 0 ? '+' : ''}{r.totalGain.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Efficiency sparkline</h2>
+      <pre class="agents-gtce-flow">{
+        results.map((r) => `${r.type.padEnd(20)} ${bar(r.efficiency, Math.max(...results.map((x) => x.efficiency)), 18)}  ${r.efficiency.toFixed(3)}`).join('\n')
+      }</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>efficiency &gt; 0.5 = 该 type 高效(花 $1 换 0.5 分 gain)</li>
+        <li>efficiency &lt; 0 = 该 type 平均退化(花钱反而分数下降)</li>
+        <li>对照 <a href={`${base}/agents/session-cost-efficiency-index/`}>Session Cost Efficiency Index</a></li>
+        <li>对照 <a href={`${base}/agents/goal-type-final-score-heatmap/`}>Goal Type Final Score Heatmap</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gtce-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
