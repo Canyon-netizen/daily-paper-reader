@@ -1736,11 +1736,15 @@ function renderUserLibraryDetail(): void {
             <a class="filter-pill" data-status-filter="trashed" href="#papers">🗑 回收 ${papers.filter((p) => lib.papers[p.canonicalArxivId]?.status === 'trashed').length}</a>
           </div>
           ${papers.length === 0
-            ? `<p class="empty" data-user-lib-empty-hint>
-                库内还没有论文。
-                <br />在论文详情页右上角点 <strong>+ 加进文献库</strong> 即可加入;
-                或点这里 <button type="button" class="btn btn-soft btn-sm" data-action="add-papers" data-lib-id="${escapeHtml(lib.id)}">去添加</button>。
-              </p>`
+            ? `<div class="empty" data-user-lib-empty-hint>
+                <h4 style="margin: 0 0 0.5rem;">👋 新库空空如也 — 接下来可以:</h4>
+                <ol style="text-align: left; margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8;">
+                  <li>切到 <strong>「⚙️ 文献库配置」</strong> 标签 → 点「▶ 启动 Ingest」,系统从 arXiv 拉最近 30 天的候选论文</li>
+                  <li>或在论文详情页右上角点 <strong>+ 加进文献库</strong> 手动加论文</li>
+                  <li>填几个 <strong>锚点论文</strong>(你认可的核心论文),LLM 会参考它们打更准的分</li>
+                </ol>
+                <button type="button" class="btn btn-primary btn-sm" data-action="switch-tab" data-tab="govern" style="margin-top: 0.5rem;">⚙️ 打开配置 + 启动 Ingest</button>
+              </div>`
             : `<div class="wb-bulk-bar" data-bulk-bar hidden>
                 <span class="wb-bulk-count" data-bulk-count>0</span> 已选 ·
                 <button type="button" class="btn btn-soft btn-sm" data-bulk-status="included">✓ 纳入</button>
@@ -2346,6 +2350,17 @@ function renderUserLibraryDetail(): void {
       e.stopPropagation();
       const id = btn.dataset.libId || lib.id;
       openIngestPanel(id);
+    });
+  });
+  // 「切换 tab」入口(空库 onboarding 用)
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="switch-tab"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tab = btn.dataset.tab || '';
+      if ((VALID_TABS as readonly string[]).includes(tab)) {
+        setActiveTab(tab as Tab);
+      }
     });
   });
 

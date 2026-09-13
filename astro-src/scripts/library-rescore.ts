@@ -22,13 +22,22 @@ import { getUserLibrary, batchSetLibraryPaperMeta } from '../lib/user-libraries'
 import { recordUsage } from '../lib/llm-budget';
 import type { UserLibrary } from '../lib/user-libraries';
 
-const LLM_BATCH = 30;
+const LLM_BATCH = 15;
 
 const RESCORE_SYSTEM_PROMPT = (
-  '你是文献库评分助手。给定一个文献库的方向声明 + 关键词 + 范围内主题,'
-  + '给每篇论文打 0-1 相关度(0=无关,1=核心命中) + 一句话理由。'
+  '你是文献库评分助手。给定一个文献库的方向声明 + 关键词 + 范围内主题 + 锚点论文,'
+  + '给每篇论文打 0-1 相关度,并给一句话理由。\n'
+  + '评分标准(必须严格按此执行,不允许给 0.6-0.9 的中间分):\n'
+  + '• 1.0 分:论文核心贡献直接落在本库方向内,是本领域的原创研究(非跨领域)。\n'
+  + '• 0.5 分:论文提到本库核心概念但只是引用/应用/综述/博客,非主要贡献;'
+  + '或跨方向论文(用了本方向工具但目标是别的领域)。\n'
+  + '• 0.0 分:论文主题与本库方向完全无关,即使标题里有同义词。\n'
+  + '• 无法判断时统一给 0.5 分。\n'
+  + '注意:\n'
+  + '- 锚点论文是本库认可的核心里程碑,与锚点主题/方法/场景相似的论文给 1 分;\n'
+  + '- 即使标题不含所有关键词,只要用了相关技术/涉及相关子领域,就给 1 或 0.5,不要给 0。\n'
   + '严格 JSON 输出,无 prose,无 <think>,无 markdown 代码块:'
-  + '{"scores":[{"i":1,"s":0.7,"r":"一句话理由"},...]}'
+  + '{"scores":[{"i":1,"s":1.0,"r":"理由必须说明为什么是 0/0.5/1"},...]}'
 );
 
 /** 拉 + 打分 + 写入。进度回调给 UI 显示。 */
@@ -70,13 +79,18 @@ export async function rescoreLibrary(
 
   for (let i = 0; i < toScore.length; i += LLM_BATCH) {
     const batch = toScore.slice(i, i + LLM_BATCH);
+    const anchorList = (lib.definition?.anchors || []).slice(0, 8);
+    const anchorSection = anchorList.length > 0
+      ? `锚点论文(本库已认可的核心,相似者给 1 分):\n${anchorList.map((a, idx) => `${idx + 1}. ${a.value}${a.note ? ` (${a.note})` : ''}`).join('\n')}\n`
+      : '';
     const userMsg = [
       `## 文献库`,
       `陈述: ${lib.statement}`,
       lib.inclusionKeywords.length > 0 ? `必须命中关键词: ${lib.inclusionKeywords.join(', ')}` : '',
       (lib.definition?.inScope || []).length > 0 ? `范围内: ${(lib.definition?.inScope || []).join('; ')}` : '',
       '',
-      '## 论文(共 ' + batch.length + ' 篇)',
+      anchorSection,
+      `## 论文(本批 ${i + 1}-${i + batch.length}/${toScore.length} 篇)`,
       ...batch.map((p, idx) => `${idx + 1}. ${p.title_zh || p.title || p.canonicalArxivId}\n   ${(p.abstract || p.evidence || '').slice(0, 300).replace(/\s+/g, ' ')}`),
     ].filter(Boolean).join('\n');
     try {

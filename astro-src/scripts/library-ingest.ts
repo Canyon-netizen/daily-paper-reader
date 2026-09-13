@@ -50,7 +50,36 @@ interface IngestCandidate {
 }
 
 const ARXIV_API = 'https://export.arxiv.org/api/query';
-const LLM_BATCH = 30;
+const LLM_BATCH = 15;
+
+/** 同义词扩展词典 —— 解决"RLHF ≠ preference learning"漏召。
+ *  key 是归一化关键词(小写),value 是 arXiv 标题/摘要里常出现的同义表达。
+ *  仅在 buildArxivQuery 用 inclusionKeywords 时展开。 */
+const SYNONYM_DICT: Record<string, string[]> = {
+  rlhf: ['preference learning', 'reinforcement learning from human feedback', 'human feedback', 'reward model', 'preference optimization'],
+  dpo: ['direct preference optimization', 'preference optimization'],
+  ppo: ['proximal policy optimization'],
+  cot: ['chain-of-thought', 'chain of thought', 'step-by-step reasoning'],
+  'llm-agent': ['language agent', 'tool use', 'function calling', 'tool-augmented'],
+  rag: ['retrieval-augmented generation', 'retrieval augmented'],
+  mcts: ['monte carlo tree search', 'tree search'],
+  'world-model': ['world model', 'learned dynamics', 'forward model'],
+  'self-distillation': ['self-distillation', 'self-rewarding', 'self-play', 'self-improvement'],
+  'mechanistic-interpretability': ['mechanistic interpretability', 'circuit analysis', 'superposition'],
+  steering: ['activation steering', 'steering vector', 'representation engineering'],
+};
+
+/** 把单个关键词展开成含同义词的列表,长度限制防 arXiv URL 过长。 */
+function expandKeyword(k: string): string[] {
+  const out = [k];
+  const norm = k.toLowerCase().trim();
+  for (const [base, syns] of Object.entries(SYNONYM_DICT)) {
+    if (norm === base || norm.includes(base) || base.includes(norm)) {
+      for (const s of syns) if (!out.includes(s)) out.push(s);
+    }
+  }
+  return out.slice(0, 4); // 每个关键词最多 4 个变体
+}
 
 /** 把 library 的 definition + keywords 拼成 arXiv 搜索表达式。
  *  arXiv 查询语法:ti:"keyword" OR abs:"keyword" */
@@ -61,7 +90,7 @@ function buildArxivQuery(lib: UserLibrary): string {
   const goals = lib.definition?.goals || [];
   const questions = lib.definition?.questions || [];
   const stmt = lib.statement;
-  // 2) keywords.include 优先(必命中);其次 inScope(主题)
+  // 2) keywords.include 优先(必命中,带同义词扩展);其次 inScope(主题,不展开避免噪音)
   const must = (lib.inclusionKeywords || []).filter(Boolean);
   const should = [...inScope, ...goals, ...questions];
   // 3) arXiv categories 走 cat:cs.LG 这种前缀
@@ -70,7 +99,12 @@ function buildArxivQuery(lib: UserLibrary): string {
     parts.push(`(${cats.map((c) => `cat:${c}`).join(' OR ')})`);
   }
   if (must.length > 0) {
-    parts.push(`(${must.map((k) => `ti:"${escapeArxiv(k)}" OR abs:"${escapeArxiv(k)}"`).join(' OR ')})`);
+    // 同义词扩展:每个 inclusionKeyword 展开成多个变体,所有变体 OR 起来
+    const expandedGroups = must.map((k) => {
+      const variants = expandKeyword(k);
+      return `(${variants.map((v) => `ti:"${escapeArxiv(v)}" OR abs:"${escapeArxiv(v)}"`).join(' OR ')})`;
+    });
+    parts.push(expandedGroups.join(' OR '));
   } else if (should.length > 0) {
     parts.push(`(${should.map((k) => `ti:"${escapeArxiv(k)}" OR abs:"${escapeArxiv(k)}"`).join(' OR ')})`);
   } else if (stmt) {
@@ -156,9 +190,19 @@ function parseArxivList(xml: string): Array<{
 }
 
 const SCORE_SYSTEM_PROMPT = (
-  '你是文献库筛选助手。给定一个文献库的方向陈述 + 关键词 + 范围,'
-  + '给每篇候选 arXiv 论文打 0-1 相关度分(0=无关,1=核心命中),并给一句话理由。'
-  + '严格 JSON 输出,无 prose,无 <think>:{"scores":[{"i":1,"s":0.7,"r":"一句话理由"},...]}'
+  '你是文献库筛选助手。给定一个文献库的方向陈述 + 关键词 + 范围 + 锚点论文,'
+  + '给每篇候选 arXiv 论文打 0-1 相关度分,并给一句话理由。\n'
+  + '评分标准(必须严格按此执行,不允许给 0.6-0.9 的中间分):\n'
+  + '• 1.0 分:论文核心贡献直接落在本库方向内,是本领域的原创研究(非跨领域)。\n'
+  + '• 0.5 分:论文提到本库核心概念但只是引用/应用/综述/博客,非主要贡献;'
+  + '或跨方向论文(用了本方向工具但目标是别的领域)。\n'
+  + '• 0.0 分:论文主题与本库方向完全无关,即使标题里有同义词。\n'
+  + '• 无法判断时统一给 0.5 分。\n'
+  + '注意:\n'
+  + '- 锚点论文是本库认可的核心里程碑,与锚点主题/方法/场景相似的论文给 1 分;\n'
+  + '- 顶会(NeurIPS/ICML/ICLR/CVPR)不会自动加分,仍要核验内容是否贴库;\n'
+  + '- 即使标题不含所有关键词,只要用了相关技术/涉及相关子领域,就给 1 或 0.5,不要给 0。\n'
+  + '严格 JSON 输出,无 prose,无 <think>:{"scores":[{"i":1,"s":1.0,"r":"理由必须说明为什么是 0/0.5/1"},...]}'
 );
 
 /** LLM 给候选打分。一次最多 LLM_BATCH 篇。 */
@@ -177,18 +221,23 @@ async function scoreCandidatesWithLLM(
 
   for (let i = 0; i < candidates.length; i += LLM_BATCH) {
     const batch = candidates.slice(i, i + LLM_BATCH);
+    const anchorList = (lib.definition?.anchors || []).slice(0, 8);
+    const anchorSection = anchorList.length > 0
+      ? `锚点论文(本库已认可的核心,相似者给 1 分):\n${anchorList.map((a, idx) => `${idx + 1}. ${a.value}${a.note ? ` (${a.note})` : ''}`).join('\n')}\n`
+      : '';
     const userMsg = [
       `## 文献库方向`,
       `陈述: ${lib.statement}`,
       lib.inclusionKeywords.length > 0 ? `必须命中关键词: ${lib.inclusionKeywords.join(', ')}` : '',
       (lib.definition?.inScope || []).length > 0 ? `范围内: ${(lib.definition?.inScope || []).join('; ')}` : '',
       (lib.definition?.outOfScope || []).length > 0 ? `范围外: ${(lib.definition?.outOfScope || []).join('; ')}` : '',
+      anchorSection,
       '',
-      '## 候选论文(共 ' + batch.length + ' 篇)',
+      `## 候选论文(本批 ${i + 1}-${i + batch.length}/${candidates.length} 篇)`,
       ...batch.map((c, idx) => `${idx + 1}. ${c.title}\n   abstract: ${c.abstract.slice(0, 400)}`),
       '',
       '## 输出',
-      'JSON 对象:{"scores":[{"i":1,"s":0.7,"r":"一句话理由"},...]}',
+      'JSON 对象:{"scores":[{"i":1,"s":1.0,"r":"理由"},...]}',
     ].filter(Boolean).join('\n');
 
     try {
