@@ -317,6 +317,8 @@ function setupModalHandlers(): void {
     closeModal();
     renderIdeaGrid();
     updateCounts();
+    // iter #404: 成功反馈。用户创建 idea 后之前是静默关闭 modal,体验割裂。
+    showToast(`✅ 已创建想法: ${title.slice(0, 30)}${title.length > 30 ? '…' : ''}`);
   });
 
   // Expose setter for pending source (called by openIdeaModal)

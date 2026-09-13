@@ -239,6 +239,13 @@ const { id } = Astro.params;
         if (updated) {
           renderDetail(updated);
         }
+        // iter #404: 编辑成功反馈
+        const t = document.createElement('div');
+        t.className = 'toast-notification';
+        t.textContent = '✅ 已保存修改';
+        t.style.cssText = 'position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:.75rem 1.5rem;border-radius:8px;z-index:1000;font-size:.9rem;';
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 2500);
         // iter #403: <dialog> close
         if (typeof modal.close === 'function') modal.close();
         else modal.removeAttribute('open');

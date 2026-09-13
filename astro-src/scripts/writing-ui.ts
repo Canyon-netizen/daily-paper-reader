@@ -1055,6 +1055,14 @@ function setupModal(): void {
     if (templateSelect) templateSelect.value = '';
     modal.classList.remove('open');
 
+    // iter #404: 创建成功反馈(redirect 前闪一下,用户知道发生了什么)
+    const toast = document.createElement('div');
+    toast.className = 'toast-notification';
+    toast.textContent = `✅ 已创建写作: ${title.slice(0, 30)}${title.length > 30 ? '…' : ''}`;
+    toast.style.cssText = 'position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:.75rem 1.5rem;border-radius:8px;z-index:1000;font-size:.9rem;';
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 2000);  // redirect 之前 2s,稍微长一点用户能看到
+
     // Redirect to detail page
     window.location.href = `/writing/${writing.id}/`;
   });

@@ -336,6 +336,8 @@ function setupModalHandlers(): void {
     closeModal();
     renderExperimentGrid();
     updateCounts();
+    // iter #404: 成功反馈
+    showToast(`✅ 已创建实验: ${title.slice(0, 30)}${title.length > 30 ? '…' : ''}`);
   });
 }
 
@@ -448,7 +450,35 @@ function escapeHtml(str: string): string {
 
 /** Close the experiment modal */
 function closeModal(): void {
-  document.getElementById('experiment-modal')?.classList.remove('active');
+  const modal = document.getElementById('experiment-modal');
+  if (!modal) return;
+  // iter #403 同款修复: <dialog> 用 close(),classList.remove('active') 无效
+  if (typeof modal.close === 'function') modal.close();
+  else modal.removeAttribute('open');
+}
+
+/** Show toast notification (iter #404: 跟 ideas-ui 同步加,创建后给反馈) */
+function showToast(message: string): void {
+  const existing = document.querySelector('.toast-notification');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.className = 'toast-notification';
+  toast.textContent = message;
+  toast.style.cssText = `
+    position: fixed;
+    bottom: 2rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #333;
+    color: #fff;
+    padding: 0.75rem 1.5rem;
+    border-radius: 8px;
+    z-index: 1000;
+    font-size: 0.9rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  `;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
 }
 
 /** Update the counts display */
