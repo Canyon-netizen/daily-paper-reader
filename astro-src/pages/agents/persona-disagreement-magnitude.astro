@@ -1,0 +1,185 @@
+---
+// /agents/persona-disagreement-magnitude.astro — iter #392:persona score std per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessDisagree {
+  sid: string;
+  goal: string;
+  rounds: number;
+  avgStd: number;
+  maxStd: number;
+  totalDisagreement: number; // sum of std per round
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessDisagree[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const stds: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const scores: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          let s = 0;
+          let cnt = 0;
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') { s += p.total; cnt += 1; }
+          }
+          if (cnt > 0) scores.push(s / cnt);
+        }
+        if (scores.length >= 2) {
+          const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
+          const variance = scores.reduce((s, v) => s + (v - mean) ** 2, 0) / scores.length;
+          stds.push(Math.sqrt(variance));
+        }
+      } catch (e) { /* */ }
+    }
+    if (stds.length === 0) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessions.push({
+      sid, goal,
+      rounds: rNums.length,
+      avgStd: stds.reduce((s, v) => s + v, 0) / stds.length,
+      maxStd: Math.max(...stds),
+      totalDisagreement: stds.reduce((s, v) => s + v, 0),
+    });
+  }
+}
+
+sessions.sort((a, b) => b.avgStd - a.avgStd);
+
+const total = sessions.length;
+const highDisagree = sessions.filter((s) => s.avgStd > 1.5).length;
+const consensus = sessions.filter((s) => s.avgStd < 0.5).length;
+
+function sparklineV(v: number): string {
+  if (v >= 2.0) return '████';
+  if (v >= 1.5) return '███░';
+  if (v >= 1.0) return '██░░';
+  if (v >= 0.5) return '█░░░';
+  return '·░░░';
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Persona Disagreement Magnitude · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / persona-disagreement-magnitude</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💬 Persona Disagreement Magnitude <span class="muted" style="font-size:0.6em">(iter #392)</span></h1>
+      <p class="agents-sub">
+        每 session 中各 round persona 平均分的 std 平均。
+        avg std 大 = persona 严重分歧;小 = 共识度高。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-pdm-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>high disagree (&gt;1.5): <strong style="color:#ef4444">{highDisagree}</strong></span>
+        <span>consensus (&lt;0.5): <strong style="color:#10b981">{consensus}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 20 highest disagreement</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>avg std</th><th>max std</th><th>total</th><th>rounds</th><th>bar</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 20).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#ef4444">{s.avgStd.toFixed(2)}</strong></td>
+              <td>{s.maxStd.toFixed(2)}</td>
+              <td>{s.totalDisagreement.toFixed(2)}</td>
+              <td>{s.rounds}</td>
+              <td><code>{sparklineV(s.avgStd)}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🤝 Top 10 lowest disagreement</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>avg std</th><th>total</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 10).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#10b981">{s.avgStd.toFixed(2)}</strong></td>
+              <td>{s.totalDisagreement.toFixed(2)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg std &gt; 1.5 = persona 之间严重分歧(任务定义不清 / 多角度审视)</li>
+        <li>avg std &lt; 0.5 = 高度共识(可能所有 persona 都对结果满意或同样批评)</li>
+        <li>对照 <a href={`${base}/agents/persona-disagreement-sessions/`}>Persona Disagreement Sessions</a></li>
+        <li>对照 <a href={`${base}/agents/persona-specialty-by-type/`}>Persona Specialty by Type</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-pdm-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-pdm-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
