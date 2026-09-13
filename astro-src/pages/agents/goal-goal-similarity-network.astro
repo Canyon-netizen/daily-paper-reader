@@ -1,0 +1,197 @@
+---
+// /agents/goal-goal-similarity-network.astro — iter #363:pairs of sessions with similar goals (Jaccard ≥ 0.5)
+//
+// 简化版:展示 high-similarity pairs + 形成 "goal cluster" 数量
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\|$/, '');
+
+const CN_RE = /[一-鿿]/;
+
+function tokenize(goal: string): Set<string> {
+  const out = new Set<string>();
+  if (!goal) return out;
+  for (const seg of goal.split(/\s+/)) {
+    if (CN_RE.test(seg)) {
+      const chars = Array.from(seg);
+      for (let i = 0; i + 2 <= chars.length; i++) out.add(chars.slice(i, i + 2).join(''));
+      for (const c of chars) out.add(c);
+    } else {
+      const t = seg.toLowerCase().replace(/[^\w]/g, '');
+      if (t && t.length > 1) out.add(t);
+    }
+  }
+  return out;
+}
+
+const root = join(process.cwd(), 'archive');
+interface SessInfo { sid: string; goal: string; tokens: Set<string>; }
+const sessions: SessInfo[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal || goal.length < 8) continue;
+    const tokens = tokenize(goal);
+    if (tokens.size < 3) continue;
+    sessions.push({ sid, goal, tokens });
+  }
+}
+
+// Build pair cache
+const totalSessions = sessions.length;
+const allPairs: { a: SessInfo; b: SessInfo; jaccard: number }[] = [];
+
+// Use simple O(n²) but cap at first 200 sessions
+const N = Math.min(200, sessions.length);
+for (let i = 0; i < N; i++) {
+  for (let j = i + 1; j < N; j++) {
+    const a = sessions[i].tokens;
+    const b = sessions[j].tokens;
+    let inter = 0;
+    for (const t of a) if (b.has(t)) inter += 1;
+    const union = a.size + b.size - inter;
+    const j_ = union > 0 ? inter / union : 0;
+    if (j_ >= 0.5) {
+      allPairs.push({ a: sessions[i], b: sessions[j], jaccard: j_ });
+    }
+  }
+}
+
+allPairs.sort((a, b) => b.jaccard - a.jaccard);
+
+// Simple cluster: union-find on sessions connected by Jaccard ≥ 0.5
+const parent = new Map<string, string>();
+for (const s of sessions) parent.set(s.sid, s.sid);
+function find(x: string): string {
+  let cur = x;
+  while (parent.get(cur) !== cur) {
+    const next = parent.get(cur)!;
+    parent.set(cur, parent.get(next)!);
+    cur = next;
+  }
+  return cur;
+}
+function union(a: string, b: string): void {
+  parent.set(find(a), find(b));
+}
+for (const p of allPairs) union(p.a.sid, p.b.sid);
+
+const clusterMap = new Map<string, string[]>();
+for (const s of sessions) {
+  const root_ = find(s.sid);
+  if (!clusterMap.has(root_)) clusterMap.set(root_, []);
+  clusterMap.get(root_)!.push(s.sid);
+}
+const clusters = [...clusterMap.values()].filter((c) => c.length >= 2).sort((a, b) => b.length - a.length);
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal-Goal Similarity Network · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-goal-similarity-network</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🕸️ Goal-Goal Similarity Network <span class="muted" style="font-size:0.6em">(iter #363)</span></h1>
+      <p class="agents-sub">
+        session 之间 goal 描述的 Jaccard 相似度。
+        Jaccard ≥ 0.5 视为"高度相似" → 视为同一话题 cluster。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-ggsn-globals">
+        <span>total sessions: <strong>{totalSessions}</strong></span>
+        <span>scanned: <strong>{N}</strong></span>
+        <span>pairs (J ≥ 0.5): <strong>{allPairs.length}</strong></span>
+        <span>clusters (size ≥ 2): <strong>{clusters.length}</strong></span>
+        <span>clustered sessions: <strong>{clusters.reduce((s, c) => s + c.length, 0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 15 highest-similarity pairs</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid A</th><th>sid B</th><th>Jaccard</th><th>goal A</th><th>goal B</th></tr>
+        </thead>
+        <tbody>
+          {allPairs.slice(0, 15).map((p, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${p.a.sid}/`}><code>{esc(p.a.sid.slice(0, 8))}</code></a></td>
+              <td><a href={`${base}/agents/${p.b.sid}/`}><code>{esc(p.b.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#10b981">{p.jaccard.toFixed(3)}</strong></td>
+              <td><small class="muted">{esc(p.a.goal.slice(0, 18))}{p.a.goal.length > 18 ? '…' : ''}</small></td>
+              <td><small class="muted">{esc(p.b.goal.slice(0, 18))}{p.b.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>👥 Top 10 largest clusters</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>size</th><th>sids</th></tr>
+        </thead>
+        <tbody>
+          {clusters.slice(0, 10).map((c, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><strong>{c.length}</strong></td>
+              <td>
+                <small>
+                  {c.slice(0, 6).map((sid) => <a href={`${base}/agents/${sid}/`}><code style="margin-right:0.3em">{esc(sid.slice(0, 8))}</code></a>)}
+                  {c.length > 6 && <span class="muted">+{c.length - 6} more</span>}
+                </small>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>cluster size &gt; 5 = 反复跑的同话题(可能可以批量优化)</li>
+        <li>total pairs = 同质化程度</li>
+        <li>对照 <a href={`${base}/agents/goal-topic-jaccard-cluster/`}>Goal Topic Jaccard Cluster</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ggsn-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-ggsn-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
