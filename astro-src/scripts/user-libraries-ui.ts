@@ -276,8 +276,10 @@ async function runInterviewFlow(
       <div class="lib-interview-progress">第 ${current + 1} / ${steps.length} 步</div>
       <div class="lib-interview-q" data-interview-question></div>
       <textarea class="lib-interview-a" rows="3" placeholder="在这里写下你的回答…(中文优先)" data-interview-input></textarea>
+      <div class="lib-interview-candidates" data-interview-candidates hidden></div>
       <div class="lib-interview-suggestion" data-interview-suggestion hidden></div>
       <div class="lib-interview-actions">
+        <button type="button" class="btn btn-soft btn-sm" data-interview-candidates-btn>🎲 列几个候选</button>
         <button type="button" class="btn btn-soft btn-sm" data-interview-suggest>💡 给我建议</button>
         <button type="button" class="btn btn-primary btn-sm" data-interview-next ${current === steps.length - 1 ? 'data-interview-finish' : ''}>${current === steps.length - 1 ? '✓ 完成' : '下一题 →'}</button>
         <button type="button" class="btn btn-ghost btn-sm" data-interview-cancel>取消</button>
@@ -292,16 +294,67 @@ async function runInterviewFlow(
 
     const inputTA = panel.querySelector<HTMLTextAreaElement>('[data-interview-input]');
     const sugEl = panel.querySelector<HTMLElement>('[data-interview-suggestion]');
+    const candWrap = panel.querySelector<HTMLElement>('[data-interview-candidates]');
+    const candBtn = panel.querySelector<HTMLButtonElement>('[data-interview-candidates-btn]');
+    const progressEl = panel.querySelector<HTMLElement>('[data-interview-progress]');
+
+    // 用户在 textarea 里手敲时,清空已选 candidate 高亮(避免误导)
+    inputTA?.addEventListener('input', () => {
+      candWrap?.querySelectorAll('.lib-interview-candidate.active').forEach((el) => el.classList.remove('active'));
+    });
+
+    candBtn?.addEventListener('click', async () => {
+      candBtn.disabled = true;
+      const ans = inputTA?.value.trim() || '';
+      if (progressEl) progressEl.innerHTML = '<span class="lib-spinner"></span> 正在生成候选…';
+      try {
+        const r = await runInterviewStep(stepId, history.map((h) => ({
+          ...h,
+          answer: h.answer || ans,
+        })), '');
+        const list = r.candidates || [];
+        if (candWrap) {
+          if (list.length === 0) {
+            candWrap.innerHTML = '<span class="muted">未生成候选,试试 💡 给我建议</span>';
+            candWrap.hidden = false;
+          } else {
+            candWrap.innerHTML = list
+              .map((c, i) => `<button type="button" class="lib-interview-candidate" data-cand-idx="${i}">${escapeHtml(c)}</button>`)
+              .join('');
+            candWrap.hidden = false;
+            candWrap.querySelectorAll<HTMLButtonElement>('.lib-interview-candidate').forEach((chip) => {
+              chip.addEventListener('click', () => {
+                const idx = Number(chip.dataset.candIdx);
+                const text = list[idx] || '';
+                if (inputTA && text) inputTA.value = text;
+                candWrap.querySelectorAll('.lib-interview-candidate.active').forEach((el) => el.classList.remove('active'));
+                chip.classList.add('active');
+              });
+            });
+          }
+        }
+        // rationale 顺手展示
+        if (r.rationale && sugEl) {
+          sugEl.innerHTML = `<em class="muted">${escapeHtml(r.rationale)}</em>`;
+          sugEl.hidden = false;
+        }
+      } catch (err) {
+        showToast(`生成候选失败:${(err as Error).message}`, 'error');
+      } finally {
+        if (progressEl) progressEl.textContent = `第 ${current + 1} / ${steps.length} 步`;
+        candBtn.disabled = false;
+      }
+    });
 
     panel.querySelector('[data-interview-suggest]')?.addEventListener('click', async () => {
       const ans = inputTA?.value.trim() || '';
-      panel.querySelector<HTMLElement>('[data-interview-progress]')!.innerHTML =
+      if (progressEl) progressEl.innerHTML =
         '<span class="lib-spinner"></span> 正在生成建议…';
       try {
         const r = await runInterviewStep(stepId, history.map((h) => ({
           ...h,
           answer: h.answer || ans,
-        })));
+        })), ans);
         const txt = [
           r.refined ? `<strong>精炼:</strong> ${escapeHtml(r.refined)}` : '',
           r.categories ? `<strong>分类:</strong> ${r.categories.map((c) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join(' ')}` : '',
@@ -323,13 +376,14 @@ async function runInterviewFlow(
           keywords: r.keywords,
           statement: r.statement,
           exclude: r.exclude,
+          candidates: r.candidates,
         }), rationale: r.rationale });
         // 把上一次 push 弹掉(每次 suggest 都是「最新一次」)
         if (history.length > current + 1) history.length = current + 1;
       } catch (err) {
         showToast(`生成失败:${(err as Error).message}`, 'error');
       } finally {
-        panel.querySelector('[data-interview-progress]')!.textContent = `第 ${current + 1} / ${steps.length} 步`;
+        if (progressEl) progressEl.textContent = `第 ${current + 1} / ${steps.length} 步`;
       }
     });
 
