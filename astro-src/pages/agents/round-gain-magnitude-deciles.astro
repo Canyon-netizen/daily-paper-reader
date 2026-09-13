@@ -1,0 +1,171 @@
+---
+// /agents/round-gain-magnitude-deciles.astro — iter #375:round gain magnitude decile distribution
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+interface GainPoint { sid: string; round: number; gain: number; type: 'positive' | 'negative'; }
+const gains: GainPoint[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { scores.push(0); }
+    }
+    for (let i = 1; i < scores.length; i++) {
+      const g = scores[i] - scores[i - 1];
+      gains.push({ sid, round: i + 1, gain: g, type: g >= 0 ? 'positive' : 'negative' });
+    }
+  }
+}
+
+// Build decile buckets by absolute magnitude
+const absMagnitudes = gains.map((g) => Math.abs(g.gain)).sort((a, b) => a - b);
+const totalG = gains.length;
+const totalPos = gains.filter((g) => g.gain > 0).length;
+const totalNeg = gains.filter((g) => g.gain < 0).length;
+
+interface Decile {
+  label: string;
+  lo: number;
+  hi: number;
+  count: number;
+  pos: number;
+  neg: number;
+}
+
+const deciles: Decile[] = [];
+for (let d = 0; d < 10; d++) {
+  const loIdx = Math.floor((d / 10) * absMagnitudes.length);
+  const hiIdx = Math.floor(((d + 1) / 10) * absMagnitudes.length);
+  const lo = absMagnitudes[Math.max(0, loIdx)] ?? 0;
+  const hi = absMagnitudes[Math.max(0, hiIdx - 1)] ?? 0;
+  const inRange = gains.filter((g) => {
+    const m = Math.abs(g.gain);
+    if (d === 0) return m >= lo && m <= hi;
+    return m > lo && m <= hi;
+  });
+  deciles.push({
+    label: `D${d + 1}`,
+    lo,
+    hi,
+    count: inRange.length,
+    pos: inRange.filter((g) => g.gain > 0).length,
+    neg: inRange.filter((g) => g.gain < 0).length,
+  });
+}
+
+function bar(n: number, max: number, width = 22): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Gain Magnitude Deciles · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-gain-magnitude-deciles</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📐 Round Gain Magnitude Deciles <span class="muted" style="font-size:0.6em">(iter #375)</span></h1>
+      <p class="agents-sub">
+        所有 round-to-round gain 按绝对值排序,均分为 10 个 decile。
+        看 round 改进量级的分布 — 大多数 round 是小幅改动还是剧烈跃迁?
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rgmd-globals">
+        <span>round-to-round gains: <strong>{totalG}</strong></span>
+        <span>positive: <strong style="color:#10b981">{totalPos}</strong></span>
+        <span>negative: <strong style="color:#ef4444">{totalNeg}</strong></span>
+        <span>median |gain|: <strong>{absMagnitudes.length > 0 ? absMagnitudes[Math.floor(absMagnitudes.length / 2)].toFixed(3) : '0'}</strong></span>
+        <span>max |gain|: <strong>{(absMagnitudes[absMagnitudes.length - 1] ?? 0).toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📐 Decile 分布</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>decile</th><th>range</th><th>count</th><th>bar</th><th>positive</th><th>negative</th></tr>
+        </thead>
+        <tbody>
+          {deciles.map((d) => (
+            <tr>
+              <td><strong>{d.label}</strong></td>
+              <td><code>[{d.lo.toFixed(3)}, {d.hi.toFixed(3)}]</code></td>
+              <td>{d.count}</td>
+              <td><code>{bar(d.count, Math.max(...deciles.map((x) => x.count)), 18)}</code></td>
+              <td style="color:#10b981">{d.pos}</td>
+              <td style="color:#ef4444">{d.neg}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>D1-D3 = 小幅改动(round 之间分数接近)</li>
+        <li>D8-D10 = 大幅跃迁(罕见但有)</li>
+        <li>多数 gain 集中在哪个 decile = 系统倾向于微调 vs 剧变</li>
+        <li>对照 <a href={`${base}/agents/round-improvement-statistics/`}>Round Improvement Statistics</a></li>
+        <li>对照 <a href={`${base}/agents/round-score-percentile-bands/`}>Round Score Percentile Bands</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rgmd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rgmd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
