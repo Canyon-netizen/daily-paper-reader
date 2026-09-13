@@ -1,0 +1,128 @@
+---
+// /agents/goal-type-token-length-stats.astro — iter #394:goal length stats per goal type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface TypeLenStats {
+  type: string;
+  count: number;
+  avg: number;
+  median: number;
+  max: number;
+  min: number;
+  total: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const typeMap = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    let type = 'unknown';
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      goal = m.goal ?? '';
+      type = m.type ?? 'unknown';
+    } catch (e) { continue; }
+    if (!goal) continue;
+    if (!typeMap.has(type)) typeMap.set(type, []);
+    typeMap.get(type)!.push(goal.length);
+  }
+}
+
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+const stats: TypeLenStats[] = [];
+for (const [type, lens] of typeMap.entries()) {
+  if (lens.length < 2) continue;
+  stats.push({
+    type,
+    count: lens.length,
+    avg: lens.reduce((s, v) => s + v, 0) / lens.length,
+    median: median(lens),
+    max: Math.max(...lens),
+    min: Math.min(...lens),
+    total: lens.reduce((s, v) => s + v, 0),
+  });
+}
+stats.sort((a, b) => b.avg - a.avg);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Type Token Length Stats · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-token-length-stats</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Goal Type Token Length Stats <span class="muted" style="font-size:0.6em">(iter #394)</span></h1>
+      <p class="agents-sub">
+        每个 goal type 的 goal 字符长度统计。
+        avg 高 = 该 type 任务描述通常很长。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📐 Type × goal length</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>count</th><th>avg</th><th>median</th><th>min</th><th>max</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((r) => (
+            <tr>
+              <td><code>{esc(r.type)}</code></td>
+              <td>{r.count}</td>
+              <td><strong>{r.avg.toFixed(0)}</strong></td>
+              <td>{r.median.toFixed(0)}</td>
+              <td>{r.min}</td>
+              <td>{r.max}</td>
+              <td><code>{bar(r.avg, Math.max(...stats.map((x) => x.avg)), 18)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg &gt; 500 chars = 该 type 通常需要复杂描述(可能任务非结构化)</li>
+        <li>avg &lt; 100 chars = 该 type 通常很简短(结构化模板)</li>
+        <li>对照 <a href={`${base}/agents/goal-type-round-distribution/`}>Goal Type Round Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/goal-length-vs-action-count/`}>Goal Length vs Action Count</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+</style>
