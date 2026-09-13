@@ -1,0 +1,189 @@
+---
+// /agents/weekly-score-gain-cohort.astro — iter #377:cohort analysis of session gain per week
+
+import { readFile, readdir, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile as readFileAsync, readdir as readdirAsync } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function isoWeek(date: Date): string {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${weekNum.toString().padStart(2, '0')}`;
+}
+
+interface Cohort {
+  week: string;
+  sessions: number;
+  avgGain: number;
+  medianGain: number;
+  totalGain: number;
+  bestGain: number;
+  worstGain: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const cohortMap = new Map<string, { gains: number[] }>();
+
+if (existsSync(root)) {
+  const sids = await readdirAsync(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdirAsync(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    let created: Date;
+    try { created = statSync(join(rd, `round_${rNums[0]}.json`)).mtime; } catch (e) { continue; }
+    const week = isoWeek(created);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFileAsync(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { scores.push(0); }
+    }
+    const gain = scores[scores.length - 1] - scores[0];
+    if (!cohortMap.has(week)) cohortMap.set(week, { gains: [] });
+    cohortMap.get(week)!.gains.push(gain);
+  }
+}
+
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+const cohorts: Cohort[] = [];
+for (const [week, data] of cohortMap.entries()) {
+  if (data.gains.length === 0) continue;
+  cohorts.push({
+    week,
+    sessions: data.gains.length,
+    avgGain: data.gains.reduce((s, v) => s + v, 0) / data.gains.length,
+    medianGain: median(data.gains),
+    totalGain: data.gains.reduce((s, v) => s + v, 0),
+    bestGain: Math.max(...data.gains),
+    worstGain: Math.min(...data.gains),
+  });
+}
+cohorts.sort((a, b) => a.week.localeCompare(b.week));
+
+function sparkline(arr: number[], width = 28): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  const lo = Math.min(...arr);
+  const hi = Math.max(...arr);
+  const range = hi - lo || 1;
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - lo) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Weekly Score Gain Cohort · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / weekly-score-gain-cohort</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📅 Weekly Score Gain Cohort <span class="muted" style="font-size:0.6em">(iter #377)</span></h1>
+      <p class="agents-sub">
+        按 session 创建的 ISO 周分 cohort,看每周开局的 session 平均 gain。
+        上升趋势 = 系统在进化;下降 = 在退化。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 平均 gain sparkline</h2>
+      <pre class="agents-wsgc-flow">{sparkline(cohorts.map((c) => c.avgGain), 32)}</pre>
+      <p class="muted">▁..█ = avg gain(高 = cohort 整体表现好)</p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 中位 gain sparkline</h2>
+      <pre class="agents-wsgc-flow">{sparkline(cohorts.map((c) => c.medianGain), 32)}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📅 周表</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>week</th><th>n</th><th>avg gain</th><th>median gain</th><th>total gain</th><th>best</th><th>worst</th></tr>
+        </thead>
+        <tbody>
+          {cohorts.map((c) => (
+            <tr>
+              <td><code>{esc(c.week)}</code></td>
+              <td>{c.sessions}</td>
+              <td style={`color:${c.avgGain >= 0 ? '#10b981' : '#ef4444'}`}><strong>{c.avgGain >= 0 ? '+' : ''}{c.avgGain.toFixed(2)}</strong></td>
+              <td style={`color:${c.medianGain >= 0 ? '#10b981' : '#ef4444'}`}>{c.medianGain >= 0 ? '+' : ''}{c.medianGain.toFixed(2)}</td>
+              <td>{c.totalGain >= 0 ? '+' : ''}{c.totalGain.toFixed(2)}</td>
+              <td style="color:#10b981">{c.bestGain >= 0 ? '+' : ''}{c.bestGain.toFixed(2)}</td>
+              <td style="color:#ef4444">{c.worstGain >= 0 ? '+' : ''}{c.worstGain.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg gain 持续上升 = 系统的修改能力随时间变强</li>
+        <li>avg gain 持平 = 系统稳定</li>
+        <li>对照 <a href={`${base}/agents/score-gain-year-month/`}>Score Gain Year-Month</a></li>
+        <li>对照 <a href={`${base}/agents/weekly-session-volume/`}>Weekly Session Volume</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-wsgc-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
