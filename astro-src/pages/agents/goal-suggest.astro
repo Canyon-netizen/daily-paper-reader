@@ -106,24 +106,24 @@ function bar(n: number, max: number, width = 16): string {
       <h2>📊 高频 unigram(top 30)</h2>
       <pre class="agents-gsug-flow">{(() => {
         const max = topUnis[0]?.[1] ?? 1;
-        return topUnis.map(([w, c]) => `${w.padEnd(16)} ${bar(c, max, 18)}  ${c}`);
-      }).join('\n')()}</pre>
+        return topUnis.map(([w, c]) => `${w.padEnd(16)} ${bar(c, max, 18)}  ${c}`).join('\n');
+      })()}</pre>
     </section>
 
     <section class="agents-session-section">
       <h2>📊 高频 bigram(常用搭配,top 20)</h2>
       <pre class="agents-gsug-flow">{(() => {
         const max = topBigrams[0]?.[1] ?? 1;
-        return topBigrams.map(([w, c]) => `${w.padEnd(30)} ${bar(c, max, 18)}  ${c}`);
-      }).join('\n')()}</pre>
+        return topBigrams.map(([w, c]) => `${w.padEnd(30)} ${bar(c, max, 18)}  ${c}`).join('\n');
+      })()}</pre>
     </section>
 
     <section class="agents-session-section">
       <h2>🌟 高频 trigram(研究方向,top 15)</h2>
       <pre class="agents-gsug-flow">{(() => {
         const max = topTrigrams[0]?.[1] ?? 1;
-        return topTrigrams.map(([w, c]) => `${w.padEnd(36)} ${bar(c, max, 14)}  ${c}`);
-      }).join('\n')()}</pre>
+        return topTrigrams.map(([w, c]) => `${w.padEnd(36)} ${bar(c, max, 14)}  ${c}`).join('\n');
+      })()}</pre>
     </section>
 
     <section class="agents-session-section">

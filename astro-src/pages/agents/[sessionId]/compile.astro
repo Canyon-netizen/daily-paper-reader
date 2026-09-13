@@ -127,15 +127,15 @@ node astro-src/scripts/agents-run.mjs --session {sessionId} --compile-paper --js
 
     <section class="agents-help">
       <h3>📚 这是什么?</h3>
-      <p>iter #61 引入 <code>--compile-paper</code> CLI(iter #61 <code>lib/agents/paper-compiler.{mjs,ts}</code>),
-        把 <code>archive/&lt;sid&gt;/{drafts,reviews,experiments,paper_additions,rebuttals}/</code> + <code>synthesis/</code>
+      <p>iter #61 引入 <code>--compile-paper</code> CLI(iter #61 <code>lib/agents/paper-compiler.&#123;mjs,ts&#125;</code>),
+        把 <code>archive/&lt;sid&gt;/&#123;drafts,reviews,experiments,paper_additions,rebuttals&#125;/</code> + <code>synthesis/</code>
         按 deliverable kind 路由到 5 个标准论文章节(Intro / Related Work / Method / Results / Limitations),
         装上 LaTeX / markdown / .bib。</p>
       <p>本页面(iter #62)把同一份 paper-compiler 实现搬到浏览器:</p>
       <ul>
         <li>数据源:localStorage 优先(round 由浏览器跑过),fallback 到空 PaperDraft + 提示</li>
         <li>实时切换 LaTeX / markdown / .bib 三种格式预览</li>
-        <li>下载按钮触发浏览器 &lt;a download&gt;,文件名 &lt;sid&gt;-paper.{tex|md|bib}</li>
+        <li>下载按钮触发浏览器 &lt;a download&gt;,文件名 &lt;sid&gt;-paper.&#123;tex|md|bib&#125;</li>
         <li>document class 选择器控制 LaTeX 模板(article / acmart / ieeeconf / iclr2026 占位)</li>
         <li>与 CLI 端 字节级一致 —— 同一份 buildPaperDraft / formatPaperLatex / formatPaperMarkdown / formatBibtex</li>
       </ul>
@@ -182,7 +182,7 @@ node astro-src/scripts/agents-run.mjs --session {sessionId} --compile-paper --js
       formatPaperLatex,
       formatPaperMarkdown,
       formatBibtex,
-    } from '../../../../lib/agents/paper-compiler.mjs';
+    } from '../../../lib/agents/paper-compiler.mjs';
 
     // -----------------------------------------------------------------------
     // 数据源:localStorage 优先(浏览器跑的 round),fallback 到空 + 提示

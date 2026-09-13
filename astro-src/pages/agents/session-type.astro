@@ -120,7 +120,7 @@ const totalSessions = rows.length;
 
 function bar(n: number, max: number, width = 30): string {
   if (!max) return '░'.repeat(width);
-  const filled = Math.round((n / max) * width);
+  const filled = Math.max(0, Math.min(width, Math.round((n / max) * width)));
   return '█'.repeat(filled) + '░'.repeat(width - filled);
 }
 function esc(s: any): string {
