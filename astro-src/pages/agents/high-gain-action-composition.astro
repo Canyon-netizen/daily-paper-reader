@@ -1,0 +1,165 @@
+---
+// /agents/high-gain-action-composition.astro — iter #401:high-gain vs low-gain sessions action composition
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessAct {
+  sid: string;
+  goal: string;
+  gain: number;
+  actionCounts: Map<string, number>;
+  totalActions: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessAct[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const actionCounts = new Map<string, number>();
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          actionCounts.set(act, (actionCounts.get(act) ?? 0) + 1);
+        }
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { scores.push(0); }
+    }
+    if (scores.length < 2) continue;
+    const gain = scores[scores.length - 1] - scores[0];
+    if (actionCounts.size === 0) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessions.push({
+      sid, goal, gain,
+      actionCounts,
+      totalActions: Array.from(actionCounts.values()).reduce((s, v) => s + v, 0),
+    });
+  }
+}
+
+const sorted = [...sessions].sort((a, b) => b.gain - a.gain);
+const topGain = sorted.slice(0, 10);
+const bottomGain = sorted.slice().reverse().slice(0, 10);
+
+function topActions(s: SessAct, n = 4): string {
+  const sorted = [...s.actionCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+  return sorted.map(([a, c]) => `${a}=${c}`).join(', ');
+}
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="High Gain Action Composition · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / high-gain-action-composition</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 High Gain Action Composition <span class="muted" style="font-size:0.6em">(iter #401)</span></h1>
+      <p class="agents-sub">
+        Top-10 gain sessions vs Bottom-10 gain sessions 的 action type 组成对比。
+        看高 gain session 偏爱哪些 action。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top 10 highest gain sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>gain</th><th>total acts</th><th>top actions</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {topGain.map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#10b981">+{s.gain.toFixed(2)}</strong></td>
+              <td>{s.totalActions}</td>
+              <td><code style="font-size:0.75em">{esc(topActions(s))}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💀 Bottom 10 lowest gain sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>gain</th><th>total acts</th><th>top actions</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {bottomGain.map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#ef4444">{s.gain >= 0 ? '+' : ''}{s.gain.toFixed(2)}</strong></td>
+              <td>{s.totalActions}</td>
+              <td><code style="font-size:0.75em">{esc(topActions(s))}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高 gain session 共同偏爱的 action = 该 action 真正高效</li>
+        <li>低 gain session 偏向某种 action = 该 action 可能无效或反效果</li>
+        <li>对照 <a href={`${base}/agents/action-diversity-sessions/`}>Action Diversity Sessions</a></li>
+        <li>对照 <a href={`${base}/agents/goal-type-action-affinity/`}>Goal Type Action Affinity</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+</style>
