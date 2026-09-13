@@ -132,7 +132,9 @@ export async function runInterviewStep(
       ],
       temperature: 0.5,
       response_format: { type: 'json_object' },
-      max_tokens: 800,
+      // 候选 5 个 + 3-5 个 arxiv 分类 + rationale ≈ 200-400 token;给 1500 防中长中文
+      // 被截断(JSON.parse 偶发 Unexpected token 'c', "cs.LG", ... is not valid JSON)
+      max_tokens: 1500,
     }),
   });
   if (!resp.ok) {

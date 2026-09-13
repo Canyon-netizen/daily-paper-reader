@@ -1044,7 +1044,7 @@ function closeModal(modal: HTMLElement): void {
   const cadSel = modal.querySelector<HTMLSelectElement>('[data-modal-cadence]');
   if (cadSel) cadSel.value = 'manual';
   const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
-  if (thresholdInput) thresholdInput.value = '0.5';
+  if (thresholdInput) thresholdInput.value = '0.8';
 }
 
 /** 同一 modal 节点在不同打开轮次复用同一组 controls;
@@ -1100,9 +1100,9 @@ function fillModalFromLibrary(modal: HTMLElement, lib: UserLibrary): void {
   const cadSel = modal.querySelector<HTMLSelectElement>('[data-modal-cadence]');
   const def = lib.definition || defaultLibraryDefinition(lib.statement);
   if (cadSel) cadSel.value = def.cadence;
-  // 编辑模式回填:已有值优先,没有就 0.5
+  // 编辑模式回填:已有值优先,没有就 0.8
   const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
-  if (thresholdInput) thresholdInput.value = String(def.relevanceThreshold ?? 0.5);
+  if (thresholdInput) thresholdInput.value = String(def.relevanceThreshold ?? 0.8);
 
   // P8a 字段
   const goalsTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-goals]');
@@ -1270,10 +1270,10 @@ function setupNewLibraryModal(): void {
     // 新字段
     const visibility = (form.querySelector<HTMLSelectElement>('[data-modal-visibility]')?.value as 'personal' | 'pending' | 'public') || 'personal';
     const cadence = (form.querySelector<HTMLSelectElement>('[data-modal-cadence]')?.value as 'manual' | 'daily' | 'weekly' | 'monthly') || 'manual';
-    // 把 [0,1] 之外的脏输入钳到合法区间,非数字 fallback 0.5(兜底)
+    // 把 [0,1] 之外的脏输入钳到合法区间,非数字 fallback 0.8(兜底)
     const thresholdRaw = Number(form.querySelector<HTMLInputElement>('[data-modal-threshold]')?.value);
     const relevanceThreshold = !Number.isFinite(thresholdRaw)
-      ? 0.5
+      ? 0.8
       : Math.max(0, Math.min(1, thresholdRaw));
     const goals = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-goals]')?.value || '', 3, 200);
     const inScope = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-in-scope]')?.value || '', 8, 80);
