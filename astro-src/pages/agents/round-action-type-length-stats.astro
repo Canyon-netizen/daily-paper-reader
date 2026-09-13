@@ -1,0 +1,156 @@
+---
+// /agents/round-action-type-length-stats.astro — iter #386:JSON length stats per action type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ActLenStats {
+  action: string;
+  count: number;
+  avg: number;
+  median: number;
+  p90: number;
+  max: number;
+  total: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const actMap = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!rf.match(/^round_\d+\.json$/)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          const len = JSON.stringify(a).length;
+          if (!actMap.has(act)) actMap.set(act, []);
+          actMap.get(act)!.push(len);
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+function p90(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length * 0.9)];
+}
+
+const results: ActLenStats[] = [];
+for (const [action, lens] of actMap.entries()) {
+  if (lens.length < 3) continue;
+  results.push({
+    action,
+    count: lens.length,
+    avg: lens.reduce((s, v) => s + v, 0) / lens.length,
+    median: median(lens),
+    p90: p90(lens),
+    max: Math.max(...lens),
+    total: lens.reduce((s, v) => s + v, 0),
+  });
+}
+results.sort((a, b) => b.avg - a.avg);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Type Length Stats · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-action-type-length-stats</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📐 Action Type Length Stats <span class="muted" style="font-size:0.6em">(iter #386)</span></h1>
+      <p class="agents-sub">
+        每个 action type 的 JSON payload 字符长度统计。
+        avg 高 = 该 action payload 重(structured data);低 = 仅是简单 flag。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📐 Action × length</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>count</th><th>avg</th><th>median</th><th>p90</th><th>max</th><th>total</th></tr>
+        </thead>
+        <tbody>
+          {results.map((r) => (
+            <tr>
+              <td><code>{esc(r.action)}</code></td>
+              <td>{r.count}</td>
+              <td><strong>{r.avg.toFixed(0)}</strong></td>
+              <td>{r.median.toFixed(0)}</td>
+              <td>{r.p90.toFixed(0)}</td>
+              <td>{r.max.toFixed(0)}</td>
+              <td>{r.total.toFixed(0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Avg length bar</h2>
+      <pre class="agents-ratls-flow">{
+        results.map((r) => `${r.action.padEnd(28)} ${bar(r.avg, Math.max(...results.map((x) => x.avg)), 18)}  ${r.avg.toFixed(0)}`).join('\n')
+      }</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg 高 = action payload 重(可能含 diff、structured data)</li>
+        <li>avg 低 = 仅简单 flag / boolean</li>
+        <li>p90 ≈ max = 该 action 长度稳定;否则有 outlier</li>
+        <li>对照 <a href={`${base}/agents/round-action-type-distribution/`}>Round Action Type Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/modifier-action-tail-latency/`}>Modifier Action Tail Latency</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-ratls-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
