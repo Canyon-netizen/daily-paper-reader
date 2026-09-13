@@ -1,0 +1,186 @@
+---
+// /agents/designer-output-diversity.astro — iter #367:designer output text diversity per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const CN_RE = /[一-鿿]/;
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are', 'be', 'this', 'that', 'it', 'as', 'by', 'from']);
+
+function tokenize(text: string): string[] {
+  const out: string[] = [];
+  if (!text) return out;
+  for (const seg of text.split(/\s+/)) {
+    if (CN_RE.test(seg)) {
+      const chars = Array.from(seg);
+      for (let i = 0; i + 2 <= chars.length; i++) out.push(chars.slice(i, i + 2).join(''));
+      for (const c of chars) out.push(c);
+    } else {
+      const t = seg.toLowerCase().replace(/[^\w]/g, '');
+      if (t && t.length > 1 && !STOP.has(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
+interface SessDiv {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  totalTokens: number;
+  uniqueTokens: number;
+  diversity: number;
+  totalChars: number;
+  avgChars: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessDiv[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 1) continue;
+    rNums.sort((a, b) => a - b);
+
+    const allTokens: string[] = [];
+    let totalChars = 0;
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const text = r.designer?.output ?? r.designer?.draft ?? r.design?.output ?? '';
+        allTokens.push(...tokenize(text));
+        totalChars += text.length;
+      } catch (e) { /* */ }
+    }
+    if (allTokens.length < 10) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: rNums.length,
+      totalTokens: allTokens.length,
+      uniqueTokens: new Set(allTokens).size,
+      diversity: new Set(allTokens).size / allTokens.length,
+      totalChars,
+      avgChars: rNums.length > 0 ? totalChars / rNums.length : 0,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.uniqueTokens - a.uniqueTokens);
+
+const total = sessions.length;
+const totalToks = sessions.reduce((s, x) => s + x.totalTokens, 0);
+const totalUniq = sessions.reduce((s, x) => s + x.uniqueTokens, 0);
+const avgDiv = sessions.length > 0 ? sessions.reduce((s, x) => s + x.diversity, 0) / sessions.length : 0;
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function fmt(n: number): string {
+  if (n > 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Designer Output Diversity · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / designer-output-diversity</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎨 Designer Output Diversity <span class="muted" style="font-size:0.6em">(iter #367)</span></h1>
+      <p class="agents-sub">
+        每个 session 中 designer 全部 round 的累计 unique token 数。
+        unique 高 = designer 用了大量不同的词。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dod-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>total tokens: <strong>{fmt(totalToks)}</strong></span>
+        <span>total unique: <strong>{fmt(totalUniq)}</strong></span>
+        <span>avg TTR: <strong>{avgDiv.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📝 Top 12 most-diverse sessions (unique token count)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>unique</th><th>total</th><th>TTR</th><th>rounds</th><th>avg chars</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 12).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><strong style="color:#10b981">{fmt(s.uniqueTokens)}</strong></td>
+              <td>{fmt(s.totalTokens)}</td>
+              <td>{s.diversity.toFixed(3)}</td>
+              <td>{s.totalRounds}</td>
+              <td>{fmt(s.avgChars)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 16))}{s.goal.length > 16 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>unique &gt; 5K = designer 用了大量不同词</li>
+        <li>TTR &gt; 0.6 = 词汇丰富</li>
+        <li>对照 <a href={`${base}/agents/designer-revision-rate/`}>Designer Revision Rate</a></li>
+        <li>对照 <a href={`${base}/agents/goal-keyword-diversity/`}>Goal Keyword Diversity</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dod-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dod-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
