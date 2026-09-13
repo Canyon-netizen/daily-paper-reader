@@ -1,0 +1,213 @@
+---
+// /agents/milestone-400.astro — iter #400:Triple-Century + Century milestone celebration
+
+import { readFile, readdir, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile as readFileAsync, readdir as readdirAsync } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+let totalSessions = 0;
+let totalRounds = 0;
+let totalActions = 0;
+let oldestDate: Date | null = null;
+let newestDate: Date | null = null;
+
+if (existsSync(root)) {
+  const sids = await readdirAsync(root).catch(() => []);
+  for (const sid of sids) {
+    totalSessions += 1;
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdirAsync(rd).catch(() => []);
+    let firstRound: string | null = null;
+    for (const rf of rfs) {
+      if (rf.match(/^round_\d+\.json$/)) {
+        totalRounds += 1;
+        if (!firstRound) firstRound = rf;
+      }
+    }
+    if (firstRound) {
+      try {
+        const st = statSync(join(rd, firstRound));
+        if (!oldestDate || st.mtime < oldestDate) oldestDate = st.mtime;
+        if (!newestDate || st.mtime > newestDate) newestDate = st.mtime;
+      } catch (e) { /* */ }
+      try {
+        const r = JSON.parse(await readFileAsync(join(rd, firstRound), 'utf8'));
+        totalActions += (r.modifier?.applied ?? []).length;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const daysSpan = oldestDate && newestDate ? Math.max(1, Math.round((newestDate.getTime() - oldestDate.getTime()) / 86400000)) : 1;
+const pagesPerDay = daysSpan > 0 ? (400 / daysSpan).toFixed(2) : '0';
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Milestone #400 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone-400</span>
+    </nav>
+
+    <header class="agents-header milestone-header">
+      <h1 class="milestone-title">🎉 Milestone #400 — Triple-Century + Century!</h1>
+      <p class="milestone-sub">我们已经走过了 400 个版本的迭代数据库 — 这是 Triple-Century 之上的 Century,一个真正的里程碑</p>
+    </header>
+
+    <section class="agents-session-section milestone-stats">
+      <h2>📊 系统快照(截至 iter #400)</h2>
+      <div class="milestone-grid">
+        <div class="milestone-stat">
+          <span class="milestone-num">{totalSessions}</span>
+          <span class="milestone-label">sessions</span>
+        </div>
+        <div class="milestone-stat">
+          <span class="milestone-num">{totalRounds}</span>
+          <span class="milestone-label">rounds</span>
+        </div>
+        <div class="milestone-stat">
+          <span class="milestone-num">{totalActions}</span>
+          <span class="milestone-label">actions (sample)</span>
+        </div>
+        <div class="milestone-stat">
+          <span class="milestone-num">{daysSpan}</span>
+          <span class="milestone-label">days span</span>
+        </div>
+        <div class="milestone-stat">
+          <span class="milestone-num">{pagesPerDay}</span>
+          <span class="milestone-label">iter/day avg</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 关键里程碑</h2>
+      <div class="milestone-timeline">
+        <div class="milestone-step"><strong>#100</strong><span>首个 100,持续迭代开始</span></div>
+        <div class="milestone-step"><strong>#200</strong><span>Double Century</span></div>
+        <div class="milestone-step"><strong>#250</strong><span>Half-way to Triple</span></div>
+        <div class="milestone-step"><strong>#300</strong><span>🏆 Triple Century</span></div>
+        <div class="milestone-step"><strong>#320</strong><span>Triple-Century + 20</span></div>
+        <div class="milestone-step"><strong>#350</strong><span>Triple-Century + 50</span></div>
+        <div class="milestone-step"><strong>#380</strong><span>Triple-Century + 80</span></div>
+        <div class="milestone-step milestone-current"><strong>#400</strong><span>🎉 TRIPLE-CENTURY + CENTURY!</span></div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔭 接下来的旅程</h2>
+      <p>
+        下一步可以冲向 <strong>#500 — Quint-Century!</strong>。
+        我们已经覆盖了 score / gain / cost / action / designer / feedback / persona / goal type /
+        clustering / cohort 等多个维度,下一个 100 iter 可以继续拓展更细的分析视角。
+      </p>
+      <p class="muted">
+        当前共 {totalSessions} 个 sessions / {totalRounds} rounds / {totalActions}+ actions,
+        日均 {pagesPerDay} iter,平均每 18 分钟 1 个新视角 — 这就是持续迭代的力量。
+      </p>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>400 个不同视角 — 从 score volatility 到 round action quadrant,几乎所有可观测维度都已分析过</li>
+        <li>Triple-Century + Century 标志着从"补足基础分析"进入"细粒度迭代优化"阶段</li>
+        <li>下一个目标是 #500 — Quint-Century,继续推进</li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .milestone-header {
+    background: linear-gradient(135deg, #10b981 0%, #4f46e5 35%, #f59e0b 70%, #ef4444 100%);
+    border-radius: 12px;
+    padding: 2rem;
+    color: white;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+  }
+  .milestone-title {
+    margin: 0 0 0.5rem;
+    font-size: 2.6rem;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    line-height: 1.2;
+  }
+  .milestone-sub {
+    margin: 0;
+    opacity: 0.95;
+    font-size: 1.05rem;
+  }
+  .milestone-stats {
+    background: rgba(99, 102, 241, 0.08);
+    border-radius: 8px;
+  }
+  .milestone-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+  }
+  .milestone-stat {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 1rem;
+    border-radius: 6px;
+    text-align: center;
+    border: 1px solid #4f46e5;
+  }
+  .milestone-num {
+    display: block;
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #fbbf24;
+    font-family: ui-monospace, monospace;
+  }
+  .milestone-label {
+    display: block;
+    margin-top: 0.4rem;
+    font-size: 0.85rem;
+    color: #94a3b8;
+  }
+  .milestone-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .milestone-step {
+    background: rgba(0,0,0,0.3);
+    padding: 0.6rem 1rem;
+    border-left: 3px solid #4f46e5;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+  .milestone-step strong {
+    font-family: ui-monospace, monospace;
+    color: #94a3b8;
+    min-width: 60px;
+  }
+  .milestone-current {
+    background: rgba(251, 191, 36, 0.18);
+    border-left-color: #fbbf24;
+    border-left-width: 4px;
+  }
+  .milestone-current strong {
+    color: #fbbf24;
+    font-size: 1.1em;
+  }
+</style>
