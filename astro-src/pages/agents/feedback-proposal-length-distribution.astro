@@ -1,0 +1,169 @@
+---
+// /agents/feedback-proposal-length-distribution.astro — iter #376:proposal length stats per persona
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface PersonaStats {
+  name: string;
+  proposals: number;
+  lengths: number[];
+  median: number;
+  p10: number;
+  p90: number;
+  avg: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const personaMap = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (!m) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          for (const p of persona.proposals ?? []) {
+            let len = 0;
+            if (typeof p === 'string') len = p.length;
+            else if (typeof p === 'object') {
+              const text = p.rationale ?? p.feedback ?? p.comment ?? p.text ?? p.content ?? '';
+              if (typeof text === 'string') len = text.length;
+              else len = JSON.stringify(p).length;
+            }
+            if (len > 0) {
+              if (!personaMap.has(name)) personaMap.set(name, []);
+              personaMap.get(name)!.push(len);
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+function percentile(arr: number[], q: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  const idx = Math.floor(q * (sorted.length - 1));
+  return sorted[idx];
+}
+
+const stats: PersonaStats[] = [];
+for (const [name, lens] of personaMap.entries()) {
+  if (lens.length < 3) continue;
+  stats.push({
+    name,
+    proposals: lens.length,
+    lengths: lens,
+    median: percentile(lens, 0.5),
+    p10: percentile(lens, 0.1),
+    p90: percentile(lens, 0.9),
+    avg: lens.reduce((s, v) => s + v, 0) / lens.length,
+  });
+}
+stats.sort((a, b) => b.median - a.median);
+
+const allLens = stats.flatMap((s) => s.lengths);
+const globalMedian = percentile(allLens, 0.5);
+const globalP10 = percentile(allLens, 0.1);
+const globalP90 = percentile(allLens, 0.9);
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Feedback Proposal Length Distribution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / feedback-proposal-length-distribution</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Feedback Proposal Length Distribution <span class="muted" style="font-size:0.6em">(iter #376)</span></h1>
+      <p class="agents-sub">
+        每个 persona 反馈 proposal 的字符长度分布 (median, p10, p90)。
+        长 persona = 反馈 verbose;短 persona = 反馈精炼。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-fpld-globals">
+        <span>total proposals: <strong>{allLens.length}</strong></span>
+        <span>personas: <strong>{stats.length}</strong></span>
+        <span>global median: <strong>{globalMedian.toFixed(0)}</strong></span>
+        <span>p10: <strong>{globalP10.toFixed(0)}</strong></span>
+        <span>p90: <strong>{globalP90.toFixed(0)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📐 Length stats by persona</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>persona</th><th>n</th><th>median</th><th>avg</th><th>p10</th><th>p90</th><th>bar (median)</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((s) => (
+            <tr>
+              <td><code>{esc(s.name)}</code></td>
+              <td>{s.proposals}</td>
+              <td><strong>{s.median.toFixed(0)}</strong></td>
+              <td>{s.avg.toFixed(0)}</td>
+              <td>{s.p10.toFixed(0)}</td>
+              <td>{s.p90.toFixed(0)}</td>
+              <td><code>{bar(s.median, Math.max(...stats.map((x) => x.median)), 18)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>p90 >> p10 = 该 persona 反馈长度波动大(部分详细部分简略)</li>
+        <li>p90 ≈ p10 = 反馈长度一致(可能是结构化模板)</li>
+        <li>对照 <a href={`${base}/agents/persona-distribution/`}>Persona Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/designer-length-vs-gain/`}>Designer Length vs Gain</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-fpld-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-fpld-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
