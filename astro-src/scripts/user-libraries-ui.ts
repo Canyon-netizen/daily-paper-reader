@@ -229,6 +229,8 @@ async function runInterviewFlow(
   };
   const history: { id: StepId; question: string; answer: string; suggestion: string; rationale: string }[] = [];
   let current = 0;
+  // 实时读 modal 里的文献库名称 —— 用户改 name 输入框就同步给 LLM
+  const readLibraryName = () => modal.querySelector<HTMLInputElement>('[data-modal-name]')?.value.trim() || '';
 
   function renderStep(): void {
     const stepId = steps[current];
@@ -313,7 +315,7 @@ async function runInterviewFlow(
         const r = await runInterviewStep(stepId, history.map((h) => ({
           ...h,
           answer: h.answer || ans,
-        })), '');
+        })), '', readLibraryName());
         const list = r.candidates || [];
         if (candWrap) {
           if (list.length === 0) {
@@ -365,7 +367,7 @@ async function runInterviewFlow(
         const r = await runInterviewStep(stepId, history.map((h) => ({
           ...h,
           answer: h.answer || ans,
-        })), ans);
+        })), ans, readLibraryName());
         const txt = [
           r.refined ? `<strong>精炼:</strong> ${escapeHtml(r.refined)}` : '',
           r.categories ? `<strong>分类:</strong> ${r.categories.map((c) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join(' ')}` : '',
