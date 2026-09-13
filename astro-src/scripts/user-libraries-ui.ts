@@ -76,50 +76,83 @@ async function openIngestPanel(libId: string): Promise<void> {
   mount.innerHTML = `
     <div class="lib-ingest-panel">
       <div class="lib-ingest-header">
-        <h3>🛰️ Ingest · 正在拉 arXiv 候选</h3>
-        <p class="muted">从 arXiv listing API 拉最近 30 天,LLM 批量打分。</p>
+        <h3>🛰️ Ingest · 调优参数</h3>
+        <p class="muted">改完点「▶ 启动」即跑;不改动直接启动也行。</p>
       </div>
-      <div class="lib-ingest-progress"><span class="lib-spinner"></span><span data-ingest-status>准备中…</span></div>
+      <div class="lib-ingest-settings">
+        <label class="lib-ingest-setting">
+          阈值 ≥ <input type="number" min="0" max="1" step="0.05" value="${lib.definition?.relevanceThreshold ?? 0.5}" data-ingest-threshold />
+          <span class="muted">(LLM 打分低于此值的论文不入候选)</span>
+        </label>
+        <label class="lib-ingest-setting">
+          时间窗 <input type="number" min="7" max="365" step="1" value="30" data-ingest-daysback />
+          <span class="muted">天(经典论文补录建议设 90-180)</span>
+        </label>
+        <label class="lib-ingest-setting">
+          最多候选 <input type="number" min="10" max="100" step="10" value="50" data-ingest-max />
+          <span class="muted">篇</span>
+        </label>
+        <button type="button" class="btn btn-primary btn-sm" data-ingest-run>▶ 启动 Ingest</button>
+      </div>
+      <div class="lib-ingest-progress" data-ingest-progress hidden>
+        <div class="lib-ingest-progress-bar"><div class="lib-ingest-progress-fill" data-ingest-progress-fill style="width:0%"></div></div>
+        <span data-ingest-status>准备中…</span>
+      </div>
     </div>
   `;
   const statusEl = mount.querySelector<HTMLElement>('[data-ingest-status]');
+  const fillEl = mount.querySelector<HTMLElement>('[data-ingest-progress-fill]');
+  const progressEl = mount.querySelector<HTMLElement>('[data-ingest-progress]');
   const setStatus = (s: string) => { if (statusEl) statusEl.textContent = s; };
+  const setProgress = (pct: number) => { if (fillEl) fillEl.style.width = `${Math.round(pct)}%`; };
 
-  try {
+  // 启动按钮:从 UI 读参数 → 跑
+  const runBtn = mount.querySelector<HTMLButtonElement>('[data-ingest-run]');
+  runBtn?.addEventListener('click', () => runIngestFlow());
+  async function runIngestFlow(): Promise<void> {
+    const thrEl = mount.querySelector<HTMLInputElement>('[data-ingest-threshold]');
+    const daysEl = mount.querySelector<HTMLInputElement>('[data-ingest-daysback]');
+    const maxEl = mount.querySelector<HTMLInputElement>('[data-ingest-max]');
+    const threshold = thrEl ? Math.max(0, Math.min(1, parseFloat(thrEl.value) || 0.5)) : 0.5;
+    const daysBack = daysEl ? Math.max(7, Math.min(365, parseInt(daysEl.value, 10) || 30)) : 30;
+    const maxResults = maxEl ? Math.max(10, Math.min(100, parseInt(maxEl.value, 10) || 50)) : 50;
+    if (runBtn) runBtn.disabled = true;
+    if (progressEl) progressEl.hidden = false;
     setStatus('加载 ingest 模块…');
+    setProgress(5);
     const { runIngest, persistCandidatesAsCandidate, commitCandidateAsIncluded } = await import('./library-ingest');
 
-    setStatus('拉 arXiv 候选…(可能 10-30s)');
-    // 阈值优先取库的 relevanceThreshold,未设置时 fallback 到 0.5。
-    // 不再用硬编码 0.45 —— Polaris 风格是「每个库各自设阈值」,否则
-    // 用户既不能在 Govern 调,也不知道为什么某个候选被滤掉。
-    const threshold = lib.definition?.relevanceThreshold ?? 0.5;
-    const candidates = await runIngest(libId, { daysBack: 30, maxResults: 50, threshold });
+    setStatus(`拉 arXiv 候选(${daysBack}天 / 上限 ${maxResults} 篇)…`);
+    setProgress(15);
+    try {
+      const candidates = await runIngest(libId, { daysBack, maxResults, threshold });
+      setProgress(100);
+      if (candidates.length === 0) {
+        mount.innerHTML = `
+          <div class="lib-ingest-panel">
+            <h3>🛰️ Ingest 完成</h3>
+            <p class="muted">arXiv 在 ${daysBack} 天、当前关键词下没有命中 ≥ ${threshold.toFixed(2)} 的候选。</p>
+            <p class="muted">建议:①放宽阈值(降到 0.3)②拉长时间窗(到 90 天)③补充 inScope / 包括关键词</p>
+            <button type="button" class="btn btn-soft btn-sm" data-ingest-retry>← 调参数重跑</button>
+          </div>
+        `;
+        mount.querySelector<HTMLButtonElement>('[data-ingest-retry]')?.addEventListener('click', () => openIngestPanel(libId));
+        return;
+      }
 
-    if (candidates.length === 0) {
+      // 写候选状态(走 candidate,不直接进 paperIds)
+      persistCandidatesAsCandidate(libId, candidates);
+      showToast(`拉回 ${candidates.length} 篇候选(已写入 candidate 状态)`, 'ok');
+
+      // 渲染候选列表
       mount.innerHTML = `
-        <div class="lib-ingest-panel">
-          <h3>🛰️ Ingest 完成</h3>
-          <p class="muted">arXiv 在最近 30 天、当前关键词下没有命中 ≥ ${threshold.toFixed(2)} 的候选。</p>
-          <p class="muted">建议:放宽 inScope / 包括关键词,或拉长 daysBack。</p>
-        </div>
-      `;
-      return;
-    }
-
-    // 写候选状态(走 candidate,不直接进 paperIds)
-    persistCandidatesAsCandidate(libId, candidates);
-    showToast(`拉回 ${candidates.length} 篇候选(已写入 candidate 状态)`, 'ok');
-
-    // 渲染候选列表
-    mount.innerHTML = `
       <div class="lib-ingest-panel">
         <div class="lib-ingest-header">
-          <h3>🛰️ Ingest · 候选 ${candidates.length} 篇(score ≥ 0.45)</h3>
-          <p class="muted">按相关度倒序。每条点「✓ 纳入」加进 paperIds / 「⏭ 跳过」忽略 / 「🕐 留候选」保存为 candidate。</p>
+          <h3>🛰️ Ingest · 候选 ${candidates.length} 篇(阈值 ${threshold.toFixed(2)} · ${daysBack} 天)</h3>
+          <p class="muted">按相关度倒序。每条点「✓ 纳入」加进 paperIds / 「⏭ 跳过」忽略。</p>
           <div class="lib-ingest-batch">
             <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.7">✓ 批量纳入 ≥ 0.70</button>
-            <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.6">✓ 批量纳入 ≥ 0.60</button>
+            <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.5">✓ 批量纳入 ≥ 0.50</button>
             <button type="button" class="btn btn-ghost btn-sm" data-ingest-batch="hide">关闭面板</button>
           </div>
         </div>
@@ -144,73 +177,71 @@ async function openIngestPanel(libId: string): Promise<void> {
         </div>
       </div>
     `;
-    // 把 candidates 缓存到 dataset 上,供后续 button handler 读
-    mount.querySelector<HTMLElement>('.lib-ingest-panel')!.dataset.candidates = JSON.stringify(
-      candidates.map((c) => ({ cx: c.cx, arxivId: c.arxivId, score: c.score, reason: c.reason })),
-    );
+      // 把 candidates 缓存到 dataset 上,供后续 button handler 读
+      mount.querySelector<HTMLElement>('.lib-ingest-panel')!.dataset.candidates = JSON.stringify(
+        candidates.map((c) => ({ cx: c.cx, arxivId: c.arxivId, score: c.score, reason: c.reason })),
+      );
 
-    // 行内动作
-    mount.querySelectorAll<HTMLButtonElement>('[data-ingest-action]').forEach((btn) => {
-      btn.addEventListener('click', async (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const action = btn.dataset.ingestAction;
-        const cx = btn.dataset.cx || '';
-        const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
-        const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
-        const cand = cached.find((x) => x.cx === cx);
-        if (!cand) return;
-        if (action === 'include') {
-          commitCandidateAsIncluded(libId, {
-            cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
-            title: '', authors: [], abstract: '', date: '', inLibrary: false,
-          });
-          showToast(`已纳入 ${cand.arxivId}`, 'ok');
-          btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
-        } else if (action === 'skip') {
-          btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
-        }
-      });
-    });
-
-    // 批量动作
-    mount.querySelectorAll<HTMLButtonElement>('[data-ingest-batch]').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        const action = btn.dataset.ingestBatch;
-        if (action === 'hide') {
-          mount.innerHTML = '';
-          return;
-        }
-        if (action === 'include-top') {
-          const thr = parseFloat(btn.dataset.threshold || '0.7');
+      // 行内动作
+      mount.querySelectorAll<HTMLButtonElement>('[data-ingest-action]').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const action = btn.dataset.ingestAction;
+          const cx = btn.dataset.cx || '';
           const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
           const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
-          let n = 0;
-          for (const cand of cached) {
-            if (cand.score < thr) break; // 倒序的,break 即可
+          const cand = cached.find((x) => x.cx === cx);
+          if (!cand) return;
+          if (action === 'include') {
             commitCandidateAsIncluded(libId, {
               cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
               title: '', authors: [], abstract: '', date: '', inLibrary: false,
             });
-            n++;
+            showToast(`已纳入 ${cand.arxivId}`, 'ok');
+            btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
+          } else if (action === 'skip') {
+            btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
           }
-          showToast(`批量纳入 ${n} 篇`, 'ok');
-          // 重渲(简单:重跑整个 ingest 面板)
-          renderUserLibraryDetail();
-          openIngestPanel(libId);
-        }
+        });
       });
-    });
-  } catch (e) {
-    mount.innerHTML = `
-      <div class="lib-ingest-panel">
-        <h3>🛰️ Ingest 失败</h3>
-        <p class="muted error">${escapeHtml((e as Error).message || String(e))}</p>
-      </div>
-    `;
-    showToast(`Ingest 失败:${(e as Error).message}`, 'error');
+
+      // 批量动作
+      mount.querySelectorAll<HTMLButtonElement>('[data-ingest-batch]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          const action = btn.dataset.ingestBatch;
+          if (action === 'hide') {
+            mount.innerHTML = '';
+            return;
+          }
+          if (action === 'include-top') {
+            const thr = parseFloat(btn.dataset.threshold || '0.7');
+            const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
+            const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
+            let n = 0;
+            for (const cand of cached) {
+              if (cand.score < thr) break; // 倒序的,break 即可
+              commitCandidateAsIncluded(libId, {
+                cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
+                title: '', authors: [], abstract: '', date: '', inLibrary: false,
+              });
+              n++;
+            }
+            showToast(`批量纳入 ${n} 篇`, 'ok');
+            // 重渲(简单:重跑整个 ingest 面板)
+            renderUserLibraryDetail();
+            openIngestPanel(libId);
+          }
+        });
+      });
+    } catch (e) {
+      setStatus(`失败:${(e as Error).message || String(e)}`);
+      showToast(`Ingest 失败:${(e as Error).message}`, 'error');
+      if (runBtn) runBtn.disabled = false;
+    }
   }
+  // 触发首次渲染(用户可调整后再点启动,或直接启动)
 }
 
 /** AI 访谈流 —— 引导用户三步生成 statement。
@@ -1717,6 +1748,17 @@ function renderUserLibraryDetail(): void {
     <section id="papers-panel" class="library-wb-panel active" data-panel="papers">
       <div class="wb-papers" data-user-lib-paper-list>
         <div class="wb-papers-list">
+          <div class="wb-papers-quickadd">
+            <input
+              type="text"
+              class="lib-input lib-quickadd-input"
+              placeholder="手动添加 arXiv ID 或 URL(例:2503.12345)"
+              data-quickadd-input
+              aria-label="手动添加 arXiv 论文"
+            />
+            <button type="button" class="btn btn-soft btn-sm" data-quickadd-go>➕ 加进此库</button>
+            <span class="muted" data-quickadd-status style="font-size: 0.8rem;"></span>
+          </div>
           <div class="wb-papers-filter">
             <a class="filter-pill active" data-view="all" href="#papers">全部 ${papers.length}</a>
             <a class="filter-pill" data-view="today" href="#papers">今日 ${papers.filter((p) => p.date === new Date().toISOString().slice(0, 10)).length}</a>
@@ -2362,6 +2404,53 @@ function renderUserLibraryDetail(): void {
         setActiveTab(tab as Tab);
       }
     });
+  });
+
+  // 「手动添加 arXiv 论文」快速入口 — 让用户绕过 Ingest,直接粘贴 ID 加进库
+  // 这是「想看的论文不在库内」最直接的解法:看到 arXiv → 复制 ID → 粘贴 → 纳入
+  const qaInput = mount.querySelector<HTMLInputElement>('[data-quickadd-input]');
+  const qaBtn = mount.querySelector<HTMLButtonElement>('[data-quickadd-go]');
+  const qaStatus = mount.querySelector<HTMLElement>('[data-quickadd-status]');
+  async function handleQuickAdd(): Promise<void> {
+    if (!qaInput) return;
+    const raw = qaInput.value.trim();
+    if (!raw) {
+      if (qaStatus) qaStatus.textContent = '⚠️ 粘贴一个 ID';
+      return;
+    }
+    // 提取 arXiv ID(支持 "2503.12345" 或 "https://arxiv.org/abs/2503.12345" 或带 vN)
+    const m = raw.match(/(\d{4}\.\d{4,5}(v\d+)?)/);
+    if (!m) {
+      if (qaStatus) qaStatus.textContent = '⚠️ 解析不出 arXiv ID(格式:2503.12345)';
+      return;
+    }
+    const arxivId = m[1];
+    if (qaBtn) qaBtn.disabled = true;
+    if (qaStatus) qaStatus.textContent = `⏳ 验证 ${arxivId}…`;
+    try {
+      // 验证 arXiv 上真存在(防止用户复制错)+ 顺便拿元数据
+      const { searchArxivById } = await import('./paper-analyzer');
+      const entries = await searchArxivById(arxivId);
+      if (entries.length === 0) throw new Error('arXiv 上找不到');
+      const { addPaperToLibrary } = await import('../lib/user-libraries');
+      const res = addPaperToLibrary(lib.id, arxivId);
+      if (!res.ok) {
+        if (qaStatus) qaStatus.textContent = `❌ ${res.reason || '加入失败'}`;
+        return;
+      }
+      if (qaStatus) qaStatus.textContent = `✅ ${entries[0].title?.slice(0, 40) || arxivId}… 已加入`;
+      qaInput.value = '';
+      // 重渲工作台显示新论文
+      renderUserLibraryDetail();
+    } catch (e) {
+      if (qaStatus) qaStatus.textContent = `❌ ${(e as Error).message || '失败'}`;
+    } finally {
+      if (qaBtn) qaBtn.disabled = false;
+    }
+  }
+  qaBtn?.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); void handleQuickAdd(); });
+  qaInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); void handleQuickAdd(); }
   });
 
   // 归档 / 取消归档
