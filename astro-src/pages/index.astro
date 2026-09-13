@@ -98,6 +98,12 @@ const newToday = items.filter((p) => p.date === today).length;
         <a class="shortcut" href={base + '/projects/'}>📂 项目工作区</a>
         <a class="shortcut" href={base + '/dashboard/'}>📊 阅读仪表板</a>
       </div>
+
+      {/* 个人文献库快捷入口 — 从 localStorage 读,客户端水合(R5 减少每次进入的点击) */}
+      <section class="home-recent-libraries" data-home-recent-libraries hidden>
+        <h2 class="recent-papers-title">⭐ 我的文献库</h2>
+        <div class="recent-papers-grid" data-home-recent-libraries-list></div>
+      </section>
     </header>
 
     {/* 最新论文快捷入口 (R5:在快捷入口后面渲染论文卡片) */}
@@ -325,6 +331,35 @@ const newToday = items.filter((p) => p.date === today).length;
     const mount = document.getElementById('dashboard-strip-mount');
     if (mount && Array.isArray(itemsForStrip)) {
       mountDashboardStrip(mount, itemsForStrip);
+    }
+
+    // 个人文献库快捷入口 — 从 localStorage 读,前 6 个按 updatedAt 排
+    const recentSection = document.querySelector<HTMLElement>('[data-home-recent-libraries]');
+    const recentList = document.querySelector<HTMLElement>('[data-home-recent-libraries-list]');
+    if (recentSection && recentList) {
+      try {
+        const KEY = 'dpr_user_libraries_v1';
+        const raw = localStorage.getItem(KEY);
+        if (raw) {
+          const libs = JSON.parse(raw) as Record<string, { id: string; name: string; statement: string; hue: string; paperIds: string[]; updatedAt: string }>;
+          const list = Object.values(libs).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 6);
+          if (list.length > 0) {
+            recentSection.hidden = false;
+            recentList.innerHTML = list.map((l) => `
+              <a class="recent-paper-card hue-${escapeHtml(l.hue || 'emerald')}" href="/libraries/?id=${encodeURIComponent(l.id)}">
+                <div class="recent-paper-title">${escapeHtml(l.name)}</div>
+                <div class="recent-paper-meta">
+                  <span>📚 ${l.paperIds.length} 篇</span>
+                  <span>${l.updatedAt ? l.updatedAt.slice(0, 10) : ''}</span>
+                </div>
+                <div class="recent-paper-tldr">${escapeHtml((l.statement || '').slice(0, 80))}${(l.statement || '').length > 80 ? '…' : ''}</div>
+              </a>
+            `).join('');
+          }
+        }
+      } catch {
+        // 静默 — 用户没装 user-libraries-ui 也不会报错
+      }
     }
 
     // Update workflow counts on home page
