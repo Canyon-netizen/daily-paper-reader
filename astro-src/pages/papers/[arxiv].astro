@@ -204,6 +204,27 @@ const tabTitle = plainZh || plainEn || id;
                       data-arxiv-id={paper.canonicalArxivId || paper.arxivId || ' '}
                       data-title={plainZh || plainEn || ' '}
                     >💡 保存为想法</button>
+                    {/* iter #328: 跨模块 CTA — paper 详情页直达科研全流程三模块。
+                        之前只能从 paper-analyzer 创建,普通用户在 /papers/ 浏览时无法一键派生。
+                        prefill 跳转: /experiments/ 和 /writing/ 都已实现对应 initPrefillFromUrl 接收,
+                        experiments-ui.ts:initExperimentsUI (line 21) 读 prefill_title/prefill_papers/prefill_hypothesis,
+                        writing-ui.ts:initPrefillFromUrl (line 60) 读 prefill_title/prefill_papers + 自动 add citation。 */}
+                    <button
+                      type="button"
+                      id="create-experiment-from-paper-btn"
+                      class="create-from-paper-btn"
+                      aria-label="基于这篇论文创建实验"
+                      data-arxiv-id={paper.canonicalArxivId || paper.arxivId || ' '}
+                      data-title={plainZh || plainEn || ' '}
+                    >🧪 创建实验</button>
+                    <button
+                      type="button"
+                      id="create-writing-from-paper-btn"
+                      class="create-from-paper-btn"
+                      aria-label="基于这篇论文创建写作"
+                      data-arxiv-id={paper.canonicalArxivId || paper.arxivId || ' '}
+                      data-title={plainZh || plainEn || ' '}
+                    >📝 写论文</button>
                     <a
                       href={`/papers/${paper.slug}/citations/`}
                       class="citation-check-btn"
@@ -1178,6 +1199,43 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
         params.set('prefill_source_papers', JSON.stringify(sourcePapers));
         window.location.href = `/ideas/?${params.toString()}`;
       });
+
+      // iter #328: 创建实验按钮 — 跳 /experiments/ 带 prefill_title / prefill_papers / prefill_hypothesis
+      // experiments-ui.ts:initExperimentsUI (line 21) 接 prefill_title + prefill_papers 自动开 modal
+      document.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest('#create-experiment-from-paper-btn') as HTMLButtonElement;
+        if (!btn) return;
+        const arxivId = btn.dataset.arxivId;
+        const title = btn.dataset.title;
+        if (!arxivId || arxivId === ' ') return;
+
+        // 抽 4 段中文笔记作为 hypothesis (method 段是核心)
+        const tldr = document.querySelector('[data-tldr]')?.getAttribute('data-tldr') || '';
+        const method = document.querySelector('[data-method]')?.getAttribute('data-method') || '';
+        const result = document.querySelector('[data-method]')?.getAttribute('data-result') || '';
+        const hypothesis = [tldr, method, result].filter(Boolean).join('\n').slice(0, 600);
+
+        const params = new URLSearchParams();
+        params.set('prefill_title', title || '');
+        params.set('prefill_papers', arxivId);
+        if (hypothesis) params.set('prefill_hypothesis', hypothesis);
+        window.location.href = `/experiments/?${params.toString()}`;
+      });
+
+      // iter #328: 写论文按钮 — 跳 /writing/ 带 prefill_title / prefill_papers
+      // writing-ui.ts:initPrefillFromUrl (line 60) 接 prefill_title + prefill_papers 自动开 modal + 加 citation
+      document.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest('#create-writing-from-paper-btn') as HTMLButtonElement;
+        if (!btn) return;
+        const arxivId = btn.dataset.arxivId;
+        const title = btn.dataset.title;
+        if (!arxivId || arxivId === ' ') return;
+
+        const params = new URLSearchParams();
+        params.set('prefill_title', title || '');
+        params.set('prefill_papers', arxivId);
+        window.location.href = `/writing/?${params.toString()}`;
+      });
     })();
 
     // 智能预热:用户首次 focus chat 输入框或点 FAB 打开侧栏时,
@@ -1299,6 +1357,34 @@ ${paperText ? `\n论文正文(前 8000 字符):\n${paperText.slice(0, 8000)}` : 
   .save-as-idea-btn:hover {
     background: var(--accent-soft);
     border-color: var(--accent);
+  }
+  /* iter #328: 跨模块 CTA — 实验 / 写作派生按钮。沿用 .save-as-idea-btn 风格
+     但用蓝/绿色调区分(idea = accent 紫蓝;exp = 实验蓝;writing = 写作绿)。
+     不影响原有 .save-as-idea-btn 行为。 */
+  .create-from-paper-btn {
+    font-size: 0.85rem;
+    padding: 0.35rem 0.85rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    cursor: pointer;
+    transition: all 150ms;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  #create-experiment-from-paper-btn {
+    color: #2563eb; /* 实验蓝 */
+  }
+  #create-experiment-from-paper-btn:hover {
+    background: #dbeafe;
+    border-color: #2563eb;
+  }
+  #create-writing-from-paper-btn {
+    color: #059669; /* 写作绿 */
+  }
+  #create-writing-from-paper-btn:hover {
+    background: #d1fae5;
+    border-color: #059669;
   }
   .citation-check-btn {
     font-size: 0.85rem;
