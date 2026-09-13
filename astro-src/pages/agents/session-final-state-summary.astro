@@ -1,0 +1,221 @@
+---
+// /agents/session-final-state-summary.astro — iter #368:final round snapshot summary per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessSnapshot {
+  sid: string;
+  goal: string;
+  finalScore: number;
+  totalRounds: number;
+  totalGain: number;
+  actionsApplied: number;
+  passCount: number;
+  failCount: number;
+  personaCount: number;
+  proposalCount: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessSnapshot[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let firstScore = 0;
+    let lastScore = 0;
+    let totalActions = 0;
+    let passCount = 0;
+    let failCount = 0;
+    let personaSet = new Set<string>();
+    let proposalCount = 0;
+
+    for (let i = 0; i < rNums.length; i++) {
+      const rn = rNums[i];
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        totalActions += (r.modifier?.applied ?? []).length;
+
+        // Eval pass/fail
+        const evalResult = r.evaluator ?? r.eval ?? {};
+        let isPass = false;
+        if (typeof evalResult.pass === 'boolean') isPass = evalResult.pass;
+        else if (typeof evalResult.passed === 'boolean') isPass = evalResult.passed;
+        else if (typeof evalResult.status === 'string') isPass = evalResult.status.toLowerCase().includes('pass');
+        else if (typeof evalResult.verdict === 'string') isPass = evalResult.verdict.toLowerCase().includes('pass');
+        if (isPass) passCount += 1;
+        else if (evalResult.pass !== undefined || evalResult.passed !== undefined || evalResult.status || evalResult.verdict) failCount += 1;
+
+        // Personas
+        for (const persona of r.feedback?.personas ?? []) {
+          const name = persona.persona ?? persona.name ?? persona.role ?? 'unknown';
+          personaSet.add(name);
+          proposalCount += (persona.proposals ?? []).length;
+        }
+
+        // Score
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+          if (i === 0) firstScore = avg;
+          lastScore = avg;
+        }
+      } catch (e) { /* */ }
+    }
+    if (firstScore === 0) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      finalScore: lastScore,
+      totalRounds: rNums.length,
+      totalGain: lastScore - firstScore,
+      actionsApplied: totalActions,
+      passCount,
+      failCount,
+      personaCount: personaSet.size,
+      proposalCount,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.finalScore - a.finalScore);
+
+const total = sessions.length;
+const avgScore = sessions.length > 0 ? sessions.reduce((s, x) => s + x.finalScore, 0) / sessions.length : 0;
+const avgActions = sessions.length > 0 ? sessions.reduce((s, x) => s + x.actionsApplied, 0) / sessions.length : 0;
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Session Final-State Summary · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-final-state-summary</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎬 Session Final-State Summary <span class="muted" style="font-size:0.6em">(iter #368)</span></h1>
+      <p class="agents-sub">
+        每个 session 终态快照(final score + gain + actions + eval + personas)。
+        按 final score 排序,top/bottom 15。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sfss-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>avg final score: <strong>{avgScore.toFixed(2)}</strong></span>
+        <span>avg actions: <strong>{avgActions.toFixed(1)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top 15 highest final score</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>final</th><th>gain</th><th>rounds</th><th>actions</th><th>eval</th><th>personas</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 15).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#10b981">{s.finalScore.toFixed(2)}</strong></td>
+              <td style={`color:${s.totalGain >= 0 ? '#10b981' : '#ef4444'}`}>{s.totalGain >= 0 ? '+' : ''}{s.totalGain.toFixed(2)}</td>
+              <td>{s.totalRounds}</td>
+              <td>{s.actionsApplied}</td>
+              <td>{s.passCount}/{s.failCount}</td>
+              <td>{s.personaCount}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 16))}{s.goal.length > 16 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💀 Bottom 10 lowest final score</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>final</th><th>gain</th><th>rounds</th><th>actions</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#ef4444">{s.finalScore.toFixed(2)}</strong></td>
+              <td style={`color:${s.totalGain >= 0 ? '#10b981' : '#ef4444'}`}>{s.totalGain >= 0 ? '+' : ''}{s.totalGain.toFixed(2)}</td>
+              <td>{s.totalRounds}</td>
+              <td>{s.actionsApplied}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>本视图是 session 终态总览</li>
+        <li>对照 <a href={`${base}/agents/session-quality-tier/`}>Session Quality Tier</a></li>
+        <li>对照 <a href={`${base}/agents/final-score-decile/`}>Final Score Decile</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sfss-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sfss-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
