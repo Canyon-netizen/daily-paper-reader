@@ -1,0 +1,202 @@
+---
+// /agents/modifier-action-tail-latency.astro — iter #372:action first-use round distribution
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ActStats {
+  action: string;
+  firstUseIdx: number[]; // (roundIdx / totalRounds) for sessions that used this action
+  medianPos: number;
+  avgPos: number;
+  lateUseCount: number; // sessions where first use in last 25%
+  earlyUseCount: number;
+  totalUses: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const actMap = new Map<string, { positions: number[]; totalUses: number; sessions: number }>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+    const totalRounds = rNums.length;
+
+    const firstSeen = new Map<string, number>(); // action -> first roundIdx where seen
+    let totalUses = 0;
+    for (let i = 0; i < rNums.length; i++) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNums[i]}.json`), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          totalUses += 1;
+          if (!firstSeen.has(act)) firstSeen.set(act, i / Math.max(1, totalRounds - 1));
+        }
+      } catch (e) { /* */ }
+    }
+    if (firstSeen.size === 0) continue;
+
+    for (const [act, pos] of firstSeen.entries()) {
+      if (!actMap.has(act)) actMap.set(act, { positions: [], totalUses: 0, sessions: 0 });
+      const s = actMap.get(act)!;
+      s.positions.push(pos);
+      s.sessions += 1;
+    }
+  }
+}
+
+// totalUses per action by re-counting across all rounds
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (!m) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          if (actMap.has(act)) actMap.get(act)!.totalUses += 1;
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const stats: ActStats[] = [];
+for (const [action, data] of actMap.entries()) {
+  if (data.sessions < 2) continue;
+  const sorted = [...data.positions].sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  const avg = data.positions.reduce((s, v) => s + v, 0) / data.positions.length;
+  const lateUseCount = data.positions.filter((p) => p > 0.75).length;
+  const earlyUseCount = data.positions.filter((p) => p < 0.25).length;
+  stats.push({
+    action,
+    firstUseIdx: data.positions,
+    medianPos: median,
+    avgPos: avg,
+    lateUseCount,
+    earlyUseCount,
+    totalUses: data.totalUses,
+  });
+}
+stats.sort((a, b) => a.avgPos - b.avgPos);
+
+const total = stats.length;
+const earlyActions = stats.filter((s) => s.avgPos < 0.4).length;
+const lateActions = stats.filter((s) => s.avgPos > 0.6).length;
+
+function sparkline(arr: number[], width = 12): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const lo = Math.min(...arr);
+    const hi = Math.max(...arr);
+    const range = hi - lo || 1;
+    const ratio = (v - lo) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Modifier Action Tail Latency · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / modifier-action-tail-latency</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⏱️ Modifier Action Tail Latency <span class="muted" style="font-size:0.6em">(iter #372)</span></h1>
+      <p class="agents-sub">
+        每个 action type 首次在 session 中被使用的相对位置 (roundIdx / totalRounds)。
+        接近 0 = 早期就出现;接近 1 = 后期才出现。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-matl-globals">
+        <span>action types: <strong>{total}</strong></span>
+        <span>early-dominated (&lt;0.4): <strong style="color:#10b981">{earlyActions}</strong></span>
+        <span>late-dominated (&gt;0.6): <strong style="color:#f59e0b">{lateActions}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⏱️ Action first-use position (sorted by avg pos)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>action</th><th>sessions</th><th>uses</th><th>avg pos</th><th>median pos</th><th>early</th><th>late</th><th>distribution</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((s) => (
+            <tr>
+              <td><code>{esc(s.action)}</code></td>
+              <td>{s.firstUseIdx.length}</td>
+              <td>{s.totalUses}</td>
+              <td><strong style={`color:${s.avgPos < 0.4 ? '#10b981' : s.avgPos > 0.6 ? '#f59e0b' : '#4f46e5'}`}>{s.avgPos.toFixed(2)}</strong></td>
+              <td>{s.medianPos.toFixed(2)}</td>
+              <td style={`color:${s.earlyUseCount > 0 ? '#10b981' : 'inherit'}`}>{s.earlyUseCount}</td>
+              <td style={`color:${s.lateUseCount > 0 ? '#f59e0b' : 'inherit'}`}>{s.lateUseCount}</td>
+              <td><code style="font-size:0.75em">{sparkline(s.firstUseIdx, 12)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg pos &lt; 0.4 = 该 action 偏早期(开局就用)</li>
+        <li>avg pos &gt; 0.6 = 该 action 偏后期(收尾阶段才登场)</li>
+        <li>对照 <a href={`${base}/agents/action-recency-half-life/`}>Action Recency Half-life</a></li>
+        <li>对照 <a href={`${base}/agents/round-action-position/`}>Round Action Position</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-matl-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-matl-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
