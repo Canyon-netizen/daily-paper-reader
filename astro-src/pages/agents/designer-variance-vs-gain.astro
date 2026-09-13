@@ -1,0 +1,200 @@
+---
+// /agents/designer-variance-vs-gain.astro — iter #387:designer length variance vs total gain
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function designLen(r: any): number {
+  const ds = r.designer ?? {};
+  let s = ds.design ?? ds.output ?? ds.text ?? ds.content ?? '';
+  if (typeof s === 'object') s = JSON.stringify(s);
+  return typeof s === 'string' ? s.length : 0;
+}
+
+interface SessVar {
+  sid: string;
+  goal: string;
+  lengths: number[];
+  meanLen: number;
+  variance: number;
+  stddev: number;
+  totalGain: number;
+  cv: number; // coefficient of variation
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessVar[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 4) continue;
+    rNums.sort((a, b) => a - b);
+
+    const lengths: number[] = [];
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        lengths.push(designLen(r));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { lengths.push(0); scores.push(0); }
+    }
+
+    const meanLen = lengths.reduce((s, v) => s + v, 0) / lengths.length;
+    const variance = lengths.reduce((s, v) => s + (v - meanLen) ** 2, 0) / lengths.length;
+    const stddev = Math.sqrt(variance);
+    const totalGain = scores[scores.length - 1] - scores[0];
+    const cv = meanLen > 0 ? stddev / meanLen : 0;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessions.push({ sid, goal, lengths, meanLen, variance, stddev, totalGain, cv });
+  }
+}
+
+sessions.sort((a, b) => b.variance - a.variance);
+
+const total = sessions.length;
+const highVar = sessions.filter((s) => s.variance > 100000).length;
+const stableLen = sessions.filter((s) => s.cv < 0.1).length;
+const volatileLen = sessions.filter((s) => s.cv > 0.5).length;
+
+function sparkline(arr: number[], width = 12): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  const lo = Math.min(...arr);
+  const hi = Math.max(...arr);
+  const range = hi - lo || 1;
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - lo) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Designer Variance vs Gain · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / designer-variance-vs-gain</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Designer Variance vs Gain <span class="muted" style="font-size:0.6em">(iter #387)</span></h1>
+      <p class="agents-sub">
+        每个 session 中 designer output 长度的方差 vs total gain。
+        高 CV = designer 输出长度剧烈波动;高方差 + 高 gain = 改动有效。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-dvg-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>high variance (&gt;100k): <strong style="color:#f59e0b">{highVar}</strong></span>
+        <span>stable len (CV&lt;0.1): <strong style="color:#10b981">{stableLen}</strong></span>
+        <span>volatile len (CV&gt;0.5): <strong style="color:#ef4444">{volatileLen}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 15 highest variance</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>variance</th><th>CV</th><th>mean len</th><th>total gain</th><th>lengths</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 15).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong>{s.variance.toFixed(0)}</strong></td>
+              <td>{s.cv.toFixed(2)}</td>
+              <td>{s.meanLen.toFixed(0)}</td>
+              <td style={`color:${s.totalGain >= 0 ? '#10b981' : '#ef4444'}`}>{s.totalGain >= 0 ? '+' : ''}{s.totalGain.toFixed(2)}</td>
+              <td><code style="font-size:0.7em">{sparkline(s.lengths, 14)}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 Top 10 lowest variance</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>variance</th><th>CV</th><th>gain</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 10).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td>{s.variance.toFixed(0)}</td>
+              <td>{s.cv.toFixed(2)}</td>
+              <td style={`color:${s.totalGain >= 0 ? '#10b981' : '#ef4444'}`}>{s.totalGain >= 0 ? '+' : ''}{s.totalGain.toFixed(2)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高 variance + 高 gain = designer 在大幅迭代,改进有效</li>
+        <li>高 variance + 低 gain = designer 在乱改但无效果</li>
+        <li>低 variance = designer 几乎不动(designer 卡住或收敛)</li>
+        <li>对照 <a href={`${base}/agents/designer-edit-magnitude-trajectory/`}>Designer Edit Magnitude Trajectory</a></li>
+        <li>对照 <a href={`${base}/agents/designer-length-vs-gain/`}>Designer Length vs Gain</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-dvg-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-dvg-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
