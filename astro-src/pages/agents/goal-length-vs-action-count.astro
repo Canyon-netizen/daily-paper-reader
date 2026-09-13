@@ -1,0 +1,174 @@
+---
+// /agents/goal-length-vs-action-count.astro — iter #391:goal length vs total actions per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessPair {
+  sid: string;
+  goalLen: number;
+  totalActions: number;
+  goal: string;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessPair[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    if (rfs.length === 0) continue;
+
+    let totalActions = 0;
+    for (const rf of rfs) {
+      if (!rf.match(/^round_\d+\.json$/)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        totalActions += (r.modifier?.applied ?? []).length;
+      } catch (e) { /* */ }
+    }
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    if (!goal) continue;
+    sessions.push({ sid, goalLen: goal.length, totalActions, goal });
+  }
+}
+
+// Goal length bins
+const goalBuckets: { range: string; lo: number; hi: number; sessions: number[] }[] = [
+  { range: '0-50', lo: 0, hi: 50, sessions: [] },
+  { range: '50-100', lo: 50, hi: 100, sessions: [] },
+  { range: '100-200', lo: 100, hi: 200, sessions: [] },
+  { range: '200-400', lo: 200, hi: 400, sessions: [] },
+  { range: '400-800', lo: 400, hi: 800, sessions: [] },
+  { range: '800-1600', lo: 800, hi: 1600, sessions: [] },
+  { range: '1600+', lo: 1600, hi: 1e9, sessions: [] },
+];
+
+for (const s of sessions) {
+  for (const b of goalBuckets) {
+    if (s.goalLen >= b.lo && s.goalLen < b.hi) {
+      b.sessions.push(s.totalActions);
+      break;
+    }
+  }
+}
+
+const total = sessions.length;
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length < 2) return 0;
+  const n = Math.min(xs.length, ys.length);
+  const mx = xs.slice(0, n).reduce((s, v) => s + v, 0) / n;
+  const my = ys.slice(0, n).reduce((s, v) => s + v, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    dx += (xs[i] - mx) ** 2;
+    dy += (ys[i] - my) ** 2;
+  }
+  return dx > 0 && dy > 0 ? num / Math.sqrt(dx * dy) : 0;
+}
+
+const goalLens = sessions.map((s) => s.goalLen);
+const actCounts = sessions.map((s) => s.totalActions);
+const p = pearson(goalLens, actCounts);
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Length vs Action Count · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-length-vs-action-count</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📏 Goal Length vs Action Count <span class="muted" style="font-size:0.6em">(iter #391)</span></h1>
+      <p class="agents-sub">
+        每 session:goal 字符长度 vs 总 action 数。
+        Pearson = 看 goal 复杂度是否驱动更多 action。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-glva-globals">
+        <span>total sessions: <strong>{total}</strong></span>
+        <span>pearson(goal_len, actions): <strong>{p.toFixed(3)}</strong></span>
+        <span>mean goal len: <strong>{(goalLens.reduce((s, v) => s + v, 0) / Math.max(1, goalLens.length)).toFixed(0)}</strong></span>
+        <span>mean actions: <strong>{(actCounts.reduce((s, v) => s + v, 0) / Math.max(1, actCounts.length)).toFixed(1)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📐 Goal length bucket × avg actions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>bucket</th><th>sessions</th><th>avg actions</th><th>max actions</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {goalBuckets.filter((b) => b.sessions.length > 0).map((b) => {
+            const avg = b.sessions.reduce((s, v) => s + v, 0) / b.sessions.length;
+            const mx = Math.max(...b.sessions);
+            return (
+              <tr>
+                <td><code>{b.range}</code></td>
+                <td>{b.sessions.length}</td>
+                <td><strong>{avg.toFixed(1)}</strong></td>
+                <td>{mx}</td>
+                <td><code>{bar(avg, Math.max(...goalBuckets.filter((bb) => bb.sessions.length > 0).map((bb) => bb.sessions.reduce((s, v) => s + v, 0) / bb.sessions.length)), 18)}</code></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>pearson &gt; 0.3 = 长 goal 通常催生更多 action(任务复杂度驱动)</li>
+        <li>pearson &lt; 0 = 长 goal 反而 action 少(可能 LLM 一次性写完)</li>
+        <li>对照 <a href={`${base}/agents/goal-keyword-diversity/`}>Goal Keyword Diversity</a></li>
+        <li>对照 <a href={`${base}/agents/goal-embedding-diversity/`}>Goal Embedding Diversity</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-glva-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-glva-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
