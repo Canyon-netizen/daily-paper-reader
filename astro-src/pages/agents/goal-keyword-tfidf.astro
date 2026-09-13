@@ -1,0 +1,183 @@
+---
+// /agents/goal-keyword-tfidf.astro — iter #373:TF-IDF distinctive keywords per goal type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const CN_RE = /[一-鿿]/;
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are', 'be', 'this', 'that', 'it', 'as', 'by', 'from', 'will', 'can', 'do']);
+
+function tokenize(goal: string): string[] {
+  const out: string[] = [];
+  if (!goal) return out;
+  for (const seg of goal.split(/\s+/)) {
+    if (CN_RE.test(seg)) {
+      for (const c of Array.from(seg)) out.push(c);
+    } else {
+      const t = seg.toLowerCase().replace(/[^\w-]/g, '');
+      if (t && t.length > 1 && !STOP.has(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
+interface SessGoal {
+  sid: string;
+  goal: string;
+  type: string;
+  tf: Map<string, number>;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessGoal[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    let type = 'unknown';
+    try {
+      const m = JSON.parse(await readFile(mp, 'utf8'));
+      goal = m.goal ?? '';
+      type = m.type ?? 'unknown';
+    } catch (e) { continue; }
+    if (!goal) continue;
+    const toks = tokenize(goal);
+    const tf = new Map<string, number>();
+    for (const t of toks) tf.set(t, (tf.get(t) ?? 0) + 1);
+    sessions.push({ sid, goal, type, tf });
+  }
+}
+
+const N = sessions.length;
+const df = new Map<string, number>(); // doc frequency
+for (const s of sessions) {
+  const seen = new Set<string>();
+  for (const t of s.tf.keys()) seen.add(t);
+  for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
+}
+
+const idf = new Map<string, number>();
+for (const [t, d] of df.entries()) {
+  idf.set(t, Math.log(1 + N / d));
+}
+
+// Group by type, compute avg TF-IDF per token within type
+const typeMap = new Map<string, Map<string, number>>(); // type -> {token: sum_tfidf}
+const typeCounts = new Map<string, number>();
+for (const s of sessions) {
+  if (!typeMap.has(s.type)) typeMap.set(s.type, new Map());
+  typeCounts.set(s.type, (typeCounts.get(s.type) ?? 0) + 1);
+  const localMap = typeMap.get(s.type)!;
+  const len = Array.from(s.tf.values()).reduce((a, b) => a + b, 0);
+  for (const [t, freq] of s.tf.entries()) {
+    const tfidf = (freq / Math.max(1, len)) * (idf.get(t) ?? 0);
+    localMap.set(t, (localMap.get(t) ?? 0) + tfidf);
+  }
+}
+
+interface TypeTfidf {
+  type: string;
+  top: { token: string; score: number }[];
+  total: number;
+}
+
+const results: TypeTfidf[] = [];
+for (const [type, map] of typeMap.entries()) {
+  const count = typeCounts.get(type) ?? 1;
+  if (count < 2) continue; // require ≥2 sessions
+  const tokens = [...map.entries()]
+    .map(([t, s]) => ({ token: t, score: s / count }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+  results.push({ type, top: tokens, total: count });
+}
+results.sort((a, b) => b.total - a.total);
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Keyword TF-IDF · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-keyword-tfidf</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔬 Goal Keyword TF-IDF <span class="muted" style="font-size:0.6em">(iter #373)</span></h1>
+      <p class="agents-sub">
+        对所有 session goal 计算 TF-IDF,每个 goal type 取 top 12 distinctive tokens。
+        分数高 = 在该 type 中频度高,在其他 type 中少见。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-gkt-globals">
+        <span>total sessions: <strong>{N}</strong></span>
+        <span>distinct goal types: <strong>{results.length}</strong></span>
+        <span>distinct tokens: <strong>{df.size}</strong></span>
+      </div>
+    </section>
+
+    {results.map((r) => (
+      <section class="agents-session-section">
+        <h2>🏷️ type = {esc(r.type)} <small class="muted">(n={r.total})</small></h2>
+        <pre class="agents-gkt-flow">{r.top.map((t) => `${t.token.padEnd(20)} ${bar(t.score, r.top[0].score, 14)}  ${t.score.toFixed(3)}`).join('\n')}</pre>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>TF-IDF 高 = 该 token 在此 type 中代表性高</li>
+        <li>同 token 出现在不同 type 中分数不同 = 任务模式差异</li>
+        <li>对照 <a href={`${base}/agents/goal-type-distribution/`}>Goal Type Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/goal-keyword-diversity/`}>Goal Keyword Diversity</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-gkt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-gkt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-gkt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
