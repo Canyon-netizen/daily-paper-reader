@@ -229,8 +229,10 @@ async function handleChatCompletions(req, res) {
   if (status >= 400) console.error(consoleLine);
   else console.log(consoleLine);
 
-  // 透传上游 content-type(通常 application/json),让客户端拿到的就是 OpenAI 标准格式
-  const ct = upstreamRes.headers.get('content-type') || 'application/json';
+  // 透传上游 content-type,但强制加 charset=utf-8 —— 否则浏览器会按 ISO-8859-1
+  // 解析,Chinese / emoji 全部乱码(`多步任务规划` → `�ಽ����滮`)。
+  const upstreamCt = upstreamRes.headers.get('content-type') || 'application/json';
+  const ct = /charset=/i.test(upstreamCt) ? upstreamCt : upstreamCt.replace(/^([^;]+)/, '$1; charset=utf-8');
   res.writeHead(status, { 'Content-Type': ct });
   res.end(upstreamBody);
 }

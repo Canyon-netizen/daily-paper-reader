@@ -19,6 +19,20 @@
 import { showToast } from './toast';
 import { loadSettings } from './settings';
 
+/** 读取 localStorage `dpr_llm_proxy_v1`(scripts/local-llm-proxy.mjs 的 URL)。
+ *  与 lib/llm/chat.ts 的 readLLMProxyOverride 逻辑一致;
+ *  客户端设了就走本地 8124 代理,避免 CORS / API key 暴露。 */
+function readLLMProxyOverride(): string {
+  try {
+    if (typeof localStorage === 'undefined') return '';
+    const v = (localStorage.getItem('dpr_llm_proxy_v1') || '').trim();
+    if (!v) return '';
+    return /^https?:\/\//i.test(v) ? v.replace(/\/+$/, '') : `http://${v.replace(/\/+$/, '')}`;
+  } catch {
+    return '';
+  }
+}
+
 export interface InterviewStep {
   id: 'topic' | 'subtopic' | 'audience';
   question: string;
@@ -84,7 +98,12 @@ export async function runInterviewStep(
     showToast('请先在设置页配置 LLM key', 'error');
     throw new Error('no LLM key');
   }
-  const url = (cfg.baseUrl || 'https://api.minimaxi.com/v1').replace(/\/$/, '');
+  // 走本地 LLM 代理(若 localStorage 设了 dpr_llm_proxy_v1),否则直连上游。
+  // 与 lib/llm/chat.ts 的 callChatCompletion 逻辑保持一致 —— 之前直接用 cfg.baseUrl
+  // 直连 api.minimaxi.com/anthropic 会被 CORS 挡 → fetch 抛错 → candWrap 永远不显示。
+  const proxyUrl = readLLMProxyOverride();
+  const effectiveBase = proxyUrl || (cfg.baseUrl || 'https://api.minimaxi.com/v1');
+  const url = `${effectiveBase.replace(/\/+$/, '')}/v1/chat/completions`.replace(/\/v1\/v1\//, '/v1/');
   const model = cfg.model || 'MiniMax-M2.7-highspeed';
   const step = STEP_TEMPLATE.find((s) => s.id === stepId)!;
 
@@ -99,11 +118,11 @@ export async function runInterviewStep(
     `用户当前回答: ${currentAnswer.trim() || '(空 — 请输出 candidates 候选数组)'}\n\n` +
     `输出 JSON:`;
 
-  const resp = await fetch(`${url}/chat/completions`, {
+  const resp = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.apiKey}`,
+      ...(proxyUrl ? {} : { Authorization: `Bearer ${cfg.apiKey}` }),
     },
     body: JSON.stringify({
       model,
