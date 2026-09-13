@@ -1,0 +1,200 @@
+---
+// /agents/feedback-proposal-token-overlap.astro — iter #379:within-type proposal Jaccard overlap
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const CN_RE = /[一-鿿]/;
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are', 'be', 'this', 'that', 'it', 'as', 'by', 'from']);
+
+function tokenize(text: string): string[] {
+  const out: string[] = [];
+  if (!text) return out;
+  for (const seg of text.split(/\s+/)) {
+    if (CN_RE.test(seg)) {
+      for (const c of Array.from(seg)) out.push(c);
+    } else {
+      const t = seg.toLowerCase().replace(/[^\w-]/g, '');
+      if (t && t.length > 1 && !STOP.has(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let inter = 0;
+  const [smaller, larger] = a.size < b.size ? [a, b] : [b, a];
+  for (const x of smaller) if (larger.has(x)) inter += 1;
+  return inter / (a.size + b.size - inter);
+}
+
+interface TypeOverlap {
+  type: string;
+  sessions: number;
+  pairCount: number;
+  avgJaccard: number;
+  medianJaccard: number;
+  maxJaccard: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const typeTokens = new Map<string, { sid: string; toks: Set<string> }[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    let type = 'unknown';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { type = JSON.parse(await readFile(mp, 'utf8')).type ?? 'unknown'; } catch (e) { /* */ }
+    }
+
+    const allToks = new Set<string>();
+    let proposalCount = 0;
+    for (const rf of rfs) {
+      if (!rf.match(/^round_\d+\.json$/)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            let text = '';
+            if (typeof p === 'string') text = p;
+            else if (typeof p === 'object') text = p.rationale ?? p.feedback ?? p.comment ?? p.text ?? p.content ?? '';
+            if (text) {
+              for (const t of tokenize(text)) allToks.add(t);
+              proposalCount += 1;
+            }
+          }
+        }
+      } catch (e) { /* */ }
+    }
+    if (allToks.size < 5 || proposalCount < 3) continue;
+    if (!typeTokens.has(type)) typeTokens.set(type, []);
+    typeTokens.get(type)!.push({ sid, toks: allToks });
+  }
+}
+
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+const results: TypeOverlap[] = [];
+for (const [type, arr] of typeTokens.entries()) {
+  if (arr.length < 2) continue;
+  const jaccards: number[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    for (let j = i + 1; j < arr.length; j++) {
+      jaccards.push(jaccard(arr[i].toks, arr[j].toks));
+    }
+  }
+  if (jaccards.length === 0) continue;
+  results.push({
+    type,
+    sessions: arr.length,
+    pairCount: jaccards.length,
+    avgJaccard: jaccards.reduce((s, v) => s + v, 0) / jaccards.length,
+    medianJaccard: median(jaccards),
+    maxJaccard: Math.max(...jaccards),
+  });
+}
+results.sort((a, b) => b.avgJaccard - a.avgJaccard);
+
+const total = results.length;
+const highOverlap = results.filter((r) => r.avgJaccard > 0.4).length;
+const lowOverlap = results.filter((r) => r.avgJaccard < 0.1).length;
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Feedback Proposal Token Overlap · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / feedback-proposal-token-overlap</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🔁 Feedback Proposal Token Overlap <span class="muted" style="font-size:0.6em">(iter #379)</span></h1>
+      <p class="agents-sub">
+        同 goal type session 之间,所有 feedback proposal token 集合的 pairwise Jaccard。
+        高 = feedback 模板化重复;低 = 每次反馈多样。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-fpto-globals">
+        <span>analyzed types: <strong>{total}</strong></span>
+        <span>high overlap (&gt;0.4): <strong style="color:#f59e0b">{highOverlap}</strong></span>
+        <span>low overlap (&lt;0.1): <strong style="color:#10b981">{lowOverlap}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔁 Per-type overlap</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>sessions</th><th>pairs</th><th>avg jaccard</th><th>median</th><th>max</th><th>bar (avg)</th></tr>
+        </thead>
+        <tbody>
+          {results.map((r) => (
+            <tr>
+              <td><code>{esc(r.type)}</code></td>
+              <td>{r.sessions}</td>
+              <td>{r.pairCount}</td>
+              <td><strong style={`color:${r.avgJaccard > 0.4 ? '#f59e0b' : r.avgJaccard < 0.1 ? '#10b981' : '#4f46e5'}`}>{r.avgJaccard.toFixed(3)}</strong></td>
+              <td>{r.medianJaccard.toFixed(3)}</td>
+              <td>{r.maxJaccard.toFixed(3)}</td>
+              <td><code>{bar(r.avgJaccard, Math.max(...results.map((x) => x.avgJaccard)), 16)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg &gt; 0.4 = feedback 高度模板化(可能 prompt 引导太死)</li>
+        <li>avg &lt; 0.1 = feedback 真正多样(每个 session 给出独特建议)</li>
+        <li>对照 <a href={`${base}/agents/goal-keyword-tfidf/`}>Goal Keyword TF-IDF</a></li>
+        <li>对照 <a href={`${base}/agents/persona-repetition-rate/`}>Persona Repetition Rate</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-fpto-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-fpto-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
