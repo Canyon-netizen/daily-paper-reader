@@ -1,0 +1,165 @@
+---
+// /agents/goal-type-score-distribution.astro — iter #399:final score distribution per goal type
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface TypeStats {
+  type: string;
+  count: number;
+  avg: number;
+  std: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  min: number;
+  max: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const typeMap = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let lastScore = 0;
+    for (let i = rNums.length - 1; i >= 0; i--) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rNums[i]}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) {
+          lastScore = arr.reduce((a, b) => a + b, 0) / arr.length;
+          break;
+        }
+      } catch (e) { /* */ }
+    }
+    if (lastScore === 0) continue;
+
+    let type = 'unknown';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { type = JSON.parse(await readFile(mp, 'utf8')).type ?? 'unknown'; } catch (e) { /* */ }
+    }
+    if (!typeMap.has(type)) typeMap.set(type, []);
+    typeMap.get(type)!.push(lastScore);
+  }
+}
+
+function p(arr: number[], q: number): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(q * (s.length - 1))];
+}
+
+function stddev(arr: number[]): number {
+  if (arr.length < 2) return 0;
+  const m = arr.reduce((s, v) => s + v, 0) / arr.length;
+  return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
+}
+
+const stats: TypeStats[] = [];
+for (const [type, scores] of typeMap.entries()) {
+  if (scores.length < 2) continue;
+  stats.push({
+    type,
+    count: scores.length,
+    avg: scores.reduce((s, v) => s + v, 0) / scores.length,
+    std: stddev(scores),
+    p25: p(scores, 0.25),
+    p50: p(scores, 0.5),
+    p75: p(scores, 0.75),
+    min: Math.min(...scores),
+    max: Math.max(...scores),
+  });
+}
+stats.sort((a, b) => b.avg - a.avg);
+
+function bar(n: number, max: number, width = 16): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Goal Type Score Distribution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / goal-type-score-distribution</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📈 Goal Type Score Distribution <span class="muted" style="font-size:0.6em">(iter #399)</span></h1>
+      <p class="agents-sub">
+        每 goal type 的 final score 分布(mean, std, p25, p50, p75)。
+        高 std = 该 type 的 session 之间分数差异大;低 std = 一致。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 Type × score</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>type</th><th>n</th><th>avg</th><th>std</th><th>p25</th><th>p50</th><th>p75</th><th>min</th><th>max</th></tr>
+        </thead>
+        <tbody>
+          {stats.map((r) => (
+            <tr>
+              <td><code>{esc(r.type)}</code></td>
+              <td>{r.count}</td>
+              <td><strong style={`color:${r.avg >= 7 ? '#10b981' : r.avg >= 5 ? '#f59e0b' : '#ef4444'}`}>{r.avg.toFixed(2)}</strong></td>
+              <td>{r.std.toFixed(2)}</td>
+              <td>{r.p25.toFixed(2)}</td>
+              <td>{r.p50.toFixed(2)}</td>
+              <td>{r.p75.toFixed(2)}</td>
+              <td>{r.min.toFixed(2)}</td>
+              <td>{r.max.toFixed(2)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>avg 高的 type = 该类任务通常表现好</li>
+        <li>std 小的 type = 该类任务表现稳定可预测</li>
+        <li>p75 &lt; 5 = 该 type 多数 session 都失败</li>
+        <li>对照 <a href={`${base}/agents/goal-type-round-distribution/`}>Goal Type Round Distribution</a></li>
+        <li>对照 <a href={`${base}/agents/goal-type-final-score-heatmap/`}>Goal Type Final Score Heatmap</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+</style>
