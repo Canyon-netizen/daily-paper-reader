@@ -329,6 +329,9 @@ async function runInterviewFlow(
     };
 
     const runOptionsGen = async () => {
+      if (optionsEl) {
+        optionsEl.innerHTML = '<div class="lib-interview-options-loading"><span class="lib-spinner"></span> 正在生成候选…</div>';
+      }
       try {
         const r = await runInterviewStep(stepId, history.map((h) => ({
           ...h,
@@ -336,7 +339,16 @@ async function runInterviewFlow(
         })), '', readLibraryName());
         renderOptions(r.candidates || [], r.rationale);
       } catch (err) {
-        if (optionsEl) optionsEl.innerHTML = `<div class="muted error">生成失败:${escapeHtml((err as Error).message)} — 用下方「其他」自写。</div>`;
+        if (optionsEl) optionsEl.innerHTML = `
+          <div class="lib-interview-options-error">
+            <div class="muted error">⚠️ 生成失败:${escapeHtml((err as Error).message)}</div>
+            <button type="button" class="btn btn-soft btn-sm" data-interview-retry>🔄 重试</button>
+            <span class="muted">或用下方「其他」自写。</span>
+          </div>
+        `;
+        optionsEl.querySelector('[data-interview-retry]')?.addEventListener('click', () => {
+          void runOptionsGen();
+        });
       }
     };
 
