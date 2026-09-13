@@ -1,0 +1,212 @@
+---
+// /agents/session-designer-convergence-index.astro — iter #396:designer output length convergence per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function designLen(r: any): number {
+  const ds = r.designer ?? {};
+  let s = ds.design ?? ds.output ?? ds.text ?? ds.content ?? '';
+  if (typeof s === 'object') s = JSON.stringify(s);
+  return typeof s === 'string' ? s.length : 0;
+}
+
+function pearson(xs: number[], ys: number[]): number {
+  if (xs.length < 2) return 0;
+  const n = Math.min(xs.length, ys.length);
+  const mx = xs.slice(0, n).reduce((s, v) => s + v, 0) / n;
+  const my = ys.slice(0, n).reduce((s, v) => s + v, 0) / n;
+  let num = 0, dx = 0, dy = 0;
+  for (let i = 0; i < n; i++) {
+    num += (xs[i] - mx) * (ys[i] - my);
+    dx += (xs[i] - mx) ** 2;
+    dy += (ys[i] - my) ** 2;
+  }
+  return dx > 0 && dy > 0 ? num / Math.sqrt(dx * dy) : 0;
+}
+
+interface SessConv {
+  sid: string;
+  goal: string;
+  lengths: number[];
+  corr: number; // pearson(roundIdx, length) — negative = converging
+  totalChange: number;
+  finalLen: number;
+  rounds: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessConv[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 4) continue;
+    rNums.sort((a, b) => a - b);
+
+    const lengths: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        lengths.push(designLen(r));
+      } catch (e) { lengths.push(0); }
+    }
+
+    // Pearson roundIdx vs length; rolling window std to capture variance shrink
+    const x = lengths.map((_, i) => i);
+    const corr = pearson(x, lengths);
+    const totalChange = lengths.reduce((s, v, i) => i === 0 ? 0 : s + Math.abs(v - lengths[i - 1]), 0);
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessions.push({
+      sid, goal,
+      lengths,
+      corr,
+      totalChange,
+      finalLen: lengths[lengths.length - 1],
+      rounds: rNums.length,
+    });
+  }
+}
+
+// Sort by corr (most negative = converging most)
+sessions.sort((a, b) => a.corr - b.corr);
+
+const total = sessions.length;
+const converging = sessions.filter((s) => s.corr < -0.3).length;
+const growing = sessions.filter((s) => s.corr > 0.3).length;
+const stable = sessions.length - converging - growing;
+
+function sparkline(arr: number[], width = 14): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  const lo = Math.min(...arr);
+  const hi = Math.max(...arr);
+  const range = hi - lo || 1;
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - lo) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Session Designer Convergence Index · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-designer-convergence-index</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🎯 Session Designer Convergence Index <span class="muted" style="font-size:0.6em">(iter #396)</span></h1>
+      <p class="agents-sub">
+        每 session:designer output 长度与 round 索引的 Pearson。
+        强负 = 后期输出变短(收敛);强正 = 后期输出变长(扩张)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sdci-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>converging (corr&lt;-0.3): <strong style="color:#10b981">{converging}</strong></span>
+        <span>growing (corr&gt;0.3): <strong style="color:#f59e0b">{growing}</strong></span>
+        <span>stable: <strong>{stable}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 Top 15 most converging (corr most negative)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>corr</th><th>rounds</th><th>final len</th><th>total change</th><th>lengths</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 15).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#10b981">{s.corr.toFixed(3)}</strong></td>
+              <td>{s.rounds}</td>
+              <td>{s.finalLen}</td>
+              <td>{s.totalChange.toFixed(0)}</td>
+              <td><code style="font-size:0.7em">{sparkline(s.lengths, 14)}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📈 Top 15 most expanding (corr most positive)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>corr</th><th>rounds</th><th>final len</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 15).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#f59e0b">{s.corr.toFixed(3)}</strong></td>
+              <td>{s.rounds}</td>
+              <td>{s.finalLen}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>corr &lt; -0.3 = designer 输出越来越短(收敛到最终答案)</li>
+        <li>corr &gt; 0.3 = designer 输出越来越长(膨胀 / 新增内容)</li>
+        <li>corr ≈ 0 = designer 输出长度基本稳定</li>
+        <li>对照 <a href={`${base}/agents/designer-edit-magnitude/`}>Designer Edit Magnitude</a></li>
+        <li>对照 <a href={`${base}/agents/designer-variance-vs-gain/`}>Designer Variance vs Gain</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sdci-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sdci-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
