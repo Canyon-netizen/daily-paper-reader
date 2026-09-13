@@ -1,0 +1,142 @@
+---
+// /agents/action-application-recency-by-type.astro — iter #389:recent action type usage (last K actions)
+
+import { readFile, readdir, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile as readFileAsync, readdir as readdirAsync } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface ActionEntry { action: string; ts: number; sid: string; round: number; }
+
+const root = join(process.cwd(), 'archive');
+const allActions: ActionEntry[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdirAsync(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdirAsync(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    rNums.sort((a, b) => a - b);
+
+    for (const rn of rNums) {
+      const fp = join(rd, `round_${rn}.json`);
+      let ts = 0;
+      try { ts = statSync(fp).mtimeMs; } catch (e) { continue; }
+      try {
+        const r = JSON.parse(await readFileAsync(fp, 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          const act = a.action ?? a.type ?? 'unknown';
+          allActions.push({ action: act, ts, sid, round: rn });
+        }
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+// Sort by timestamp descending
+allActions.sort((a, b) => b.ts - a.ts);
+
+function recencyStats(K: number) {
+  const recent = allActions.slice(0, K);
+  const counts = new Map<string, number>();
+  for (const a of recent) counts.set(a.action, (counts.get(a.action) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([action, count]) => ({ action, count, pct: (count / recent.length) * 100 }))
+    .sort((a, b) => b.count - a.count);
+}
+
+const Ks = [50, 100, 250, 500, 1000];
+const statsByK = Ks.map((K) => ({ K, items: recencyStats(K) }));
+const totalActions = allActions.length;
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Application Recency by Type · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-application-recency-by-type</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🕒 Action Application Recency by Type <span class="muted" style="font-size:0.6em">(iter #389)</span></h1>
+      <p class="agents-sub">
+        按 mtime 倒序取最近 K 个 actions,看各 action type 的占比。
+        反映系统当前阶段的 action 偏好。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-aarbt-globals">
+        <span>total actions: <strong>{totalActions}</strong></span>
+      </div>
+    </section>
+
+    {statsByK.map((s) => (
+      <section class="agents-session-section">
+        <h2>🕒 Top 12 actions in last {s.K} actions</h2>
+        <pre class="agents-aarbt-flow">{
+          s.items.slice(0, 12).map((it) => `${it.action.padEnd(24)} ${bar(it.count, s.items[0].count, 18)}  ${it.count} (${it.pct.toFixed(1)}%)`).join('\n')
+        }</pre>
+      </section>
+    ))}
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>recent 50 vs recent 1000 = action 偏好是否随时间漂移</li>
+        <li>同一 action 在多 K 中排名都靠前 = 稳定常用</li>
+        <li>近期占比远高 = 当前 system 偏好该 action(可能 gate 阈值调整)</li>
+        <li>对照 <a href={`${base}/agents/action-recency-half-life/`}>Action Recency Half-life</a></li>
+        <li>对照 <a href={`${base}/agents/action-diversity-trend/`}>Action Diversity Trend</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-aarbt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-aarbt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+  .agents-aarbt-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
