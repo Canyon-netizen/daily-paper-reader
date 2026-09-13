@@ -1,0 +1,163 @@
+---
+// /agents/milestone-380.astro — iter #380:milestone celebration page
+
+import { readFile, readdir, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readFile as readFileAsync, readdir as readdirAsync } from 'node:fs/promises';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const root = join(process.cwd(), 'archive');
+let totalSessions = 0;
+let totalRounds = 0;
+let totalActions = 0;
+let oldestDate: Date | null = null;
+let newestDate: Date | null = null;
+
+if (existsSync(root)) {
+  const sids = await readdirAsync(root).catch(() => []);
+  for (const sid of sids) {
+    totalSessions += 1;
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdirAsync(rd).catch(() => []);
+    let firstRound: string | null = null;
+    for (const rf of rfs) {
+      if (rf.match(/^round_\d+\.json$/)) {
+        totalRounds += 1;
+        if (!firstRound) firstRound = rf;
+      }
+    }
+    if (firstRound) {
+      try {
+        const st = statSync(join(rd, firstRound));
+        if (!oldestDate || st.mtime < oldestDate) oldestDate = st.mtime;
+        if (!newestDate || st.mtime > newestDate) newestDate = st.mtime;
+      } catch (e) { /* */ }
+      try {
+        const r = JSON.parse(await readFileAsync(join(rd, firstRound), 'utf8'));
+        totalActions += (r.modifier?.applied ?? []).length;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const daysSpan = oldestDate && newestDate ? Math.max(1, Math.round((newestDate.getTime() - oldestDate.getTime()) / 86400000)) : 1;
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Milestone #380 · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / milestone-380</span>
+    </nav>
+
+    <header class="agents-header milestone-header">
+      <h1 class="milestone-title">🏆 Milestone #380</h1>
+      <p class="milestone-sub">Triple-Century + 80:多智能体迭代数据库已经走过了 380 个版本</p>
+    </header>
+
+    <section class="agents-session-section milestone-stats">
+      <h2>📊 系统快照</h2>
+      <div class="milestone-grid">
+        <div class="milestone-stat">
+          <span class="milestone-num">{totalSessions}</span>
+          <span class="milestone-label">sessions</span>
+        </div>
+        <div class="milestone-stat">
+          <span class="milestone-num">{totalRounds}</span>
+          <span class="milestone-label">rounds</span>
+        </div>
+        <div class="milestone-stat">
+          <span class="milestone-num">{totalActions}</span>
+          <span class="milestone-label">actions (sample)</span>
+        </div>
+        <div class="milestone-stat">
+          <span class="milestone-num">{daysSpan}</span>
+          <span class="milestone-label">days span</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🎉 历程回顾</h2>
+      <ul>
+        <li>#100:首个 century 里程碑</li>
+        <li>#200:double century</li>
+        <li>#250:half-way to triple</li>
+        <li>#270 / #280:approach triple century</li>
+        <li>#299:almost there</li>
+        <li>#300:Triple Century!</li>
+        <li>#320 / #350:Triple-Century + 20/50</li>
+        <li><strong>#380:当前里程碑 — Triple-Century + 80</strong></li>
+      </ul>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <p>
+        380 次迭代 = 380 个观察角度。从 goal 类型、action 类别、persona 反馈、score 收敛到 designer 效率,
+        系统的每个侧面都已经被分析过。继续推进,下一个里程碑是 <strong>#400 — Triple-Century + Century</strong>,
+        还有 20 步。
+      </p>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .milestone-header {
+    background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #ef4444 100%);
+    border-radius: 8px;
+    padding: 1.5rem;
+    color: white;
+    margin-bottom: 1.2rem;
+  }
+  .milestone-title {
+    margin: 0 0 0.5rem;
+    font-size: 2.4rem;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+  }
+  .milestone-sub {
+    margin: 0;
+    opacity: 0.9;
+  }
+  .milestone-stats {
+    background: rgba(99, 102, 241, 0.08);
+  }
+  .milestone-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+  }
+  .milestone-stat {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 1rem;
+    border-radius: 6px;
+    text-align: center;
+    border: 1px solid #4f46e5;
+  }
+  .milestone-num {
+    display: block;
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #fbbf24;
+    font-family: ui-monospace, monospace;
+  }
+  .milestone-label {
+    display: block;
+    margin-top: 0.4rem;
+    font-size: 0.85rem;
+    color: #94a3b8;
+  }
+</style>
