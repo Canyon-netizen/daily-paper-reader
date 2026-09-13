@@ -1,0 +1,162 @@
+---
+// /agents/round-action-total-cost-distribution.astro — iter #382:per-round total action cost distribution
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Bin {
+  range: string;
+  lo: number;
+  hi: number;
+  count: number;
+  totalCost: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const costs: number[] = [];
+let totalCostAll = 0;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    for (const rf of rfs) {
+      if (!rf.match(/^round_\d+\.json$/)) continue;
+      try {
+        const r = JSON.parse(await readFile(join(rd, rf), 'utf8'));
+        let cost = 0;
+        for (const a of (r.modifier?.applied ?? [])) {
+          if (typeof a.cost === 'number') cost += a.cost;
+        }
+        costs.push(cost);
+        totalCostAll += cost;
+      } catch (e) { /* */ }
+    }
+  }
+}
+
+const sorted = [...costs].sort((a, b) => a - b);
+const N = costs.length;
+function p(q: number): number {
+  return sorted[Math.floor(q * (sorted.length - 1))] ?? 0;
+}
+
+const median = p(0.5);
+const mean = N > 0 ? sorted.reduce((s, v) => s + v, 0) / N : 0;
+const max = sorted[N - 1] ?? 0;
+const min = sorted[0] ?? 0;
+const zeroRounds = costs.filter((c) => c === 0).length;
+
+const bins: Bin[] = [
+  { range: '0', lo: 0, hi: 0, count: 0, totalCost: 0 },
+  { range: '0-1', lo: 0.001, hi: 1, count: 0, totalCost: 0 },
+  { range: '1-5', lo: 1.001, hi: 5, count: 0, totalCost: 0 },
+  { range: '5-10', lo: 5.001, hi: 10, count: 0, totalCost: 0 },
+  { range: '10-50', lo: 10.001, hi: 50, count: 0, totalCost: 0 },
+  { range: '50-100', lo: 50.001, hi: 100, count: 0, totalCost: 0 },
+  { range: '100+', lo: 100.001, hi: 1e9, count: 0, totalCost: 0 },
+];
+
+for (const c of costs) {
+  for (const b of bins) {
+    if (c >= b.lo && c <= b.hi) {
+      b.count += 1;
+      b.totalCost += c;
+      break;
+    }
+  }
+}
+
+function bar(n: number, max: number, width = 24): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Total Action Cost Distribution · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-action-total-cost-distribution</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💰 Round Total Action Cost Distribution <span class="muted" style="font-size:0.6em">(iter #382)</span></h1>
+      <p class="agents-sub">
+        每个 round 累计 action cost 分布。
+        多数 round cost = $0-1;少数 round = $100+ (单轮重投入)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rtcd-globals">
+        <span>total rounds: <strong>{N}</strong></span>
+        <span>total cost (sum): <strong>${totalCostAll.toFixed(2)}</strong></span>
+        <span>median: <strong>${median.toFixed(2)}</strong></span>
+        <span>mean: <strong>${mean.toFixed(2)}</strong></span>
+        <span>max: <strong>${max.toFixed(2)}</strong></span>
+        <span>zero-cost rounds: <strong style="color:#94a3b8">{zeroRounds} ({(zeroRounds / Math.max(1, N) * 100).toFixed(1)}%)</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💰 Histogram</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>range</th><th>count</th><th>%</th><th>total cost</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {bins.map((b) => (
+            <tr>
+              <td><code>${b.range}</code></td>
+              <td>{b.count}</td>
+              <td>{N > 0 ? ((b.count / N) * 100).toFixed(1) : '0'}%</td>
+              <td>${b.totalCost.toFixed(2)}</td>
+              <td><code>{bar(b.count, Math.max(...bins.map((x) => x.count)), 28)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>zero-cost rounds = 没产生任何 applied action</li>
+        <li>median cost = 单轮典型成本</li>
+        <li>少数 round cost $100+ = 单轮重投入,需检查是否合理</li>
+        <li>对照 <a href={`${base}/agents/round-cost-gain-correlation/`}>Round Cost-Gain Correlation</a></li>
+        <li>对照 <a href={`${base}/agents/cost-density/`}>Cost Density</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rtcd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rtcd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
