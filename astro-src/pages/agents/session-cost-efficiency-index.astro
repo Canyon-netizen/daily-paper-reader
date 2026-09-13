@@ -1,0 +1,190 @@
+---
+// /agents/session-cost-efficiency-index.astro — iter #384:cost efficiency per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessEff {
+  sid: string;
+  goal: string;
+  totalCost: number;
+  totalGain: number;
+  rounds: number;
+  costPerGain: number; // negative gain → null
+  costPerRound: number;
+  gainPerCost: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessEff[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let totalCost = 0;
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        for (const a of (r.modifier?.applied ?? [])) {
+          if (typeof a.cost === 'number') totalCost += a.cost;
+        }
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { scores.push(0); }
+    }
+    const totalGain = scores[scores.length - 1] - scores[0];
+    if (totalCost === 0) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessions.push({
+      sid, goal,
+      totalCost, totalGain,
+      rounds: rNums.length,
+      costPerGain: totalGain > 0 ? totalCost / totalGain : Infinity,
+      costPerRound: totalCost / rNums.length,
+      gainPerCost: totalGain / totalCost,
+    });
+  }
+}
+
+const positiveSessions = sessions.filter((s) => s.totalGain > 0);
+positiveSessions.sort((a, b) => a.costPerGain - b.costPerGain);
+
+const total = positiveSessions.length;
+const avgCost = positiveSessions.length > 0 ? positiveSessions.reduce((s, x) => s + x.totalCost, 0) / positiveSessions.length : 0;
+const avgGain = positiveSessions.length > 0 ? positiveSessions.reduce((s, x) => s + x.totalGain, 0) / positiveSessions.length : 0;
+const avgEfficiency = positiveSessions.length > 0 ? positiveSessions.reduce((s, x) => s + x.gainPerCost, 0) / positiveSessions.length : 0;
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Session Cost Efficiency Index · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-cost-efficiency-index</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>⚡ Session Cost Efficiency Index <span class="muted" style="font-size:0.6em">(iter #384)</span></h1>
+      <p class="agents-sub">
+        每个 session 的 cost-per-gain ratio(cost / gain)。
+        越低 = 单位 gain 花费越少,越高效。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-scei-globals">
+        <span>positive-gain sessions: <strong>{total}</strong></span>
+        <span>avg cost: <strong>${avgCost.toFixed(2)}</strong></span>
+        <span>avg gain: <strong>{avgGain.toFixed(2)}</strong></span>
+        <span>avg gain-per-cost: <strong>{avgEfficiency.toFixed(3)}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>⚡ Top 20 most cost-efficient (lowest cost/gain)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>cost</th><th>gain</th><th>cost/gain</th><th>gain/cost</th><th>cost/round</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {positiveSessions.slice(0, 20).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td>${s.totalCost.toFixed(2)}</td>
+              <td><strong style="color:#10b981">+{s.totalGain.toFixed(2)}</strong></td>
+              <td><strong style="color:#fbbf24">${s.costPerGain.toFixed(2)}</strong></td>
+              <td>{s.gainPerCost.toFixed(3)}</td>
+              <td>${s.costPerRound.toFixed(2)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💸 Bottom 10 least cost-efficient</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>cost</th><th>gain</th><th>cost/gain</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {positiveSessions.slice().reverse().slice(0, 10).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td>${s.totalCost.toFixed(2)}</td>
+              <td><strong style="color:#10b981">+{s.totalGain.toFixed(2)}</strong></td>
+              <td><strong style="color:#ef4444">${s.costPerGain.toFixed(2)}</strong></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>低 cost/gain = 该 session 用小成本拿到了高 gain(性价比高)</li>
+        <li>高 cost/gain = 该 session 烧了很多钱只换来小幅提升</li>
+        <li>cost/round = 每轮平均开销(对比 round 长度)</li>
+        <li>对照 <a href={`${base}/agents/round-cost-gain-correlation/`}>Round Cost-Gain Correlation</a></li>
+        <li>对照 <a href={`${base}/agents/cost-density/`}>Cost Density</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-scei-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-scei-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
