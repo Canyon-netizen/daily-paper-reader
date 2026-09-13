@@ -1,0 +1,192 @@
+---
+// /agents/designer-edit-magnitude-trajectory.astro — iter #383:designer edit magnitude per round
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+function designLen(r: any): number {
+  const ds = r.designer ?? {};
+  let s = ds.design ?? ds.output ?? ds.text ?? ds.content ?? '';
+  if (typeof s === 'object') s = JSON.stringify(s);
+  return typeof s === 'string' ? s.length : 0;
+}
+
+interface SessEdit {
+  sid: string;
+  goal: string;
+  diffs: number[];
+  total: number;
+  avg: number;
+  trend: number; // positive = growing, negative = shrinking
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessEdit[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const lengths: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        lengths.push(designLen(r));
+      } catch (e) { lengths.push(0); }
+    }
+    const diffs: number[] = [];
+    for (let i = 1; i < lengths.length; i++) diffs.push(Math.abs(lengths[i] - lengths[i - 1]));
+    if (diffs.length < 2) continue;
+    const total = diffs.reduce((s, v) => s + v, 0);
+    const avg = total / diffs.length;
+
+    // trend: average(last 2 diffs) - average(first 2 diffs)
+    const first = diffs.slice(0, Math.min(2, diffs.length)).reduce((s, v) => s + v, 0) / Math.min(2, diffs.length);
+    const last = diffs.slice(-2).reduce((s, v) => s + v, 0) / 2;
+    const trend = last - first;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessions.push({ sid, goal, diffs, total, avg, trend });
+  }
+}
+
+sessions.sort((a, b) => b.trend - a.trend);
+
+const total = sessions.length;
+const growing = sessions.filter((s) => s.trend > 200).length;
+const shrinking = sessions.filter((s) => s.trend < -200).length;
+const stable = sessions.length - growing - shrinking;
+
+function sparkline(arr: number[], width = 14): string {
+  if (arr.length === 0) return '·'.repeat(width);
+  const chars = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+  const out: string[] = [];
+  const lo = Math.min(...arr);
+  const hi = Math.max(...arr);
+  const range = hi - lo || 1;
+  for (let i = 0; i < width; i++) {
+    const idx = Math.floor((i / (width - 1)) * (arr.length - 1));
+    const v = arr[Math.max(0, Math.min(arr.length - 1, idx))];
+    const ratio = (v - lo) / range;
+    out.push(chars[Math.min(chars.length - 1, Math.floor(ratio * (chars.length - 1)))]);
+  }
+  return out.join('');
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Designer Edit Magnitude Trajectory · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / designer-edit-magnitude-trajectory</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>✏️ Designer Edit Magnitude Trajectory <span class="muted" style="font-size:0.6em">(iter #383)</span></h1>
+      <p class="agents-sub">
+        每个 session 中 designer output 长度变化 (|len_i - len_(i-1)|) 的 trend。
+        growing = 后期编辑更大;shrinking = 后期编辑趋近 0 (收敛)。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-demt-globals">
+        <span>sessions: <strong>{total}</strong></span>
+        <span>growing trend: <strong style="color:#f59e0b">{growing}</strong></span>
+        <span>shrinking trend: <strong style="color:#10b981">{shrinking}</strong></span>
+        <span>stable: <strong>{stable}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 15 growing edit trend</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>trend (chars)</th><th>avg diff</th><th>total diff</th><th>diffs sparkline</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 15).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#f59e0b">{s.trend >= 0 ? '+' : ''}{s.trend.toFixed(0)}</strong></td>
+              <td>{s.avg.toFixed(0)}</td>
+              <td>{s.total.toFixed(0)}</td>
+              <td><code style="font-size:0.7em">{sparkline(s.diffs, 14)}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📉 Top 15 shrinking edit trend</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>trend</th><th>avg</th><th>diffs</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 15).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#10b981">{s.trend >= 0 ? '+' : ''}{s.trend.toFixed(0)}</strong></td>
+              <td>{s.avg.toFixed(0)}</td>
+              <td><code style="font-size:0.7em">{sparkline(s.diffs, 14)}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>shrinking 主导 = 后期 designer 只做小幅调整(收敛)</li>
+        <li>growing 主导 = 后期 designer 反而大改(可能 rewrites)</li>
+        <li>对照 <a href={`${base}/agents/designer-edit-magnitude/`}>Designer Edit Magnitude</a></li>
+        <li>对照 <a href={`${base}/agents/designer-length-vs-gain/`}>Designer Length vs Gain</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-demt-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-demt-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
