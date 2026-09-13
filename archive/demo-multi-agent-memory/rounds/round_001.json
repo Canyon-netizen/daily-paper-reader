@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "round": 1,
+  "project_id": "demo-multi-agent-memory",
+  "started_at": 1757750305000,
+  "finished_at": 1757750399000,
+  "designer": {
+    "proposals": [
+      {
+        "id": "p_demo_001",
+        "round": 1,
+        "type": "add_paper",
+        "title": "把 KV-cache 完整性论文加入研究背景",
+        "rationale": "2606.28958 直接讨论多智能体协作中的 KV-cache 完整性,是 context 共享问题的核心参考。",
+        "evidence": {
+          "paperIds": ["2606.28958"],
+          "quotes": [
+            "We examine whether a compromised KV-cache in one agent can corrupt downstream planning in collaborator agents."
+          ]
+        },
+        "target": {
+          "projectId": "demo-multi-agent-memory",
+          "stageId": "stage-background",
+          "arxivIds": ["2606.28958"]
+        },
+        "estimated_effort": "low",
+        "risk": "仅是文献补全,不直接产出可执行 idea。",
+        "created_at": 1757750312000
+      },
+      {
+        "id": "p_demo_002",
+        "round": 1,
+        "type": "add_paper",
+        "title": "加入 hierarchical communication 论文作对照",
+        "rationale": "2606.29126 提出的层级通信结构正是长时记忆分层的工程范式,与目标高度相关。",
+        "evidence": {
+          "paperIds": ["2606.29126"],
+          "quotes": [
+            "Hierarchical communication enables agents to specialize while sharing only compressed summaries across layers."
+          ]
+        },
+        "target": {
+          "projectId": "demo-multi-agent-memory",
+          "stageId": "stage-background",
+          "arxivIds": ["2606.29126"]
+        },
+        "estimated_effort": "low",
+        "risk": "与 p_demo_001 重复,需要 gate 排序。",
+        "created_at": 1757750314000
+      },
+      {
+        "id": "p_demo_003",
+        "round": 1,
+        "type": "create_draft",
+        "title": "起草:多智能体长期记忆的层级结构综述",
+        "rationale": "综合背景论文,产出 1 份综述 draft,把 KV-cache 完整性 + 层级通信两条线串成可读框架。",
+        "evidence": {
+          "paperIds": ["2606.28958", "2606.29126"],
+          "quotes": []
+        },
+        "target": {
+          "projectId": "demo-multi-agent-memory",
+          "draftTitle": "多智能体长期记忆综述"
+        },
+        "estimated_effort": "medium",
+        "risk": "写成综述而不是原创观点,可能被 reviewer 批评缺乏新意。",
+        "created_at": 1757750316000
+      },
+      {
+        "id": "p_demo_004",
+        "round": 1,
+        "type": "experiment_plan",
+        "title": "实验:shared KV-cache vs per-agent memory 的 ablation",
+        "rationale": "在 2-3 agent 的对话任务上对比共享 KV-cache(共享 context)与 per-agent memory(独立 context + 通信),量化 context 长度与任务质量的 Pareto 曲线。",
+        "evidence": {
+          "paperIds": ["2606.29126", "2606.28958"],
+          "quotes": []
+        },
+        "target": {
+          "projectId": "demo-multi-agent-memory"
+        },
+        "estimated_effort": "high",
+        "risk": "需要 2-3 天搭建实验脚手架,短期 ROI 中等。",
+        "created_at": 1757750318000
+      }
+    ],
+    "prompt_summary": "goal='如何在多智能体协作中实现长时记忆而不让 context 爆炸?' + 2 candidates (2606.28958, 2606.29126);Designer 产出 4 proposals:2 add_paper + 1 create_draft + 1 experiment_plan。",
+    "model": "stub-dry-run"
+  },
+  "feedback": {
+    "critiques": [
+      {
+        "proposal_id": "p_demo_001",
+        "scores": { "methodologist": 7, "engineer": 6, "skeptic": 5 },
+        "total": 6.0,
+        "critique": "文献补全动作本身合理,但与 goal 的直接因果不强。methodologist 认可引用的及时性,engineer 觉得应该再补 1 篇关于 memory consolidation 的工作,skeptic 担忧这只是凑数不解决问题。",
+        "elo": 1180,
+        "matches": 1,
+        "wins": 0,
+        "persona_attribution": {
+          "methodologist": "引用是 2026 年新工作,覆盖度 OK。",
+          "engineer": "建议补一篇关于 memory consolidation 的论文,理由更充分。",
+          "skeptic": "补文献不会直接解决 context 爆炸问题。"
+        }
+      },
+      {
+        "proposal_id": "p_demo_002",
+        "scores": { "methodologist": 8, "engineer": 7, "skeptic": 6 },
+        "total": 7.0,
+        "critique": "层级通信论文与 goal 强相关,methodologist 给出高分。engineer 指出需要明确 stage 边界。skeptic 担忧与 p_demo_001 重复。",
+        "elo": 1220,
+        "matches": 1,
+        "wins": 1,
+        "persona_attribution": {
+          "methodologist": "层级结构是当前主流解决方案之一。",
+          "engineer": "需要明确 stage 之间共享什么粒度的 summary。",
+          "skeptic": "和 p_demo_001 高度相似,gate 应该二选一。"
+        }
+      },
+      {
+        "proposal_id": "p_demo_003",
+        "scores": { "methodologist": 9, "engineer": 7, "skeptic": 8 },
+        "total": 8.0,
+        "critique": "把背景论文串成综述 draft 是合理的下一步。三 persona 一致认可其整合价值。skeptic 提醒避免写成无原创观点的 survey。",
+        "elo": 1280,
+        "matches": 1,
+        "wins": 2,
+        "persona_attribution": {
+          "methodologist": "综述是验证理解的最低成本方式。",
+          "engineer": "可以放进 writing 工作流,后续继续扩。",
+          "skeptic": "要明确 contribution,否则 reviewer 会说只是 survey。"
+        }
+      },
+      {
+        "proposal_id": "p_demo_004",
+        "scores": { "methodologist": 7, "engineer": 9, "skeptic": 6 },
+        "total": 7.33,
+        "critique": "实验设计清晰,engineer 给出最高分因为 ablation 维度切得对。methodologist 担心 baseline 选择是否覆盖了 per-agent memory 的极端。skeptic 关注 cost 是否合理。",
+        "elo": 1260,
+        "matches": 1,
+        "wins": 1,
+        "persona_attribution": {
+          "methodologist": "Ablation 框架合理,baseline 选择是关键。",
+          "engineer": "可以 2-3 天搭起来,值得做。",
+          "skeptic": "需要先评估 LLM API 成本,可能 1000 美元跑不下来。"
+        }
+      }
+    ],
+    "judge_calls": 12,
+    "total_tokens": 3420
+  },
+  "gate": {
+    "verdicts": [
+      {
+        "proposal_id": "p_demo_001",
+        "decision": "candidate",
+        "reasons": [
+          "score=6.0 处于 candidate 阈值区间",
+          "evidence 单一 (仅 1 篇),不足以 promoted",
+          "与 p_demo_002 重复,留给后续 round 合并"
+        ]
+      },
+      {
+        "proposal_id": "p_demo_002",
+        "decision": "promoted",
+        "reasons": [
+          "score=7.0 ≥ balanced 阈值 (≥ 7.0)",
+          "evidence 强,与 goal 直接相关",
+          "stage 边界明确,可执行"
+        ]
+      },
+      {
+        "proposal_id": "p_demo_003",
+        "decision": "promoted",
+        "reasons": [
+          "score=8.0 全场最高",
+          "三 persona 共识,无 veto",
+          "产出物(draft)可直接进入 writing 工作流"
+        ]
+      },
+      {
+        "proposal_id": "p_demo_004",
+        "decision": "promoted",
+        "reasons": [
+          "score=7.33 ≥ balanced 阈值",
+          "engineer persona 9 分强力背书",
+          "effort=high 但 ROI 可观"
+        ]
+      }
+    ],
+    "promoted": ["p_demo_002", "p_demo_003", "p_demo_004"],
+    "candidate": ["p_demo_001"],
+    "sketch": [],
+    "rejected": []
+  },
+  "modifier": {
+    "applied": [
+      {
+        "id": "m_demo_001",
+        "kind": "add_paper_to_stage",
+        "proposal_id": "p_demo_002",
+        "payload": {
+          "projectId": "demo-multi-agent-memory",
+          "stageId": "stage-background",
+          "arxivId": "2606.29126",
+          "ok": true
+        },
+        "applied_at": 1757750385000
+      },
+      {
+        "id": "m_demo_002",
+        "kind": "create_draft_outline",
+        "proposal_id": "p_demo_003",
+        "payload": {
+          "writing_id": "w_demo_001",
+          "type": "literature_review",
+          "title": "多智能体长期记忆综述"
+        },
+        "applied_at": 1757750387000
+      },
+      {
+        "id": "m_demo_003",
+        "kind": "archive_round_summary",
+        "proposal_id": "p_demo_004",
+        "payload": {
+          "would_call": "createExperiment",
+          "experiment_id": "e_demo_001",
+          "title": "shared KV-cache vs per-agent memory ablation"
+        },
+        "applied_at": 1757750389000
+      }
+    ],
+    "skipped": [
+      {
+        "proposal_id": "p_demo_001",
+        "reason": "gate 判 candidate,未达 promoted 阈值;合并到 p_demo_002 后处理"
+      }
+    ]
+  },
+  "telemetry": {
+    "duration_ms": 94000,
+    "llm_calls": 13,
+    "approx_tokens": 3420,
+    "stage_durations_ms": {
+      "designer": 8500,
+      "feedback": 42000,
+      "gate": 1200,
+      "modifier": 42300
+    }
+  },
+  "meta": {
+    "session_id": "demo-multi-agent-memory",
+    "dry_run": true,
+    "designer_run_id": "run_designer_demo_001",
+    "feedback_run_id": "run_feedback_demo_001"
+  }
+}

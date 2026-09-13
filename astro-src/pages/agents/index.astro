@@ -90,6 +90,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           <input id="agents-import-overwrite" type="checkbox" />
           <span>overwrite</span>
         </label>
+        <button class="button" id="agents-load-sample-btn" title="一键载入预置的示例 session(展示一次完整 Designer→Feedback→Gate→Modifier 闭环)">🧪 试用示例</button>
         <a class="button" href="/agents/compare/" title="多会话并排对比">📊 对比</a>
         <a class="button" href="/agents/compare-sessions/" title="跨 session stats 对比">🆚 Cross-session</a>
         <a class="button" href="/agents/new-session/" title="模板式新建 session">➕ 模板建 session</a>
@@ -1423,14 +1424,10 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       );
     }
 
-    async function importSessionFromFile(file: File, targetSid?: string, overwrite = false) {
-      const text = await file.text();
-      let obj: any;
-      try {
-        obj = JSON.parse(text);
-      } catch {
-        throw new Error('JSON 解析失败');
-      }
+    // iter #402 — 把 import 的"解析 + 校验 + 写盘"逻辑拆成 applySessionBundle,
+    // 让 importSessionFromFile 和 importSessionFromUrl 共用同一份逻辑,
+    // 避免「试用示例」按钮和文件导入走两套校验路径。
+    function applySessionBundle(obj: any, targetSid?: string, overwrite = false): { sid: string; roundsImported: number } {
       if (obj?.kind !== 'dpr-agents-session') {
         throw new Error(`不是 dpr-agents-session export(kind=${obj?.kind})`);
       }
@@ -1454,6 +1451,24 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
         updatedAt: Date.now(),
       }));
       return { sid: finalSid, roundsImported: rounds.length };
+    }
+
+    async function importSessionFromFile(file: File, targetSid?: string, overwrite = false) {
+      const text = await file.text();
+      let obj: any;
+      try {
+        obj = JSON.parse(text);
+      } catch {
+        throw new Error('JSON 解析失败');
+      }
+      return applySessionBundle(obj, targetSid, overwrite);
+    }
+
+    async function importSessionFromUrl(url: string, targetSid?: string, overwrite = false) {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`fetch ${url} 失败: HTTP ${res.status}`);
+      const obj = await res.json();
+      return applySessionBundle(obj, targetSid, overwrite);
     }
 
     async function handleImportFileInput(e: Event) {
@@ -1783,10 +1798,37 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
       });
     }
 
+    // iter #402 — 一键载入预置示例 session。
+    // 让新用户在没有 LLM key、没有自己数据的情况下,先看到一次完整的
+    // Designer → Feedback → Gate → Modifier 闭环跑出来长什么样。
+    async function loadSampleSession() {
+      const url = `${base}/sample-sessions/research-demo.json`;
+      try {
+        const overwrite = ($<HTMLInputElement>('agents-import-overwrite')).checked;
+        const r = await importSessionFromUrl(url, undefined, overwrite);
+        currentSessionId = r.sid;
+        saveSessionId(r.sid);
+        sessionInput.value = r.sid;
+        refreshSessionPicker();
+        refresh();
+        showToast(`🧪 示例 session 已载入: "${r.sid}" (${r.roundsImported} rounds)`, 'success', 4000);
+        // 跳到 session 详情页,展示 round 内容
+        const detailHref = `${base}/agents/${encodeURIComponent(r.sid)}/`;
+        if (confirm(`已导入 ${r.roundsImported} 个 round。\n\n跳转到 session 详情页查看吗?`)) {
+          location.href = detailHref;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[agents] loadSampleSession failed:', err);
+        showToast(`❌ 载入示例失败: ${msg}`, 'error', 6000);
+      }
+    }
+
     function wireExportImport() {
       $('agents-export-btn').addEventListener('click', downloadCurrentSession);
       $('agents-report-btn').addEventListener('click', downloadExperimentReport);
       $('agents-import-file').addEventListener('change', handleImportFileInput);
+      $('agents-load-sample-btn')?.addEventListener('click', loadSampleSession);
     }
 
     function duplicateCurrentSession() {
