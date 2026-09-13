@@ -645,6 +645,24 @@
   border-color: var(--accent);
   font-weight: 600;
 }
+/* 选择题 UX:chip 被点后闪一下高亮 + 准备切换 */
+@keyframes lib-chip-picked {
+  0%   { transform: scale(1);    box-shadow: 0 0 0 0 var(--accent); }
+  35%  { transform: scale(1.08); box-shadow: 0 0 0 6px var(--accent-soft, #e0e7ff); }
+  100% { transform: scale(1);    box-shadow: 0 0 0 0 transparent; }
+}
+.lib-interview-candidate.picked {
+  animation: lib-chip-picked 600ms ease-out;
+}
+/* 整面板淡出 → 淡入,让选择题切换更明显 */
+@keyframes lib-panel-fade {
+  0%   { opacity: 1; }
+  60%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+.lib-interview-panel.fading {
+  animation: lib-panel-fade 320ms ease-out forwards;
+}
 .lib-interview-actions {
   display: flex;
   gap: 0.5rem;

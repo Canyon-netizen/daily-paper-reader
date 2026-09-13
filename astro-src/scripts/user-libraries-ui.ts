@@ -332,14 +332,17 @@ async function runInterviewFlow(
                 const text = list[idx] || '';
                 if (!inputTA || !text) return;
                 inputTA.value = text;
-                // 高亮选中
+                // 高亮选中 + 触发 pick 动画(显眼一下,让选择题感更明确)
                 candWrap.querySelectorAll('.lib-interview-candidate.active').forEach((el) => el.classList.remove('active'));
-                chip.classList.add('active');
-                // 选择题 UX:点 chip 自动进下一题 —— 短暂延迟让用户看到「已选中」状态
+                chip.classList.add('active', 'picked');
+                // 面板淡出 → 再切下一题 → 整个 panel.innerHTML 替换,自然淡入
+                panel.classList.add('fading');
                 setTimeout(() => {
                   const nextBtn = panel.querySelector<HTMLButtonElement>('[data-interview-next], [data-interview-finish]');
                   nextBtn?.click();
-                }, 280);
+                  // 新面板已渲染,清掉 fading class(下一题的 textarea/inputTA 是新元素)
+                  panel.classList.remove('fading');
+                }, 320);
               });
             });
           }
