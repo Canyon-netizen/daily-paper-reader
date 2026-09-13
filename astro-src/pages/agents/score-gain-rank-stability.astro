@@ -1,0 +1,203 @@
+---
+// /agents/score-gain-rank-stability.astro — iter #371:rank stability across rounds
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessRank {
+  sid: string;
+  goal: string;
+  ranks: number[]; // rank at each round
+  avgRank: number;
+  rankVariance: number;
+  bestRank: number;
+  worstRank: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessRank[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  const sessScores: { sid: string; scores: number[]; goal: string }[] = [];
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 3) continue;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessScores.push({ sid, scores, goal });
+  }
+
+  const maxRounds = Math.max(...sessScores.map((s) => s.scores.length));
+  // For each round position, rank sessions
+  for (const ss of sessScores) {
+    const ranks: number[] = [];
+    for (let r = 0; r < ss.scores.length; r++) {
+      const myScore = ss.scores[r];
+      // rank among all sessions that have at least r+1 rounds
+      const peers = sessScores.filter((p) => p.scores.length > r);
+      const sorted = peers.map((p) => p.scores[r]).sort((a, b) => b - a);
+      const rank = sorted.indexOf(myScore) + 1;
+      ranks.push(rank);
+    }
+    const avg = ranks.reduce((s, v) => s + v, 0) / ranks.length;
+    const variance = ranks.reduce((s, v) => s + (v - avg) ** 2, 0) / ranks.length;
+    sessions.push({
+      sid: ss.sid,
+      goal: ss.goal,
+      ranks,
+      avgRank: avg,
+      rankVariance: variance,
+      bestRank: Math.min(...ranks),
+      worstRank: Math.max(...ranks),
+    });
+  }
+}
+
+sessions.sort((a, b) => a.avgRank - b.avgRank);
+
+const total = sessions.length;
+const totalRounds = sessions.length > 0 ? Math.max(...sessions.map((s) => s.ranks.length)) : 0;
+const stableLeaders = sessions.filter((s) => s.rankVariance < 2 && s.avgRank <= 5).length;
+const climbers = sessions.filter((s) => s.ranks.length >= 3 && s.ranks[s.ranks.length - 1] < s.ranks[0]).length;
+const fallers = sessions.filter((s) => s.ranks.length >= 3 && s.ranks[s.ranks.length - 1] > s.ranks[0]).length;
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Score Gain Rank Stability · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / score-gain-rank-stability</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🏅 Score Rank Stability <span class="muted" style="font-size:0.6em">(iter #371)</span></h1>
+      <p class="agents-sub">
+        每 round 中各 session 按 score 排序的 rank。
+        rank 稳定 = 该 session 长期保持领先/落后。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-sgrs-globals">
+        <span>total sessions: <strong>{total}</strong></span>
+        <span>max rounds: <strong>{totalRounds}</strong></span>
+        <span>stable leaders: <strong style="color:#fbbf24">{stableLeaders}</strong></span>
+        <span>climbers: <strong style="color:#10b981">{climbers}</strong></span>
+        <span>fallers: <strong style="color:#ef4444">{fallers}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🏆 Top 10 best avg rank</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>avg rank</th><th>variance</th><th>best</th><th>worst</th><th>rounds</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#10b981">{s.avgRank.toFixed(1)}</strong></td>
+              <td>{s.rankVariance.toFixed(2)}</td>
+              <td>{s.bestRank}</td>
+              <td>{s.worstRank}</td>
+              <td>{s.ranks.length}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💀 Bottom 10 worst avg rank</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>avg rank</th><th>variance</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td><strong style="color:#ef4444">{s.avgRank.toFixed(1)}</strong></td>
+              <td>{s.rankVariance.toFixed(2)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>stable leaders = rank 长期 top 5 的 session</li>
+        <li>climbers = 后期 rank 上升的 session</li>
+        <li>fallers = 后期 rank 下降的 session</li>
+        <li>对照 <a href={`${base}/agents/round-position-trajectory/`}>Round Position Trajectory</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-sgrs-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-sgrs-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
