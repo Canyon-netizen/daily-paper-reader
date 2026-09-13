@@ -1,0 +1,189 @@
+---
+// /agents/round-score-phase-space.astro — iter #364:round score × gain 2D distribution
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface RoundPoint {
+  score: number;
+  gain: number;
+  position: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const points: RoundPoint[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (scores.length < 2) continue;
+    for (let i = 1; i < scores.length; i++) {
+      points.push({
+        score: scores[i],
+        gain: scores[i] - scores[i - 1],
+        position: i + 1,
+      });
+    }
+  }
+}
+
+// 2D bins: rows = score bands, cols = gain bands
+const scoreBands = [0, 2, 4, 5, 6, 7, 8, 9, 10];
+const gainBands = [-Infinity, -0.5, -0.1, 0, 0.1, 0.5, 1.0, Infinity];
+const grid: number[][] = [];
+for (let r = 0; r < scoreBands.length - 1; r++) {
+  const row: number[] = [];
+  for (let c = 0; c < gainBands.length - 1; c++) row.push(0);
+  grid.push(row);
+}
+
+function scoreIdx(s: number): number {
+  for (let i = 0; i < scoreBands.length - 1; i++) {
+    if (s >= scoreBands[i] && s < scoreBands[i + 1]) return i;
+  }
+  return scoreBands.length - 2;
+}
+function gainIdx(g: number): number {
+  for (let i = 0; i < gainBands.length - 1; i++) {
+    if (g >= gainBands[i] && g < gainBands[i + 1]) return i;
+  }
+  return gainBands.length - 2;
+}
+
+const gainsByScore = new Map<number, number[]>();
+for (const p of points) {
+  const r = scoreIdx(p.score);
+  const c = gainIdx(p.gain);
+  grid[r][c] += 1;
+  const key = p.score;
+  if (!gainsByScore.has(key)) gainsByScore.set(key, []);
+  gainsByScore.get(key)!.push(p.gain);
+}
+
+const maxCell = Math.max(1, ...grid.flat());
+const totalPoints = points.length;
+
+function cellBg(n: number): string {
+  if (n === 0) return '#1f2937';
+  const r = n / maxCell;
+  if (r >= 0.5) return '#10b981';
+  if (r >= 0.25) return '#34d399';
+  if (r >= 0.10) return '#fbbf24';
+  if (r >= 0.03) return '#fb923c';
+  return '#fca5a5';
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Score Phase Space · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-score-phase-space</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📐 Round Score Phase Space <span class="muted" style="font-size:0.6em">(iter #364)</span></h1>
+      <p class="agents-sub">
+        2D bins: 行 = score 段,列 = gain 段。
+        看"高/低分 + 高/低 gain"四种象限的密度。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rsps-globals">
+        <span>total round points: <strong>{totalPoints}</strong></span>
+        <span>max bin: <strong>{maxCell}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🟦 2D Heatmap (score × gain)</h2>
+      <table class="agents-session-table" style="font-size:0.75rem">
+        <thead>
+          <tr>
+            <th>score \ gain</th>
+            {gainBands.slice(1).map((g, i) => <th>{g === Infinity ? '+∞' : g === -Infinity ? '−∞' : `${gainBands[i]}→${g}`}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {grid.map((row, rIdx) => {
+            const lo = scoreBands[rIdx];
+            const hi = scoreBands[rIdx + 1];
+            return (
+              <tr>
+                <td><strong style="color:#4f46e5">{lo}-{hi}</strong></td>
+                {row.map((v) => (
+                  <td style={`background:${cellBg(v)};text-align:center;font-weight:600;color:#0f172a`}>
+                    {v > 0 ? v : '·'}
+                  </td>
+                ))}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>左上象限(高 score + 负 gain)= 处于高分但回退</li>
+        <li>右上象限(高 score + 正 gain)= 持续高分</li>
+        <li>左下象限(低 score + 正 gain)= 显著反弹</li>
+        <li>右下象限(低 score + 负 gain)= 持续恶化</li>
+        <li>对照 <a href={`${base}/agents/score-velocity/`}>Score Velocity</a></li>
+        <li>对照 <a href={`${base}/agents/round-improvement-statistics/`}>Round Improvement Statistics</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rsps-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rsps-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
