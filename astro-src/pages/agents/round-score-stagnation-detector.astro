@@ -1,0 +1,180 @@
+---
+// /agents/round-score-stagnation-detector.astro — iter #393:stagnant round count per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessStag {
+  sid: string;
+  goal: string;
+  rounds: number;
+  stagnantRounds: number;
+  stagnantPct: number;
+  maxStagnantRun: number;
+  totalChange: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessStag[] = [];
+
+const STAG_THRESHOLD = 0.01;
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { scores.push(0); }
+    }
+
+    let stagnant = 0;
+    let curRun = 0;
+    let maxRun = 0;
+    let totalChange = 0;
+    for (let i = 1; i < scores.length; i++) {
+      const delta = Math.abs(scores[i] - scores[i - 1]);
+      totalChange += delta;
+      if (delta < STAG_THRESHOLD) {
+        stagnant += 1;
+        curRun += 1;
+        maxRun = Math.max(maxRun, curRun);
+      } else {
+        curRun = 0;
+      }
+    }
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+    sessions.push({
+      sid, goal,
+      rounds: rNums.length,
+      stagnantRounds: stagnant,
+      stagnantPct: (stagnant / (rNums.length - 1)) * 100,
+      maxStagnantRun: maxRun,
+      totalChange,
+    });
+  }
+}
+
+sessions.sort((a, b) => b.stagnantPct - a.stagnantPct);
+
+const total = sessions.length;
+const highStag = sessions.filter((s) => s.stagnantPct > 50).length;
+const zeroStag = sessions.filter((s) => s.stagnantRounds === 0).length;
+const avgStagPct = sessions.length > 0 ? sessions.reduce((s, x) => s + x.stagnantPct, 0) / sessions.length : 0;
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Score Stagnation Detector · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-score-stagnation-detector</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🧊 Round Score Stagnation Detector <span class="muted" style="font-size:0.6em">(iter #393)</span></h1>
+      <p class="agents-sub">
+        每 session 中 score 变化 &lt; 0.01 的 round 数(stagnant)。
+        高 % = 系统在某处卡住;0 % = 每轮都有可见变化。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rssd-globals">
+        <span>threshold: <strong>|Δscore| &lt; {STAG_THRESHOLD}</strong></span>
+        <span>sessions: <strong>{total}</strong></span>
+        <span>avg stagnant %: <strong>{avgStagPct.toFixed(1)}%</strong></span>
+        <span>high stagnant (&gt;50%): <strong style="color:#f59e0b">{highStag}</strong></span>
+        <span>zero stagnant: <strong style="color:#10b981">{zeroStag}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🧊 Top 20 most stagnant sessions</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>sid</th><th>rounds</th><th>stagnant</th><th>%</th><th>max run</th><th>total change</th><th>bar</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 20).map((s) => (
+            <tr>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 8))}</code></a></td>
+              <td>{s.rounds}</td>
+              <td><strong style="color:#f59e0b">{s.stagnantRounds}</strong></td>
+              <td>{s.stagnantPct.toFixed(1)}%</td>
+              <td>{s.maxStagnantRun}</td>
+              <td>{s.totalChange.toFixed(2)}</td>
+              <td><code>{bar(s.stagnantPct, 100, 18)}</code></td>
+              <td><small class="muted">{esc(s.goal.slice(0, 14))}{s.goal.length > 14 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>stagnant% &gt; 50% = 系统大半时间在原地踏步(可能卡在 gate 阈值)</li>
+        <li>max run 长 = 出现连续多轮不变化</li>
+        <li>对照 <a href={`${base}/agents/score-convergence-speed/`}>Score Convergence Speed</a></li>
+        <li>对照 <a href={`${base}/agents/round-improvement-statistics/`}>Round Improvement Statistics</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rssd-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rssd-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
