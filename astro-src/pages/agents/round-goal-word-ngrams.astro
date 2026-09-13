@@ -1,0 +1,146 @@
+---
+// /agents/round-goal-word-ngrams.astro — iter #370:top 2-grams and 3-grams in goals
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const CN_RE = /[一-鿿]/;
+const STOP = new Set(['the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'is', 'are', 'be', 'this', 'that', 'it', 'as', 'by', 'from']);
+
+function tokenize(goal: string): string[] {
+  const out: string[] = [];
+  if (!goal) return out;
+  for (const seg of goal.split(/\s+/)) {
+    if (CN_RE.test(seg)) {
+      const chars = Array.from(seg);
+      for (let i = 0; i + 2 <= chars.length; i++) out.push(chars.slice(i, i + 2).join(''));
+      for (const c of chars) out.push(c);
+    } else {
+      const t = seg.toLowerCase().replace(/[^\w]/g, '');
+      if (t && t.length > 1 && !STOP.has(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
+const root = join(process.cwd(), 'archive');
+const bigramMap = new Map<string, number>();
+const trigramMap = new Map<string, number>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const mp = join(root, sid, 'meta.json');
+    if (!existsSync(mp)) continue;
+    let goal = '';
+    try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { continue; }
+    if (!goal) continue;
+    const toks = tokenize(goal);
+    for (let i = 0; i + 2 <= toks.length; i++) {
+      bigramMap.set(`${toks[i]} ${toks[i + 1]}`, (bigramMap.get(`${toks[i]} ${toks[i + 1]}`) ?? 0) + 1);
+    }
+    for (let i = 0; i + 3 <= toks.length; i++) {
+      trigramMap.set(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`, (trigramMap.get(`${toks[i]} ${toks[i + 1]} ${toks[i + 2]}`) ?? 0) + 1);
+    }
+  }
+}
+
+const bigrams = [...bigramMap.entries()]
+  .filter(([_, c]) => c >= 3)
+  .map(([ngram, count]) => ({ ngram, count }))
+  .sort((a, b) => b.count - a.count)
+  .slice(0, 25);
+
+const trigrams = [...trigramMap.entries()]
+  .filter(([_, c]) => c >= 2)
+  .map(([ngram, count]) => ({ ngram, count }))
+  .sort((a, b) => b.count - a.count)
+  .slice(0, 20);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Goal Word N-grams · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-goal-word-ngrams</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📝 Round Goal Word N-grams <span class="muted" style="font-size:0.6em">(iter #370)</span></h1>
+      <p class="agents-sub">
+        所有 session goal 描述的 2-gram 和 3-gram 高频片段。
+        频繁出现的词组合 → 系统常见任务模式。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rgwn-globals">
+        <span>distinct bigrams (≥3): <strong>{bigrams.length}</strong></span>
+        <span>distinct trigrams (≥2): <strong>{trigrams.length}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 25 bigrams</h2>
+      <pre class="agents-rgwn-flow">{bigrams.map((b) => `${b.ngram.padEnd(48)} ${bar(b.count, bigrams[0].count, 18)}  ${b.count}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🔥 Top 20 trigrams</h2>
+      <pre class="agents-rgwn-flow">{trigrams.map((b) => `${b.ngram.padEnd(60)} ${bar(b.count, trigrams[0].count, 14)}  ${b.count}`).join('\n')}</pre>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>高频 2-gram = 任务的核心词汇组合</li>
+        <li>高频 3-gram = 任务的具体模式</li>
+        <li>对照 <a href={`${base}/agents/goal-keyword-diversity/`}>Goal Keyword Diversity</a></li>
+        <li>对照 <a href={`${base}/agents/goal-topic-jaccard-cluster/`}>Goal Topic Jaccard Cluster</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rgwn-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rgwn-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+  .agents-rgwn-flow {
+    background: rgba(0,0,0,0.4);
+    color: #c9d1d9;
+    padding: 0.8rem;
+    border-radius: 4px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre;
+  }
+</style>
