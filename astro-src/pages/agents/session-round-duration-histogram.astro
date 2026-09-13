@@ -1,0 +1,149 @@
+---
+// /agents/session-round-duration-histogram.astro — iter #378:distribution of session total rounds
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Bin {
+  range: string;
+  lo: number;
+  hi: number;
+  count: number;
+  sessions: string[];
+}
+
+const root = join(process.cwd(), 'archive');
+const bins: Bin[] = [
+  { range: '1-2', lo: 1, hi: 2, count: 0, sessions: [] },
+  { range: '3-4', lo: 3, hi: 4, count: 0, sessions: [] },
+  { range: '5-6', lo: 5, hi: 6, count: 0, sessions: [] },
+  { range: '7-8', lo: 7, hi: 8, count: 0, sessions: [] },
+  { range: '9-10', lo: 9, hi: 10, count: 0, sessions: [] },
+  { range: '11-15', lo: 11, hi: 15, count: 0, sessions: [] },
+  { range: '16-20', lo: 16, hi: 20, count: 0, sessions: [] },
+  { range: '21-30', lo: 21, hi: 30, count: 0, sessions: [] },
+  { range: '31+', lo: 31, hi: 999, count: 0, sessions: [] },
+];
+
+const allLengths: number[] = [];
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    let nRounds = 0;
+    for (const rf of rfs) {
+      if (rf.match(/^round_\d+\.json$/)) nRounds += 1;
+    }
+    if (nRounds === 0) continue;
+    allLengths.push(nRounds);
+    for (const b of bins) {
+      if (nRounds >= b.lo && nRounds <= b.hi) {
+        b.count += 1;
+        b.sessions.push(sid);
+        break;
+      }
+    }
+  }
+}
+
+const total = allLengths.length;
+const median = (() => {
+  if (allLengths.length === 0) return 0;
+  const s = [...allLengths].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+})();
+const mean = allLengths.length > 0 ? allLengths.reduce((s, v) => s + v, 0) / allLengths.length : 0;
+const min = allLengths.length > 0 ? Math.min(...allLengths) : 0;
+const max = allLengths.length > 0 ? Math.max(...allLengths) : 0;
+
+function bar(n: number, max: number, width = 28): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Session Round-Duration Histogram · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / session-round-duration-histogram</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>📊 Session Round-Duration Histogram <span class="muted" style="font-size:0.6em">(iter #378)</span></h1>
+      <p class="agents-sub">
+        每个 session 的总 round 数量分布。
+        短 session = 很快收敛;长 session = 难以收敛。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-srdh-globals">
+        <span>total sessions: <strong>{total}</strong></span>
+        <span>mean rounds: <strong>{mean.toFixed(1)}</strong></span>
+        <span>median: <strong>{median}</strong></span>
+        <span>min: <strong>{min}</strong></span>
+        <span>max: <strong>{max}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>📊 Histogram</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>range</th><th>count</th><th>%</th><th>bar</th></tr>
+        </thead>
+        <tbody>
+          {bins.map((b) => (
+            <tr>
+              <td><code>{b.range}</code></td>
+              <td>{b.count}</td>
+              <td>{total > 0 ? ((b.count / total) * 100).toFixed(1) : '0'}%</td>
+              <td><code>{bar(b.count, Math.max(...bins.map((x) => x.count)), 28)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>短 bin (1-4) 主导 = 系统能快速收敛</li>
+        <li>长 bin (16+) 不少 = 存在难以收敛的 session</li>
+        <li>对照 <a href={`${base}/agents/score-convergence-speed/`}>Score Convergence Speed</a></li>
+        <li>对照 <a href={`${base}/agents/session-summary-cards/`}>Session Summary Cards</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-srdh-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-srdh-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
