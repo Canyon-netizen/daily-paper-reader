@@ -70,10 +70,11 @@ function readEnvLLMConfig(): ServerLLMConfig | null {
       provider: 'minimax',
       // 默认代理: 公开 Cloudflare Pages worker(用于浏览器直接 fetch 跨域时兜底)
       corsProxy: env.DPR_CORS_PROXY || 'https://daily-paper-reader.pages.dev/api/proxy',
-      // 本地 LLM 代理(2026-09-08): 如果 .env 写了 DPR_LLM_PROXY_URL(默认 http://localhost:8124),
-      // 浏览器 bootstrap 时自动写入 dpr_llm_proxy_v1,所有 chat 请求改走本地代理。
-      // 空串 = 不启用 proxy,直连上游。
-      llmProxy: (env.DPR_LLM_PROXY_URL || '').trim(),
+      // 本地 LLM 代理(2026-09-08): 默认 http://localhost:8124(= scripts/local-llm-proxy.mjs)。
+      // .env 里 DPR_LLM_PROXY_URL 可覆盖(用于部署到非 loopback 环境)。
+      // 浏览器 bootstrap 时自动写入 dpr_llm_proxy_v1,所有 chat 请求改走本地代理,
+      // 避免 CORS + API key 不落到 client。
+      llmProxy: (env.DPR_LLM_PROXY_URL || 'http://localhost:8124').trim(),
     };
   } catch {
     return null;
