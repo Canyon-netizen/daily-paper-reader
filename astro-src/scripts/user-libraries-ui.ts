@@ -303,7 +303,9 @@ async function runInterviewFlow(
       candWrap?.querySelectorAll('.lib-interview-candidate.active').forEach((el) => el.classList.remove('active'));
     });
 
-    candBtn?.addEventListener('click', async () => {
+    // 抽成函数:按钮点击 + 首屏自动触发都走同一份逻辑
+    const runCandidateGen = async () => {
+      if (!candBtn) return;
       candBtn.disabled = true;
       const ans = inputTA?.value.trim() || '';
       if (progressEl) progressEl.innerHTML = '<span class="lib-spinner"></span> 正在生成候选…';
@@ -344,7 +346,16 @@ async function runInterviewFlow(
         if (progressEl) progressEl.textContent = `第 ${current + 1} / ${steps.length} 步`;
         candBtn.disabled = false;
       }
+    };
+
+    candBtn?.addEventListener('click', () => {
+      void runCandidateGen();
     });
+
+    // 首屏自动出候选 —— textarea 空时调一次,用户手敲再覆盖
+    if (inputTA && !inputTA.value.trim()) {
+      void runCandidateGen();
+    }
 
     panel.querySelector('[data-interview-suggest]')?.addEventListener('click', async () => {
       const ans = inputTA?.value.trim() || '';
