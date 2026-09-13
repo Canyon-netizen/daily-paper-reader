@@ -222,11 +222,6 @@ async function runInterviewFlow(
   const { runInterviewStep, summarizeInterview } = await import('./library-statement-interview');
   type StepId = 'topic' | 'subtopic' | 'audience';
   const steps: StepId[] = ['topic', 'subtopic', 'audience'];
-  const stepLabels: Record<StepId, string> = {
-    topic: '① 大致方向',
-    subtopic: '② 子问题',
-    audience: '③ 用法 / 期望读者',
-  };
   const history: { id: StepId; question: string; answer: string; suggestion: string; rationale: string }[] = [];
   let current = 0;
   // 实时读 modal 里的文献库名称 —— 用户改 name 输入框就同步给 LLM
@@ -274,159 +269,106 @@ async function runInterviewFlow(
     }
 
     panel.innerHTML = `
-      <h4>🎤 AI 访谈 · ${stepLabels[stepId]}</h4>
-      <div class="lib-interview-progress">第 ${current + 1} / ${steps.length} 步</div>
+      <div class="lib-interview-head">
+        <h4>🎤 AI 访谈:把方向说清楚</h4>
+        <button type="button" class="btn-icon" data-interview-cancel title="关闭" aria-label="关闭">×</button>
+      </div>
+      <p class="muted lib-interview-sub">这段描述既用来自动挑论文,也用来给论文打分 —— 写得越具体,收得越准。</p>
+      <div class="lib-interview-progress" data-interview-progress>
+        <div class="lib-interview-progress-bar"><div class="lib-interview-progress-fill" style="width:${((current) / steps.length) * 100}%"></div></div>
+        <span>${current + 1} / ${steps.length}</span>
+      </div>
       <div class="lib-interview-q" data-interview-question></div>
-      <textarea class="lib-interview-a" rows="3" placeholder="在这里写下你的回答…(中文优先)" data-interview-input></textarea>
-      <div class="lib-interview-candidates" data-interview-candidates hidden></div>
-      <div class="lib-interview-suggestion" data-interview-suggestion hidden></div>
+      <div class="lib-interview-options" data-interview-options>
+        <div class="lib-interview-options-loading"><span class="lib-spinner"></span> 正在生成候选…</div>
+      </div>
+      <div class="lib-interview-other">
+        <label class="muted">其他(自己写,可与上面同时选)</label>
+        <textarea class="lib-interview-other-ta" rows="2" placeholder="补充这个环节的具体内容…" data-interview-other></textarea>
+      </div>
+      <div class="lib-interview-rationale" data-interview-suggestion hidden></div>
       <div class="lib-interview-actions">
-        <button type="button" class="btn btn-soft btn-sm" data-interview-candidates-btn>🎲 列几个候选</button>
-        <button type="button" class="btn btn-soft btn-sm" data-interview-suggest>💡 给我建议</button>
-        <button type="button" class="btn btn-primary btn-sm" data-interview-next ${current === steps.length - 1 ? 'data-interview-finish' : ''}>${current === steps.length - 1 ? '✓ 完成' : '下一题 →'}</button>
         <button type="button" class="btn btn-ghost btn-sm" data-interview-cancel>取消</button>
+        <button type="button" class="btn btn-primary btn-sm" data-interview-next ${current === steps.length - 1 ? 'data-interview-finish' : ''}>${current === steps.length - 1 ? '✓ 完成' : '下一步'}</button>
       </div>
     `;
     const qEl = panel.querySelector<HTMLElement>('[data-interview-question]');
+    const qName = readLibraryName() || '这个库';
     if (qEl) qEl.textContent = stepId === 'topic'
-      ? '你打算跟踪哪个研究方向?(1-2 句话,不需要完美,大致方向即可)'
+      ? `「${qName}」打算跟踪哪个大致研究方向?`
       : stepId === 'subtopic'
-      ? '这个方向上,你最关心的 2-3 个子问题是什么?(每个一行)'
-      : '这个库里的论文,你打算用来做什么?(如:写综述 / 跟踪进展 / 给新项目找 idea)';
+      ? `「${qName}」主要想回答哪些核心子问题?`
+      : `「${qName}」这个库的论文,打算用来做什么?`;
 
-    const inputTA = panel.querySelector<HTMLTextAreaElement>('[data-interview-input]');
+    const optionsEl = panel.querySelector<HTMLElement>('[data-interview-options]');
+    const otherTA = panel.querySelector<HTMLTextAreaElement>('[data-interview-other]');
     const sugEl = panel.querySelector<HTMLElement>('[data-interview-suggestion]');
-    const candWrap = panel.querySelector<HTMLElement>('[data-interview-candidates]');
-    const candBtn = panel.querySelector<HTMLButtonElement>('[data-interview-candidates-btn]');
-    const progressEl = panel.querySelector<HTMLElement>('[data-interview-progress]');
 
-    // 用户在 textarea 里手敲时,清空已选 candidate 高亮(避免误导)
-    inputTA?.addEventListener('input', () => {
-      candWrap?.querySelectorAll('.lib-interview-candidate.active').forEach((el) => el.classList.remove('active'));
-    });
-
-    // 抽成函数:按钮点击 + 首屏自动触发都走同一份逻辑
-    const runCandidateGen = async () => {
-      if (!candBtn) return;
-      candBtn.disabled = true;
-      const ans = inputTA?.value.trim() || '';
-      if (progressEl) progressEl.innerHTML = '<span class="lib-spinner"></span> 正在生成候选…';
-      try {
-        const r = await runInterviewStep(stepId, history.map((h) => ({
-          ...h,
-          answer: h.answer || ans,
-        })), '', readLibraryName());
-        const list = r.candidates || [];
-        if (candWrap) {
-          if (list.length === 0) {
-            candWrap.innerHTML = '<span class="muted">未生成候选,试试 💡 给我建议</span>';
-            candWrap.hidden = false;
-          } else {
-            candWrap.innerHTML = list
-              .map((c, i) => `<button type="button" class="lib-interview-candidate" data-cand-idx="${i}">${escapeHtml(c)}</button>`)
-              .join('');
-            candWrap.hidden = false;
-            candWrap.querySelectorAll<HTMLButtonElement>('.lib-interview-candidate').forEach((chip) => {
-              chip.addEventListener('click', () => {
-                const idx = Number(chip.dataset.candIdx);
-                const text = list[idx] || '';
-                if (!inputTA || !text) return;
-                inputTA.value = text;
-                // 高亮选中 + 触发 pick 动画(显眼一下,让选择题感更明确)
-                candWrap.querySelectorAll('.lib-interview-candidate.active').forEach((el) => el.classList.remove('active'));
-                chip.classList.add('active', 'picked');
-                // 面板淡出 → 再切下一题 → 整个 panel.innerHTML 替换,自然淡入
-                panel.classList.add('fading');
-                setTimeout(() => {
-                  const nextBtn = panel.querySelector<HTMLButtonElement>('[data-interview-next], [data-interview-finish]');
-                  nextBtn?.click();
-                  // 新面板已渲染,清掉 fading class(下一题的 textarea/inputTA 是新元素)
-                  panel.classList.remove('fading');
-                }, 320);
-              });
-            });
-          }
-        }
-        // rationale 顺手展示
-        if (r.rationale && sugEl) {
-          sugEl.innerHTML = `<em class="muted">${escapeHtml(r.rationale)}</em>`;
-          sugEl.hidden = false;
-        }
-      } catch (err) {
-        showToast(`生成候选失败:${(err as Error).message}`, 'error');
-      } finally {
-        if (progressEl) progressEl.textContent = `第 ${current + 1} / ${steps.length} 步`;
-        candBtn.disabled = false;
+    const renderOptions = (list: string[], rationale?: string) => {
+      if (!optionsEl) return;
+      if (!list || list.length === 0) {
+        optionsEl.innerHTML = '<div class="muted">未生成候选 —— 下方「其他」自写你的方向。</div>';
+      } else {
+        optionsEl.innerHTML = list
+          .map((c, i) => `
+            <label class="lib-interview-option">
+              <input type="checkbox" data-opt-idx="${i}">
+              <span>${escapeHtml(c)}</span>
+            </label>
+          `).join('');
+        optionsEl.querySelectorAll<HTMLInputElement>('input[type=checkbox]').forEach((cb) => {
+          cb.addEventListener('change', () => {
+            const anyChecked = optionsEl.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked').length > 0;
+            if (anyChecked && rationale && sugEl) {
+              sugEl.innerHTML = `<em class="muted">${escapeHtml(rationale)}</em>`;
+              sugEl.hidden = false;
+            }
+          });
+        });
       }
     };
 
-    candBtn?.addEventListener('click', () => {
-      void runCandidateGen();
-    });
-
-    // 首屏自动出候选 —— textarea 空时调一次,用户手敲再覆盖
-    if (inputTA && !inputTA.value.trim()) {
-      void runCandidateGen();
-    }
-
-    panel.querySelector('[data-interview-suggest]')?.addEventListener('click', async () => {
-      const ans = inputTA?.value.trim() || '';
-      if (progressEl) progressEl.innerHTML =
-        '<span class="lib-spinner"></span> 正在生成建议…';
+    const runOptionsGen = async () => {
       try {
         const r = await runInterviewStep(stepId, history.map((h) => ({
           ...h,
-          answer: h.answer || ans,
-        })), ans, readLibraryName());
-        const txt = [
-          r.refined ? `<strong>精炼:</strong> ${escapeHtml(r.refined)}` : '',
-          r.categories ? `<strong>分类:</strong> ${r.categories.map((c) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join(' ')}` : '',
-          r.themes ? `<strong>主题:</strong><ul>${r.themes.map((t) => `<li>${escapeHtml(t.title)} — ${escapeHtml(t.papers)}</li>`).join('')}</ul>` : '',
-          r.keywords ? `<strong>关键词:</strong> ${r.keywords.map((k) => `<span class="lib-tag include">${escapeHtml(k)}</span>`).join(' ')}` : '',
-          r.statement ? `<strong>综合 statement:</strong> ${escapeHtml(r.statement)}` : '',
-          r.exclude ? `<strong>排除:</strong> ${r.exclude.map((k) => `<span class="lib-tag exclude">${escapeHtml(k)}</span>`).join(' ')}` : '',
-          r.rationale ? `<em class="muted">${escapeHtml(r.rationale)}</em>` : '',
-        ].filter(Boolean).join('<br/>');
-        if (sugEl) {
-          sugEl.innerHTML = txt;
-          sugEl.hidden = false;
-        }
-        // 把建议暂存,下一步用
-        history.push({ id: stepId, question: qEl?.textContent || '', answer: ans, suggestion: JSON.stringify({
-          refined: r.refined,
-          categories: r.categories,
-          themes: r.themes,
-          keywords: r.keywords,
-          statement: r.statement,
-          exclude: r.exclude,
-          candidates: r.candidates,
-        }), rationale: r.rationale });
-        // 把上一次 push 弹掉(每次 suggest 都是「最新一次」)
-        if (history.length > current + 1) history.length = current + 1;
+          answer: h.answer || (otherTA?.value.trim() || ''),
+        })), '', readLibraryName());
+        renderOptions(r.candidates || [], r.rationale);
       } catch (err) {
-        showToast(`生成失败:${(err as Error).message}`, 'error');
-      } finally {
-        if (progressEl) progressEl.textContent = `第 ${current + 1} / ${steps.length} 步`;
+        if (optionsEl) optionsEl.innerHTML = `<div class="muted error">生成失败:${escapeHtml((err as Error).message)} — 用下方「其他」自写。</div>`;
       }
-    });
+    };
 
-    panel.querySelector('[data-interview-next], [data-interview-finish]')?.addEventListener('click', () => {
-      const ans = inputTA?.value.trim() || '';
-      // 写当前步 history(覆盖 suggest push 的)
-      history[current] = {
-        id: stepId,
-        question: qEl?.textContent || '',
-        answer: ans,
-        suggestion: history[current]?.suggestion || '',
-        rationale: history[current]?.rationale || '',
-      };
-      current += 1;
-      renderStep();
-    });
+    // 首屏自动生成候选
+    void runOptionsGen();
 
     panel.querySelector('[data-interview-cancel]')?.addEventListener('click', () => {
       panel.hidden = true;
       panel.innerHTML = '';
+    });
+
+    panel.querySelector('[data-interview-next], [data-interview-finish]')?.addEventListener('click', () => {
+      // 收集勾选的 options + 其他 textarea,组合成最终回答
+      const checkedTexts: string[] = [];
+      optionsEl?.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked').forEach((cb) => {
+        const lbl = cb.closest('.lib-interview-option');
+        const span = lbl?.querySelector('span');
+        const text = span?.textContent?.trim();
+        if (text) checkedTexts.push(text);
+      });
+      const other = otherTA?.value.trim() || '';
+      const combined = [...checkedTexts, other ? `其他:${other}` : ''].filter(Boolean).join(' | ');
+      const ans = combined || '(未填)';
+      history[current] = {
+        id: stepId,
+        question: qEl?.textContent || '',
+        answer: ans,
+        suggestion: '',
+        rationale: sugEl?.textContent || '',
+      };
+      current += 1;
+      renderStep();
     });
   }
   renderStep();
