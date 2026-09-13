@@ -1,0 +1,196 @@
+---
+// astro-src/pages/roadmap/[id].astro
+//
+// Research roadmap detail view — quarters, goals, linked ideas/experiments.
+// 详情模板从原 index.astro 拆出,getStaticPaths() 在这里,Astro 才能正确把
+// /roadmap/<id>/ 路由到这个文件 (而不是 404)。
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import { getRoadmap, getAllRoadmapIds } from '../../lib/roadmap';
+import { getIdea } from '../../lib/ideas';
+import { getExperiment } from '../../lib/experiments';
+import '../../styles/roadmap.css';
+
+export function getStaticPaths() {
+  const ids = getAllRoadmapIds();
+  return ids.map((id) => ({ params: { id } }));
+}
+
+const { id } = Astro.params;
+const roadmap = id ? getRoadmap(id) : null;
+
+// Fetch titles for linked ideas and experiments (SSR-safe)
+const linkedIdeasWithTitles = roadmap?.linked_ideas.map((ideaId) => {
+  const idea = getIdea(ideaId);
+  return { id: ideaId, title: idea?.title || ideaId };
+}) || [];
+
+const linkedExperimentsWithTitles = roadmap?.linked_experiments.map((expId) => {
+  const exp = getExperiment(expId);
+  return { id: expId, title: exp?.title || exp?.titleZh || expId };
+}) || [];
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+---
+
+<BaseLayout
+  title={roadmap ? `${roadmap.titleZh || roadmap.title} · 研究路线图` : "研究路线图 · Daily Paper Reader"}
+  description={roadmap?.descriptionZh || roadmap?.description || "长期研究目标时间线"}
+>
+  <Navbar />
+
+  <main class="roadmap-page">
+    {roadmap ? (
+      <div class="roadmap-detail" data-roadmap-id={roadmap.id}>
+        <header class="roadmap-detail-header">
+          <a href={base + '/roadmap/'} class="roadmap-back-link">← 所有路线图</a>
+          <div class="roadmap-detail-title-row">
+            <h1>{roadmap.titleZh || roadmap.title}</h1>
+            <span class="roadmap-type-badge" data-type={roadmap.type}>
+              {roadmap.type === 'phd' ? 'PhD' : roadmap.type === 'industry' ? '工业' : '个人'}
+            </span>
+          </div>
+          <p class="roadmap-detail-desc">{roadmap.descriptionZh || roadmap.description}</p>
+          <div class="roadmap-detail-meta">
+            <span>负责人: {roadmap.owner}</span>
+            <span>周期: {roadmap.startDate} ~ {roadmap.endDate}</span>
+            {roadmap.tags.length > 0 && (
+              <span>标签: {roadmap.tags.join(', ')}</span>
+            )}
+          </div>
+        </header>
+
+        <!-- Issue #25: Progress Dashboard -->
+        <div id="roadmap-dashboard" class="roadmap-dashboard">
+          <div class="dashboard-header">
+            <h3>进度概览</h3>
+            <div class="dashboard-progress">
+              <div class="dashboard-progress-bar">
+                <div class="dashboard-progress-fill" style="width: 0%"></div>
+              </div>
+              <span class="dashboard-progress-text">0%</span>
+            </div>
+          </div>
+          <div class="dashboard-stats">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+
+        <div class="roadmap-timeline">
+          {roadmap.quarters.map((q) => (
+            <section class="roadmap-quarter" data-quarter={q.id}>
+              <header class="roadmap-quarter-header">
+                <span class="roadmap-quarter-label">{q.id}</span>
+                <h2 class="roadmap-quarter-title">{q.titleZh || q.title}</h2>
+              </header>
+              <div class="roadmap-goals">
+                {q.goals.map((g) => (
+                  <div class="roadmap-goal" data-status={g.status} data-priority={g.priority}>
+                    <div class="roadmap-goal-header">
+                      <span class="roadmap-goal-id">G{g.id}</span>
+                      <span class="roadmap-goal-status" data-status={g.status}>
+                        {g.status === 'completed' ? '✓' : g.status === 'in-progress' ? '◐' : '○'}
+                      </span>
+                    </div>
+                    <h3 class="roadmap-goal-title">
+                      {g.titleZh || g.title}
+                      {/* Issue #8: Show sprint badge */}
+                      {g.sprint && <span class="roadmap-goal-sprint">{g.sprint}</span>}
+                    </h3>
+                    {g.description && (
+                      <p class="roadmap-goal-desc">{g.descriptionZh || g.description}</p>
+                    )}
+                    <div class="roadmap-goal-meta">
+                      <span class="roadmap-goal-priority" data-priority={g.priority}>
+                        {g.priority === 'high' ? '高' : g.priority === 'medium' ? '中' : '低'}
+                      </span>
+                      {/* Issue #26: Show due date */}
+                      {g.dueDate && (
+                        <span class="roadmap-goal-due">
+                          📅 {g.dueDate}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+
+        {linkedIdeasWithTitles.length > 0 && (
+          <section class="roadmap-links">
+            <h3>关联想法</h3>
+            <ul class="roadmap-link-list">
+              {linkedIdeasWithTitles.map((item) => (
+                <li><a href={base + '/ideas/' + item.id + '/'}>{item.title} ({item.id})</a></li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {linkedExperimentsWithTitles.length > 0 && (
+          <section class="roadmap-links">
+            <h3>关联实验</h3>
+            <ul class="roadmap-link-list">
+              {linkedExperimentsWithTitles.map((item) => (
+                <li><a href={base + '/experiments/' + item.id + '/'}>{item.title} ({item.id})</a></li>
+              ))}
+            </ul>
+          </section>
+        )}
+      </div>
+    ) : (
+      <div class="roadmap-empty">
+        <div class="roadmap-empty-icon">🗺️</div>
+        <h3>找不到该路线图</h3>
+        <p><a href={base + '/roadmap/'}>← 返回所有路线图</a></p>
+      </div>
+    )}
+  </main>
+
+  <Footer />
+
+  <!-- Issue #7: Goal Edit Modal -->
+  <div id="goal-edit-modal" class="modal-overlay">
+    <div class="modal-content">
+      <button id="goal-modal-close" class="modal-close">&times;</button>
+      <h2>编辑目标</h2>
+      <form id="goal-edit-form">
+        <input type="hidden" id="edit-goal-id" name="goalId">
+        <div class="form-group">
+          <label for="edit-goal-title">标题</label>
+          <input type="text" id="edit-goal-title" name="title" required>
+        </div>
+        <div class="form-group">
+          <label for="edit-goal-desc">描述</label>
+          <textarea id="edit-goal-desc" name="description" rows="3"></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="edit-goal-status">状态</label>
+            <select id="edit-goal-status" name="status">
+              <option value="pending">待开始</option>
+              <option value="in-progress">进行中</option>
+              <option value="completed">已完成</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="edit-goal-priority">优先级</label>
+            <select id="edit-goal-priority" name="priority">
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn-primary">保存更改</button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    import '../../scripts/roadmap-ui';
+  </script>
+</BaseLayout>
