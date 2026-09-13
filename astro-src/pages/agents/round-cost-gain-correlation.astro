@@ -1,0 +1,216 @@
+---
+// /agents/round-cost-gain-correlation.astro — iter #362:Pearson(cost, gain) per session
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface SessCorr {
+  sid: string;
+  goal: string;
+  totalRounds: number;
+  pearson: number;
+  absCost: number;
+  absGain: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const sessions: SessCorr[] = [];
+
+function getRoundCost(r: any): number {
+  let c = 0;
+  if (typeof r.cost === 'number') c += r.cost;
+  if (typeof r.tokens === 'number') c += r.tokens;
+  if (typeof r.totalTokens === 'number') c += r.totalTokens;
+  if (r.usage) c += (r.usage.input_tokens ?? 0) + (r.usage.output_tokens ?? 0);
+  return c;
+}
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 3) continue;
+    rNums.sort((a, b) => a - b);
+
+    const costs: number[] = [];
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        costs.push(getRoundCost(r));
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        if (arr.length > 0) scores.push(arr.reduce((a, b) => a + b, 0) / arr.length);
+      } catch (e) { /* */ }
+    }
+    if (costs.length < 3 || scores.length < 3) continue;
+    if (costs.every((c) => c === 0)) continue;
+
+    // Pearson cost vs score
+    const n = costs.length;
+    const mx = costs.reduce((s, v) => s + v, 0) / n;
+    const my = scores.reduce((s, v) => s + v, 0) / n;
+    let sx = 0, sy = 0, sxy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = costs[i] - mx;
+      const dy = scores[i] - my;
+      sx += dx * dx;
+      sy += dy * dy;
+      sxy += dx * dy;
+    }
+    const denom = Math.sqrt(sx * sy);
+    const pearson = denom !== 0 ? sxy / denom : 0;
+
+    let goal = '';
+    const mp = join(root, sid, 'meta.json');
+    if (existsSync(mp)) {
+      try { goal = JSON.parse(await readFile(mp, 'utf8')).goal ?? ''; } catch (e) { /* */ }
+    }
+
+    sessions.push({
+      sid, goal,
+      totalRounds: n,
+      pearson,
+      absCost: costs.reduce((s, v) => s + v, 0),
+      absGain: scores[scores.length - 1] - scores[0],
+    });
+  }
+}
+
+sessions.sort((a, b) => b.pearson - a.pearson);
+
+const total = sessions.length;
+const valid = sessions.filter((s) => isFinite(s.pearson));
+const avgPearson = valid.length > 0 ? valid.reduce((s, x) => s + x.pearson, 0) / valid.length : 0;
+const positiveCorr = valid.filter((s) => s.pearson > 0.3).length;
+const negativeCorr = valid.filter((s) => s.pearson < -0.3).length;
+
+function bar(n: number, max: number, width = 14): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function fmt(n: number): string {
+  if (n > 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toFixed(0);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Round Cost Gain Correlation · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / round-cost-gain-correlation</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>💰 Round Cost-Gain Correlation <span class="muted" style="font-size:0.6em">(iter #362)</span></h1>
+      <p class="agents-sub">
+        每个 session 中 Pearson(round_cost, round_score)。
+        + = 烧得多 = 分数高;− = 烧得多 = 分数低;0 = 无关。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-rcgc-globals">
+        <span>sessions w/ cost data: <strong>{valid.length}</strong></span>
+        <span>avg pearson: <strong style={`color:${avgPearson >= 0.2 ? '#10b981' : avgPearson <= -0.2 ? '#ef4444' : '#94a3b8'}`}>{avgPearson.toFixed(3)}</strong></span>
+        <span>positive corr (&gt;0.3): <strong style="color:#10b981">{positiveCorr}</strong></span>
+        <span>negative corr (&lt;-0.3): <strong style="color:#ef4444">{negativeCorr}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🚀 Top 10 positive correlation (烧得越猛越好)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>pearson</th><th>rounds</th><th>cost</th><th>gain</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><strong style="color:#10b981">{s.pearson.toFixed(3)}</strong></td>
+              <td>{s.totalRounds}</td>
+              <td>{fmt(s.absCost)}</td>
+              <td>{s.absGain >= 0 ? '+' : ''}{s.absGain.toFixed(2)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💀 Top 10 negative correlation (越烧越糟)</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>#</th><th>sid</th><th>pearson</th><th>rounds</th><th>cost</th><th>gain</th><th>goal</th></tr>
+        </thead>
+        <tbody>
+          {sessions.slice().reverse().slice(0, 10).map((s, i) => (
+            <tr>
+              <td>{i + 1}</td>
+              <td><a href={`${base}/agents/${s.sid}/`}><code>{esc(s.sid.slice(0, 10))}</code></a></td>
+              <td><strong style="color:#ef4444">{s.pearson.toFixed(3)}</strong></td>
+              <td>{s.totalRounds}</td>
+              <td>{fmt(s.absCost)}</td>
+              <td>{s.absGain >= 0 ? '+' : ''}{s.absGain.toFixed(2)}</td>
+              <td><small class="muted">{esc(s.goal.slice(0, 18))}{s.goal.length > 18 ? '…' : ''}</small></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>pearson &gt; 0.5 = 烧钱 = 高分(烧得有效)</li>
+        <li>pearson &lt; -0.5 = 烧钱 = 低分(浪费)</li>
+        <li>pearson ≈ 0 = cost 与 score 无关(可能 cost 在 feedback 而非 design)</li>
+        <li>对照 <a href={`${base}/agents/cost-per-score-point/`}>Cost Per Score Point</a></li>
+        <li>对照 <a href={`${base}/agents/action-failure-correlation/`}>Action Failure Correlation</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-rcgc-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-rcgc-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0.3rem;
+  }
+</style>
