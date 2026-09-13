@@ -330,9 +330,16 @@ async function runInterviewFlow(
               chip.addEventListener('click', () => {
                 const idx = Number(chip.dataset.candIdx);
                 const text = list[idx] || '';
-                if (inputTA && text) inputTA.value = text;
+                if (!inputTA || !text) return;
+                inputTA.value = text;
+                // 高亮选中
                 candWrap.querySelectorAll('.lib-interview-candidate.active').forEach((el) => el.classList.remove('active'));
                 chip.classList.add('active');
+                // 选择题 UX:点 chip 自动进下一题 —— 短暂延迟让用户看到「已选中」状态
+                setTimeout(() => {
+                  const nextBtn = panel.querySelector<HTMLButtonElement>('[data-interview-next], [data-interview-finish]');
+                  nextBtn?.click();
+                }, 280);
               });
             });
           }
