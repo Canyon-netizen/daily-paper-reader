@@ -1,0 +1,171 @@
+---
+// /agents/action-count-vs-gain-buckets.astro — iter #397:gain distribution by action count buckets
+
+import { readFile, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import '../../styles/agents.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+interface Bucket {
+  range: string;
+  lo: number;
+  hi: number;
+  count: number;
+  avgGain: number;
+  medianGain: number;
+  totalGain: number;
+}
+
+const root = join(process.cwd(), 'archive');
+const buckets: Bucket[] = [
+  { range: '1-3', lo: 1, hi: 3, count: 0, avgGain: 0, medianGain: 0, totalGain: 0 },
+  { range: '4-6', lo: 4, hi: 6, count: 0, avgGain: 0, medianGain: 0, totalGain: 0 },
+  { range: '7-10', lo: 7, hi: 10, count: 0, avgGain: 0, medianGain: 0, totalGain: 0 },
+  { range: '11-15', lo: 11, hi: 15, count: 0, avgGain: 0, medianGain: 0, totalGain: 0 },
+  { range: '16-25', lo: 16, hi: 25, count: 0, avgGain: 0, medianGain: 0, totalGain: 0 },
+  { range: '26-50', lo: 26, hi: 50, count: 0, avgGain: 0, medianGain: 0, totalGain: 0 },
+  { range: '51+', lo: 51, hi: 1e9, count: 0, avgGain: 0, medianGain: 0, totalGain: 0 },
+];
+
+const bucketGains = new Map<string, number[]>();
+
+if (existsSync(root)) {
+  const sids = await readdir(root).catch(() => []);
+  for (const sid of sids) {
+    const rd = join(root, sid, 'rounds');
+    if (!existsSync(rd)) continue;
+    const rfs = await readdir(rd).catch(() => []);
+    const rNums: number[] = [];
+    for (const rf of rfs) {
+      const m = rf.match(/^round_(\d+)\.json$/);
+      if (m) rNums.push(parseInt(m[1], 10));
+    }
+    if (rNums.length < 2) continue;
+    rNums.sort((a, b) => a - b);
+
+    let totalActions = 0;
+    const scores: number[] = [];
+    for (const rn of rNums) {
+      try {
+        const r = JSON.parse(await readFile(join(rd, `round_${rn}.json`), 'utf8'));
+        totalActions += (r.modifier?.applied ?? []).length;
+        const arr: number[] = [];
+        for (const persona of r.feedback?.personas ?? []) {
+          for (const p of persona.proposals ?? []) {
+            if (typeof p.total === 'number') arr.push(p.total);
+          }
+        }
+        scores.push(arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+      } catch (e) { scores.push(0); }
+    }
+    const gain = scores[scores.length - 1] - scores[0];
+    for (const b of buckets) {
+      if (totalActions >= b.lo && totalActions <= b.hi) {
+        b.count += 1;
+        b.totalGain += gain;
+        if (!bucketGains.has(b.range)) bucketGains.set(b.range, []);
+        bucketGains.get(b.range)!.push(gain);
+        break;
+      }
+    }
+  }
+}
+
+function median(arr: number[]): number {
+  if (arr.length === 0) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+for (const b of buckets) {
+  const arr = bucketGains.get(b.range) ?? [];
+  b.avgGain = b.count > 0 ? b.totalGain / b.count : 0;
+  b.medianGain = median(arr);
+}
+
+const totalSessions = buckets.reduce((s, b) => s + b.count, 0);
+
+function bar(n: number, max: number, width = 18): string {
+  if (!max) return '░'.repeat(width);
+  const filled = Math.round((n / max) * width);
+  return '█'.repeat(filled) + '░'.repeat(width - filled);
+}
+
+function esc(s: any): string {
+  const str = String(s == null ? '' : s);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+---
+
+<BaseLayout title="Action Count vs Gain Buckets · Agents">
+  <Navbar />
+  <main class="shell agents-shell">
+    <nav class="agents-breadcrumb">
+      <a href={`${base}/agents/`}>← 多智能体控制台</a>
+      <span class="muted"> / action-count-vs-gain-buckets</span>
+    </nav>
+
+    <header class="agents-header">
+      <h1>🪣 Action Count vs Gain Buckets <span class="muted" style="font-size:0.6em">(iter #397)</span></h1>
+      <p class="agents-sub">
+        按 session 总 action 数分桶,每桶的 avg gain。
+        找最有效的 action 数区间。
+      </p>
+    </header>
+
+    <section class="agents-session-section">
+      <h2>📊 全局</h2>
+      <div class="agents-acvg-globals">
+        <span>total sessions: <strong>{totalSessions}</strong></span>
+      </div>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>🪣 Bucket stats</h2>
+      <table class="agents-session-table">
+        <thead>
+          <tr><th>range</th><th>count</th><th>avg gain</th><th>median gain</th><th>total gain</th><th>bar (avg)</th></tr>
+        </thead>
+        <tbody>
+          {buckets.map((b) => (
+            <tr>
+              <td><code>{b.range}</code></td>
+              <td>{b.count}</td>
+              <td style={`color:${b.avgGain >= 0 ? '#10b981' : '#ef4444'}`}><strong>{b.avgGain >= 0 ? '+' : ''}{b.avgGain.toFixed(2)}</strong></td>
+              <td style={`color:${b.medianGain >= 0 ? '#10b981' : '#ef4444'}`}>{b.medianGain >= 0 ? '+' : ''}{b.medianGain.toFixed(2)}</td>
+              <td>{b.totalGain >= 0 ? '+' : ''}{b.totalGain.toFixed(2)}</td>
+              <td><code>{bar(Math.max(0, b.avgGain), Math.max(...buckets.map((x) => Math.max(0, x.avgGain))), 18)}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="agents-session-section">
+      <h2>💡 解读</h2>
+      <ul>
+        <li>最佳桶 = avg gain 最高的桶(性价比最优)</li>
+        <li>11-25 actions 通常是大多数 session 的落点</li>
+        <li>对照 <a href={`${base}/agents/score-per-action-productivity/`}>Score Per Action Productivity</a></li>
+        <li>对照 <a href={`${base}/agents/session-round-duration-histogram/`}>Session Round-Duration Histogram</a></li>
+      </ul>
+    </section>
+  </main>
+</BaseLayout>
+
+<style>
+  .agents-acvg-globals {
+    display: flex;
+    gap: 1.2rem;
+    flex-wrap: wrap;
+  }
+  .agents-acvg-globals strong {
+    color: #4f46e5;
+    font-family: ui-monospace, monospace;
+    margin: 0 0 0 0.3rem;
+  }
+</style>
