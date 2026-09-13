@@ -276,7 +276,12 @@ const { id } = Astro.params;
       (form.querySelector('#edit-exp-papers') as HTMLInputElement).value = exp.relatedPapers.join(', ');
       (form.querySelector('#edit-exp-ideas') as HTMLInputElement).value = (exp.relatedIdeas || []).join(', ');
 
-      modal.classList.add('active');
+      // iter #403: <dialog> 用 showModal()/close(),不再用 classList.add('active')
+      if (typeof modal.showModal === 'function') {
+        if (!modal.open) modal.showModal();
+      } else {
+        modal.setAttribute('open', '');
+      }
 
       form.onsubmit = (e) => {
         e.preventDefault();
@@ -312,11 +317,15 @@ const { id } = Astro.params;
         if (updated) {
           renderDetail(updated);
         }
-        modal.classList.remove('active');
+        // iter #403: <dialog> close after submit
+        if (typeof modal.close === 'function') modal.close();
+        else modal.removeAttribute('open');
       };
 
       modal.querySelector('.modal-close')?.addEventListener('click', () => {
-        modal.classList.remove('active');
+        // iter #403: <dialog> close
+        if (typeof modal.close === 'function') modal.close();
+        else modal.removeAttribute('open');
       });
     }
 
@@ -393,7 +402,11 @@ const { id } = Astro.params;
       document.body.appendChild(modal);
 
       modal.addEventListener('click', (e) => {
-        if (e.target === modal) modal.classList.remove('active');
+        // iter #403: <dialog> close on backdrop click
+        if (e.target === modal) {
+          if (typeof modal.close === 'function') modal.close();
+          else modal.removeAttribute('open');
+        }
       });
 
       return modal;

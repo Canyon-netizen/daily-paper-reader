@@ -214,7 +214,12 @@ const { id } = Astro.params;
       (form.querySelector('#edit-idea-tags') as HTMLInputElement).value = idea.tags.join(', ');
       (form.querySelector('#edit-idea-papers') as HTMLInputElement).value = idea.relatedPapers.join(', ');
 
-      modal.classList.add('active');
+      // iter #403: <dialog> showModal
+      if (typeof modal.showModal === 'function') {
+        if (!modal.open) modal.showModal();
+      } else {
+        modal.setAttribute('open', '');
+      }
 
       form.onsubmit = (e) => {
         e.preventDefault();
@@ -234,11 +239,15 @@ const { id } = Astro.params;
         if (updated) {
           renderDetail(updated);
         }
-        modal.classList.remove('active');
+        // iter #403: <dialog> close
+        if (typeof modal.close === 'function') modal.close();
+        else modal.removeAttribute('open');
       };
 
       modal.querySelector('.modal-close')?.addEventListener('click', () => {
-        modal.classList.remove('active');
+        // iter #403: <dialog> close
+        if (typeof modal.close === 'function') modal.close();
+        else modal.removeAttribute('open');
       });
     }
 
@@ -279,7 +288,11 @@ const { id } = Astro.params;
       document.body.appendChild(modal);
 
       modal.addEventListener('click', (e) => {
-        if (e.target === modal) modal.classList.remove('active');
+        // iter #403: <dialog> close on backdrop
+        if (e.target === modal) {
+          if (typeof modal.close === 'function') modal.close();
+          else modal.removeAttribute('open');
+        }
       });
 
       return modal;

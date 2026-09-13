@@ -24,6 +24,9 @@ export function initIdeasUI(): void {
   setupNewIdeaButton();
   setupModalHandlers();
   setupBatchOperations();
+  // iter #403: 初始化时同步 actionbar 批量按钮的 disabled 态,
+  // 否则「🚀 批量建实验」在页面刚加载时看起来可按,但点了只是 alert。
+  updateBatchSelectionBar();
 }
 
 /** Render the idea grid */
@@ -382,7 +385,13 @@ function openIdeaModal(
       const setter = (window as unknown as { __setPendingIdeaSource?: (s: IdeaSource) => void }).__setPendingIdeaSource;
       setter?.(prefillSource);
     }
-    modal.classList.add('active');
+    // 用 <dialog> 原生 showModal()/close(),配合 CSS .idea-modal[open]
+    // (iter #403 修复: 之前用 classList.add('active') 对 dialog 无效)
+    if (typeof modal.showModal === 'function') {
+      if (!modal.open) modal.showModal();
+    } else {
+      modal.setAttribute('open', '');
+    }
     (form.querySelector('input[name="title"]') as HTMLInputElement)?.focus();
   }
 }
@@ -422,7 +431,14 @@ function buildStructuredDescription(papers: Array<{id: string; title?: string; a
 
 /** Close the idea modal */
 function closeModal(): void {
-  document.getElementById('idea-modal')?.classList.remove('active');
+  const modal = document.getElementById('idea-modal');
+  if (!modal) return;
+  // 用 <dialog> 原生 close() (iter #403: 同 openIdeaModal 一起修)
+  if (typeof modal.close === 'function') {
+    modal.close();
+  } else {
+    modal.removeAttribute('open');
+  }
 }
 
 /** Update the counts display */
@@ -509,9 +525,11 @@ function setupBatchOperations(): void {
   const batchPreview = batchModal?.querySelector<HTMLElement>('#batch-preview');
 
   // Open batch modal from actionbar button
+  // iter #403: 之前是 alert 后 return,UX 差。改为:有选择→开 modal,无选择→按钮本身 disabled(在 renderIdeaGrid 里同步)
   batchCreateBtn?.addEventListener('click', () => {
     if (selectedIdeaIds.size === 0) {
-      alert('请先在想法卡片上勾选要创建实验的想法');
+      // 双重保险:即便 disabled 被绕过,也提示一下
+      showToast?.('请先在想法卡片上勾选要创建实验的想法', 'info');
       return;
     }
     openBatchExperimentModal();
@@ -711,6 +729,15 @@ function updateBatchSelectionBar(): void {
   }
   if (batchBar) {
     batchBar.hidden = selectedIdeaIds.size === 0;
+  }
+  // iter #403: actionbar 的「🚀 批量建实验」按钮在无选择时 disabled,
+  // 让用户一眼看出"先勾选再点"。checkboxes 触发 onChange → renderIdeaGrid → 这里。
+  const batchCreateBtn = document.querySelector<HTMLButtonElement>('[data-batch-create-experiments]');
+  if (batchCreateBtn) {
+    batchCreateBtn.disabled = selectedIdeaIds.size === 0;
+    batchCreateBtn.title = selectedIdeaIds.size === 0
+      ? '请先在想法卡片上勾选要创建实验的想法'
+      : `为已选的 ${selectedIdeaIds.size} 个想法批量创建实验`;
   }
 }
 

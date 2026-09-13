@@ -368,7 +368,12 @@ function openExperimentModal(prefill?: {
       if (prefill.relatedIdeas?.length) relatedIdeasInput.value = prefill.relatedIdeas.join(', ');
       if (prefill.relatedPapers?.length) relatedPapersInput.value = prefill.relatedPapers.join(', ');
     }
-    modal.classList.add('active');
+    // iter #403: <dialog> 元素用 showModal()/close(),classList.add('active') 无效
+    if (typeof modal.showModal === 'function') {
+      if (!modal.open) modal.showModal();
+    } else {
+      modal.setAttribute('open', '');
+    }
     (form.querySelector('input[name="title"]') as HTMLInputElement)?.focus();
   }
 }
