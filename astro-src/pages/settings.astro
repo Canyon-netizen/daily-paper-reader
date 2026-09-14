@@ -470,6 +470,24 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
       <p class="settings-hidden-status" id="hidden-status" role="status" aria-live="polite"></p>
     </section>
 
+    <!-- ===== 文献库反馈日志 ===== -->
+    <section class="settings-card" id="settings-library-feedback-card">
+      <h2 class="settings-card-title">📊 文献库反馈日志</h2>
+      <p class="settings-card-sub">
+        站点会静默收集你对文献库的操作(新建 / 改画像 / 调阈值 / include / exclude / 标记不相关),
+        仅存浏览器 <code>localStorage</code>(key = <code>dpr_library_feedback_v1</code>),
+        用于校准多维入库标准 —— 见
+        <a href="/docs/library/inclusion-standard/" target="_blank" rel="noopener">入库标准文档</a>。
+        <strong>零网络、零 PII。</strong>
+      </p>
+      <ul class="settings-feedback-counts" id="settings-feedback-counts"></ul>
+      <div class="settings-feedback-actions">
+        <button type="button" class="settings-action-btn ghost" id="feedback-export-btn">⬇ 导出 JSON</button>
+        <button type="button" class="settings-action-btn ghost danger" id="feedback-clear-btn">清空所有反馈</button>
+      </div>
+      <p class="settings-feedback-status" id="feedback-status" role="status" aria-live="polite"></p>
+    </section>
+
     <!-- ===== 重置 ===== -->
     <section class="settings-card settings-card-danger">
       <h2 class="settings-card-title">重置</h2>

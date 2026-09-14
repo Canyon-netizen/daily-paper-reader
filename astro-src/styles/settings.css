@@ -347,6 +347,79 @@
   margin: 0.5rem 0;
 }
 
+/* ===== 文献库反馈日志面板 ===== */
+.settings-feedback-counts {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0;
+  display: grid;
+  gap: 0.3rem;
+}
+.settings-feedback-empty {
+  color: var(--fg-subtle);
+  font-style: italic;
+  font-size: 0.9rem;
+}
+.settings-feedback-summary {
+  font-size: 0.88rem;
+  color: var(--fg-muted);
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed var(--border, #e2e2e2);
+  margin-bottom: 0.3rem;
+}
+.settings-feedback-summary strong {
+  color: var(--fg-strong, var(--fg));
+  font-variant-numeric: tabular-nums;
+}
+.settings-feedback-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  background: var(--card-bg, transparent);
+}
+.settings-feedback-row:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+}
+.settings-feedback-row--zero {
+  opacity: 0.55;
+}
+.settings-feedback-kind {
+  font-size: 0.9rem;
+}
+.settings-feedback-code {
+  font-size: 0.72rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.settings-feedback-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--accent, #1f8b4c);
+  min-width: 2ch;
+  text-align: right;
+}
+.settings-feedback-row--zero .settings-feedback-count {
+  color: var(--fg-subtle);
+  font-weight: 400;
+}
+.settings-feedback-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.settings-feedback-status {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+.settings-feedback-status[data-kind="ok"] { color: var(--accent); }
+.settings-feedback-status[data-kind="error"] { color: #c33; }
+.settings-feedback-status[data-kind="info"] { color: var(--fg-muted); }
+
 .settings-model-actions {
   display: flex;
   align-items: center;

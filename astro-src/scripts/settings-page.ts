@@ -50,6 +50,14 @@ import {
   pushUserTagsToGist,
   type UserTag,
 } from '../lib/user-tags';
+import {
+  countByKind,
+  exportFeedbackJson,
+  clearFeedback,
+  listFeedback,
+  type FeedbackKind,
+} from '../lib/library/feedback';
+import { onDprLibraryFeedback } from '../lib/events/bus';
 import { debounce, escapeHtml } from '../lib/dom-utils';
 
 // ============================================================================
@@ -584,6 +592,9 @@ function init(): void {
 
   // --- 8. 用户标签面板 ---
   initUserTagsPanel();
+
+  // --- 9. 文献库反馈日志面板 ---
+  initFeedbackPanel();
 }
 
 // ============================================================================
@@ -985,6 +996,129 @@ function initUserTagsPanel(): void {
         console.warn('[user-tags-panel] Gist push failed:', err),
       );
     }
+  });
+}
+
+// ============================================================================
+// 文献库反馈日志面板 — 列出 localStorage 里的 11 类事件计数,
+// 提供导出 JSON / 清空本地 两个操作。订阅 dpr:library-feedback 自动刷新。
+// ============================================================================
+
+/** 把 FeedbackKind 翻译成中文短标签,UI 显示更直观。 */
+const FEEDBACK_KIND_LABELS: Record<FeedbackKind, string> = {
+  library_created: '新建文献库',
+  library_deleted: '删除文献库',
+  library_profile_changed: '切换画像',
+  library_threshold_changed: '调阈值',
+  paper_included: 'include 论文',
+  paper_excluded: 'exclude 论文',
+  paper_marked_irrelevant: '标记不相关',
+  candidate_score_too_low: '打分偏低',
+  candidate_score_too_high: '打分偏高',
+  paper_reading_status_changed: '阅读状态变化',
+  feedback_note: '反馈备注',
+};
+
+function setFeedbackStatus(msg: string, kind: 'info' | 'ok' | 'error' = 'info'): void {
+  const el = document.getElementById('feedback-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.dataset.kind = kind;
+}
+
+function renderFeedbackCounts(): void {
+  const list = document.getElementById('settings-feedback-counts');
+  if (!list) return;
+
+  const counts = countByKind();
+  const entries = listFeedback();
+  const total = entries.length;
+  const ordered: FeedbackKind[] = [
+    'library_created',
+    'library_deleted',
+    'library_profile_changed',
+    'library_threshold_changed',
+    'paper_included',
+    'paper_excluded',
+    'paper_marked_irrelevant',
+    'candidate_score_too_low',
+    'candidate_score_too_high',
+    'paper_reading_status_changed',
+    'feedback_note',
+  ];
+
+  // 总计条
+  const summary = total === 0
+    ? '<li class="settings-feedback-empty">尚无任何反馈记录。</li>'
+    : `<li class="settings-feedback-summary">共 <strong>${total}</strong> 条反馈记录(FIFO 上限 5000)</li>`;
+
+  // 按顺序渲染每个 kind(0 也展示,免得用户疑惑某个维度为什么没数)
+  const rows = ordered.map((k) => {
+    const c = counts[k] ?? 0;
+    const dim = c === 0 ? ' settings-feedback-row--zero' : '';
+    return `<li class="settings-feedback-row${dim}">
+      <span class="settings-feedback-kind">${escapeHtml(FEEDBACK_KIND_LABELS[k])}</span>
+      <code class="settings-feedback-code">${escapeHtml(k)}</code>
+      <span class="settings-feedback-count">${c}</span>
+    </li>`;
+  }).join('');
+
+  list.innerHTML = summary + rows;
+}
+
+function downloadFeedbackJson(): void {
+  const json = exportFeedbackJson();
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+  a.href = url;
+  a.download = `dpr-library-feedback-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // 异步释放 URL,浏览器有时间开始下载
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function initFeedbackPanel(): void {
+  const listEl = document.getElementById('settings-feedback-counts');
+  if (!listEl) return; // panel not on this page
+
+  renderFeedbackCounts();
+
+  // 订阅 dpr:library-feedback:任意位置(recordFeedback 被调用)都刷新计数
+  onDprLibraryFeedback(document, () => {
+    renderFeedbackCounts();
+  });
+
+  $<HTMLButtonElement>('feedback-export-btn').addEventListener('click', () => {
+    const entries = listFeedback();
+    if (entries.length === 0) {
+      setFeedbackStatus('本地为空,无需导出', 'info');
+      return;
+    }
+    try {
+      downloadFeedbackJson();
+      setFeedbackStatus(`✓ 已导出 ${entries.length} 条反馈到 JSON`, 'ok');
+    } catch (err) {
+      console.warn('[feedback-panel] export failed:', err);
+      setFeedbackStatus('✗ 导出失败,详情见 console', 'error');
+    }
+  });
+
+  $<HTMLButtonElement>('feedback-clear-btn').addEventListener('click', () => {
+    const entries = listFeedback();
+    if (entries.length === 0) {
+      setFeedbackStatus('本地已为空,无需清空', 'info');
+      return;
+    }
+    if (!confirm(`确定清空本地所有反馈记录?(共 ${entries.length} 条,不可撤销)\n\n该操作不影响你的文献库 —— 仅清空审计/校准用的事件日志。`)) {
+      return;
+    }
+    const removed = clearFeedback();
+    renderFeedbackCounts();
+    setFeedbackStatus(`✓ 已清空 ${removed} 条反馈记录`, 'ok');
   });
 }
 

@@ -16,6 +16,11 @@
 import { canonicalArxivId } from '../lib/arxiv';
 import { onDprUserLibrariesChange } from '../lib/events';
 import {
+  AUDIENCE_PROFILES,
+  type AudienceProfileId,
+} from '../lib/library/audience-profiles';
+import { recordFeedback } from '../lib/library/feedback';
+import {
   addLibraryAnchor,
   addPaperToLibrary,
   bulkRemovePapersFromLibrary,
@@ -170,6 +175,7 @@ async function openIngestPanel(libId: string): Promise<void> {
               <div class="lib-ingest-actions">
                 <button type="button" class="btn btn-primary btn-sm" data-ingest-action="include" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">✓ 纳入</button>
                 <button type="button" class="btn btn-ghost btn-sm" data-ingest-action="skip" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">⏭ 跳过</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-ingest-action="note" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}" title="为这次打分写一条备注(写入反馈日志,用于校准画像)">📝 备注</button>
                 <a class="btn btn-ghost btn-sm" href="https://arxiv.org/abs/${encodeURIComponent(c.arxivId.replace(/v\d+$/, ''))}" target="_blank" rel="noopener">🔗 arXiv</a>
               </div>
             </div>
@@ -202,6 +208,31 @@ async function openIngestPanel(libId: string): Promise<void> {
             btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
           } else if (action === 'skip') {
             btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
+          } else if (action === 'note') {
+            // 📝 备注 — 写一条 feedback_note,带 LLM 打分快照 + 当前画像。
+            // 用于校准画像的打分偏差:用户 override 时留下"为什么"。
+            const note = window.prompt(
+              `为 ${cand.arxivId}(LLM 打分 ${cand.score.toFixed(2)})写一条备注:\n` +
+              `会写入反馈日志,用于校准画像打分偏差。最多 500 字。`,
+              '',
+            );
+            if (note === null) return; // 取消
+            const trimmed = note.trim().slice(0, 500);
+            if (!trimmed) {
+              showToast('备注为空,未写入', 'info');
+              return;
+            }
+            // 取当前 lib 的画像快照(feedback 的 audienceProfile 是 snapshot)
+            const currentLib = getUserLibrary(libId);
+            recordFeedback({
+              kind: 'feedback_note',
+              libraryId: libId,
+              arxivId: cand.arxivId,
+              value: cand.score,
+              text: trimmed,
+              audienceProfile: currentLib?.definition?.audienceProfile,
+            });
+            showToast(`✓ 备注已记录(${trimmed.length} 字)`, 'ok');
           }
         });
       });
@@ -1024,6 +1055,7 @@ function bindAnchorControl(modal: HTMLElement): AnchorControl {
 
 /** 在弹窗上装好四个 list 控件并 reset 到空态。返回 handlers 让 caller 在 reset/close 时复用。 */
 function setupModalControls(modal: HTMLElement): ModalControls {
+  bindProfilePicker(modal);
   return {
     categories: bindListInput(modal, { listKey: 'categories', presetAttr: 'data-cat-preset' }),
     inclusion: bindListInput(modal, { listKey: 'inclusion' }),
@@ -1076,6 +1108,10 @@ function closeModal(modal: HTMLElement): void {
   if (cadSel) cadSel.value = 'manual';
   const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
   if (thresholdInput) thresholdInput.value = '0.8';
+  // 重置读者画像:清 active + 清 hidden
+  modal.querySelectorAll<HTMLElement>('[data-profile-card]').forEach((el) => el.classList.remove('active'));
+  const profileHidden = modal.querySelector<HTMLInputElement>('[data-modal-profile]');
+  if (profileHidden) profileHidden.value = '';
 }
 
 /** 同一 modal 节点在不同打开轮次复用同一组 controls;
@@ -1091,6 +1127,31 @@ function bindHuePicker(modal: HTMLElement): void {
       chip.classList.add('active');
       const hidden = modal.querySelector<HTMLInputElement>('[data-modal-hue]');
       if (hidden) hidden.value = chip.dataset.hue || 'emerald';
+    });
+  });
+}
+
+/** 读者画像卡片选择 —— 点击切换 active 态,自动同步默认值到 threshold input。
+ *
+ * 设计:点了某张卡 → 阈值 input 自动覆盖成 profile.defaultThreshold(可手改,
+ * 手改后再点别的卡才会再次覆盖)。这样既给"懒人"一个开箱即用的体验,
+ * 也给"高级用户"留 override 路径。 */
+function bindProfilePicker(modal: HTMLElement): void {
+  const cards = modal.querySelectorAll<HTMLElement>('[data-profile-card]');
+  const hidden = modal.querySelector<HTMLInputElement>('[data-modal-profile]');
+  const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
+  cards.forEach((card) => {
+    card.addEventListener('click', () => {
+      const id = card.dataset.profileCard as AudienceProfileId | undefined;
+      if (!id || !hidden) return;
+      cards.forEach((c) => c.classList.remove('active'));
+      card.classList.add('active');
+      hidden.value = id;
+      // 同步默认阈值(用户没手改过才覆盖;这里简化为"点了就覆盖",UX 直接)
+      const profile = AUDIENCE_PROFILES[id];
+      if (profile && thresholdInput) {
+        thresholdInput.value = String(profile.defaultThreshold);
+      }
     });
   });
 }
@@ -1134,6 +1195,14 @@ function fillModalFromLibrary(modal: HTMLElement, lib: UserLibrary): void {
   // 编辑模式回填:已有值优先,没有就 0.8
   const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
   if (thresholdInput) thresholdInput.value = String(def.relevanceThreshold ?? 0.8);
+
+  // 读者画像:已有 → 高亮对应卡片;无 → 全空(走 legacy)
+  const profileId = def.audienceProfile;
+  const profileHidden = modal.querySelector<HTMLInputElement>('[data-modal-profile]');
+  if (profileHidden) profileHidden.value = profileId || '';
+  modal.querySelectorAll<HTMLElement>('[data-profile-card]').forEach((el) => {
+    el.classList.toggle('active', el.dataset.profileCard === profileId);
+  });
 
   // P8a 字段
   const goalsTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-goals]');
@@ -1306,6 +1375,12 @@ function setupNewLibraryModal(): void {
     const relevanceThreshold = !Number.isFinite(thresholdRaw)
       ? 0.8
       : Math.max(0, Math.min(1, thresholdRaw));
+    // 读者画像:空串 = 未设(走 legacy)。校验一下 id 合法,避免脏 input 污染 store。
+    const profileRaw = form.querySelector<HTMLInputElement>('[data-modal-profile]')?.value || '';
+    const audienceProfile: AudienceProfileId | undefined =
+      profileRaw && profileRaw in AUDIENCE_PROFILES
+        ? (profileRaw as AudienceProfileId)
+        : undefined;
     const goals = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-goals]')?.value || '', 3, 200);
     const inScope = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-in-scope]')?.value || '', 8, 80);
     const outOfScope = parseSentences(form.querySelector<HTMLTextAreaElement>('[data-modal-out-of-scope]')?.value || '', 8, 80);
@@ -1338,6 +1413,7 @@ function setupNewLibraryModal(): void {
           outOfScope,
           questions,
           relevanceThreshold,
+          audienceProfile,
         });
         if (!r2.ok) {
           showToast(getApiResultMessage(r2) || '保存失败', 'error');
@@ -1380,6 +1456,7 @@ function setupNewLibraryModal(): void {
           outOfScope,
           questions,
           relevanceThreshold,
+          audienceProfile,
         },
       });
       if (!res.ok || !res.id) {
