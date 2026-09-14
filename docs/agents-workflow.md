@@ -100,6 +100,23 @@ DPR 的解法：把流水线拆成 **3 个有清晰输入输出的智能体 + 1 
 
 ## 5. 上手路径
 
+### 5.0 与「方法论」skill 文档的关系(2026-09-14 整合)
+
+agents 闭环是「**执行化**」(从 RQ 到 deliverable),但具体每一步「**怎么写得专业**」要消费对应的方法论文档:
+
+| 阶段 | 对应方法论 skill | agents 消费方式 |
+|------|------------------|------------------|
+| 1. Ideation | [`research-skills/defining-research-question.md`](research-skills/defining-research-question.md) | Designer 用 §3 RQ 模板 + §4 反模式 |
+| 2. Literature | [`research-skills/how-to-lit-review.md`](research-skills/how-to-lit-review.md) | Modifier 写 literature_review deliverable 时参考 §2 5 步法 |
+| 3. Experiment | [`research-skills/experiment-design.md`](research-skills/experiment-design.md) | Modifier 写 experiment_plan deliverable 时参考 §3 5 元素模板 |
+| 4. Draft | [`research-skills/writing-paper.md`](research-skills/writing-paper.md) | Modifier 写 paper_draft deliverable 时参考 §1 5 阶段 |
+| 5. Review | [`research-skills/writing-rebuttal.md`](research-skills/writing-rebuttal.md) + [`research-skills/reviewer-mindset.md`](research-skills/reviewer-mindset.md) | Reviser 回应 Reviewer concern 时参考 §1 4 段结构 |
+| 6. Revise | [`research-skills/writing-rebuttal.md`](research-skills/writing-rebuttal.md) | Reviser 改 draft 时参考 §3 7 类 concern 模板 |
+
+**索引**:`docs/research-skills/README.md`(阶段映射 + 工具配合表)。
+
+**实际落地**:Designer / Modifier / Reviser / Reviewer 的 prompt 会在下一批(2026-09-14+)加上「注入上下文 = read docs/research-skills/*.md 对应章节」。
+
 ### 5.1 CLI 零摩擦入口（iter #54 引入）
 
 ```bash

@@ -209,3 +209,21 @@ Each module supports references to others:
 3. **Metrics:** Track idea-to-paper conversion rates
 4. **Advanced Search:** Full-text search with relevance scoring
 5. **Dashboard Customization:** User-configurable widgets
+
+## 关联技能文档
+
+本总览是「**架构图**」,不重复讲方法论。所有阶段对应的「**怎么读 / 怎么设计 / 怎么写**」细节在 [`docs/research-skills/`](research-skills/) 下:
+
+| 阶段 | 详细方法论 |
+|------|------------|
+| 0. 方向定位(怎么写研究问题) | [`research-skills/defining-research-question.md`](research-skills/defining-research-question.md) |
+| 1. 文献检索(怎么做综述) | [`research-skills/how-to-lit-review.md`](research-skills/how-to-lit-review.md) |
+| 2. 论文速读(怎么读一篇 paper) | [`research-skills/how-to-read-paper.md`](research-skills/how-to-read-paper.md) |
+| 3. 实验设计 | [`research-skills/experiment-design.md`](research-skills/experiment-design.md) |
+| 4. 论文写作 | [`research-skills/writing-paper.md`](research-skills/writing-paper.md) |
+| 5. 审稿应对(rebuttal) | [`research-skills/writing-rebuttal.md`](research-skills/writing-rebuttal.md) |
+| 6. 同行审稿 + mindset | [`research-skills/writing-review.md`](research-skills/writing-review.md) + [`reviewer-mindset.md`](research-skills/reviewer-mindset.md) |
+
+**索引页**:`docs/research-skills/README.md`(阶段映射 + 工具配合表)。
+
+闭环设计见 [`docs/agents-workflow.md`](agents-workflow.md)(3 智能体 Designer → Feedback → Gate → Modifier + pipeline 7 stage),agents 在每阶段会消费对应的 skill 文档作为 prompt 上下文。
