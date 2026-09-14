@@ -742,20 +742,21 @@ function renderDigestMarkdown(md: string): string {
 /** 渲染 digest mount:当前 digest + 历史 list。 */
 function renderDigestMount(
   mount: HTMLElement,
-  current: { markdown: string; paperCount: number; id: string; generatedAt: number; model: string } | null,
+  current: { markdown: string; paperCount: number; id: string; generatedAt: number; model: string; depth?: 'daily' | 'academic' } | null,
   history: Array<{ id: string; paperCount: number; generatedAt: number }>,
 ): void {
   const cur = current
     ? `
-      <article class="digest-article">
+      <article class="digest-article ${current.depth === 'academic' ? 'digest-article-academic' : 'digest-article-daily'}">
         <header class="digest-article-head">
           <span class="digest-date">${escapeHtml(current.id)}</span>
+          <span class="digest-depth-badge ${current.depth === 'academic' ? 'badge-academic' : 'badge-daily'}">${current.depth === 'academic' ? '📑 学术综述(IMRaD)' : '📰 日报'}</span>
           <span class="digest-stats">${current.paperCount} 篇 · 模型 ${escapeHtml(current.model)} · ${new Date(current.generatedAt).toLocaleString('zh-CN')}</span>
         </header>
         <div class="digest-body">${renderDigestMarkdown(current.markdown)}</div>
       </article>
     `
-    : `<p class="muted">还没有 digest。点上方「✨ 生成今日简报」。</p>`;
+    : `<p class="muted">还没有 digest。点上方按钮生成。</p>`;
   const hist = history.length > 1
     ? `
       <details class="digest-history">
@@ -2255,9 +2256,15 @@ function renderUserLibraryDetail(): void {
     <section id="digest-panel" class="library-wb-panel" data-panel="digest">
       <div class="wb-digest">
         <div class="digest-header">
-          <h3>📰 每日简报</h3>
-          <p class="muted">基于 statement + 关键词 + inScope,聚合最近 7 天库内论文,LLM 生成中文解读。本地缓存 24h。</p>
-          <button type="button" class="btn btn-primary btn-sm" data-action="digest-generate" data-lib-id="${escapeHtml(lib.id)}">✨ 生成今日简报</button>
+          <h3>📰 简报与综述</h3>
+          <p class="muted">
+            <strong>日报</strong>:基于 statement + 关键词,聚合最近 7 天论文,LLM 生成 4 段解读(本地缓存 24h)。
+            <strong>学术综述</strong>:IMRaD 七段结构(Abstract / Introduction / Methodology / Key Findings / Discussion / Conclusion / References),1500-2500 字可投稿级别,覆盖近 30 天。
+          </p>
+          <div class="digest-actions">
+            <button type="button" class="btn btn-primary btn-sm" data-action="digest-generate" data-lib-id="${escapeHtml(lib.id)}">✨ 生成今日简报</button>
+            <button type="button" class="btn btn-soft btn-sm" data-action="digest-academic-gen" data-lib-id="${escapeHtml(lib.id)}" title="IMRaD 七段结构,1500-2500 字,可投稿级别">📑 生成学术综述</button>
+          </div>
         </div>
         <div id="lib-digest-mount" data-lib-digest-mount></div>
       </div>
@@ -2802,6 +2809,24 @@ function renderUserLibraryDetail(): void {
       try {
         const { generateDigest, listDigests } = await import('./library-digest');
         const d = await generateDigest(id, allPapers);
+        renderDigestMount(mount, d, listDigests(id));
+      } catch (err) {
+        mount.innerHTML = `<p class="muted error">生成失败:${escapeHtml((err as Error).message)}</p>`;
+      }
+    });
+  });
+  // 学术综述按钮(IMRaD 七段可投稿级,深度较深 30 天 / 60 篇)
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="digest-academic-gen"]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = btn.dataset.libId || lib.id;
+      const mount = document.getElementById('lib-digest-mount');
+      if (!mount) return;
+      mount.innerHTML = '<p class="muted"><span class="lib-spinner"></span> 正在生成学术综述(IMRaD 结构,1500-2500 字,通常需要 30-60s)…</p>';
+      try {
+        const { generateAcademicReport, listDigests } = await import('./library-digest');
+        const d = await generateAcademicReport(id, allPapers);
         renderDigestMount(mount, d, listDigests(id));
       } catch (err) {
         mount.innerHTML = `<p class="muted error">生成失败:${escapeHtml((err as Error).message)}</p>`;
