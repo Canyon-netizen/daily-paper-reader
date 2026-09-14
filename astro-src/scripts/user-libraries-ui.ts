@@ -1270,6 +1270,15 @@ function bindModalQuickActions(modal: HTMLElement): void {
     decision.hidden = !decision.hidden;
     if (helpBtn) helpBtn.textContent = decision.hidden ? '不确定?看决策树 →' : '收起决策树 ↑';
   });
+
+  // 2026-09-14 fallback:旧浏览器(Chrome <119 / FF <88 / Safari <16)不支持
+  // :user-invalid,所以用 JS 在用户首次失焦时给 required input 加 .is-touched
+  // class,触发 CSS 红框。新浏览器优先用 :user-invalid(无需 JS)。
+  if (typeof modal.matches !== 'function' || !CSS.supports('selector(:user-invalid)')) {
+    modal.querySelectorAll<HTMLInputElement>('.lib-input[required], .lib-textarea[required]').forEach((el) => {
+      el.addEventListener('blur', () => el.classList.add('is-touched'), { once: true });
+    });
+  }
 }
 
 function closeModal(modal: HTMLElement): void {

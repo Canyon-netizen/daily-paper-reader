@@ -1,5 +1,5 @@
 ---
-// /components/NewLibraryModal.astro — 新建 / 编辑文献库弹窗(2026-08 升级)
+// /components/NewLibraryModal.astro — 新建 / 编辑文献库弹窗(2026-09-14 重构)
 //
 // 双模式:同一个 modal 既能「新建」也能「编辑」某条已有 library。
 // 模式由 modal 根上的 `data-edit-id="<libraryId>"` 决定:有值 = 编辑,空 = 新建。
@@ -7,34 +7,35 @@
 //
 // 对照 Polaris NewLibraryModal.tsx + InclusionSettingsForm 的字段:
 //
+// 重构要点(2026-09-14 用户反馈「无法滚动 / 不好看」):
+//   1. **基本区永远可见** —— 名称 / 方向描述 / 阈值 + 快捷 / 读者画像 + 决策树
+//      (小白 P0-2/P0-3 修复必须第一眼就看到,不能藏在折叠里)
+//   2. **高级选项折叠** —— 可见性 / 同步节奏 / goals / inScope / outOfScope /
+//      questions / 锚点 / arXiv 分类 / 包括关键词 / 排除关键词 / rubric / 卡片颜色
+//      全部收进 <details>(默认关,用户展开)
+//   3. **必填红框只在 :user-invalid 后出现** —— 见 user-libraries.css
+//      (避免初始打开就红框吓到小白)
+//
 // 必填:
-//   - name              1-32 字(Polaris 也要求)
-//   - statement         1-200 字(Polaris 强调,挑论文/打分都靠它)
+//   - name              1-32 字
+//   - statement         1-200 字
 // 可选(基础):
-//   - hue               7 色挑一,卡片左竖条颜色
-//   - visibility        personal / pending / public(Polaris 的 status 状态机,DPR 单人站保留语义)
-//   - cadence           manual / daily / weekly / monthly(Polaris 也用,DPR 仅 UI label)
-// P8a LibraryDefinition(Polaris direction_libraries.definition JSONB):
-//   - goals[]           库目标(最多 3 条)
-//   - inScope[]         范围内主题(最多 8 条)
-//   - outOfScope[]      范围外(最多 8 条)
-//   - questions[]       要回答的研究问题(最多 8 条)
-//   - anchors[]         种子论文(arxiv/doi/free,带 note)
-// 其余字段沿用 v1 老 schema:categories / inclusionKeywords / exclusionKeywords / rubric
+//   - relevanceThreshold 0-1,默认 0.5(小白 P0-2:0.8 太严)
+//   - audienceProfile   novice/expert/reviewer/practitioner(决策树帮助选)
+// P8a LibraryDefinition(进入高级折叠):
+//   - goals / inScope / outOfScope / questions
+//   - anchors / categories / inclusionKeywords / exclusionKeywords / rubric
+//   - visibility / cadence
 //
 // 不做:
-//   - AI 访谈生成 statement —— Polaris 的 LLM hook,本仓库静态站无服务端 LLM,
-//     用户手写 statement 即可,留作 follow-up。
-//   - 申请转公共文献库 / anchor / admin —— Polaris DB 后端语义,单人静态站
-//     不需要(详见 types.ts 的「Polaris 字段映射」注释)。
+//   - 创建新文献库之外的事(UI 范围 = 创建/编辑 + AI 访谈自动生成 statement)。
+//   - admin / 审批 / 公共申请 —— Polaris DB 后端语义,单人静态站不需要。
 //
 // SSR 渲染空 modal 壳(display:none,JS 控制可见);客户端 user-libraries-ui.ts
-// 接管所有交互(打开/关闭/提交/校验/创建 + chips 增删)。
+// 接管所有交互。
 //
-// 引入方式:
-//   1. 在 BaseLayout 之前 import(不必要);2. 在 /libraries/ / 首页 footer 之前
-//   直接 <NewLibraryModal /> 一次(全局唯一实例)。点 [data-open-new-library]
-//   任意位置的按钮都会打开它;点 [data-edit-library="<id>"] 会打开编辑模式。
+// 引入方式:BaseLayout 之后挂一次,任何 [data-open-new-library] / [data-edit-library]
+// 按钮都能打开它。
 ---
 
 <div
@@ -55,6 +56,10 @@
     </div>
     <form>
       <div class="dpr-modal-body">
+        {/* === 基本区(永远可见)===
+            设计意图:小白第一眼就看到「这库是啥」「多严」「什么目的」三件事。 */}
+
+        {/* 名称 */}
         <div class="lib-field">
           <label class="lib-field-label" for="new-lib-name">名称 <span style="color:#dc2626;">*</span></label>
           <input
@@ -66,15 +71,17 @@
             data-modal-name
             required
           />
-          <div class="lib-field-error" data-modal-name-err></div>
+          <div class="lib-field-hint" data-modal-name-err></div>
         </div>
+
+        {/* 方向描述 */}
         <div class="lib-field">
           <label class="lib-field-label" for="new-lib-statement">方向描述 <span class="lib-field-hint-inline">— 可选,空着直接点 🎤 AI 帮我写 自动生成</span></label>
           <textarea
             id="new-lib-statement"
             class="lib-textarea"
             maxlength="200"
-            rows="3"
+            rows="2"
             placeholder="研究什么问题、关注什么子问题、偏重哪类方法。写给未来的自己看 —— 越具体越好认。"
             data-modal-statement
           ></textarea>
@@ -86,262 +93,277 @@
           <div class="lib-interview-panel" data-interview-panel hidden></div>
         </div>
 
-        {/* 可见性 + 同步频率 —— Polaris 把这两项放在 definition JSON 里,
-            UI 上贴近基础信息更直观。 */}
-        <div class="lib-field-row">
-          <div class="lib-field">
-            <label class="lib-field-label" for="new-lib-visibility">可见性</label>
-            <select id="new-lib-visibility" class="lib-input" data-modal-visibility>
-              <option value="personal">个人(仅本机 + Gist)</option>
-              <option value="pending">申请公开(请求中)</option>
-              <option value="public">公开(已发布)</option>
-            </select>
-            <div class="lib-field-hint">Polaris 状态机;DPR 客户端标记,跨设备同步时对齐。</div>
+        {/* 阈值 + 阈值快捷按钮(2026-09-14 小白 P0-2 修复:0.5 默认 + 4 颗快捷) */}
+        <div class="lib-field">
+          <label class="lib-field-label" for="new-lib-relevance-threshold">入库相关度阈值</label>
+          <input
+            id="new-lib-relevance-threshold"
+            type="number"
+            class="lib-input"
+            data-modal-threshold
+            min="0"
+            max="1"
+            step="0.05"
+            value="0.5"
+          />
+          <div class="lib-threshold-quick">
+            <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.3">宽松(0.30)</button>
+            <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.55">入门(0.55)</button>
+            <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.75">专家(0.75)</button>
+            <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.8">严格(0.80)</button>
           </div>
-          <div class="lib-field">
-            <label class="lib-field-label" for="new-lib-cadence">同步节奏</label>
-            <select id="new-lib-cadence" class="lib-input" data-modal-cadence>
-              <option value="manual">手动</option>
-              <option value="daily">每日</option>
-              <option value="weekly">每周</option>
-              <option value="monthly">每月</option>
-            </select>
-            <div class="lib-field-hint">纯 label,无服务端 cron。</div>
-          </div>
-          <div class="lib-field">
-            <label class="lib-field-label" for="new-lib-relevance-threshold">入库相关度阈值</label>
-            <input
-              id="new-lib-relevance-threshold"
-              type="number"
-              class="lib-input"
-              data-modal-threshold
-              min="0"
-              max="1"
-              step="0.05"
-              value="0.5"
-            />
-            <div class="lib-field-hint">
-              LLM 打分 &lt; 此值的论文不入库(0 = 不过滤,1 = 仅收 1.0 分)。默认 0.5 —— 大致只收「主要内容在这个方向」的论文。
-            </div>
-            <div class="lib-field-quick">
-              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.3">宽松(0.30)</button>
-              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.55">入门(0.55)</button>
-              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.75">专家(0.75)</button>
-              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.8">严格(0.80)</button>
-            </div>
+          <div class="lib-field-hint">
+            LLM 打分 &lt; 此值的论文不入库(0 = 不过滤,1 = 仅收 1.0 分)。默认 0.5。
           </div>
         </div>
 
-          <div class="lib-field">
-            <label class="lib-field-label">读者画像</label>
-            <div class="lib-profile-cards" data-profile-picker>
-              <button type="button" class="lib-profile-card" data-profile-card="novice">
-                <div class="lib-profile-card-head">
-                  <span class="lib-profile-emoji">🌱</span>
-                  <span class="lib-profile-name">入门小白</span>
-                  <span class="lib-profile-thresh">默认阈值 0.55</span>
-                </div>
-                <p class="lib-profile-desc">教学型 / 综述 / 高被引奠基论文。术语密度高的会被扣分。</p>
-              </button>
-              <button type="button" class="lib-profile-card" data-profile-card="expert">
-                <div class="lib-profile-card-head">
-                  <span class="lib-profile-emoji">🔬</span>
-                  <span class="lib-profile-name">深耕专家</span>
-                  <span class="lib-profile-thresh">默认阈值 0.75</span>
-                </div>
-                <p class="lib-profile-desc">新颖度 + 实验严谨度。只收真正推进 SoTA 的工作。</p>
-              </button>
-              <button type="button" class="lib-profile-card" data-profile-card="reviewer">
-                <div class="lib-profile-card-head">
-                  <span class="lib-profile-emoji">👀</span>
-                  <span class="lib-profile-name">专业审稿人</span>
-                  <span class="lib-profile-thresh">默认阈值 0.65</span>
-                </div>
-                <p class="lib-profile-desc">方法严谨度 + 相对新颖度。按顶会标准审。</p>
-              </button>
-              <button type="button" class="lib-profile-card" data-profile-card="practitioner">
-                <div class="lib-profile-card-head">
-                  <span class="lib-profile-emoji">🏭</span>
-                  <span class="lib-profile-name">工业实践者</span>
-                  <span class="lib-profile-thresh">默认阈值 0.60</span>
-                </div>
-                <p class="lib-profile-desc">生产就绪度 + 成本效率。能 ship 才收。</p>
-              </button>
-            </div>
-            <input type="hidden" data-modal-profile value="" />
-            <div class="lib-field-hint">
-              选一个画像,会按对应维度(教学 / 新颖 / 严谨 / 落地)重新打分,自动覆盖上方的阈值。
-              <button type="button" class="linklike" data-profile-help>不确定?看决策树 →</button>
-              <a href="/docs/library/inclusion-standard/" target="_blank" rel="noopener">详细评分维度 →</a>
-            </div>
-            <div class="lib-profile-decision" data-profile-decision hidden>
-              <p class="muted">按你的目的选:</p>
-              <ul class="lib-profile-decision-list">
-                <li>🌱 <strong>打基础 / 读教材 / 看综述</strong> → 入门小白(0.55)</li>
-                <li>🔬 <strong>跟踪最新进展 / 找 idea / 攻坚难题</strong> → 深耕专家(0.75)</li>
-                <li>👀 <strong>审稿 / 找方法缺陷 / 比 baseline</strong> → 专业审稿人(0.65)</li>
-                <li>🏭 <strong>能落地 / 控制成本 / ship 生产</strong> → 工业实践者(0.60)</li>
-                <li>🤷 <strong>不确定 / 想都看看</strong> → 不选画像,阈值用默认 0.5</li>
-              </ul>
-            </div>
+        {/* 读者画像(2026-09-14 小白 P0-3 修复:决策树按钮)
+            这是决定库「打分维度」的字段,放在基本区让小白第一眼就能选 */ }
+        <div class="lib-field">
+          <label class="lib-field-label">读者画像</label>
+          <div class="lib-profile-cards" data-profile-picker>
+            <button type="button" class="lib-profile-card" data-profile-card="novice">
+              <div class="lib-profile-card-head">
+                <span class="lib-profile-emoji">🌱</span>
+                <span class="lib-profile-name">入门小白</span>
+                <span class="lib-profile-thresh">默认 0.55</span>
+              </div>
+              <p class="lib-profile-desc">教学型 / 综述 / 高被引奠基论文。</p>
+            </button>
+            <button type="button" class="lib-profile-card" data-profile-card="expert">
+              <div class="lib-profile-card-head">
+                <span class="lib-profile-emoji">🔬</span>
+                <span class="lib-profile-name">深耕专家</span>
+                <span class="lib-profile-thresh">默认 0.75</span>
+              </div>
+              <p class="lib-profile-desc">新颖度 + 实验严谨度。只收推进 SoTA 的工作。</p>
+            </button>
+            <button type="button" class="lib-profile-card" data-profile-card="reviewer">
+              <div class="lib-profile-card-head">
+                <span class="lib-profile-emoji">👀</span>
+                <span class="lib-profile-name">专业审稿人</span>
+                <span class="lib-profile-thresh">默认 0.65</span>
+              </div>
+              <p class="lib-profile-desc">方法严谨度 + 相对新颖度。按顶会标准审。</p>
+            </button>
+            <button type="button" class="lib-profile-card" data-profile-card="practitioner">
+              <div class="lib-profile-card-head">
+                <span class="lib-profile-emoji">🏭</span>
+                <span class="lib-profile-name">工业实践者</span>
+                <span class="lib-profile-thresh">默认 0.60</span>
+              </div>
+              <p class="lib-profile-desc">生产就绪度 + 成本。能 ship 才收。</p>
+            </button>
+          </div>
+          <input type="hidden" data-modal-profile value="" />
+          <div class="lib-field-hint">
+            选画像会按对应维度重新打分,自动覆盖阈值。
+            <button type="button" class="linklike" data-profile-help>不确定?看决策树 →</button>
+          </div>
+          <div class="lib-profile-decision" data-profile-decision hidden>
+            <p class="muted">按你的目的选:</p>
+            <ul class="lib-profile-decision-list">
+              <li><strong>🌱 打基础 / 读教材 / 看综述</strong> → 入门小白(0.55)</li>
+              <li><strong>🔬 跟踪最新进展 / 找 idea / 攻坚难题</strong> → 深耕专家(0.75)</li>
+              <li><strong>👀 审稿 / 找方法缺陷 / 比 baseline</strong> → 专业审稿人(0.65)</li>
+              <li><strong>🏭 能落地 / 控制成本 / ship 生产</strong> → 工业实践者(0.60)</li>
+              <li><strong>🤷 不确定 / 想都看看</strong> → 不选画像,阈值用默认 0.5</li>
+            </ul>
           </div>
         </div>
 
-        {/* P8a definition 字段:goals / inScope / outOfScope / questions
-            都是自由文本行,逗号 / 回车分隔。Polaris 用同样的粒度。 */}
-        <div class="lib-field">
-          <label class="lib-field-label">库目标(goals)</label>
-          <textarea
-            class="lib-textarea"
-            rows="2"
-            maxlength="600"
-            placeholder="如:整理今年 ICML 的 agent 工作;跟踪稀疏注意力进展。每行一条,最多 3 条。"
-            data-modal-goals
-          ></textarea>
-          <div class="lib-field-hint">驱动 digest 生成的上下文。</div>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">范围内主题(in scope)</label>
-          <textarea
-            class="lib-textarea"
-            rows="2"
-            maxlength="600"
-            placeholder="如:LLM agent / 多智能体协作 / 思维链推理。每行一条,最多 8 条。"
-            data-modal-in-scope
-          ></textarea>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">范围外(out of scope)</label>
-          <textarea
-            class="lib-textarea"
-            rows="2"
-            maxlength="600"
-            placeholder="如:语音识别 / 图像超分。每行一条,最多 8 条。"
-            data-modal-out-of-scope
-          ></textarea>
-          <div class="lib-field-hint">命中即剔除 —— 比关键词排除更宽。</div>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">要回答的研究问题</label>
-          <textarea
-            class="lib-textarea"
-            rows="2"
-            maxlength="800"
-            placeholder="如:稀疏注意力在 8K context 上能否保持线性推理开销?每行一条,最多 8 条。"
-            data-modal-questions
-          ></textarea>
-          <div class="lib-field-hint">驱动 ingest 拉论文的 prompt 上下文。</div>
-        </div>
+        {/* === 高级选项(默认折叠)===
+            让 modal 初始可见区只覆盖「这库是啥 + 多严 + 啥目的」三件事,
+            详细信息用户主动展开才看,符合小白第一眼不被长表单劝退 */ }
+        <details class="lib-advanced" data-advanced-toggle>
+          <summary>⚙️ 高级选项(可见性、范围、锚点、关键词等 — 默认收起)</summary>
+          <div class="lib-advanced-body">
 
-        {/* anchors:种子论文清单。Polaris 强制 included。 */}
-        <div class="lib-field">
-          <label class="lib-field-label">锚点论文(anchors)</label>
-          <div class="lib-anchor-rows" data-anchor-rows></div>
-          <div class="lib-chip-input-wrap">
-            <select class="lib-input lib-anchor-kind" data-anchor-kind>
-              <option value="arxiv">arxiv-id</option>
-              <option value="doi">DOI</option>
-              <option value="free">free text</option>
-            </select>
-            <input
-              type="text"
-              class="lib-chip-input"
-              placeholder="如 2503.12345 或 10.1109/... 或 'OpenAI o1'"
-              data-anchor-value
-            />
-            <button type="button" class="lib-chip-add" data-anchor-add>+ 添加锚点</button>
+            {/* 可见性 + 同步节奏 */}
+            <div class="lib-field-row">
+              <div class="lib-field">
+                <label class="lib-field-label" for="new-lib-visibility">可见性</label>
+                <select id="new-lib-visibility" class="lib-input" data-modal-visibility>
+                  <option value="personal">个人(仅本机 + Gist)</option>
+                  <option value="pending">申请公开(请求中)</option>
+                  <option value="public">公开(已发布)</option>
+                </select>
+                <div class="lib-field-hint">Polaris 状态机;DPR 客户端标记,跨设备同步时对齐。</div>
+              </div>
+              <div class="lib-field">
+                <label class="lib-field-label" for="new-lib-cadence">同步节奏</label>
+                <select id="new-lib-cadence" class="lib-input" data-modal-cadence>
+                  <option value="manual">手动</option>
+                  <option value="daily">每日</option>
+                  <option value="weekly">每周</option>
+                  <option value="monthly">每月</option>
+                </select>
+                <div class="lib-field-hint">纯 label,无服务端 cron。</div>
+              </div>
+            </div>
+
+            {/* P8a definition 字段 */}
+            <div class="lib-field">
+              <label class="lib-field-label">库目标(goals)</label>
+              <textarea
+                class="lib-textarea"
+                rows="2"
+                maxlength="600"
+                placeholder="如:整理今年 ICML 的 agent 工作;跟踪稀疏注意力进展。每行一条,最多 3 条。"
+                data-modal-goals
+              ></textarea>
+              <div class="lib-field-hint">驱动 digest 生成的上下文。</div>
+            </div>
+            <div class="lib-field">
+              <label class="lib-field-label">范围内主题(in scope)</label>
+              <textarea
+                class="lib-textarea"
+                rows="1"
+                maxlength="600"
+                placeholder="如:LLM agent / 多智能体协作 / 思维链推理。每行一条,最多 8 条。"
+                data-modal-in-scope
+              ></textarea>
+            </div>
+            <div class="lib-field">
+              <label class="lib-field-label">范围外(out of scope)</label>
+              <textarea
+                class="lib-textarea"
+                rows="1"
+                maxlength="600"
+                placeholder="如:语音识别 / 图像超分。每行一条,最多 8 条。"
+                data-modal-out-of-scope
+              ></textarea>
+              <div class="lib-field-hint">命中即剔除 —— 比关键词排除更宽。</div>
+            </div>
+            <div class="lib-field">
+              <label class="lib-field-label">要回答的研究问题</label>
+              <textarea
+                class="lib-textarea"
+                rows="1"
+                maxlength="800"
+                placeholder="如:稀疏注意力在 8K context 上能否保持线性推理开销?每行一条,最多 8 条。"
+                data-modal-questions
+              ></textarea>
+              <div class="lib-field-hint">驱动 ingest 拉论文的 prompt 上下文。</div>
+            </div>
+
+            {/* anchors */}
+            <div class="lib-field">
+              <label class="lib-field-label">锚点论文(anchors)</label>
+              <div class="lib-anchor-rows" data-anchor-rows></div>
+              <div class="lib-chip-input-wrap">
+                <select class="lib-input lib-anchor-kind" data-anchor-kind>
+                  <option value="arxiv">arxiv-id</option>
+                  <option value="doi">DOI</option>
+                  <option value="free">free text</option>
+                </select>
+                <input
+                  type="text"
+                  class="lib-chip-input"
+                  placeholder="如 2503.12345 或 10.1109/... 或 'OpenAI o1'"
+                  data-anchor-value
+                />
+                <button type="button" class="lib-chip-add" data-anchor-add>+ 添加锚点</button>
+              </div>
+              <div class="lib-field-hint">最多 32 条,带「为什么是锚点」备注。填 2-3 篇后 Ingest 会找跟它们相似的论文。</div>
+            </div>
+
+            <div class="lib-field">
+              <label class="lib-field-label">arXiv 分类</label>
+              <div class="lib-chip-row" data-categories-presets>
+                <button type="button" class="lib-chip" data-cat-preset="cs.CL">cs.CL</button>
+                <button type="button" class="lib-chip" data-cat-preset="cs.AI">cs.AI</button>
+                <button type="button" class="lib-chip" data-cat-preset="cs.LG">cs.LG</button>
+                <button type="button" class="lib-chip" data-cat-preset="cs.CV">cs.CV</button>
+                <button type="button" class="lib-chip" data-cat-preset="cs.MA">cs.MA</button>
+                <button type="button" class="lib-chip" data-cat-preset="stat.ML">stat.ML</button>
+              </div>
+              <div class="lib-chip-input-wrap" data-categories-wrap>
+                <span class="lib-chip-input-prefix">自定义分类</span>
+                <input
+                  type="text"
+                  class="lib-chip-input"
+                  placeholder="如 cs.IR"
+                  maxlength="16"
+                  data-categories-input
+                />
+                <button type="button" class="lib-chip-add" data-categories-add aria-label="添加分类">添加</button>
+              </div>
+              <div class="lib-tag-list" data-categories-tags></div>
+              <input type="hidden" data-modal-categories />
+              <div class="lib-field-hint">已选分类会用 <code>arxiv:cat</code> 命中。空 = 不过滤分类。</div>
+            </div>
+
+            <div class="lib-field">
+              <label class="lib-field-label">包括关键词</label>
+              <div class="lib-chip-input-wrap">
+                <span class="lib-chip-input-prefix">包括</span>
+                <input
+                  type="text"
+                  class="lib-chip-input"
+                  placeholder="输入关键词后回车或逗号添加,如 agent"
+                  maxlength="32"
+                  data-incl-input
+                />
+                <button type="button" class="lib-chip-add" data-incl-add aria-label="添加关键词">添加</button>
+              </div>
+              <div class="lib-tag-list" data-incl-tags></div>
+              <input type="hidden" data-modal-incl />
+              <div class="lib-field-hint">命中就不收,检索、打分、每日同步三处都生效。支持同义词自动扩展(如 RLHF → preference learning)。</div>
+            </div>
+
+            <div class="lib-field">
+              <label class="lib-field-label">排除关键词</label>
+              <div class="lib-chip-input-wrap">
+                <span class="lib-chip-input-prefix">排除</span>
+                <input
+                  type="text"
+                  class="lib-chip-input"
+                  placeholder="输入后回车或逗号添加,如 speech recognition"
+                  maxlength="32"
+                  data-excl-input
+                />
+                <button type="button" class="lib-chip-add" data-excl-add aria-label="添加关键词">添加</button>
+              </div>
+              <div class="lib-tag-list" data-excl-tags></div>
+              <input type="hidden" data-modal-excl />
+              <div class="lib-field-hint">命中就不收,检索、打分、每日同步三处都生效。</div>
+            </div>
+
+            <div class="lib-field">
+              <label class="lib-field-label">打分标准</label>
+              <div class="lib-tag-list" data-rubric-rows></div>
+              <div class="lib-chip-input-wrap" data-rubric-input-wrap>
+                <span class="lib-chip-input-prefix">维度</span>
+                <input
+                  type="text"
+                  class="lib-chip-input"
+                  placeholder="如 新颖性 / 实验完备度 / 可复现性"
+                  maxlength="32"
+                  data-rubric-input
+                />
+                <button type="button" class="lib-chip-add" data-rubric-add aria-label="添加维度">+ 添加维度</button>
+              </div>
+              <input type="hidden" data-modal-rubric />
+              <div class="lib-field-hint">未设维度:只按方向说明判定相关性。添加的维度会按维度名打分。</div>
+            </div>
+
+            <div class="lib-field">
+              <label class="lib-field-label">卡片颜色</label>
+              <div class="lib-hue-picker" data-hue-picker>
+                <button type="button" class="lib-hue-chip hue-orange"  data-hue="orange"  aria-label="orange"></button>
+                <button type="button" class="lib-hue-chip hue-cyan"    data-hue="cyan"    aria-label="cyan"></button>
+                <button type="button" class="lib-hue-chip hue-purple"  data-hue="purple"  aria-label="purple"></button>
+                <button type="button" class="lib-hue-chip hue-emerald active" data-hue="emerald" aria-label="emerald"></button>
+                <button type="button" class="lib-hue-chip hue-amber"   data-hue="amber"   aria-label="amber"></button>
+                <button type="button" class="lib-hue-chip hue-rose"    data-hue="rose"    aria-label="rose"></button>
+                <button type="button" class="lib-hue-chip hue-sky"     data-hue="sky"     aria-label="sky"></button>
+              </div>
+              <input type="hidden" data-modal-hue value="emerald" />
+            </div>
+
           </div>
-          <div class="lib-field-hint">最多 32 条,带「为什么是锚点」备注。</div>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">arXiv 分类</label>
-          <div class="lib-chip-row" data-categories-presets>
-            <button type="button" class="lib-chip" data-cat-preset="cs.CL">cs.CL</button>
-            <button type="button" class="lib-chip" data-cat-preset="cs.AI">cs.AI</button>
-            <button type="button" class="lib-chip" data-cat-preset="cs.LG">cs.LG</button>
-            <button type="button" class="lib-chip" data-cat-preset="cs.CV">cs.CV</button>
-            <button type="button" class="lib-chip" data-cat-preset="cs.MA">cs.MA</button>
-            <button type="button" class="lib-chip" data-cat-preset="stat.ML">stat.ML</button>
-          </div>
-          <div class="lib-chip-input-wrap" data-categories-wrap>
-            <span class="lib-chip-input-prefix">自定义分类</span>
-            <input
-              type="text"
-              class="lib-chip-input"
-              placeholder="如 cs.IR"
-              maxlength="16"
-              data-categories-input
-            />
-            <button type="button" class="lib-chip-add" data-categories-add aria-label="添加分类">添加</button>
-          </div>
-          <div class="lib-tag-list" data-categories-tags></div>
-          <input type="hidden" data-modal-categories />
-          <div class="lib-field-hint">已选分类会用 <code>arxiv:cat</code> 命中。空 = 不过滤分类。</div>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">包括关键词</label>
-          <div class="lib-chip-input-wrap">
-            <span class="lib-chip-input-prefix">包括</span>
-            <input
-              type="text"
-              class="lib-chip-input"
-              placeholder="输入关键词后回车或逗号添加,如 agent"
-              maxlength="32"
-              data-incl-input
-            />
-            <button type="button" class="lib-chip-add" data-incl-add aria-label="添加关键词">添加</button>
-          </div>
-          <div class="lib-tag-list" data-incl-tags></div>
-          <input type="hidden" data-modal-incl />
-          <div class="lib-field-hint">命中就不收,检索、打分、每日同步三处都生效。用来挡掉和本方向偏向的其他领域,宁缺毋滥。</div>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">排除关键词</label>
-          <div class="lib-chip-input-wrap">
-            <span class="lib-chip-input-prefix">排除</span>
-            <input
-              type="text"
-              class="lib-chip-input"
-              placeholder="输入后回车或逗号添加,如 speech recognition"
-              maxlength="32"
-              data-excl-input
-            />
-            <button type="button" class="lib-chip-add" data-excl-add aria-label="添加关键词">添加</button>
-          </div>
-          <div class="lib-tag-list" data-excl-tags></div>
-          <input type="hidden" data-modal-excl />
-          <div class="lib-field-hint">命中就不收,检索、打分、每日同步三处都生效。用来挡掉和本方向偏向的其他领域,宁缺毋滥。</div>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">打分标准</label>
-          <div class="lib-tag-list" data-rubric-rows></div>
-          <div class="lib-chip-input-wrap" data-rubric-input-wrap>
-            <span class="lib-chip-input-prefix">维度</span>
-            <input
-              type="text"
-              class="lib-chip-input"
-              placeholder="如 新颖性 / 实验完备度 / 可复现性"
-              maxlength="32"
-              data-rubric-input
-            />
-            <button type="button" class="lib-chip-add" data-rubric-add aria-label="添加维度">+ 添加维度</button>
-          </div>
-          <input type="hidden" data-modal-rubric />
-          <div class="lib-field-hint">未设维度:只按方向说明判定相关性。添加的维度会按维度名打分,日后可以重排 / 增删。</div>
-        </div>
-        <div class="lib-field">
-          <label class="lib-field-label">卡片颜色</label>
-          <div class="lib-hue-picker" data-hue-picker>
-            <button type="button" class="lib-hue-chip hue-orange"  data-hue="orange"  aria-label="orange"></button>
-            <button type="button" class="lib-hue-chip hue-cyan"    data-hue="cyan"    aria-label="cyan"></button>
-            <button type="button" class="lib-hue-chip hue-purple"  data-hue="purple"  aria-label="purple"></button>
-            <button type="button" class="lib-hue-chip hue-emerald active" data-hue="emerald" aria-label="emerald"></button>
-            <button type="button" class="lib-hue-chip hue-amber"   data-hue="amber"   aria-label="amber"></button>
-            <button type="button" class="lib-hue-chip hue-rose"    data-hue="rose"    aria-label="rose"></button>
-            <button type="button" class="lib-hue-chip hue-sky"     data-hue="sky"     aria-label="sky"></button>
-          </div>
-          <input type="hidden" data-modal-hue value="emerald" />
-        </div>
+        </details>
       </div>
       <div class="dpr-modal-footer">
         <button type="button" class="btn btn-ghost" data-modal-close>取消</button>
