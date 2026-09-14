@@ -43,6 +43,8 @@ import {
   DPR_READING_DASHBOARD_DIRTY_LEGACY,
   DPR_IDEA_BANK_CHANGE,
   DPR_IDEA_BANK_CHANGE_LEGACY,
+  DPR_LIBRARY_FEEDBACK,
+  DPR_LIBRARY_FEEDBACK_LEGACY,
 } from './names';
 import type {
   DprThemeChangeDetail,
@@ -56,6 +58,7 @@ import type {
   DprCompareSetChangeDetail,
   DprReadingDashboardDirtyDetail,
   DprIdeaBankChangeDetail,
+  DprLibraryFeedbackDetail,
 } from './types';
 
 /** 通用 emit helper。target 默认 document。
@@ -352,4 +355,28 @@ export function onDprIdeaBankChange(
   handler: (detail: DprIdeaBankChangeDetail) => void,
 ): () => void {
   return on(target, DPR_IDEA_BANK_CHANGE, handler);
+}
+// ---------------------------------------------------------------------------
+// dpr:library-feedback (legacy alias: dpr-library-feedback)
+//
+// 唯一合法 emit 方是 astro-src/lib/library/feedback.ts 的 recordFeedback()。
+// 其它模块只应该 on(...) 订阅(用于刷新 settings 页面的反馈角标)。
+// ---------------------------------------------------------------------------
+export function emitDprLibraryFeedback(
+  target: EventTarget = document,
+  detail: DprLibraryFeedbackDetail,
+): boolean {
+  return emit(
+    target,
+    DPR_LIBRARY_FEEDBACK,
+    detail,
+    DPR_LIBRARY_FEEDBACK_LEGACY,
+    { bubbles: true },
+  );
+}
+export function onDprLibraryFeedback(
+  target: EventTarget = document,
+  handler: (detail: DprLibraryFeedbackDetail) => void,
+): () => void {
+  return on(target, DPR_LIBRARY_FEEDBACK, handler);
 }

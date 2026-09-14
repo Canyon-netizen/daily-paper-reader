@@ -142,3 +142,27 @@ export interface DprIdeaBankChangeDetail {
   /** 触发原因。 */
   reason: DprIdeaBankChangeReason;
 }
+
+/** Library feedback 事件 detail(对齐 astro-src/lib/library/feedback.ts 的 FeedbackKind)。 */
+export type DprLibraryFeedbackKind =
+  | 'library_created'
+  | 'library_deleted'
+  | 'library_profile_changed'
+  | 'library_threshold_changed'
+  | 'paper_included'
+  | 'paper_excluded'
+  | 'paper_marked_irrelevant'
+  | 'candidate_score_too_low'
+  | 'candidate_score_too_high'
+  | 'paper_reading_status_changed'
+  | 'feedback_note';
+
+export interface DprLibraryFeedbackDetail {
+  kind: DprLibraryFeedbackKind;
+  /** Library-scoped events 时填。 */
+  libraryId?: string;
+  /** Paper-scoped events 时填(canonical arxiv id)。 */
+  arxivId?: string;
+  /** entry id,便于 listener 去重。 */
+  entryId: string;
+}

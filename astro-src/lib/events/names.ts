@@ -139,3 +139,19 @@ export const DPR_READING_DASHBOARD_DIRTY_LEGACY = 'dpr:reading-dashboard-dirty';
 export const DPR_IDEA_BANK_CHANGE = 'dpr:idea-bank-change';
 /** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
 export const DPR_IDEA_BANK_CHANGE_LEGACY = 'dpr:idea-bank-change';
+
+/** Library feedback log 变化(用户排除 / 标记不相关 / 阈值调整 / profile 切换 /
+ *  候选分数异议 / 自由备注)—
+ *  detail: DprLibraryFeedbackDetail { kind, libraryId?, arxivId? }
+ *
+ *  **单一 emit 源**:只有 astro-src/lib/library/feedback.ts 的
+ *  recordFeedback() 会发。listener 用于在 UI 角落刷新"待处理反馈"角标。
+ *
+ *  收集的目的是给 multi-dimensional inclusion standard
+ *  (docs/library/inclusion-standard.md §5) 提供校准信号:同一篇论文,
+ *  在不同画像下的"用户实际 inclusion 率"可以反推 rubric 偏差。
+ *
+ *  隐私:零网络,纯 localStorage 落盘,不写 PII;用户可在 /settings/ 一键清空。 */
+export const DPR_LIBRARY_FEEDBACK = 'dpr:library-feedback';
+/** @deprecated 兼容风格一致性而提供的 legacy 别名。 */
+export const DPR_LIBRARY_FEEDBACK_LEGACY = 'dpr-library-feedback';
