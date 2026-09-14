@@ -63,6 +63,18 @@ const isDetail = !!detailId;
     )}
 
     {!isDetail && (
+      <aside class="lib-onboarding-hint" data-onboarding-hint>
+        <span class="lib-onboarding-emoji">🎓</span>
+        <span class="lib-onboarding-text">
+          <strong>第一次来?</strong>
+          从 <a href={base + '/docs/onboarding/jump-in/'}>10 分钟 jump-in</a> 开始,
+          或者看完整的 <a href={base + '/docs/onboarding/phd-journey/'}>PhD 路径地图</a>(4 阶段 / 7 个 primer)。
+        </span>
+        <button type="button" class="lib-onboarding-dismiss" data-onboarding-dismiss aria-label="不再提示">✕</button>
+      </aside>
+    )}
+
+    {!isDetail && (
       <div class="libraries-actionbar">
         <span class="lib-segmented" data-type-filter data-type-filter-target="#all-libraries">
           <button class="lib-segment active" type="button" data-type-value="all">全部</button>
@@ -191,5 +203,21 @@ const isDetail = !!detailId;
 
   <script>
     import '../../scripts/user-libraries-ui';
+
+    // 新人提示卡:localStorage 持久化 dismiss,不再骚扰老用户。
+    // 单独的 <script> 而不是塞 user-libraries-ui,避免大文件耦合一次性加载。
+    (function initOnboardingHint() {
+      const hint = document.querySelector<HTMLElement>('[data-onboarding-hint]');
+      if (!hint) return;
+      const KEY = 'dpr_onboarding_dismissed_v1';
+      try {
+        if (localStorage.getItem(KEY) === '1') hint.hidden = true;
+      } catch { /* localStorage unavailable — leave visible */ }
+      const btn = hint.querySelector<HTMLButtonElement>('[data-onboarding-dismiss]');
+      btn?.addEventListener('click', () => {
+        hint.hidden = true;
+        try { localStorage.setItem(KEY, '1'); } catch { /* swallow */ }
+      });
+    })();
   </script>
 </BaseLayout>

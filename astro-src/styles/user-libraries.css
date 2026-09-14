@@ -1234,3 +1234,87 @@
 .user-lib-archived-grid .library-card:hover {
   filter: grayscale(0);
 }
+
+/* ============================================================================
+   /libraries/ 新人提示卡(onboarding hint)
+   ----------------------------------------------------------------------------
+   一次性轻量引导:让第一次来的 PhD 学生能找到 docs/onboarding/jump-in/。
+   用户点 ✕ 后,localStorage 记 '1',后续不显示。
+   ============================================================================ */
+
+.lib-onboarding-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.7rem 1rem;
+  margin: 1rem 0 0.5rem;
+  border: 1px solid var(--border, #e2e2e2);
+  border-left: 3px solid var(--accent, #1f8b4c);
+  border-radius: 6px;
+  background: var(--card-bg-soft, rgba(31, 139, 76, 0.06));
+  font-size: 0.92rem;
+  color: var(--fg-muted, #444);
+}
+
+.lib-onboarding-hint[hidden] {
+  display: none;
+}
+
+.lib-onboarding-emoji {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.lib-onboarding-text {
+  flex: 1;
+  line-height: 1.5;
+}
+
+.lib-onboarding-text strong {
+  color: var(--fg-strong, var(--fg, #222));
+}
+
+.lib-onboarding-text a {
+  color: var(--accent, #1f8b4c);
+  text-decoration: none;
+  font-weight: 600;
+  margin: 0 0.15rem;
+}
+
+.lib-onboarding-text a:hover {
+  text-decoration: underline;
+}
+
+.lib-onboarding-dismiss {
+  border: none;
+  background: transparent;
+  color: var(--fg-subtle, #888);
+  cursor: pointer;
+  padding: 0.2rem 0.5rem;
+  font-size: 1rem;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.lib-onboarding-dismiss:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+  color: var(--fg-strong, var(--fg, #222));
+}
+
+@media (max-width: 600px) {
+  .lib-onboarding-hint {
+    flex-wrap: wrap;
+    padding: 0.6rem 0.8rem;
+  }
+  .lib-onboarding-text {
+    flex-basis: 100%;
+    order: 2;
+  }
+  .lib-onboarding-emoji {
+    order: 1;
+  }
+  .lib-onboarding-dismiss {
+    order: 1;
+    margin-left: auto;
+  }
+}

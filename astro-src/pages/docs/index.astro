@@ -1,0 +1,134 @@
+---
+// /docs/ — 文档导航首页。
+//
+// 列出 docs/ 下所有可见 markdown 文件,按 onboarding / research-skills /
+// library / feedback 四组分组,每组卡片指向 [...slug] 路由。
+
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/docs.css';
+
+const RAW_DOCS = import.meta.glob(
+  [
+    '../../../docs/onboarding/**/*.md',
+    '../../../docs/research-skills/**/*.md',
+    '../../../docs/library/**/*.md',
+    '../../../docs/feedback/**/*.md',
+  ],
+  { query: '?raw', import: 'default', eager: true },
+) as Record<string, string>;
+
+interface DocEntry {
+  slug: string[];
+  slugStr: string;
+  raw: string;
+  title: string;
+  group: 'onboarding' | 'research-skills' | 'library' | 'feedback' | 'other';
+  description: string;
+}
+
+const DOCS_ROOT = '/Users/zhourui/code/daily-paper-reader/docs/';
+
+function extractTitle(raw: string, fallback: string): string {
+  const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+  if (fm) {
+    const t = fm[1].match(/^title:\s*(.+?)\s*$/m);
+    if (t) return t[1].replace(/^['"]|['"]$/g, '');
+  }
+  const h1 = raw.match(/^#\s+(.+?)\s*$/m);
+  if (h1) return h1[1];
+  return fallback;
+}
+
+/** 取第一段 blockquote 作为卡片描述(> **面向:** 之类的),否则取 H1 后第一段。 */
+function extractDescription(raw: string): string {
+  const m = raw.match(/^>\s*\*\*(?:面向|Target):\*\*\s*(.+?)$/m);
+  if (m) return m[1].replace(/\*\*/g, '').trim();
+  // fallback:第一个非标题/blockquote 段落
+  const cleaned = raw
+    .replace(/^---\n[\s\S]*?\n---\n?/, '')
+    .split('\n')
+    .filter((l) => l.trim() && !l.startsWith('#') && !l.startsWith('>') && !l.startsWith('|'))
+    .slice(0, 3)
+    .join(' ')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/[*_`]/g, '')
+    .trim();
+  return cleaned.slice(0, 120) + (cleaned.length > 120 ? '…' : '');
+}
+
+const ALL_DOCS: DocEntry[] = Object.entries(RAW_DOCS)
+  .filter(([path]) => {
+    const name = path.split('/').pop() || '';
+    return !name.startsWith('_') && name.endsWith('.md');
+  })
+  .map(([path, raw]) => {
+    const rel = path.replace(DOCS_ROOT, '').replace(/\.md$/, '');
+    const parts = rel.split('/');
+    return {
+      slug: parts,
+      slugStr: parts.join('/'),
+      raw,
+      title: extractTitle(raw, parts[parts.length - 1] || rel),
+      group: (parts[0] as DocEntry['group']) || 'other',
+      description: extractDescription(raw),
+    };
+  })
+  .sort((a, b) => a.slugStr.localeCompare(b.slugStr));
+
+const SECTIONS: { group: DocEntry['group']; label: string; emoji: string; tagline: string }[] = [
+  { group: 'onboarding',      label: 'PhD 入门路径', emoji: '🎓', tagline: '从入学到成为领域专家的 4 阶段路线图' },
+  { group: 'research-skills', label: '科研技能',     emoji: '🛠️', tagline: '7 个 primer:读论文、写综述、设计实验、写 paper / review / rebuttal、审稿心态' },
+  { group: 'library',         label: '文献库标准',   emoji: '📚', tagline: '多维入库标准(4 个读者画像)的权威文档' },
+  { group: 'feedback',        label: '反馈与校准',   emoji: '📊', tagline: '校准日志 + 迭代记录 + 系统说明' },
+];
+
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+const docHref = (parts: string[]) => `${base}/docs/${parts.join('/')}/`;
+---
+
+<BaseLayout
+  title="文档 · Daily Paper Reader"
+  description="Daily Paper Reader 文档 — 让入门博士生逐步成为领域专家。"
+>
+  <Navbar />
+
+  <main class="docs-index-page">
+    <header class="docs-index-hero">
+      <h1>📖 文档</h1>
+      <p class="docs-index-lead">
+        这里是从<strong>入门博士生到领域专家</strong>的全套文档:PhD 路径地图 + 7 个科研技能 primer + 文献库多维标准 + 反馈校准日志。
+        第一次来?<a href={docHref(['onboarding', 'jump-in'])}>10 分钟 jump-in →</a>
+      </p>
+    </header>
+
+    {SECTIONS.map((s) => {
+      const items = ALL_DOCS.filter((d) => d.group === s.group);
+      if (items.length === 0) return null;
+      return (
+        <section class="docs-index-section">
+          <header class="docs-index-section-head">
+            <span class="docs-index-emoji">{s.emoji}</span>
+            <h2>{s.label}</h2>
+            <span class="docs-index-count">{items.length} 篇</span>
+          </header>
+          <p class="docs-index-tagline">{s.tagline}</p>
+          <ul class="docs-index-cards">
+            {items.map((d) => (
+              <li class="docs-index-card">
+                <a href={docHref(d.slug)}>
+                  <h3 class="docs-index-card-title">{d.title}</h3>
+                  <p class="docs-index-card-desc">{d.description}</p>
+                  <code class="docs-index-card-path">docs/{d.slugStr}.md</code>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      );
+    })}
+  </main>
+
+  <Footer />
+</BaseLayout>

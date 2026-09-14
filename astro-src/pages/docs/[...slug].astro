@@ -1,0 +1,211 @@
+---
+// /docs/[...slug] — 把 docs/ 目录里的 markdown 文件暴露成站点路由。
+//
+// 设计原则:
+//   1. docs/ 文件夹在 astro-src/ 外(在 repo 根),Astro 默认不会扫描,
+//      所以这里用 import.meta.glob 显式收集,文件列表在 build 时确定。
+//   2. 文件名前缀 `_` 的跳过 —— docs/_sidebar.md / _404.md 等是老的
+//      Python pipeline 留下的生成产物,不在站点 nav 里出现。
+//   3. 渲染用 marked(v14,~50KB,zero deps)。Astro 5 的 astro:content
+//      暴露了 render() 但要求 content collection 配置(目录必须在 srcDir 里),
+//      不适合 srcDir 之外的 docs/。marked 在 SSR 端跑,前端 bundle 不会带。
+//   4. 左侧 sidebar 4 个组:onboarding / research-skills / library / feedback。
+//   5. 不做"上一篇/下一篇" —— 文档量小且跨组互引,不强推。
+//
+// 安全: marked 默认无 raw HTML 渲染(v14 默认 escape)。
+//      没有 rehype-raw,没有 XSS 面。
+
+import { marked } from 'marked';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import Navbar from '../../components/Navbar.astro';
+import Footer from '../../components/Footer.astro';
+import '../../styles/docs.css';
+
+// 配置 marked:GFM 表格 + 代码块 + 任务列表 + 自动链接
+marked.use({
+  gfm: true,
+  breaks: false,
+});
+
+// 所有 markdown 文件以 ?raw 形式导入(内容是 string)。
+// 范围限定到 PhD 旅程 4 个子目录,避免把 docs/papers/ 下 1000+ 篇论文笔记
+// 拉进路由(那是另一套 surface,/papers/[arxiv]/ 已经覆盖)。
+//
+// 整个 build 逻辑必须全部内联在 getStaticPaths 里。Astro 5 dev SSR 会把
+// getStaticPaths 编译到独立的 chunk 里,顶层 const/function 在那里都看不到。
+// 这是 Astro 5 + Vite glob 的已知行为 — 我们用最大内联保证可移植性。
+export function getStaticPaths() {
+  // import.meta.glob 必须就地调用,不能提升到外部 const
+  const RAW_DOCS = import.meta.glob(
+    [
+      '../../../docs/onboarding/**/*.md',
+      '../../../docs/research-skills/**/*.md',
+      '../../../docs/library/**/*.md',
+      '../../../docs/feedback/**/*.md',
+    ],
+    { query: '?raw', import: 'default', eager: true },
+  ) as Record<string, string>;
+
+  const DOCS_ROOT = '/Users/zhourui/code/daily-paper-reader/docs/';
+
+  function extractTitle(raw: string, fallback: string): string {
+    const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+    if (fm) {
+      const t = fm[1].match(/^title:\s*(.+?)\s*$/m);
+      if (t) return t[1].replace(/^['"]|['"]$/g, '');
+    }
+    const h1 = raw.match(/^#\s+(.+?)\s*$/m);
+    if (h1) return h1[1];
+    return fallback;
+  }
+
+  // 从 glob 的相对路径里提取 docs/ 之后的段 ——
+// import.meta.glob 在 [...slug].astro 内部调用时,
+// 返回的路径是相对于当前文件(astro-src/pages/docs/[...slug].astro)的,
+// 所以 '../../../docs/onboarding/jump-in.md' 是常见形式。
+function pathToRelDocsPath(filePath: string): string {
+  const m = filePath.match(/\/(docs\/[^/]+(?:\/[^/]+)*?)\.md$/);
+  return m ? m[1] : '';
+}
+
+  const entries = Object.entries(RAW_DOCS)
+    .filter(([path]) => {
+      const name = path.split('/').pop() || '';
+      return !name.startsWith('_') && name.endsWith('.md');
+    })
+    .map(([path, raw]) => {
+      const rel = pathToRelDocsPath(path);
+      if (!rel) return null;
+      const parts = rel.replace(/^docs\//, '').split('/');
+      return {
+        slug: parts,
+        slugStr: parts.join('/'),
+        raw,
+        title: extractTitle(raw, parts[parts.length - 1] || rel),
+        group: (parts[0] as DocEntry['group']) || 'other',
+      };
+    })
+    .filter((d): d is DocEntry => d !== null)
+    .sort((a, b) => a.slugStr.localeCompare(b.slugStr));
+
+  console.log('[docs-route] getStaticPaths found', entries.length, 'docs, first 3:', entries.slice(0, 3).map(e => e.slugStr));
+
+  return entries.map((d) => ({
+    params: { slug: d.slugStr },
+    props: { doc: d, allDocs: entries },
+  }));
+}
+
+interface DocEntry {
+  slug: string[];           // URL 段,如 ['onboarding', 'jump-in']
+  slugStr: string;          // 扁平字符串,用作 key
+  raw: string;
+  title: string;            // 从 frontmatter 或 H1 提取
+  group: 'onboarding' | 'research-skills' | 'library' | 'feedback' | 'other';
+}
+
+const DOCS_ROOT = '/Users/zhourui/code/daily-paper-reader/docs/';
+
+function extractTitle(raw: string, fallback: string): string {
+  // 简单 frontmatter 解析(只取 title): ---\ntitle: X\n---
+  const fm = raw.match(/^---\n([\s\S]*?)\n---/);
+  if (fm) {
+    const t = fm[1].match(/^title:\s*(.+?)\s*$/m);
+    if (t) return t[1].replace(/^['"]|['"]$/g, '');
+  }
+  // fallback:第一个 H1
+  const h1 = raw.match(/^#\s+(.+?)\s*$/m);
+  if (h1) return h1[1];
+  return fallback;
+}
+
+function stripFrontmatter(raw: string): string {
+  return raw.replace(/^---\n[\s\S]*?\n---\n?/, '');
+}
+
+interface Props {
+  doc: DocEntry;
+  allDocs: DocEntry[];
+}
+
+const { doc, allDocs } = Astro.props;
+const body = stripFrontmatter(doc.raw);
+
+// marked v14 async-friendly API
+const html = await marked.parse(body);
+
+// 左侧 sidebar 的分组
+const SIDEBAR: { group: DocEntry['group']; label: string; emoji: string }[] = [
+  { group: 'onboarding',     label: 'PhD 入门路径', emoji: '🎓' },
+  { group: 'research-skills', label: '科研技能',    emoji: '🛠️' },
+  { group: 'library',        label: '文献库标准',  emoji: '📚' },
+  { group: 'feedback',       label: '反馈与校准',  emoji: '📊' },
+];
+
+function docsInGroup(g: DocEntry['group'], docs: DocEntry[]): DocEntry[] {
+  return docs.filter((d) => d.group === g);
+}
+
+const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
+const docHref = (parts: string[]) => `${base}/docs/${parts.join('/')}/`;
+---
+
+<BaseLayout
+  title={`${doc.title} · Daily Paper Reader 文档`}
+  description="Daily Paper Reader 文档 — 让入门博士生逐步成为领域专家。"
+>
+  <Navbar />
+
+  <div class="docs-shell">
+    <aside class="docs-sidebar" aria-label="文档目录">
+      <a class="docs-sidebar-home" href={base + '/docs/'}>📖 文档首页</a>
+      <nav>
+          {SIDEBAR.map((s) => {
+            const items = docsInGroup(s.group, allDocs);
+            if (items.length === 0) return null;
+            return (
+              <details class="docs-sidebar-group" open={s.group === doc.group}>
+                <summary>
+                  <span class="docs-sidebar-emoji">{s.emoji}</span>
+                  <span class="docs-sidebar-label">{s.label}</span>
+                  <span class="docs-sidebar-count">{items.length}</span>
+                </summary>
+                <ul>
+                  {items.map((d) => (
+                    <li class:list={[{ active: d.slugStr === doc.slugStr }]}>
+                      <a href={docHref(d.slug)}>{d.title}</a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            );
+          })}
+        </nav>
+    </aside>
+
+    <main class="docs-main">
+      <nav class="docs-breadcrumb" aria-label="面包屑">
+        <a href={base + '/docs/'}>文档</a>
+        <span class="docs-breadcrumb-sep">/</span>
+        <span class="docs-breadcrumb-group">{SIDEBAR.find((s) => s.group === doc.group)?.label ?? doc.group}</span>
+        <span class="docs-breadcrumb-sep">/</span>
+        <span class="docs-breadcrumb-current">{doc.title}</span>
+      </nav>
+
+      <article class="docs-prose" set:html={html} />
+
+      <footer class="docs-footer">
+        <p>
+          觉得这片文档有用/有错?反馈渠道:
+          <a href={base + '/settings/'}>站内反馈</a> ·
+          <a href={base + '/'}>首页</a>
+        </p>
+        <p class="docs-footer-path">
+          源文件: <code>docs/{doc.slugStr}.md</code>
+        </p>
+      </footer>
+    </main>
+  </div>
+
+  <Footer />
+</BaseLayout>
