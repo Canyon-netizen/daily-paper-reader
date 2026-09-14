@@ -32,6 +32,12 @@ import {
   setLibraryPaperMeta,
 } from '../lib/user-libraries';
 import type { UserLibrary } from '../lib/user-libraries';
+import {
+  buildAudiencePromptAddendum,
+  getAudienceProfile,
+  resolveLibraryThreshold,
+  type AudienceProfileId,
+} from '../lib/library/audience-profiles';
 
 interface IngestCandidate {
   /** canonicalArxivId,去 vN */
@@ -225,7 +231,13 @@ async function scoreCandidatesWithLLM(
     const anchorSection = anchorList.length > 0
       ? `锚点论文(本库已认可的核心,相似者给 1 分):\n${anchorList.map((a, idx) => `${idx + 1}. ${a.value}${a.note ? ` (${a.note})` : ''}`).join('\n')}\n`
       : '';
+    // 注入读者画像的 addendum(若有)。prompt 顶部追加"按画像打分"指令。
+    const profile = getAudienceProfile(lib.definition?.audienceProfile);
+    const audienceSection = profile
+      ? buildAudiencePromptAddendum(profile) + '\n'
+      : '';
     const userMsg = [
+      audienceSection,
       `## 文献库方向`,
       `陈述: ${lib.statement}`,
       lib.inclusionKeywords.length > 0 ? `必须命中关键词: ${lib.inclusionKeywords.join(', ')}` : '',
@@ -300,13 +312,27 @@ async function scoreCandidatesWithLLM(
  *  - threshold 默认 0.5(过滤低分) */
 export async function runIngest(
   libId: string,
-  opts: { daysBack?: number; maxResults?: number; threshold?: number } = {},
+  opts: {
+    daysBack?: number;
+    maxResults?: number;
+    threshold?: number;
+    /** 覆盖 library.definition.audienceProfile,主要给测试用。 */
+    audienceProfile?: AudienceProfileId | null;
+  } = {},
 ): Promise<IngestCandidate[]> {
   const lib = getUserLibrary(libId);
   if (!lib) throw new Error(`library ${libId} 不存在`);
   const daysBack = opts.daysBack ?? 30;
   const maxResults = opts.maxResults ?? 50;
-  const threshold = opts.threshold ?? 0.5;
+  // 阈值解析顺序:opts.threshold > library.definition.relevanceThreshold > profile.defaultThreshold > 0.5
+  const profile = getAudienceProfile(opts.audienceProfile ?? lib.definition?.audienceProfile);
+  const threshold = resolveLibraryThreshold({
+    profile,
+    userThreshold:
+      typeof opts.threshold === 'number'
+        ? opts.threshold
+        : lib.definition?.relevanceThreshold,
+  });
 
   const query = buildArxivQuery(lib);
   if (!query) {

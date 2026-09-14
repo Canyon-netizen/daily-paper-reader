@@ -28,6 +28,7 @@ import type { DprUserLibrariesChangeReason, DprProjectStageChangeReason } from '
 import { STORAGE_KEYS } from '../storage';
 import { appendLibraryActivity } from './activity-log';
 import type { LibraryActivityDetail } from './activity-log';
+import { recordFeedback } from '../library/feedback';
 import type {
   DraftRef,
   LibraryAnchor,
@@ -752,7 +753,20 @@ export function createLibrary(input: {
     entry.papers = sanitizePaperMetas(input.papers);
     entry.conceptOverrides = sanitizeConceptOverrides(input.conceptOverrides);
   });
-  if (result.ok) return { ...result, id };
+  if (result.ok) {
+    // 反馈埋点:新库带 audienceProfile 的比例是 adoption rate 的主要指标
+    // (见 docs/library/inclusion-standard.md §5)
+    try {
+      recordFeedback({
+        kind: 'library_created',
+        libraryId: id,
+        audienceProfile: input.definition?.audienceProfile,
+      });
+    } catch {
+      /* swallow — feedback must never break write */
+    }
+    return { ...result, id };
+  }
   return result;
 }
 
@@ -920,7 +934,7 @@ export function bulkSetPaperStatus(
     if (cid) cids.push(cid);
   }
   if (cids.length === 0) return { ok: true, changed: false };
-  return commit(libraryId, 'paper-status-bulk', (entry) => {
+  const result = commit(libraryId, 'paper-status-bulk', (entry) => {
     const papers = { ...(entry.papers || {}) };
     let changed = 0;
     for (const cid of cids) {
@@ -934,6 +948,28 @@ export function bulkSetPaperStatus(
     if (changed === 0) return false;
     entry.papers = papers;
   });
+  // 反馈埋点:include/exclude 是 calibration 最重要的信号
+  // (docs/library/inclusion-standard.md §5 提到的 "score-precision proxy" 主要来源)
+  if (result.ok && (status === 'included' || status === 'excluded')) {
+    try {
+      const lib = getUserLibrary(libraryId);
+      const profile = lib?.definition?.audienceProfile;
+      for (const cid of cids) {
+        const meta = lib?.papers?.[cid];
+        recordFeedback({
+          kind: status === 'included' ? 'paper_included' : 'paper_excluded',
+          libraryId,
+          arxivId: cid,
+          audienceProfile: profile,
+          value: meta?.relevanceScore,
+          text: opts.trashReason,
+        });
+      }
+    } catch {
+      /* swallow */
+    }
+  }
+  return result;
 }
 
 /**
@@ -981,7 +1017,7 @@ export function updateLibraryDefinition(
   libraryId: string,
   patch: Partial<LibraryDefinition>,
 ): WriteResult {
-  return commit(libraryId, 'definition', (entry) => {
+  const result = commit(libraryId, 'definition', (entry) => {
     const cur = entry.definition || defaultLibraryDefinition(entry.statement);
     const next: LibraryDefinition = {
       ...cur,
@@ -996,6 +1032,32 @@ export function updateLibraryDefinition(
     };
     entry.definition = next;
   });
+  if (result.ok) {
+    // 反馈埋点:profile / threshold 切换是 calibration 的核心信号
+    // 见 docs/library/inclusion-standard.md §5
+    try {
+      const cur = getUserLibrary(libraryId);
+      if (typeof patch.audienceProfile === 'string') {
+        recordFeedback({
+          kind: 'library_profile_changed',
+          libraryId,
+          audienceProfile: patch.audienceProfile,
+          value: cur?.definition?.relevanceThreshold,
+        });
+      }
+      if (typeof patch.relevanceThreshold === 'number') {
+        recordFeedback({
+          kind: 'library_threshold_changed',
+          libraryId,
+          audienceProfile: cur?.definition?.audienceProfile,
+          value: patch.relevanceThreshold,
+        });
+      }
+    } catch {
+      /* swallow */
+    }
+  }
+  return result;
 }
 
 /**

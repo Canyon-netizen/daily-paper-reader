@@ -22,11 +22,30 @@ import {
   DEFAULT_LIBRARY_PACKS,
   withDefaultLibraryPacks,
 } from '../../scripts/library-prompt-defaults';
+import {
+  buildAudiencePromptAddendum,
+  getAudienceProfile,
+  type AudienceProfileId,
+  type LibraryAudienceProfile,
+} from './audience-profiles';
 
 export interface RelevanceScore {
   score: number; // 0-1
   reason: string;
   tldr: string;
+  /** 与 axes 对齐的 1-5 整数打分(从 audienceProfile 维度来)。仅在传入 profile 时返回。 */
+  axes?: Record<string, number>;
+}
+
+export interface ScoreRelevanceOptions {
+  /** Library 的读者画像。提供后会按 profile.axes + scopeHints 重新打分。 */
+  audienceProfile?: AudienceProfileId | null;
+  /** 自定义阈值(0-1)。未提供 → 走 profile.defaultThreshold → 0.5 兜底。 */
+  threshold?: number;
+  /** Library 名称(注入 system prompt,与 library.statement 配合)。 */
+  libraryName?: string;
+  /** Library 方向陈述(注入 user prompt)。 */
+  libraryStatement?: string;
 }
 
 /**
@@ -73,15 +92,29 @@ export async function scorePaperRelevance(
     paperTitle: string;
     paperAbstract: string;
   },
-  options: { config?: LLMConfig | null; signal?: AbortSignal } = {},
+  options: {
+    config?: LLMConfig | null;
+    signal?: AbortSignal;
+    /** 读者画像。提供后,system prompt 会注入 addendum,
+     *  输出 JSON 会带上 axes 字段。 */
+    audienceProfile?: AudienceProfileId | null;
+    /** 自定义阈值(仅用于调用方记录;实际过滤在 ingest 侧做)。 */
+    threshold?: number;
+  } = {},
 ): Promise<RelevanceScore | null> {
   const cfg = options.config ?? loadSettings();
   if (!cfg?.apiKey) return null;
   await preloadPacks(cfg).catch(() => undefined);
 
   const basePrompt = buildRelevanceBasePrompt(args);
-  const systemPrompt = injectIntoPromptSync('', 'library.relevance', cfg).trim()
-    || '你是文献相关性评审,对照研究方向定义评估一篇论文。只输出一个 JSON 对象。';
+  const profile = getAudienceProfile(options.audienceProfile);
+  const addendum = buildAudiencePromptAddendum(profile);
+
+  const systemPrompt =
+    (injectIntoPromptSync('', 'library.relevance', cfg).trim()
+      || '你是文献相关性评审,对照研究方向定义评估一篇论文。只输出一个 JSON 对象。') +
+    (addendum ? '\n\n' + addendum : '');
+
   const userPrompt = await injectIntoPrompt(basePrompt, 'library.relevance', cfg);
 
   const route = resolveRoute('library_relevance');
@@ -104,7 +137,7 @@ export async function scorePaperRelevance(
     return null;
   }
 
-  return parseRelevanceFromText(res?.content || '');
+  return parseRelevanceFromText(res?.content || '', profile);
 }
 
 function clamp01(n: number): number {
@@ -115,33 +148,53 @@ function clamp01(n: number): number {
 }
 
 /**
- * 从 LLM 文本输出里抠 JSON {score, reason, tldr}。
+ * 从 LLM 文本输出里抠 JSON {score, reason, tldr, axes?}。
  * 失败返回 null,绝不抛。
  */
-export function parseRelevanceFromText(text: string): RelevanceScore | null {
+export function parseRelevanceFromText(
+  text: string,
+  profile: LibraryAudienceProfile | null = null,
+): RelevanceScore | null {
   if (!text) return null;
   try {
     // 1) 尝试直接解析(可能 reasoning 残余剥完就是干净 JSON)
-    const direct = tryParseRelevanceObject(text);
+    const direct = tryParseRelevanceObject(text, profile);
     if (direct) return direct;
     // 2) 抓 { ... } 区间
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
-    return tryParseRelevanceObject(text.slice(start, end + 1));
+    return tryParseRelevanceObject(text.slice(start, end + 1), profile);
   } catch {
     return null;
   }
 }
 
-function tryParseRelevanceObject(raw: string): RelevanceScore | null {
+function tryParseRelevanceObject(
+  raw: string,
+  profile: LibraryAudienceProfile | null,
+): RelevanceScore | null {
   try {
     const obj = JSON.parse(raw) as Partial<RelevanceScore>;
     if (typeof obj.score !== 'number' || typeof obj.tldr !== 'string') return null;
+    // axes 仅在提供了 profile 时尝试读取,并夹紧到 1-5 整数。
+    let axes: Record<string, number> | undefined;
+    if (profile && obj.axes && typeof obj.axes === 'object') {
+      axes = {};
+      for (const a of profile.axes) {
+        const v = (obj.axes as Record<string, unknown>)[a.name];
+        if (typeof v === 'number') {
+          const clamped = Math.max(1, Math.min(5, Math.round(v)));
+          axes[a.name] = clamped;
+        }
+      }
+      if (Object.keys(axes).length === 0) axes = undefined;
+    }
     return {
       score: clamp01(obj.score),
       reason: String(obj.reason || ''),
       tldr: obj.tldr.trim(),
+      ...(axes ? { axes } : {}),
     };
   } catch {
     return null;

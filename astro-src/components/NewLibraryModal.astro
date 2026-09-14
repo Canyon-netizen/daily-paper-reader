@@ -126,6 +126,50 @@
           </div>
         </div>
 
+          <div class="lib-field">
+            <label class="lib-field-label">读者画像</label>
+            <div class="lib-profile-cards" data-profile-picker>
+              <button type="button" class="lib-profile-card" data-profile-card="novice">
+                <div class="lib-profile-card-head">
+                  <span class="lib-profile-emoji">🌱</span>
+                  <span class="lib-profile-name">入门小白</span>
+                  <span class="lib-profile-thresh">默认阈值 0.55</span>
+                </div>
+                <p class="lib-profile-desc">教学型 / 综述 / 高被引奠基论文。术语密度高的会被扣分。</p>
+              </button>
+              <button type="button" class="lib-profile-card" data-profile-card="expert">
+                <div class="lib-profile-card-head">
+                  <span class="lib-profile-emoji">🔬</span>
+                  <span class="lib-profile-name">深耕专家</span>
+                  <span class="lib-profile-thresh">默认阈值 0.75</span>
+                </div>
+                <p class="lib-profile-desc">新颖度 + 实验严谨度。只收真正推进 SoTA 的工作。</p>
+              </button>
+              <button type="button" class="lib-profile-card" data-profile-card="reviewer">
+                <div class="lib-profile-card-head">
+                  <span class="lib-profile-emoji">👀</span>
+                  <span class="lib-profile-name">专业审稿人</span>
+                  <span class="lib-profile-thresh">默认阈值 0.65</span>
+                </div>
+                <p class="lib-profile-desc">方法严谨度 + 相对新颖度。按顶会标准审。</p>
+              </button>
+              <button type="button" class="lib-profile-card" data-profile-card="practitioner">
+                <div class="lib-profile-card-head">
+                  <span class="lib-profile-emoji">🏭</span>
+                  <span class="lib-profile-name">工业实践者</span>
+                  <span class="lib-profile-thresh">默认阈值 0.60</span>
+                </div>
+                <p class="lib-profile-desc">生产就绪度 + 成本效率。能 ship 才收。</p>
+              </button>
+            </div>
+            <input type="hidden" data-modal-profile value="" />
+            <div class="lib-field-hint">
+              选一个画像,会按对应维度(教学 / 新颖 / 严谨 / 落地)重新打分,自动覆盖上方的阈值。
+              <a href="/docs/library/inclusion-standard/" target="_blank" rel="noopener">详细评分维度 →</a>
+            </div>
+          </div>
+        </div>
+
         {/* P8a definition 字段:goals / inScope / outOfScope / questions
             都是自由文本行,逗号 / 回车分隔。Polaris 用同样的粒度。 */}
         <div class="lib-field">

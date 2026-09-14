@@ -428,6 +428,60 @@
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
 }
 
+/* 读者画像卡片 —— 4 张并排 / 2x2,大屏可改 4 列 */
+.lib-profile-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.6rem;
+}
+.lib-profile-card {
+  background: var(--card-bg, #f8f9fb);
+  border: 2px solid transparent;
+  border-radius: 10px;
+  padding: 0.7rem 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  transition: transform 0.12s, border-color 0.12s, background 0.12s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.lib-profile-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--border, #d6dae0);
+}
+.lib-profile-card.active {
+  border-color: var(--accent, #2563eb);
+  background: var(--accent-soft, #eff4ff);
+}
+.lib-profile-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.lib-profile-emoji { font-size: 1.15rem; }
+.lib-profile-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.lib-profile-thresh {
+  margin-left: auto;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--accent, #2563eb);
+}
+.lib-profile-desc {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--muted, #586069);
+}
+
 /* --- 新建文献库弹窗新增字段:chip 行 / chip 输入 / tag 列表 ---
  * 对照 Polaris NewLibraryModal:
  *   - .lib-chip-row       arXiv 预设分类按钮行(cs.CL / cs.AI ...)

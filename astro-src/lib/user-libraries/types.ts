@@ -129,6 +129,16 @@ export interface LibraryDefinition {
    *  因为 rubric 是多维细则,不混单一阈值)。
    */
   relevanceThreshold?: number;
+  /** 读者画像 —— 多维入库标准的总开关。
+   *
+   *  - 不设 / undefined → 走 legacy 单阈值打分(向后兼容)
+   *  - 设了 → 按对应画像的 axes + defaultThreshold 重新打分
+   *    (resolveLibraryThreshold() 在 user 阈值未设时退回 profile.defaultThreshold)
+   *
+   *  4 个取值见 docs/library/inclusion-standard.md §2,
+   *  代码镜像在 astro-src/lib/library/audience-profiles.ts。
+   */
+  audienceProfile?: 'novice' | 'expert' | 'reviewer' | 'practitioner';
 }
 
 /** 锚点论文 = 已知与本库方向高度相关的「种子论文」。Polaris 强制 included。 */
