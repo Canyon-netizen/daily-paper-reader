@@ -163,6 +163,101 @@ export async function runInterviewStep(
   };
 }
 
+/** 一句话单次生成(2026-09-14 用户原话「创建文献库操作要足够简单」):
+ *  用户输入 1-2 句描述,1 次 LLM 调用直接产出 statement / include / exclude /
+ *  categories / rationale,跳过原 3 步访谈 3 次 LLM 调用。
+ *
+ *  与 runInterviewStep 的差异:
+ *    - 单次 prompt 同时输出 4 个字段(statement + include + exclude + categories)
+ *    - 不依赖历史(history=[]),完全基于用户当前 freeText + 库名
+ *    - prompt 用「小白描述」模板,5-15 字短语优先,避免学术术语堆砌
+ *
+ *  输出与 InterviewResult 兼容(供 UI 直接应用)。 */
+export async function runInterviewSingleShot(
+  freeText: string,
+  libraryName: string = '',
+): Promise<InterviewResult & { rationale: string }> {
+  const cfg = loadSettings();
+  if (!cfg?.apiKey) {
+    showToast('请先在设置页配置 LLM key', 'error');
+    throw new Error('no LLM key');
+  }
+  const proxyUrl = readLLMProxyOverride();
+  const effectiveBase = proxyUrl || (cfg.baseUrl || 'https://api.minimaxi.com/v1');
+  const url = `${effectiveBase.replace(/\/+$/, '')}/v1/chat/completions`.replace(/\/v1\/v1\//, '/v1/');
+  const model = cfg.model || 'MiniMax-M2.7-highspeed';
+
+  const systemHint = [
+    '用户给文献库起了名字(见用户消息的「文献库名称」),并用 1-2 句话描述他想要什么。',
+    '你要在 1 次调用里同时产出 4 个字段,让用户直接应用到表单:',
+    '',
+    '1. **statement**(80-150 中文字)',
+    '   - 一段话回答「这个库想关注什么 + 想做什么用」',
+    '   - 用日常表达,避免「该领域」「研究范式」这类学术套话',
+    '   - 不要复述库名,把方向说具体(例:库名「RLHF 周更」,statement 不要写成「这是关于 RLHF 周更的库」)',
+    '',
+    '2. **inclusion_keywords**(5-8 个,英文为主)',
+    '   - 必须命中论文标题或摘要的关键词',
+    '   - 包含常见同义词(例:RLHF → preference learning / reward model)',
+    '   - 优先 arXiv 标题/摘要里高频出现的表达,避免教科书术语',
+    '',
+    '3. **exclusion_keywords**(3-5 个)',
+    '   - 挡掉和本方向相近但目标不同的论文(例:RLHF 库排除「preference optimization for retrieval」)',
+    '   - 关键词而非长句,每个 ≤ 3 个英文单词',
+    '',
+    '4. **categories**(3-5 个)',
+    '   - arXiv 学科分类(如 cs.LG / cs.CL / cs.MA / cs.AI / cs.RO / stat.ML)',
+    '   - 不熟悉的领域可留空',
+    '',
+    '5. **rationale**(1 句话,≤ 50 字)',
+    '   - 说明你为什么这么分组关键词,帮用户判断要不要采纳',
+    '',
+    '## 输出严格 JSON',
+    '只输出一个 JSON 对象,不要 Markdown 代码块:',
+    '{"statement":"...","inclusion_keywords":["..."],"exclusion_keywords":["..."],"categories":["..."],"rationale":"..."}',
+  ].join('\n');
+
+  const userMsg =
+    `文献库名称: ${libraryName.trim() || '(用户还没填)'}\n\n` +
+    `用户描述: ${freeText.trim() || '(空 — 基于库名生成默认配置)'}\n\n` +
+    `输出 JSON:`;
+
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(proxyUrl ? {} : { Authorization: `Bearer ${cfg.apiKey}` }),
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemHint },
+        { role: 'user', content: userMsg },
+      ],
+      temperature: 0.3,
+      response_format: { type: 'json_object' },
+      // 单次生成预计 500-800 token,1500 留余量
+      max_tokens: 1500,
+    }),
+  });
+  if (!resp.ok) {
+    const errText = await resp.text().catch(() => '');
+    throw new Error(`LLM HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+  }
+  const data = await resp.json();
+  let content = (data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  const start = content.indexOf('{');
+  const end = content.lastIndexOf('}');
+  const obj = JSON.parse(content.slice(start, end + 1));
+  return {
+    statement: typeof obj.statement === 'string' ? obj.statement.trim() : '',
+    inclusionKeywords: Array.isArray(obj.inclusion_keywords) ? obj.inclusion_keywords.map(String).filter((s: string) => s && s.length < 32).slice(0, 8) : [],
+    exclusionKeywords: Array.isArray(obj.exclusion_keywords) ? obj.exclusion_keywords.map(String).filter((s: string) => s && s.length < 32).slice(0, 5) : [],
+    categories: Array.isArray(obj.categories) ? obj.categories.map(String).filter((s: string) => /^[\w.]+$/.test(s)).slice(0, 6) : [],
+    rationale: typeof obj.rationale === 'string' ? obj.rationale : '',
+  };
+}
+
 /** 把访谈最终结果展开成 modal 需要的字段。 */
 export function summarizeInterview(steps: InterviewStep[]): InterviewResult {
   const final = steps.find((s) => s.id === 'audience');

@@ -87,10 +87,29 @@
           ></textarea>
           <div class="lib-field-hint">
             1-200 字。这句话会显示在卡片上,让你以后翻找时一眼认出来。
-            <button type="button" class="linklike" data-modal-interview>🎤 AI 帮我写</button>
+            <button type="button" class="linklike" data-modal-interview>🎤 3 步 AI 访谈</button>
+            <button type="button" class="linklike" data-modal-singleshot>✨ 一句话生成</button>
           </div>
           <div class="lib-field-error" data-modal-stmt-err></div>
           <div class="lib-interview-panel" data-interview-panel hidden></div>
+          <div class="lib-singleshot-panel" data-singleshot-panel hidden>
+            <div class="lib-singleshot-head">
+              <strong>✨ 一句话生成</strong>
+              <span class="muted">用 1 句话描述你想要的方向,1 次 LLM 调用产出 statement + 关键词 + 排除词 + 分类</span>
+            </div>
+            <textarea
+              class="lib-textarea lib-singleshot-input"
+              rows="2"
+              maxlength="200"
+              placeholder="例:我想跟踪 RLHF 方向近半年的核心方法,主要是 DPO 和 self-rewarding 这类不依赖大量人类标注的工作"
+              data-singleshot-input
+            ></textarea>
+            <div class="lib-singleshot-actions">
+              <button type="button" class="btn btn-primary btn-sm" data-singleshot-run>生成</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-singleshot-cancel>取消</button>
+            </div>
+            <div class="lib-singleshot-preview" data-singleshot-preview hidden></div>
+          </div>
         </div>
 
         {/* 阈值 + 阈值快捷按钮(2026-09-14 小白 P0-2 修复:0.5 默认 + 4 颗快捷) */}

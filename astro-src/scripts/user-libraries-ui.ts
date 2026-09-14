@@ -1272,6 +1272,92 @@ function bindModalQuickActions(modal: HTMLElement): void {
     if (helpBtn) helpBtn.textContent = decision.hidden ? '不确定?看决策树 →' : '收起决策树 ↑';
   });
 
+  // 2026-09-14 一句话生成 panel(用户原话「建库操作要足够简单」)
+  // 单次 LLM 调用产出 statement + 关键词 + 排除词 + 分类,比 3 步访谈摩擦更小
+  const singleshotBtn = modal.querySelector<HTMLButtonElement>('[data-modal-singleshot]');
+  const singleshotPanel = modal.querySelector<HTMLElement>('[data-singleshot-panel]');
+  const singleshotInput = modal.querySelector<HTMLTextAreaElement>('[data-singleshot-input]');
+  const singleshotRun = modal.querySelector<HTMLButtonElement>('[data-singleshot-run]');
+  const singleshotCancel = modal.querySelector<HTMLButtonElement>('[data-singleshot-cancel]');
+  const singleshotPreview = modal.querySelector<HTMLElement>('[data-singleshot-preview]');
+  const interviewPanel = modal.querySelector<HTMLElement>('[data-interview-panel]');
+  // 互斥:点 singleshot 时收起 3 步访谈
+  singleshotBtn?.addEventListener('click', () => {
+    if (!singleshotPanel) return;
+    singleshotPanel.hidden = false;
+    if (interviewPanel) interviewPanel.hidden = true;
+    setTimeout(() => singleshotInput?.focus(), 30);
+  });
+  singleshotCancel?.addEventListener('click', () => {
+    if (singleshotPanel) singleshotPanel.hidden = true;
+    if (singleshotPreview) { singleshotPreview.hidden = true; singleshotPreview.innerHTML = ''; }
+    if (singleshotInput) singleshotInput.value = '';
+  });
+  singleshotRun?.addEventListener('click', async () => {
+    const freeText = singleshotInput?.value.trim() || '';
+    const libName = modal.querySelector<HTMLInputElement>('[data-modal-name]')?.value.trim() || '';
+    if (!freeText) {
+      showToast('先写一句描述,再点生成', 'info');
+      return;
+    }
+    if (singleshotRun) singleshotRun.disabled = true;
+    if (singleshotPreview) {
+      singleshotPreview.hidden = false;
+      singleshotPreview.innerHTML = '<div class="lib-singleshot-loading"><span class="lib-spinner"></span> 1 次 LLM 调用生成中…</div>';
+    }
+    try {
+      const { runInterviewSingleShot } = await import('./library-statement-interview');
+      const result = await runInterviewSingleShot(freeText, libName);
+      // 渲染预览 + 应用按钮
+      const incTags = result.inclusionKeywords.map((k: string) => `<span class="lib-tag include">${escapeHtml(k)}</span>`).join('');
+      const excTags = result.exclusionKeywords.map((k: string) => `<span class="lib-tag exclude">${escapeHtml(k)}</span>`).join('');
+      const catTags = result.categories.map((c: string) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join('');
+      if (singleshotPreview) {
+        singleshotPreview.innerHTML = `
+          <div class="lib-singleshot-result">
+            ${result.rationale ? `<p class="muted">💡 ${escapeHtml(result.rationale)}</p>` : ''}
+            <h5>statement(80-150 字)</h5>
+            <blockquote class="lib-interview-suggestion">${escapeHtml(result.statement || '(空)')}</blockquote>
+            <h5>包括关键词</h5>
+            <div class="lib-tag-list">${incTags || '<em class="muted">(无)</em>'}</div>
+            <h5>排除关键词</h5>
+            <div class="lib-tag-list">${excTags || '<em class="muted">(无)</em>'}</div>
+            <h5>arXiv 分类</h5>
+            <div class="lib-tag-list">${catTags || '<em class="muted">(无)</em>'}</div>
+            <div class="lib-singleshot-apply">
+              <button type="button" class="btn btn-primary btn-sm" data-singleshot-apply>应用到表单</button>
+            </div>
+          </div>
+        `;
+        const applyBtn = singleshotPreview.querySelector<HTMLButtonElement>('[data-singleshot-apply]');
+        applyBtn?.addEventListener('click', () => {
+          const stmtTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-statement]');
+          if (stmtTA && result.statement) stmtTA.value = result.statement;
+          const controls = controlsByModal.get(modal);
+          if (controls && result.inclusionKeywords.length > 0) {
+            controls.inclusion.loadFrom(result.inclusionKeywords);
+          }
+          if (controls && result.exclusionKeywords.length > 0) {
+            controls.exclusion.loadFrom(result.exclusionKeywords);
+          }
+          if (controls && result.categories.length > 0) {
+            controls.categories.loadFrom(result.categories);
+          }
+          showToast('已应用 statement / 关键词 / 分类', 'ok');
+          if (singleshotPanel) singleshotPanel.hidden = true;
+          if (singleshotPreview) { singleshotPreview.hidden = true; singleshotPreview.innerHTML = ''; }
+          if (singleshotInput) singleshotInput.value = '';
+        });
+      }
+    } catch (err) {
+      if (singleshotPreview) {
+        singleshotPreview.innerHTML = `<p class="muted error">⚠️ 生成失败:${escapeHtml((err as Error).message)}<br>可改写描述重试,或关闭直接手填。</p>`;
+      }
+    } finally {
+      if (singleshotRun) singleshotRun.disabled = false;
+    }
+  });
+
   // 2026-09-14 fallback:旧浏览器(Chrome <119 / FF <88 / Safari <16)不支持
   // :user-invalid,所以用 JS 在用户首次失焦时给 required input 加 .is-touched
   // class,触发 CSS 红框。新浏览器优先用 :user-invalid(无需 JS)。
