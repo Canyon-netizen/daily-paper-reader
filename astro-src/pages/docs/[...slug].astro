@@ -134,6 +134,12 @@ const body = stripFrontmatter(doc.raw);
 // marked v14 async-friendly API
 const html = await marked.parse(body);
 
+// 计算 prev/next — 用 group 优先序,组内字典序
+const ordered = orderedDocs(allDocs);
+const docIndex = ordered.findIndex((d) => d.slugStr === doc.slugStr);
+const prev = docIndex > 0 ? ordered[docIndex - 1] : null;
+const next = docIndex >= 0 && docIndex < ordered.length - 1 ? ordered[docIndex + 1] : null;
+
 // 左侧 sidebar 的分组
 const SIDEBAR: { group: DocEntry['group']; label: string; emoji: string }[] = [
   { group: 'onboarding',     label: 'PhD 入门路径', emoji: '🎓' },
@@ -144,6 +150,45 @@ const SIDEBAR: { group: DocEntry['group']; label: string; emoji: string }[] = [
 
 function docsInGroup(g: DocEntry['group'], docs: DocEntry[]): DocEntry[] {
   return docs.filter((d) => d.group === g);
+}
+
+// 显式定义 PhD 阅读路径 + 字母序 fallback。
+// 整个排序函数集中在一个地方,Astro dev SSR 模块顶层求值时一次性完成,
+// 避开多 const + 多 function 跨行的 TDZ 坑。
+function orderedDocs(docs: DocEntry[]): DocEntry[] {
+  const GROUP_ORDER: DocEntry['group'][] = ['onboarding', 'research-skills', 'library', 'feedback'];
+  const DOC_ORDER: Record<string, string[]> = {
+    onboarding: [
+      'onboarding/jump-in',
+      'onboarding/phd-journey',
+      'onboarding/phase-1-orientation',
+      'onboarding/phase-2-foundation',
+      'onboarding/phase-3-depth',
+      'onboarding/phase-4-contribution',
+    ],
+    'research-skills': [
+      'research-skills/how-to-read-paper',
+      'research-skills/how-to-lit-review',
+      'research-skills/experiment-design',
+      'research-skills/writing-paper',
+      'research-skills/writing-review',
+      'research-skills/writing-rebuttal',
+      'research-skills/reviewer-mindset',
+    ],
+  };
+  function orderIndex(slugStr: string): number {
+    for (const arr of Object.values(DOC_ORDER)) {
+      const idx = arr.indexOf(slugStr);
+      if (idx >= 0) return idx;
+    }
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return docs.slice().sort((a, b) => {
+    const ga = GROUP_ORDER.indexOf(a.group);
+    const gb = GROUP_ORDER.indexOf(b.group);
+    if (ga !== gb) return ga - gb;
+    return orderIndex(a.slugStr) - orderIndex(b.slugStr);
+  });
 }
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
@@ -193,6 +238,29 @@ const docHref = (parts: string[]) => `${base}/docs/${parts.join('/')}/`;
       </nav>
 
       <article class="docs-prose" set:html={html} />
+
+      {(prev || next) && (
+        <nav class="docs-pager" aria-label="文档导航">
+          {prev ? (
+            <a class="docs-pager-link docs-pager-prev" href={docHref(prev.slug)}>
+              <span class="docs-pager-arrow">←</span>
+              <span class="docs-pager-meta">
+                <span class="docs-pager-label">上一篇</span>
+                <span class="docs-pager-title">{prev.title}</span>
+              </span>
+            </a>
+          ) : <span class="docs-pager-spacer" aria-hidden="true"></span>}
+          {next ? (
+            <a class="docs-pager-link docs-pager-next" href={docHref(next.slug)}>
+              <span class="docs-pager-meta docs-pager-meta-end">
+                <span class="docs-pager-label">下一篇</span>
+                <span class="docs-pager-title">{next.title}</span>
+              </span>
+              <span class="docs-pager-arrow">→</span>
+            </a>
+          ) : <span class="docs-pager-spacer" aria-hidden="true"></span>}
+        </nav>
+      )}
 
       <footer class="docs-footer">
         <p>
