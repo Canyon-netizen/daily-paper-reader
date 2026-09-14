@@ -49,20 +49,21 @@ const STEP_TEMPLATE = [
     id: 'topic' as const,
     question: '你想关注什么主题的论文?(用一句话或短语描述,不需要完美)',
     systemHint:
-      '用户给出大致方向(可能为空)。你要:\n' +
-      '1) **紧贴 user 消息里的「文献库名称」行** —— 用户已经想好名字了,你生成的 candidates 必须贴这个名字的语义域(例:名字叫「长程智能体」,候选就该是「多步任务规划」「长视野决策」「技能链组合」之类),不是泛 AI 方向。\n' +
-      '2) 若用户当前回答为空:基于文献库名称,生成 4-5 个候选方向(每个 5-15 字短语,用日常表达而非学术术语),放到 candidates 数组。\n' +
-      '3) 若用户已有回答:把方向精炼成「核心动词 + 对象 + 场景」,放到 refined 字段。\n' +
-      '4) 给出 3-5 个相关 arxiv 分类(如 cs.LG / cs.CL / cs.MA / cs.AI / cs.RO)。\n' +
+      '用户在新建文献库,他给自己的库起了个名字(见用户消息里的「文献库名称」)。你要:\n' +
+      '1) 根据库名字,猜用户想研究什么方向,生成 4-5 个候选方向(每个 5-15 字,用日常表达,避免学术术语)。\n' +
+      '   例:名字叫「长程智能体」,就该生成「多步任务规划」「长视野决策」「技能链组合」这种,**不是**泛 AI 方向。\n' +
+      '2) 若用户已经写了研究方向:帮他改成更清楚的一句话,放到 refined 字段。\n' +
+      '3) 给出 3-5 个相关 arxiv 学科分类(可选,如 cs.LG / cs.CL / cs.MA / cs.AI / cs.RO)。\n' +
+      '4) 在 rationale 用 1 句话说明为什么这些方向贴这个库名(让用户能判断要不要选)。\n' +
       '输出 JSON:{"candidates":["…",…] | "refined":"…","categories":["cs.LG",…],"rationale":"…"}',
   },
   {
     id: 'subtopic' as const,
     question: '这个方向上,你想**深入了解**哪些具体问题或应用场景?(每个一行,简单描述就行)',
     systemHint:
-      '基于文献库名称 + 方向 + 已有子问题(可能为空)。你要:\n' +
-      '1) **紧贴 user 消息里的「文献库名称」行** —— 子问题必须跟这个名字的研究主题强相关(例:「长程智能体」就该问「长视野信用分配」「层级 RL」「工具使用链」),不要泛泛抛出「效率 vs 性能」这种通用 AI 议题。\n' +
-      '2) 若用户当前回答为空:基于文献库名称 + 研究方向,生成 4-5 个常见子问题模板(每个 ≤ 15 字,口语化),放到 candidates 数组。\n' +
+      '基于文献库名称 + 已确定的研究方向 + 已有子问题(可能为空)。你要:\n' +
+      '1) **紧贴文献库名称** —— 子问题必须跟这个库的研究主题强相关(例:「长程智能体」就该问「长视野信用分配」「层级 RL」「工具使用链」),不要泛泛抛出「效率 vs 性能」这种通用 AI 议题。\n' +
+      '2) 若用户当前回答为空:基于库名 + 方向,生成 4-5 个常见子问题模板(每个 ≤ 15 字,口语化),放到 candidates 数组。\n' +
       '3) 若用户已有子问题:把这些子问题归类成 1-3 个主题,每主题一句 title,放到 themes。\n' +
       '4) 推荐 5-8 个必须命中的关键词(英文为主,中文为辅)。\n' +
       '输出 JSON:{"candidates":["…",…] | "themes":[{"title":"…","papers":"…"},…],"keywords":["…","…"]}',
@@ -71,9 +72,9 @@ const STEP_TEMPLATE = [
     id: 'audience' as const,
     question: '这个库里的论文,你打算用来做什么?(如:写综述 / 跟踪领域进展 / 给新项目找 idea)',
     systemHint:
-      '基于文献库名称 + 方向 + 已有目的(可能为空)。你要:\n' +
-      '1) **紧贴 user 消息里的「文献库名称」行** —— 用途候选必须贴这个库的主题(例:「长程智能体」就该给「评估长视野 benchmark」「补全技能链案例」这种),不是「写综述章节」「找新项目 idea」这种通用答案。\n' +
-      '2) 若用户当前回答为空:基于文献库名称 + 研究方向,生成 4-5 个常见用途模板(每个 ≤ 15 字)。\n' +
+      '基于文献库名称 + 已确定的方向 + 已有目的(可能为空)。你要:\n' +
+      '1) **紧贴文献库名称** —— 用途候选必须贴这个库的主题(例:「长程智能体」就给「评估长视野 benchmark」「补全技能链案例」这种),不是「写综述章节」「找新项目 idea」这种通用答案。\n' +
+      '2) 若用户当前回答为空:基于库名 + 方向,生成 4-5 个常见用途模板(每个 ≤ 15 字)。\n' +
       '3) 若用户已有目的:综合成一个 80-150 字 statement,放到 statement 字段;并推荐 3-5 个**排除关键词**(用来挡掉和这个库方向相近但目标不同的论文,例如 RLHF 库排除「preference optimization for retrieval」)。\n' +
       '4) 给 statement 加 1 句话结尾,说明「这段话会填进『方向描述』字段,显示在库的卡片上」。\n' +
       '输出 JSON:{"candidates":["…",…] | "statement":"…","exclude":["…","…"],"postscript":"…"}',
@@ -93,7 +94,7 @@ export async function runInterviewStep(
   history: InterviewStep[],
   currentAnswer: string = '',
   libraryName: string = '',
-): Promise<{ refined?: string; categories?: string[]; themes?: { title: string; papers: string }[]; keywords?: string[]; statement?: string; exclude?: string[]; candidates?: string[]; rationale: string }> {
+): Promise<{ refined?: string; categories?: string[]; themes?: { title: string; papers: string }[]; keywords?: string[]; statement?: string; exclude?: string[]; candidates?: string[]; rationale: string; postscript?: string }> {
   const cfg = loadSettings();
   if (!cfg?.apiKey) {
     showToast('请先在设置页配置 LLM key', 'error');
@@ -155,7 +156,7 @@ export async function runInterviewStep(
     statement: typeof obj.statement === 'string' ? obj.statement : undefined,
     exclude: Array.isArray(obj.exclude) ? obj.exclude.map(String) : undefined,
     candidates: Array.isArray(obj.candidates)
-      ? obj.candidates.map(String).map((s) => s.trim()).filter((s) => s.length > 0 && s.length < 40).slice(0, 6)
+      ? obj.candidates.map(String).map((s: string) => s.trim()).filter((s: string) => s.length > 0 && s.length < 40).slice(0, 6)
       : undefined,
     rationale: typeof obj.rationale === 'string' ? obj.rationale : '',
     postscript: typeof obj.postscript === 'string' ? obj.postscript : undefined,
