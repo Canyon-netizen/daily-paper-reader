@@ -67,6 +67,60 @@ docs/papers/<YYYY>/<MM>/<DD>/<arxiv-id>-<slug>.{md,txt}
 
 注意：`_` 前缀的目录会被 [astro-src/lib/paper.ts](astro-src/lib/paper.ts) 的 walk **跳过**，不会进入论文扫描路径——所以如果某个内部目录必须暂存在 `docs/` 下，用 `_` 前缀是最安全的临时挂法。
 
+## 4.5 论文 frontmatter 必填与可选字段(2026-09-14 整合)
+
+论文 `.md` 文件 frontmatter 推荐结构(灰色 = 已有,PWD 推荐加):
+
+```yaml
+---
+title: "..."                # 必填,英文原题
+title_zh: "..."              # 可选,中文译题
+authors: "..."              # 必填
+date: 2026-08-23            # 必填,arxiv 发表日
+pdf: https://arxiv.org/pdf/...
+score: 8.0                  # 必填,LLM 相关度 0-10
+tldr: "..."                 # 必填,中文 100-300 字
+evidence: "..."             # 可选,选论文时 1 句话依据
+abstract_en: "..."          # 可选,英文 abstract(快读时显示)
+tags: ["query:rlhf"]        # 可选,检索 tag(query: 前缀表示来源是检索词)
+source: arxiv               # 必填
+selection_source: fresh_fetch # 可选
+
+categories:                 # 必填,2026-09-14 批量回填
+  venue: [ICLR, NeurIPS]    # 会议名(arxiv preprint 默认空)
+  task: [rlhf, agent]       # 任务
+  method: [dpo, ppo]         # 方法
+  type: [empirical]          # 类型
+
+# === 2026-09-14 新增:跨模块链接(可选,但强烈推荐填) ===
+related_ideas: []           # 关联 docs/ideas/<id>.md 路径
+related_experiments: []     # 关联 docs/experiments/<id>.md 路径
+related_writings: []        # 关联 docs/writing/<id>.md 路径
+is_milestone: false         # 是否里程碑论文(高被引 / 范式定义)
+                            # true 永久保留;false 半年后可考虑 deprecate
+```
+
+### 跨模块链接规则(2026-09-14 起强制)
+
+- **新论文**:`related_*` 字段可空,但 pipeline 应尝试从 tags + categories 推断,推荐 ≥1 条
+- **老论文**:启发式扫描 docs/ideas/*.md / docs/experiments/*.md / docs/writing/*.md 的 `supporting_papers:` 字段,反查 paper_id,写入本论文
+- **验证**:`scripts/audit-crosslinks.mjs`(下一批写)扫所有论文,确保每篇至少有 1 个外链 OR 显式标注 `is_orphan: true`
+
+### milestone 标记规则
+
+- `is_milestone: true` 用于:Transformer / AlphaGo / DPO / RLHF 原 paper 这类范式奠基
+- `is_milestone: false`(默认):普通论文
+- 自动化:`scripts/mark-milestones.mjs`(下一批写)按 arxiv citations + venue 影响因子推断
+
+### categories 回填
+
+如某篇论文 categories 为空,跑:
+
+```bash
+node astro-src/scripts/paper-backfill-categories.mjs --apply --limit 1  # 单篇测试
+node astro-src/scripts/paper-backfill-categories.mjs --apply --all       # 全量回填
+```
+
 ## 5. Astro 是怎么扫 `docs/` 的（避免误改）
 
 - [`astro-src/lib/paper.ts`](astro-src/lib/paper.ts)：列出所有论文 ID，把 id 喂给对应路由。
