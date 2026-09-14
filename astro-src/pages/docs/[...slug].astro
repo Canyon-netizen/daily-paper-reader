@@ -28,8 +28,8 @@ marked.use({
 });
 
 // 所有 markdown 文件以 ?raw 形式导入(内容是 string)。
-// 范围限定到 PhD 旅程 4 个子目录,避免把 docs/papers/ 下 1000+ 篇论文笔记
-// 拉进路由(那是另一套 surface,/papers/[arxiv]/ 已经覆盖)。
+// 范围限定到 PhD 旅程 + 进阶子目录(避免把 docs/papers/ 下 1000+ 篇论文笔记
+// 拉进路由;那是另一套 surface,/papers/[arxiv]/ 已经覆盖)。
 //
 // 整个 build 逻辑必须全部内联在 getStaticPaths 里。Astro 5 dev SSR 会把
 // getStaticPaths 编译到独立的 chunk 里,顶层 const/function 在那里都看不到。
@@ -42,6 +42,11 @@ export function getStaticPaths() {
       '../../../docs/research-skills/**/*.md',
       '../../../docs/library/**/*.md',
       '../../../docs/feedback/**/*.md',
+      // 进阶文档区
+      '../../../docs/ideas/**/*.md',
+      '../../../docs/roadmap/**/*.md',
+      '../../../docs/writing/**/*.md',
+      '../../../docs/tutorial/*.md',
     ],
     { query: '?raw', import: 'default', eager: true },
   ) as Record<string, string>;
@@ -101,7 +106,7 @@ interface DocEntry {
   slugStr: string;          // 扁平字符串,用作 key
   raw: string;
   title: string;            // 从 frontmatter 或 H1 提取
-  group: 'onboarding' | 'research-skills' | 'library' | 'feedback' | 'other';
+  group: 'onboarding' | 'research-skills' | 'library' | 'feedback' | 'ideas' | 'roadmap' | 'writing' | 'tutorial' | 'other';
 }
 
 const DOCS_ROOT = '/Users/zhourui/code/daily-paper-reader/docs/';
@@ -140,12 +145,16 @@ const docIndex = ordered.findIndex((d) => d.slugStr === doc.slugStr);
 const prev = docIndex > 0 ? ordered[docIndex - 1] : null;
 const next = docIndex >= 0 && docIndex < ordered.length - 1 ? ordered[docIndex + 1] : null;
 
-// 左侧 sidebar 的分组
+// 左侧 sidebar 的分组(进阶文档区放在 PhD 旅程之后,中间用 emoji 区分)
 const SIDEBAR: { group: DocEntry['group']; label: string; emoji: string }[] = [
   { group: 'onboarding',     label: 'PhD 入门路径', emoji: '🎓' },
   { group: 'research-skills', label: '科研技能',    emoji: '🛠️' },
   { group: 'library',        label: '文献库标准',  emoji: '📚' },
   { group: 'feedback',       label: '反馈与校准',  emoji: '📊' },
+  { group: 'ideas',          label: '研究想法',    emoji: '💡' },
+  { group: 'roadmap',        label: '路线图',      emoji: '🗺️' },
+  { group: 'writing',        label: '写作样例',    emoji: '✍️' },
+  { group: 'tutorial',       label: '使用教程',    emoji: '📖' },
 ];
 
 function docsInGroup(g: DocEntry['group'], docs: DocEntry[]): DocEntry[] {
@@ -156,7 +165,10 @@ function docsInGroup(g: DocEntry['group'], docs: DocEntry[]): DocEntry[] {
 // 整个排序函数集中在一个地方,Astro dev SSR 模块顶层求值时一次性完成,
 // 避开多 const + 多 function 跨行的 TDZ 坑。
 function orderedDocs(docs: DocEntry[]): DocEntry[] {
-  const GROUP_ORDER: DocEntry['group'][] = ['onboarding', 'research-skills', 'library', 'feedback'];
+  const GROUP_ORDER: DocEntry['group'][] = [
+    'onboarding', 'research-skills', 'library', 'feedback',
+    'ideas', 'roadmap', 'writing', 'tutorial',
+  ];
   const DOC_ORDER: Record<string, string[]> = {
     onboarding: [
       'onboarding/jump-in',

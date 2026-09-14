@@ -15,6 +15,10 @@ const RAW_DOCS = import.meta.glob(
     '../../../docs/research-skills/**/*.md',
     '../../../docs/library/**/*.md',
     '../../../docs/feedback/**/*.md',
+    '../../../docs/ideas/**/*.md',
+    '../../../docs/roadmap/**/*.md',
+    '../../../docs/writing/**/*.md',
+    '../../../docs/tutorial/*.md',
   ],
   { query: '?raw', import: 'default', eager: true },
 ) as Record<string, string>;
@@ -24,11 +28,19 @@ interface DocEntry {
   slugStr: string;
   raw: string;
   title: string;
-  group: 'onboarding' | 'research-skills' | 'library' | 'feedback' | 'other';
+  group: 'onboarding' | 'research-skills' | 'library' | 'feedback' | 'ideas' | 'roadmap' | 'writing' | 'tutorial' | 'other';
   description: string;
 }
 
 const DOCS_ROOT = '/Users/zhourui/code/daily-paper-reader/docs/';
+
+// glob 在 index.astro 内部调用时,返回路径相对当前文件
+// (astro-src/pages/docs/index.astro),如 '../../../docs/feedback/README.md'。
+// 用正则抠出 '/docs/<path>.md' 段,而不是替换绝对前缀。
+function pathToRelDocsPath(filePath: string): string {
+  const m = filePath.match(/\/(docs\/[^/]+(?:\/[^/]+)*?)\.md$/);
+  return m ? m[1] : '';
+}
 
 function extractTitle(raw: string, fallback: string): string {
   const fm = raw.match(/^---\n([\s\S]*?)\n---/);
@@ -64,8 +76,9 @@ const ALL_DOCS: DocEntry[] = Object.entries(RAW_DOCS)
     return !name.startsWith('_') && name.endsWith('.md');
   })
   .map(([path, raw]) => {
-    const rel = path.replace(DOCS_ROOT, '').replace(/\.md$/, '');
-    const parts = rel.split('/');
+    const rel = pathToRelDocsPath(path);
+    if (!rel) return null;
+    const parts = rel.replace(/^docs\//, '').split('/');
     return {
       slug: parts,
       slugStr: parts.join('/'),
@@ -75,6 +88,7 @@ const ALL_DOCS: DocEntry[] = Object.entries(RAW_DOCS)
       description: extractDescription(raw),
     };
   })
+  .filter((d): d is DocEntry => d !== null)
   .sort((a, b) => a.slugStr.localeCompare(b.slugStr));
 
 const SECTIONS: { group: DocEntry['group']; label: string; emoji: string; tagline: string }[] = [
@@ -82,6 +96,10 @@ const SECTIONS: { group: DocEntry['group']; label: string; emoji: string; taglin
   { group: 'research-skills', label: '科研技能',     emoji: '🛠️', tagline: '7 个 primer:读论文、写综述、设计实验、写 paper / review / rebuttal、审稿心态' },
   { group: 'library',         label: '文献库标准',   emoji: '📚', tagline: '多维入库标准(4 个读者画像)的权威文档' },
   { group: 'feedback',        label: '反馈与校准',   emoji: '📊', tagline: '校准日志 + 迭代记录 + 系统说明' },
+  { group: 'ideas',           label: '研究想法',     emoji: '💡', tagline: '记录中的研究想法与方向(可能未成熟,慎用)' },
+  { group: 'roadmap',         label: '路线图',       emoji: '🗺️', tagline: '长期研究方向与里程碑计划' },
+  { group: 'writing',         label: '写作样例',     emoji: '✍️', tagline: '真实写作产出(综述 / 分析 / 提案)' },
+  { group: 'tutorial',        label: '使用教程',     emoji: '📖', tagline: 'Zotero 集成 + 站点使用指引' },
 ];
 
 const base = import.meta.env.BASE_URL.replace(/\/+$/, '');
