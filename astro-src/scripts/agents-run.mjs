@@ -518,6 +518,9 @@ function makeLLMCaller(opts) {
   return {
     async callLLM({ system, user, model: m, temperature = 0.7, max_tokens = 1024 }) {
       const url = `${baseUrl.replace(/\/$/, '')}/chat/completions`;
+      // model: caller 传 m(model 字段,可能 undefined)→ fallback env → fallback 'gpt-4o-mini'
+      // 但 MiniMax 不认 'gpt-4o-mini',所以 caller 必须显式传 model 或 env 设了。
+      const resolvedModel = (typeof m === 'string' && m) ? m : model;
       const r = await fetch(url, {
         method: 'POST',
         headers: {
@@ -525,7 +528,7 @@ function makeLLMCaller(opts) {
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: m ?? model,
+          model: resolvedModel,
           messages: [
             { role: 'system', content: system },
             { role: 'user', content: user },
@@ -2960,7 +2963,9 @@ async function main() {
         project,
         candidates,
         caller,
-        model: args.model,
+        // model: 优先 CLI --model,否则 env LLM_MODEL(否则 caller 默认 'gpt-4o-mini',
+        // 但 MiniMax/非 OpenAI 上游需要显式传已知模型名)
+        model: args.model || process.env.LLM_MODEL || 'MiniMax-Text-01',
         gatePreset: preset,
         maxStages: args.maxRounds, // 复用 --rounds 表示最多跑几 stage
         startStageIdx: args.startStageIdx,

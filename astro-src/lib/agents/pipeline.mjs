@@ -505,6 +505,57 @@ async function runLoopStage(stage, input, config) {
   };
   const stageDir = STAGE_DELIVERABLE_DIRS[stage] || 'drafts';
   const stageKind = stageKindOverride[stage] || stageKindMap[stageDir] || 'draft_md';
+
+  // 把 deliverable payload 转成 markdown 文件(paper-compiler 期望 .md 形式)
+  function proposalToMarkdown(d, proposalType) {
+    const p = d.payload || {};
+    const title = p.title || p.draftTitle || (d.kind.replace(/_md$/, ''));
+    const tags = Array.isArray(p.evidence?.paperIds) ? p.evidence.paperIds : [];
+    const lines = [];
+    lines.push(`# ${title}`);
+    lines.push('');
+    lines.push(`> Stage: ${stage}  ·  Kind: ${d.kind}  ·  Type: ${proposalType}  ·  Round: ${d.round ?? ''}`);
+    lines.push(`> Gate decision: ${p.gateDecision ?? ''}  ·  Total score: ${d.totalScore ?? ''}`);
+    if (tags.length > 0) {
+      lines.push(`> References: ${tags.join(', ')}`);
+    }
+    lines.push('');
+    lines.push(`## Rationale`);
+    lines.push('');
+    lines.push(String(p.rationale || p.text || '(none)'));
+    if (p.risk) {
+      lines.push('');
+      lines.push(`## Risk`);
+      lines.push('');
+      lines.push(String(p.risk));
+    }
+    if (Array.isArray(p.evidence?.quotes) && p.evidence.quotes.length > 0) {
+      lines.push('');
+      lines.push(`## Quotes`);
+      for (const q of p.evidence.quotes) lines.push(`> ${q}`);
+    }
+    // 如果 payload 是 verdict(review stage),展开 concerns
+    if (d.kind === 'review_md' && p.verdict) {
+      const v = p.verdict;
+      lines.push('');
+      lines.push(`## Peer Review Verdict`);
+      lines.push('');
+      if (v.summary) lines.push(v.summary);
+      if (Array.isArray(v.concerns)) {
+        lines.push('');
+        lines.push(`### Concerns (${v.concerns.length})`);
+        for (const c of v.concerns) {
+          lines.push(`- **${c.severity || 'minor'}** [${c.category || 'general'}] ${c.message || c.text || ''}`);
+        }
+      }
+      if (v.scores) {
+        lines.push('');
+        lines.push(`### Scores`);
+        for (const [k, v2] of Object.entries(v.scores)) lines.push(`- ${k}: ${v2}`);
+      }
+    }
+    return lines.join('\n');
+  }
   // gate 返回的 decision ∈ {promoted, candidate, sketch, rejected};
   // pipeline 把 promoted/candidate/sketch 都算 acceptance(都被 modifier 或 archive 接收)。
   const acceptedDecisions = new Set(['promoted', 'candidate', 'sketch']);
@@ -534,6 +585,41 @@ async function runLoopStage(stage, input, config) {
         payload: a.payload,
       }))
     : directDeliverables;
+
+  // 写 archive/<sid>/<dir>/<prefix>_r<round>_<idx>.md 让 compile-paper 能读
+  // proposal.type → subdir(kind→dir 简单映射)
+  const kindToDir = {
+    draft_md: 'drafts',
+    draft_revised_md: 'drafts',
+    literature_review_md: 'reviews',
+    review_md: 'reviews',
+    experiment_plan_md: 'experiments',
+    research_question: 'drafts',
+    paper_md: 'paper',
+    paper_tex: 'paper',
+  };
+  if (Array.isArray(deliverables) && deliverables.length > 0) {
+    const { mkdir, writeFile } = await import('node:fs/promises').catch(() => ({}));
+    const { join } = await import('node:path').catch(() => ({}));
+    if (mkdir && writeFile && join && config.sessionId) {
+      const sid = config.sessionId;
+      const round = Date.now();
+      const proposalToType = new Map(proposals.map((p) => [p.id, p.type]));
+      for (let i = 0; i < deliverables.length; i++) {
+        const d = deliverables[i];
+        const subdir = kindToDir[d.kind] || 'drafts';
+        const prefixMap = { drafts: 'draft', reviews: 'review', experiments: 'exp', paper: 'paper' };
+        const prefix = prefixMap[subdir] || 'draft';
+        const dir = join('archive', sid, subdir);
+        const file = join(dir, `${prefix}_r${round}_${i}.md`);
+        await mkdir(dir, { recursive: true });
+        const proposal = d.proposalId ? proposals.find((x) => x.id === d.proposalId) : null;
+        const proposalType = proposalToType.get(d.proposalId) || 'create_draft';
+        const md = proposalToMarkdown(d, proposalType);
+        await writeFile(file, md, 'utf8').catch((e) => console.warn('[pipeline] writeDeliverable failed:', e?.message));
+      }
+    }
+  }
 
   return {
     deliverables,
@@ -924,26 +1010,78 @@ export async function runPipeline(config) {
   let currentIdx = startStageIdx;
   let stoppedReason = 'pending';
 
+  // 累积之前 stages 的 deliverables,供下游 stage(reviewer/reviser)读取 draft body / verdict
+  const accumulatedDeliverables = [];
+  const accumulatedDraft = { body: '', title: '', arxivIds: [] };
+  let accumulatedReviewVerdict = null;
+
   while (currentIdx < PIPELINE_STAGES.length && currentIdx < startStageIdx + maxStages) {
     const stage = PIPELINE_STAGES[currentIdx];
     if (plan[currentIdx].status === 'skipped') {
       currentIdx++;
       continue;
     }
+    // 从累积的 deliverables 里提取最近 draft body / review verdict,注入 stageInput
     const stageInput = {
       ...(config.projectInput || {}),
       user_goal: config.goal,
       project: config.project,
       candidates: config.candidates || config.projectInput?.candidates || [],
+      // 注入之前 stages 的成果
+      previousDeliverables: accumulatedDeliverables,
+      draftBody: accumulatedDraft.body || undefined,
+      draftTitle: accumulatedDraft.title || undefined,
+      draftArxivIds: accumulatedDraft.arxivIds.length > 0 ? accumulatedDraft.arxivIds : undefined,
+      previousReviewVerdict: accumulatedReviewVerdict || undefined,
     };
     const stageResult = await runPipelineStage(stage, stageInput, config);
     plan[currentIdx] = stageResult;
+
+    // 把该 stage 的 deliverables 累加;同时提取 draft / review verdict
+    if (Array.isArray(stageResult.deliverables)) {
+      for (const d of stageResult.deliverables) {
+        accumulatedDeliverables.push(d);
+        // draft 类
+        if (d.kind === 'draft_md' || d.kind === 'draft_revised_md') {
+          const text = d.payload?.text || d.payload?.body || '';
+          if (text) {
+            accumulatedDraft.body = text;
+            accumulatedDraft.title = d.payload?.draftTitle || d.payload?.title || accumulatedDraft.title;
+            if (Array.isArray(d.arxivIds) && d.arxivIds.length > 0) {
+              accumulatedDraft.arxivIds = d.arxivIds;
+            }
+          }
+        }
+        // review verdict
+        if (d.kind === 'review_md' && d.payload?.verdict) {
+          accumulatedReviewVerdict = d.payload.verdict;
+        }
+      }
+    }
 
     if (stageResult.status === 'error') {
       stoppedReason = 'error';
       break;
     }
     const adv = advancePipeline(plan, currentIdx, stageResult.gate);
+    // 把该 stage 的 round record 写到 archive/<sid>/rounds/round_<idx>.json
+    // 让 --compile-paper 能从 archive 读到 stage proposal/critique 数据
+    if (stageResult.roundRecord) {
+      try {
+        const fsPromises = await import('node:fs/promises').catch(() => null);
+        const nodePath = await import('node:path').catch(() => null);
+        if (fsPromises && nodePath) {
+          const { mkdir, writeFile } = fsPromises;
+          const { join } = nodePath;
+          const roundDir = join('archive', config.sessionId, 'rounds');
+          await mkdir(roundDir, { recursive: true });
+          const roundFile = join(roundDir, `round_${String(currentIdx).padStart(3, '0')}.json`);
+          await writeFile(roundFile, JSON.stringify(stageResult.roundRecord, null, 2), 'utf8');
+        }
+      } catch (e) {
+        console.warn('[pipeline] writeRoundRecord failed:', e?.message);
+      }
+    }
     if (adv.stoppedReason === 'gate_failed') {
       stoppedReason = 'gate_failed';
       break;
