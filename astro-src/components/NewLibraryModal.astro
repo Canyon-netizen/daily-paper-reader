@@ -118,10 +118,16 @@
               min="0"
               max="1"
               step="0.05"
-              value="0.8"
+              value="0.5"
             />
             <div class="lib-field-hint">
-              LLM 打分 &lt; 此值的论文不入库(0 = 不过滤,1 = 仅收 1.0 分)。默认 0.8 —— 只收贴库的,避免泛 AI 论文灌进来。
+              LLM 打分 &lt; 此值的论文不入库(0 = 不过滤,1 = 仅收 1.0 分)。默认 0.5 —— 大致只收「主要内容在这个方向」的论文。
+            </div>
+            <div class="lib-field-quick">
+              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.3">宽松(0.30)</button>
+              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.55">入门(0.55)</button>
+              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.75">专家(0.75)</button>
+              <button type="button" class="btn btn-soft btn-sm" data-threshold-quick="0.8">严格(0.80)</button>
             </div>
           </div>
         </div>
@@ -165,7 +171,18 @@
             <input type="hidden" data-modal-profile value="" />
             <div class="lib-field-hint">
               选一个画像,会按对应维度(教学 / 新颖 / 严谨 / 落地)重新打分,自动覆盖上方的阈值。
+              <button type="button" class="linklike" data-profile-help>不确定?看决策树 →</button>
               <a href="/docs/library/inclusion-standard/" target="_blank" rel="noopener">详细评分维度 →</a>
+            </div>
+            <div class="lib-profile-decision" data-profile-decision hidden>
+              <p class="muted">按你的目的选:</p>
+              <ul class="lib-profile-decision-list">
+                <li>🌱 <strong>打基础 / 读教材 / 看综述</strong> → 入门小白(0.55)</li>
+                <li>🔬 <strong>跟踪最新进展 / 找 idea / 攻坚难题</strong> → 深耕专家(0.75)</li>
+                <li>👀 <strong>审稿 / 找方法缺陷 / 比 baseline</strong> → 专业审稿人(0.65)</li>
+                <li>🏭 <strong>能落地 / 控制成本 / ship 生产</strong> → 工业实践者(0.60)</li>
+                <li>🤷 <strong>不确定 / 想都看看</strong> → 不选画像,阈值用默认 0.5</li>
+              </ul>
             </div>
           </div>
         </div>

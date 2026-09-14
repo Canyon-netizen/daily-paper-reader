@@ -262,8 +262,8 @@ async function openIngestPanel(libId: string): Promise<void> {
       </div>
       <div class="lib-ingest-settings">
         <label class="lib-ingest-setting">
-          阈值 ≥ <input type="number" min="0" max="1" step="0.05" value="${lib.definition?.relevanceThreshold ?? 0.5}" data-ingest-threshold />
-          <span class="muted">(LLM 打分低于此值的论文不入候选)</span>
+          阈值 ≥ <input type="number" min="0" max="1" step="0.05" value="${lib.definition?.relevanceThreshold ?? 0.5}" data-ingest-threshold title="LLM 打分低于此值的论文不入候选。0.5 = 默认(主要内容在这个方向);0.3 = 宽松(顺便提到也收);0.75 = 严格(只收贴库)" />
+          <span class="muted">(LLM 打分低于此值的论文不入候选;hover 看推荐值)</span>
         </label>
         <label class="lib-ingest-setting">
           时间窗 <input type="number" min="7" max="365" step="1" value="30" data-ingest-daysback />
@@ -426,9 +426,14 @@ async function openIngestPanel(libId: string): Promise<void> {
       if (candidates.length === 0) {
         mount.innerHTML = `
           <div class="lib-ingest-panel">
-            <h3>🛰️ Ingest 完成</h3>
-            <p class="muted">arXiv 在 ${daysBack} 天、当前关键词下没有命中 ≥ ${threshold.toFixed(2)} 的候选。</p>
-            <p class="muted">建议:①放宽阈值(降到 0.3)②拉长时间窗(到 90 天)③补充 inScope / 包括关键词</p>
+            <h3>🛰️ Ingest 完成 · 没找到合适的论文</h3>
+            <p class="muted">arXiv 在 ${daysBack} 天内没找到 ≥ ${threshold.toFixed(2)} 分的论文。</p>
+            <p class="muted"><strong>先试这个(成功率最高):</strong></p>
+            <ol style="margin: 0.5rem 0; padding-left: 1.2rem;">
+              <li>点「🔍 找相似」按钮,用你已纳入的论文标题搜,3-5 秒出候选</li>
+              <li>把阈值降到 <code>0.30</code>,多收一些进来再慢慢挑</li>
+              <li>补几个你熟悉的论文关键词(如 RLHF / agent / preference optimization)</li>
+            </ol>
             <button type="button" class="btn btn-soft btn-sm" data-ingest-retry>← 调参数重跑</button>
           </div>
         `;
@@ -1232,12 +1237,39 @@ function bindAnchorControl(modal: HTMLElement): AnchorControl {
 /** 在弹窗上装好四个 list 控件并 reset 到空态。返回 handlers 让 caller 在 reset/close 时复用。 */
 function setupModalControls(modal: HTMLElement): ModalControls {
   bindProfilePicker(modal);
+  bindModalQuickActions(modal);
   return {
     categories: bindListInput(modal, { listKey: 'categories', presetAttr: 'data-cat-preset' }),
     inclusion: bindListInput(modal, { listKey: 'inclusion' }),
     exclusion: bindListInput(modal, { listKey: 'exclusion' }),
     rubric: bindListInput(modal, { listKey: 'rubric' }),
   };
+}
+
+/** 弹窗快捷动作(2026-09-14 小白视角 P0-2/P0-3):
+ *  - 阈值快捷按钮「宽松 0.30 / 入门 0.55 / 专家 0.75 / 严格 0.80」
+ *  - 画像选择「不确定?看决策树」→ 展开决策表
+ *
+ *  设计:与 bindProfilePicker 解耦,各自管各自的 DOM 子集。 */
+function bindModalQuickActions(modal: HTMLElement): void {
+  const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
+  modal.querySelectorAll<HTMLButtonElement>('[data-threshold-quick]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const v = parseFloat(btn.dataset.thresholdQuick || '');
+      if (!Number.isFinite(v) || !thresholdInput) return;
+      thresholdInput.value = String(v);
+      // 视觉反馈:被点击的按钮高亮一下
+      modal.querySelectorAll<HTMLButtonElement>('[data-threshold-quick]').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+  const helpBtn = modal.querySelector<HTMLButtonElement>('[data-profile-help]');
+  const decision = modal.querySelector<HTMLElement>('[data-profile-decision]');
+  helpBtn?.addEventListener('click', () => {
+    if (!decision) return;
+    decision.hidden = !decision.hidden;
+    if (helpBtn) helpBtn.textContent = decision.hidden ? '不确定?看决策树 →' : '收起决策树 ↑';
+  });
 }
 
 function closeModal(modal: HTMLElement): void {
@@ -2048,8 +2080,9 @@ function renderUserLibraryDetail(): void {
                 <ol style="text-align: left; margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8;">
                   <li>切到 <strong>「⚙️ 文献库配置」</strong> 标签 → 点「▶ 启动 Ingest」,系统从 arXiv 拉最近 30 天的候选论文</li>
                   <li>或在论文详情页右上角点 <strong>+ 加进文献库</strong> 手动加论文</li>
-                  <li>填几个 <strong>锚点论文</strong>(你认可的核心论文),LLM 会参考它们打更准的分</li>
+                  <li>填几个 <strong>锚点论文</strong>(你认可的核心论文,见「⚙️ 配置」底部),LLM 会按它们打更准的分</li>
                 </ol>
+                <p class="muted" style="margin: 0.5rem 0;">💡 <strong>锚点论文 = 评分锚</strong>:填 2-3 篇后,Ingest 会找跟它们主题/方法相似的论文。</p>
                 <button type="button" class="btn btn-primary btn-sm" data-action="switch-tab" data-tab="govern" style="margin-top: 0.5rem;">⚙️ 打开配置 + 启动 Ingest</button>
               </div>`
             : `<div class="wb-bulk-bar" data-bulk-bar hidden>
