@@ -29,6 +29,7 @@ import { STORAGE_KEYS } from '../storage';
 import { appendLibraryActivity } from './activity-log';
 import type { LibraryActivityDetail } from './activity-log';
 import { recordFeedback } from '../library/feedback';
+import { suggestAudienceProfile } from '../library/audience-profiles';
 import type {
   DraftRef,
   LibraryAnchor,
@@ -178,7 +179,27 @@ function sanitizeDefinition(
     // 数值字段必须 clamp + 兜底:旧 v4 doc 没有这个 key → 0.5;
     // 用户塞 'abc' / NaN / -0.3 / 1.5 也回到 [0,1] 合法区间。
     relevanceThreshold: clamp01(d.relevanceThreshold, 0.5),
+    // 兜底 audienceProfile:用户没显式设置时,用 statement + keywords 推断一个。
+    // 用户随时可以在 settings UI 覆盖。in-memory 推断,不写回 Gist。
+    audienceProfile: sanitizeAudienceProfile(d.audienceProfile, {
+      statement: typeof d.statement === 'string' ? d.statement : fallback.statement,
+      keywords: sanitizeKeywords(rawKw.include ?? fallback.inclusionKeywords),
+    }),
   };
+}
+
+/** 接受显式值(必须在 4 个 ID 之一),否则基于 statement+keywords 推断。 */
+function sanitizeAudienceProfile(
+  raw: unknown,
+  ctx: { statement: string; keywords: string[] },
+): LibraryDefinition['audienceProfile'] {
+  if (
+    typeof raw === 'string' &&
+    (raw === 'novice' || raw === 'expert' || raw === 'reviewer' || raw === 'practitioner')
+  ) {
+    return raw;
+  }
+  return suggestAudienceProfile(ctx);
 }
 
 /** 把 v 钳到 [0,1],无效输入 fallback 到 defaultVal。 */
