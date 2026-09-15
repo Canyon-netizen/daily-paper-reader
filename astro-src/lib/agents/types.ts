@@ -92,17 +92,31 @@ export interface CritiqueScores {
   methodologist: number;       // 0-10
   engineer: number;
   skeptic: number;
+  // F.2.x: 4 个客观维度评估(也是 0-10)
+  citation_validity: number;   // F.2.1: paperIds 是否真存在 / 引用是否对得上
+  methodology: number;         // F.2.2: 实验设计 / 假设可证伪 / baseline / 指标
+  reproducibility: number;     // F.2.3: 代码 / 数据 / 资源 / 种子是否清晰
+  novelty: number;             // F.2.4: 相对已有工作的差异度
+  // 综合分:由 4 维度加权平均(让 UI 可以直接展示)
+  overall: number;
 }
 
 export interface Critique {
   proposal_id: string;
   scores: CritiqueScores;
-  total: number;               // 加权平均(初版:三 persona 等权)
+  total: number;               // 加权平均(初版:三 persona 等权 + 4 维度等权)
   critique: string;            // 1-2 段(综合三 persona 观点)
   elo: number;                 // Elo 评分,initial = ELO_INITIAL
   matches: number;
   wins: number;
   persona_attribution: Record<PersonaName, string>;  // 每 persona 最尖锐的一句
+  // F.2.x: 每个维度的简短说明 + 提示(可选,UI 展示用)
+  dimension_notes?: {
+    citation_validity?: string;
+    methodology?: string;
+    reproducibility?: string;
+    novelty?: string;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -258,13 +272,18 @@ export function makeEmptyProposal(round: number): Omit<Proposal, 'id'> & { id: s
 export function makeEmptyCritique(proposal_id: string): Critique {
   return {
     proposal_id,
-    scores: { methodologist: 0, engineer: 0, skeptic: 0 },
+    scores: {
+      methodologist: 0, engineer: 0, skeptic: 0,
+      citation_validity: 0, methodology: 0, reproducibility: 0, novelty: 0,
+      overall: 0,
+    },
     total: 0,
     critique: '',
     elo: 1200,
     matches: 0,
     wins: 0,
     persona_attribution: { methodologist: '', engineer: '', skeptic: '' },
+    dimension_notes: {},
   };
 }
 
