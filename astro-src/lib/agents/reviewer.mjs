@@ -72,6 +72,8 @@ export const REVIEW_RECOMMENDATIONS = Object.freeze(['accept', 'weak_accept', 'r
 // Prompt 模板
 // ---------------------------------------------------------------------------
 
+import { loadSkillContext } from "./skill-context-loader.mjs";
+
 const REVIEWER_SYSTEM_PROMPT = `你是一位资深科研论文审稿人,负责评估一篇研究论文草稿。
 
 # 任务
@@ -165,7 +167,7 @@ export async function reviewDraft(draft, opts = {}) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       raw = await opts.caller.callLLM({
-        system: REVIEWER_SYSTEM_PROMPT,
+        system: `${loadSkillContext("review")}\n\n${REVIEWER_SYSTEM_PROMPT}`,
         user: buildUserPrompt(draft),
         model,
         temperature: 0.3,

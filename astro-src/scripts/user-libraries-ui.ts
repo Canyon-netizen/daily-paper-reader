@@ -67,6 +67,182 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
+/** 把候选列表渲染到 ingest mount 里(供 runIngestFlow 和 runFindSimilar 共用)。
+ *  - checkbox 多选 + 顶部 全选/全不选/纳入选中
+ *  - 行内 ✓ 纳入 / ⏭ 跳过 / 📝 备注 / arXiv 链接
+ *  - 自动 wire 全部 handlers(操作 cache 通过 dataset.candidates 传)
+ *  - mount 是 ingest 面板的根元素 */
+function renderCandidateList(
+  mount: HTMLElement,
+  libId: string,
+  candidates: Array<{ cx: string; arxivId: string; title: string; authors: string[]; abstract: string; date: string; score: number; novelty?: number; reason: string; inLibrary: boolean }>,
+  threshold: number,
+  daysBack: number,
+): void {
+  mount.innerHTML = `
+    <div class="lib-ingest-panel">
+      <div class="lib-ingest-header">
+        <h3>🛰️ Ingest · 候选 ${candidates.length} 篇(阈值 ${threshold.toFixed(2)} · ${daysBack} 天)</h3>
+        <p class="muted">按相关度×(1+0.3×新颖性)倒序。新颖性越高越靠前。点「✓ 纳入」加进 paperIds;勾选多个后用顶部「✓ 纳入选中(N)」批量处理。</p>
+        <div class="lib-ingest-batch">
+          <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="check-all">☑ 全选</button>
+          <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="uncheck-all">☐ 全不选</button>
+          <button type="button" class="btn btn-primary btn-sm" data-ingest-batch="include-checked">✓ 纳入选中(<span data-ingest-checked-count>0</span>)</button>
+          <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.7">✓ 批量纳入 ≥ 0.70</button>
+          <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.5">✓ 批量纳入 ≥ 0.50</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-ingest-batch="hide">关闭面板</button>
+        </div>
+      </div>
+      <div class="lib-ingest-list">
+        ${candidates.map((c, idx) => `
+          <div class="lib-ingest-row" data-cx="${escapeHtml(c.cx)}">
+            <div class="lib-ingest-meta">
+              <input type="checkbox" class="lib-ingest-check" data-ingest-check data-cx="${escapeHtml(c.cx)}" aria-label="选中候选 ${idx + 1}" />
+              <span class="lib-ingest-score s-${c.score >= 0.7 ? 'h' : c.score >= 0.55 ? 'm' : 'l'}">${c.score.toFixed(2)}</span>
+              <span class="lib-ingest-id">${escapeHtml(c.arxivId)}</span>
+              <span class="lib-ingest-date">${escapeHtml(c.date || '—')}</span>
+            </div>
+            <div class="lib-ingest-title">${escapeHtml(c.title)}</div>
+            <div class="lib-ingest-authors">${escapeHtml(c.authors.slice(0, 5).join(', '))}${c.authors.length > 5 ? ` +${c.authors.length - 5}` : ''}</div>
+            ${c.reason ? `<div class="lib-ingest-reason">${escapeHtml(c.reason)}</div>` : ''}
+            <div class="lib-ingest-actions">
+              <button type="button" class="btn btn-primary btn-sm" data-ingest-action="include" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">✓ 纳入</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-ingest-action="skip" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">⏭ 跳过</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-ingest-action="note" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}" title="为这次打分写一条备注(写入反馈日志,用于校准画像)">📝 备注</button>
+              <a class="btn btn-ghost btn-sm" href="https://arxiv.org/abs/${encodeURIComponent(c.arxivId.replace(/v\d+$/, ''))}" target="_blank" rel="noopener">🔗 arXiv</a>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+  // 缓存 candidates 到 dataset
+  mount.querySelector<HTMLElement>('.lib-ingest-panel')!.dataset.candidates = JSON.stringify(
+    candidates.map((c) => ({ cx: c.cx, arxivId: c.arxivId, score: c.score, reason: c.reason })),
+  );
+
+  // 同步 checkbox 计数
+  const updateCheckedCount = () => {
+    const n = mount.querySelectorAll<HTMLInputElement>('[data-ingest-check]:checked').length;
+    const el = mount.querySelector<HTMLElement>('[data-ingest-checked-count]');
+    if (el) el.textContent = String(n);
+  };
+  mount.querySelectorAll<HTMLInputElement>('[data-ingest-check]').forEach((cb) => {
+    cb.addEventListener('change', updateCheckedCount);
+  });
+
+  // 行内动作
+  mount.querySelectorAll<HTMLButtonElement>('[data-ingest-action]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const action = btn.dataset.ingestAction;
+      const cx = btn.dataset.cx || '';
+      const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
+      const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
+      const cand = cached.find((x) => x.cx === cx);
+      if (!cand) return;
+      if (action === 'include') {
+        // 动态 import 避免冷启动膨胀
+        const { commitCandidateAsIncluded } = await import('./library-ingest');
+        commitCandidateAsIncluded(libId, {
+          cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
+          title: '', authors: [], abstract: '', date: '', inLibrary: false,
+        });
+        showToast(`已纳入 ${cand.arxivId}`, 'ok');
+        btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
+      } else if (action === 'skip') {
+        btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
+      } else if (action === 'note') {
+        const note = window.prompt(
+          `为 ${cand.arxivId}(LLM 打分 ${cand.score.toFixed(2)})写一条备注:\n` +
+          `会写入反馈日志,用于校准画像打分偏差。最多 500 字。`,
+          '',
+        );
+        if (note === null) return;
+        const trimmed = note.trim().slice(0, 500);
+        if (!trimmed) {
+          showToast('备注为空,未写入', 'info');
+          return;
+        }
+        const currentLib = getUserLibrary(libId);
+        recordFeedback({
+          kind: 'feedback_note',
+          libraryId: libId,
+          arxivId: cand.arxivId,
+          value: cand.score,
+          text: trimmed,
+          audienceProfile: currentLib?.definition?.audienceProfile,
+        });
+        showToast(`✓ 备注已记录(${trimmed.length} 字)`, 'ok');
+      }
+    });
+  });
+
+  // 批量动作
+  mount.querySelectorAll<HTMLButtonElement>('[data-ingest-batch]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const action = btn.dataset.ingestBatch;
+      const { commitCandidateAsIncluded } = await import('./library-ingest');
+      if (action === 'hide') {
+        mount.innerHTML = '';
+        return;
+      }
+      if (action === 'check-all') {
+        mount.querySelectorAll<HTMLInputElement>('[data-ingest-check]').forEach((cb) => { cb.checked = true; });
+        updateCheckedCount();
+        return;
+      }
+      if (action === 'uncheck-all') {
+        mount.querySelectorAll<HTMLInputElement>('[data-ingest-check]').forEach((cb) => { cb.checked = false; });
+        updateCheckedCount();
+        return;
+      }
+      if (action === 'include-checked') {
+        const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
+        const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
+        const checkedCxs = new Set(
+          Array.from(mount.querySelectorAll<HTMLInputElement>('[data-ingest-check]:checked'))
+            .map((cb) => cb.dataset.cx || '').filter(Boolean),
+        );
+        let n = 0;
+        for (const cand of cached) {
+          if (!checkedCxs.has(cand.cx)) continue;
+          commitCandidateAsIncluded(libId, {
+            cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
+            title: '', authors: [], abstract: '', date: '', inLibrary: false,
+          });
+          n++;
+          const row = mount.querySelector<HTMLElement>(`.lib-ingest-row[data-cx="${cand.cx}"]`);
+          row?.remove();
+        }
+        showToast(`批量纳入选中 ${n} 篇`, 'ok');
+        updateCheckedCount();
+        renderUserLibraryDetail();
+        return;
+      }
+      if (action === 'include-top') {
+        const thr = parseFloat(btn.dataset.threshold || '0.7');
+        const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
+        const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
+        let n = 0;
+        for (const cand of cached) {
+          if (cand.score < thr) break;
+          commitCandidateAsIncluded(libId, {
+            cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
+            title: '', authors: [], abstract: '', date: '', inLibrary: false,
+          });
+          n++;
+        }
+        showToast(`批量纳入 ${n} 篇`, 'ok');
+        renderUserLibraryDetail();
+        openIngestPanel(libId);
+      }
+    });
+  });
+}
+
 /** Ingest 面板入口。点击 Govern tab「启动 Ingest」按钮触发。
  *  - 动态 import library-ingest 模块(避免冷启动 bundle 膨胀)
  *  - 调 runIngest(),把候选列表渲染到 #lib-ingest-mount
@@ -86,8 +262,8 @@ async function openIngestPanel(libId: string): Promise<void> {
       </div>
       <div class="lib-ingest-settings">
         <label class="lib-ingest-setting">
-          阈值 ≥ <input type="number" min="0" max="1" step="0.05" value="${lib.definition?.relevanceThreshold ?? 0.5}" data-ingest-threshold />
-          <span class="muted">(LLM 打分低于此值的论文不入候选)</span>
+          阈值 ≥ <input type="number" min="0" max="1" step="0.05" value="${lib.definition?.relevanceThreshold ?? 0.5}" data-ingest-threshold title="LLM 打分低于此值的论文不入候选。0.5 = 默认(主要内容在这个方向);0.3 = 宽松(顺便提到也收);0.75 = 严格(只收贴库)" />
+          <span class="muted">(LLM 打分低于此值的论文不入候选;hover 看推荐值)</span>
         </label>
         <label class="lib-ingest-setting">
           时间窗 <input type="number" min="7" max="365" step="1" value="30" data-ingest-daysback />
@@ -98,6 +274,7 @@ async function openIngestPanel(libId: string): Promise<void> {
           <span class="muted">篇</span>
         </label>
         <button type="button" class="btn btn-primary btn-sm" data-ingest-run>▶ 启动 Ingest</button>
+        <button type="button" class="btn btn-soft btn-sm" data-ingest-find-similar title="用本库已有论文的标题去 arXiv 扩搜,不调 LLM,快速补充候选">🔍 找相似</button>
       </div>
       <div class="lib-ingest-progress" data-ingest-progress hidden>
         <div class="lib-ingest-progress-bar"><div class="lib-ingest-progress-fill" data-ingest-progress-fill style="width:0%"></div></div>
@@ -114,6 +291,120 @@ async function openIngestPanel(libId: string): Promise<void> {
   // 启动按钮:从 UI 读参数 → 跑
   const runBtn = mount.querySelector<HTMLButtonElement>('[data-ingest-run]');
   runBtn?.addEventListener('click', () => runIngestFlow());
+
+  // 「🔍 找相似」按钮 — 拿本库已有论文的标题去 arXiv 扩搜,不调 LLM,3-5s 出结果
+  const findSimilarBtn = mount.querySelector<HTMLButtonElement>('[data-ingest-find-similar]');
+  findSimilarBtn?.addEventListener('click', () => runFindSimilar());
+  async function runFindSimilar(): Promise<void> {
+    if (findSimilarBtn) findSimilarBtn.disabled = true;
+    if (progressEl) progressEl.hidden = false;
+    setStatus('找相似:从本库论文标题拼查询…');
+    setProgress(10);
+    try {
+      // 取本库论文
+      const currentLib = getUserLibrary(libId);
+      if (!currentLib) throw new Error('library 不存在');
+      const cxs = new Set(currentLib.paperIds);
+      const myPapers = allPapers.filter((p) => cxs.has(p.canonicalArxivId || p.id));
+      if (myPapers.length === 0) {
+        showToast('库内还没有论文,先用「▶ 启动 Ingest」或「➕ 加进此库」', 'info');
+        return;
+      }
+      // 取 5 篇最有代表性的(按 score,无 score 则按 date)
+      const withScore = myPapers
+        .map((p) => ({ p, s: (p as any).relevanceScore ?? (p as any).score ?? 0 }))
+        .sort((a, b) => b.s - a.s)
+        .slice(0, 5);
+      // 抽 3-5 个核心短语(title 的名词短语提取太重,这里取 title 前 4 个英文单词 OR 第一个中文字段)
+      const tokens: string[] = [];
+      for (const { p } of withScore) {
+        const t = (p.title || p.title_zh || '').trim();
+        if (!t) continue;
+        // 简单:英文字符 ≥ 50% 就用前 4 个单词;否则取前 8 个汉字
+        const en = t.replace(/[^A-Za-z\s]/g, '').trim();
+        if (en.length / Math.max(1, t.length) > 0.5) {
+          tokens.push(...en.split(/\s+/).slice(0, 4).filter((w) => w.length > 2));
+        } else {
+          tokens.push(t.slice(0, 8));
+        }
+      }
+      const uniqTokens = Array.from(new Set(tokens)).slice(0, 6);
+      if (uniqTokens.length === 0) throw new Error('本库论文无有效标题可抽词');
+
+      setStatus(`找相似:用 ${uniqTokens.length} 个本库关键词搜 arXiv…`);
+      setProgress(30);
+      // 直接调 arXiv API,跟 fetchArxivCandidates 同结构
+      const query = uniqTokens.map((k) => `ti:"${k.replace(/"/g, '')}" OR abs:"${k.replace(/"/g, '')}"`).join(' OR ');
+      const now = new Date();
+      const past = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000); // 90 天窗,找相似更广
+      const fmt = (d: Date) => d.toISOString().replace(/[-:T]/g, '').slice(0, 13);
+      const dateFilter = `submittedDate:[${fmt(past)} TO ${fmt(now)}]`;
+      const url = `https://export.arxiv.org/api/query?search_query=${encodeURIComponent(`(${query}) AND ${dateFilter}`)}&max_results=40&sortBy=submittedDate&sortOrder=descending`;
+      const proxyUrl = (typeof localStorage !== 'undefined' && localStorage.getItem('dpr_cors_proxy_v1')) || '';
+      const fetchUrl = proxyUrl ? `${proxyUrl.replace(/\/+$/, '')}/${url}` : url;
+      const resp = await fetch(fetchUrl);
+      if (!resp.ok) throw new Error(`arXiv API HTTP ${resp.status}`);
+      const xml = await resp.text();
+      // 简单 XML 解析(复用 library-ingest 的 parseArxivList 思路)
+      const entries = xml.split(/<entry>/).slice(1).map((raw) => {
+        const block = raw.split(/<\/entry>/)[0] || raw;
+        const idMatch = block.match(/<id>([^<]+)<\/id>/);
+        const titleMatch = block.match(/<title>([\s\S]*?)<\/title>/);
+        const summaryMatch = block.match(/<summary>([\s\S]*?)<\/summary>/);
+        const publishedMatch = block.match(/<published>([^<]+)<\/published>/);
+        const authorBlocks = block.match(/<author>\s*<name>([^<]+)<\/name>\s*<\/author>/g) || [];
+        const arxivId = idMatch ? (idMatch[1].split('/').pop() || '') : '';
+        if (!arxivId || !titleMatch) return null;
+        const cx = arxivId.replace(/v\d+$/, '');
+        return {
+          cx,
+          arxivId,
+          title: titleMatch[1].trim().replace(/\s+/g, ' '),
+          authors: authorBlocks.map((b) => (b.match(/<name>([^<]+)<\/name>/) || [])[1] || '').filter(Boolean),
+          abstract: summaryMatch ? summaryMatch[1].trim().replace(/\s+/g, ' ') : '',
+          date: publishedMatch ? publishedMatch[1].slice(0, 10) : '',
+        };
+      }).filter((e): e is NonNullable<typeof e> => e !== null);
+
+      // 去重 + 去掉已在库内的
+      const seen = new Set<string>();
+      const inLib = new Set(currentLib.paperIds);
+      const fresh = entries.filter((e) => {
+        if (seen.has(e.cx)) return false;
+        seen.add(e.cx);
+        return !inLib.has(e.cx);
+      });
+      setProgress(100);
+      if (fresh.length === 0) {
+        mount.innerHTML = `
+          <div class="lib-ingest-panel">
+            <h3>🔍 找相似 · 0 篇新候选</h3>
+            <p class="muted">用本库 ${withScore.length} 篇代表性论文的标题在 arXiv 最近 90 天里没找到新论文。</p>
+            <p class="muted">建议:①调整这些论文的 inScope②补几个包括关键词③用「▶ 启动 Ingest」按完整关键词搜。</p>
+            <button type="button" class="btn btn-soft btn-sm" data-ingest-retry>← 调优重试</button>
+          </div>
+        `;
+        mount.querySelector<HTMLButtonElement>('[data-ingest-retry]')?.addEventListener('click', () => openIngestPanel(libId));
+        return;
+      }
+      // 直接复用 candidate 渲染(无 LLM score 时默认 0.5 占位 + 0 标记,让用户手动勾)
+      const candidates = fresh.map((e) => ({
+        ...e,
+        score: 0.5,
+        reason: '🔍 找相似:基于本库论文标题匹配(未走 LLM 打分)',
+        inLibrary: false,
+      }));
+      renderCandidateList(mount, libId, candidates, threshold, 90);
+      const { persistCandidatesAsCandidate } = await import('./library-ingest');
+      persistCandidatesAsCandidate(libId, candidates);
+      showToast(`找相似:拉回 ${candidates.length} 篇候选`, 'ok');
+    } catch (e) {
+      setStatus(`找相似失败:${(e as Error).message || String(e)}`);
+      showToast(`找相似失败:${(e as Error).message}`, 'error');
+    } finally {
+      if (findSimilarBtn) findSimilarBtn.disabled = false;
+    }
+  }
   async function runIngestFlow(): Promise<void> {
     const thrEl = mount.querySelector<HTMLInputElement>('[data-ingest-threshold]');
     const daysEl = mount.querySelector<HTMLInputElement>('[data-ingest-daysback]');
@@ -125,19 +416,32 @@ async function openIngestPanel(libId: string): Promise<void> {
     if (progressEl) progressEl.hidden = false;
     setStatus('加载 ingest 模块…');
     setProgress(5);
-    const { runIngest, persistCandidatesAsCandidate, commitCandidateAsIncluded } = await import('./library-ingest');
+    const { runIngest, persistCandidatesAsCandidate } = await import('./library-ingest');
 
     setStatus(`拉 arXiv 候选(${daysBack}天 / 上限 ${maxResults} 篇)…`);
     setProgress(15);
     try {
-      const candidates = await runIngest(libId, { daysBack, maxResults, threshold });
+      const candidates = await runIngest(libId, {
+        daysBack,
+        maxResults,
+        threshold,
+        onProgress: (p) => {
+          setProgress(p.pct);
+          setStatus(p.message);
+        },
+      });
       setProgress(100);
       if (candidates.length === 0) {
         mount.innerHTML = `
           <div class="lib-ingest-panel">
-            <h3>🛰️ Ingest 完成</h3>
-            <p class="muted">arXiv 在 ${daysBack} 天、当前关键词下没有命中 ≥ ${threshold.toFixed(2)} 的候选。</p>
-            <p class="muted">建议:①放宽阈值(降到 0.3)②拉长时间窗(到 90 天)③补充 inScope / 包括关键词</p>
+            <h3>🛰️ Ingest 完成 · 没找到合适的论文</h3>
+            <p class="muted">arXiv 在 ${daysBack} 天内没找到 ≥ ${threshold.toFixed(2)} 分的论文。</p>
+            <p class="muted"><strong>先试这个(成功率最高):</strong></p>
+            <ol style="margin: 0.5rem 0; padding-left: 1.2rem;">
+              <li>点「🔍 找相似」按钮,用你已纳入的论文标题搜,3-5 秒出候选</li>
+              <li>把阈值降到 <code>0.30</code>,多收一些进来再慢慢挑</li>
+              <li>补几个你熟悉的论文关键词(如 RLHF / agent / preference optimization)</li>
+            </ol>
             <button type="button" class="btn btn-soft btn-sm" data-ingest-retry>← 调参数重跑</button>
           </div>
         `;
@@ -149,123 +453,9 @@ async function openIngestPanel(libId: string): Promise<void> {
       persistCandidatesAsCandidate(libId, candidates);
       showToast(`拉回 ${candidates.length} 篇候选(已写入 candidate 状态)`, 'ok');
 
-      // 渲染候选列表
-      mount.innerHTML = `
-      <div class="lib-ingest-panel">
-        <div class="lib-ingest-header">
-          <h3>🛰️ Ingest · 候选 ${candidates.length} 篇(阈值 ${threshold.toFixed(2)} · ${daysBack} 天)</h3>
-          <p class="muted">按相关度倒序。每条点「✓ 纳入」加进 paperIds / 「⏭ 跳过」忽略。</p>
-          <div class="lib-ingest-batch">
-            <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.7">✓ 批量纳入 ≥ 0.70</button>
-            <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="include-top" data-threshold="0.5">✓ 批量纳入 ≥ 0.50</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-ingest-batch="hide">关闭面板</button>
-          </div>
-        </div>
-        <div class="lib-ingest-list">
-          ${candidates.map((c, idx) => `
-            <div class="lib-ingest-row" data-cx="${escapeHtml(c.cx)}">
-              <div class="lib-ingest-meta">
-                <span class="lib-ingest-score s-${c.score >= 0.7 ? 'h' : c.score >= 0.55 ? 'm' : 'l'}">${c.score.toFixed(2)}</span>
-                <span class="lib-ingest-id">${escapeHtml(c.arxivId)}</span>
-                <span class="lib-ingest-date">${escapeHtml(c.date || '—')}</span>
-              </div>
-              <div class="lib-ingest-title">${escapeHtml(c.title)}</div>
-              <div class="lib-ingest-authors">${escapeHtml(c.authors.slice(0, 5).join(', '))}${c.authors.length > 5 ? ` +${c.authors.length - 5}` : ''}</div>
-              ${c.reason ? `<div class="lib-ingest-reason">${escapeHtml(c.reason)}</div>` : ''}
-              <div class="lib-ingest-actions">
-                <button type="button" class="btn btn-primary btn-sm" data-ingest-action="include" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">✓ 纳入</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-ingest-action="skip" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}">⏭ 跳过</button>
-                <button type="button" class="btn btn-ghost btn-sm" data-ingest-action="note" data-cx="${escapeHtml(c.cx)}" data-idx="${idx}" title="为这次打分写一条备注(写入反馈日志,用于校准画像)">📝 备注</button>
-                <a class="btn btn-ghost btn-sm" href="https://arxiv.org/abs/${encodeURIComponent(c.arxivId.replace(/v\d+$/, ''))}" target="_blank" rel="noopener">🔗 arXiv</a>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `;
-      // 把 candidates 缓存到 dataset 上,供后续 button handler 读
-      mount.querySelector<HTMLElement>('.lib-ingest-panel')!.dataset.candidates = JSON.stringify(
-        candidates.map((c) => ({ cx: c.cx, arxivId: c.arxivId, score: c.score, reason: c.reason })),
-      );
-
-      // 行内动作
-      mount.querySelectorAll<HTMLButtonElement>('[data-ingest-action]').forEach((btn) => {
-        btn.addEventListener('click', async (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const action = btn.dataset.ingestAction;
-          const cx = btn.dataset.cx || '';
-          const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
-          const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
-          const cand = cached.find((x) => x.cx === cx);
-          if (!cand) return;
-          if (action === 'include') {
-            commitCandidateAsIncluded(libId, {
-              cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
-              title: '', authors: [], abstract: '', date: '', inLibrary: false,
-            });
-            showToast(`已纳入 ${cand.arxivId}`, 'ok');
-            btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
-          } else if (action === 'skip') {
-            btn.closest<HTMLElement>('.lib-ingest-row')?.remove();
-          } else if (action === 'note') {
-            // 📝 备注 — 写一条 feedback_note,带 LLM 打分快照 + 当前画像。
-            // 用于校准画像的打分偏差:用户 override 时留下"为什么"。
-            const note = window.prompt(
-              `为 ${cand.arxivId}(LLM 打分 ${cand.score.toFixed(2)})写一条备注:\n` +
-              `会写入反馈日志,用于校准画像打分偏差。最多 500 字。`,
-              '',
-            );
-            if (note === null) return; // 取消
-            const trimmed = note.trim().slice(0, 500);
-            if (!trimmed) {
-              showToast('备注为空,未写入', 'info');
-              return;
-            }
-            // 取当前 lib 的画像快照(feedback 的 audienceProfile 是 snapshot)
-            const currentLib = getUserLibrary(libId);
-            recordFeedback({
-              kind: 'feedback_note',
-              libraryId: libId,
-              arxivId: cand.arxivId,
-              value: cand.score,
-              text: trimmed,
-              audienceProfile: currentLib?.definition?.audienceProfile,
-            });
-            showToast(`✓ 备注已记录(${trimmed.length} 字)`, 'ok');
-          }
-        });
-      });
-
-      // 批量动作
-      mount.querySelectorAll<HTMLButtonElement>('[data-ingest-batch]').forEach((btn) => {
-        btn.addEventListener('click', (e) => {
-          e.preventDefault();
-          const action = btn.dataset.ingestBatch;
-          if (action === 'hide') {
-            mount.innerHTML = '';
-            return;
-          }
-          if (action === 'include-top') {
-            const thr = parseFloat(btn.dataset.threshold || '0.7');
-            const panel = mount.querySelector<HTMLElement>('.lib-ingest-panel');
-            const cached = JSON.parse(panel?.dataset.candidates || '[]') as Array<{ cx: string; arxivId: string; score: number; reason: string }>;
-            let n = 0;
-            for (const cand of cached) {
-              if (cand.score < thr) break; // 倒序的,break 即可
-              commitCandidateAsIncluded(libId, {
-                cx: cand.cx, arxivId: cand.arxivId, score: cand.score, reason: cand.reason,
-                title: '', authors: [], abstract: '', date: '', inLibrary: false,
-              });
-              n++;
-            }
-            showToast(`批量纳入 ${n} 篇`, 'ok');
-            // 重渲(简单:重跑整个 ingest 面板)
-            renderUserLibraryDetail();
-            openIngestPanel(libId);
-          }
-        });
-      });
+      // 渲染候选列表(checkbox 多选已支持)
+      renderCandidateList(mount, libId, candidates, threshold, daysBack);
+      showToast(`排序已更新:相关度×(1+0.3×新颖性),新颖论文会靠前`, 'info');
     } catch (e) {
       setStatus(`失败:${(e as Error).message || String(e)}`);
       showToast(`Ingest 失败:${(e as Error).message}`, 'error');
@@ -561,20 +751,21 @@ function renderDigestMarkdown(md: string): string {
 /** 渲染 digest mount:当前 digest + 历史 list。 */
 function renderDigestMount(
   mount: HTMLElement,
-  current: { markdown: string; paperCount: number; id: string; generatedAt: number; model: string } | null,
+  current: { markdown: string; paperCount: number; id: string; generatedAt: number; model: string; depth?: 'daily' | 'academic' } | null,
   history: Array<{ id: string; paperCount: number; generatedAt: number }>,
 ): void {
   const cur = current
     ? `
-      <article class="digest-article">
+      <article class="digest-article ${current.depth === 'academic' ? 'digest-article-academic' : 'digest-article-daily'}">
         <header class="digest-article-head">
           <span class="digest-date">${escapeHtml(current.id)}</span>
+          <span class="digest-depth-badge ${current.depth === 'academic' ? 'badge-academic' : 'badge-daily'}">${current.depth === 'academic' ? '📑 学术综述(IMRaD)' : '📰 日报'}</span>
           <span class="digest-stats">${current.paperCount} 篇 · 模型 ${escapeHtml(current.model)} · ${new Date(current.generatedAt).toLocaleString('zh-CN')}</span>
         </header>
         <div class="digest-body">${renderDigestMarkdown(current.markdown)}</div>
       </article>
     `
-    : `<p class="muted">还没有 digest。点上方「✨ 生成今日简报」。</p>`;
+    : `<p class="muted">还没有 digest。点上方按钮生成。</p>`;
   const hist = history.length > 1
     ? `
       <details class="digest-history">
@@ -1056,12 +1247,134 @@ function bindAnchorControl(modal: HTMLElement): AnchorControl {
 /** 在弹窗上装好四个 list 控件并 reset 到空态。返回 handlers 让 caller 在 reset/close 时复用。 */
 function setupModalControls(modal: HTMLElement): ModalControls {
   bindProfilePicker(modal);
+  bindModalQuickActions(modal);
   return {
     categories: bindListInput(modal, { listKey: 'categories', presetAttr: 'data-cat-preset' }),
     inclusion: bindListInput(modal, { listKey: 'inclusion' }),
     exclusion: bindListInput(modal, { listKey: 'exclusion' }),
     rubric: bindListInput(modal, { listKey: 'rubric' }),
   };
+}
+
+/** 弹窗快捷动作(2026-09-14 小白视角 P0-2/P0-3):
+ *  - 阈值快捷按钮「宽松 0.30 / 入门 0.55 / 专家 0.75 / 严格 0.80」
+ *  - 画像选择「不确定?看决策树」→ 展开决策表
+ *
+ *  设计:与 bindProfilePicker 解耦,各自管各自的 DOM 子集。 */
+function bindModalQuickActions(modal: HTMLElement): void {
+  const thresholdInput = modal.querySelector<HTMLInputElement>('[data-modal-threshold]');
+  modal.querySelectorAll<HTMLButtonElement>('[data-threshold-quick]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const v = parseFloat(btn.dataset.thresholdQuick || '');
+      if (!Number.isFinite(v) || !thresholdInput) return;
+      thresholdInput.value = String(v);
+      // 视觉反馈:被点击的按钮高亮一下
+      modal.querySelectorAll<HTMLButtonElement>('[data-threshold-quick]').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+  const helpBtn = modal.querySelector<HTMLButtonElement>('[data-profile-help]');
+  const decision = modal.querySelector<HTMLElement>('[data-profile-decision]');
+  helpBtn?.addEventListener('click', () => {
+    if (!decision) return;
+    decision.hidden = !decision.hidden;
+    if (helpBtn) helpBtn.textContent = decision.hidden ? '不确定?看决策树 →' : '收起决策树 ↑';
+  });
+
+  // 2026-09-14 一句话生成 panel(用户原话「建库操作要足够简单」)
+  // 单次 LLM 调用产出 statement + 关键词 + 排除词 + 分类,比 3 步访谈摩擦更小
+  const singleshotBtn = modal.querySelector<HTMLButtonElement>('[data-modal-singleshot]');
+  const singleshotPanel = modal.querySelector<HTMLElement>('[data-singleshot-panel]');
+  const singleshotInput = modal.querySelector<HTMLTextAreaElement>('[data-singleshot-input]');
+  const singleshotRun = modal.querySelector<HTMLButtonElement>('[data-singleshot-run]');
+  const singleshotCancel = modal.querySelector<HTMLButtonElement>('[data-singleshot-cancel]');
+  const singleshotPreview = modal.querySelector<HTMLElement>('[data-singleshot-preview]');
+  const interviewPanel = modal.querySelector<HTMLElement>('[data-interview-panel]');
+  // 互斥:点 singleshot 时收起 3 步访谈
+  singleshotBtn?.addEventListener('click', () => {
+    if (!singleshotPanel) return;
+    singleshotPanel.hidden = false;
+    if (interviewPanel) interviewPanel.hidden = true;
+    setTimeout(() => singleshotInput?.focus(), 30);
+  });
+  singleshotCancel?.addEventListener('click', () => {
+    if (singleshotPanel) singleshotPanel.hidden = true;
+    if (singleshotPreview) { singleshotPreview.hidden = true; singleshotPreview.innerHTML = ''; }
+    if (singleshotInput) singleshotInput.value = '';
+  });
+  singleshotRun?.addEventListener('click', async () => {
+    const freeText = singleshotInput?.value.trim() || '';
+    const libName = modal.querySelector<HTMLInputElement>('[data-modal-name]')?.value.trim() || '';
+    if (!freeText) {
+      showToast('先写一句描述,再点生成', 'info');
+      return;
+    }
+    if (singleshotRun) singleshotRun.disabled = true;
+    if (singleshotPreview) {
+      singleshotPreview.hidden = false;
+      singleshotPreview.innerHTML = '<div class="lib-singleshot-loading"><span class="lib-spinner"></span> 1 次 LLM 调用生成中…</div>';
+    }
+    try {
+      const { runInterviewSingleShot } = await import('./library-statement-interview');
+      const result = await runInterviewSingleShot(freeText, libName);
+      // 渲染预览 + 应用按钮
+      const incTags = result.inclusionKeywords.map((k: string) => `<span class="lib-tag include">${escapeHtml(k)}</span>`).join('');
+      const excTags = result.exclusionKeywords.map((k: string) => `<span class="lib-tag exclude">${escapeHtml(k)}</span>`).join('');
+      const catTags = result.categories.map((c: string) => `<span class="lib-tag">${escapeHtml(c)}</span>`).join('');
+      if (singleshotPreview) {
+        singleshotPreview.innerHTML = `
+          <div class="lib-singleshot-result">
+            ${result.rationale ? `<p class="muted">💡 ${escapeHtml(result.rationale)}</p>` : ''}
+            <h5>statement(80-150 字)</h5>
+            <blockquote class="lib-interview-suggestion">${escapeHtml(result.statement || '(空)')}</blockquote>
+            <h5>包括关键词</h5>
+            <div class="lib-tag-list">${incTags || '<em class="muted">(无)</em>'}</div>
+            <h5>排除关键词</h5>
+            <div class="lib-tag-list">${excTags || '<em class="muted">(无)</em>'}</div>
+            <h5>arXiv 分类</h5>
+            <div class="lib-tag-list">${catTags || '<em class="muted">(无)</em>'}</div>
+            <div class="lib-singleshot-apply">
+              <button type="button" class="btn btn-primary btn-sm" data-singleshot-apply>应用到表单</button>
+            </div>
+          </div>
+        `;
+        const applyBtn = singleshotPreview.querySelector<HTMLButtonElement>('[data-singleshot-apply]');
+        applyBtn?.addEventListener('click', () => {
+          const stmtTA = modal.querySelector<HTMLTextAreaElement>('[data-modal-statement]');
+          if (stmtTA && result.statement) stmtTA.value = result.statement;
+          const controls = controlsByModal.get(modal);
+          if (controls && result.inclusionKeywords.length > 0) {
+            controls.inclusion.loadFrom(result.inclusionKeywords);
+          }
+          if (controls && result.exclusionKeywords.length > 0) {
+            controls.exclusion.loadFrom(result.exclusionKeywords);
+          }
+          if (controls && result.categories.length > 0) {
+            controls.categories.loadFrom(result.categories);
+          }
+          showToast('已应用 statement / 关键词 / 分类', 'ok');
+          if (singleshotPanel) singleshotPanel.hidden = true;
+          if (singleshotPreview) { singleshotPreview.hidden = true; singleshotPreview.innerHTML = ''; }
+          if (singleshotInput) singleshotInput.value = '';
+        });
+      }
+    } catch (err) {
+      if (singleshotPreview) {
+        singleshotPreview.innerHTML = `<p class="muted error">⚠️ 生成失败:${escapeHtml((err as Error).message)}<br>可改写描述重试,或关闭直接手填。</p>`;
+      }
+    } finally {
+      if (singleshotRun) singleshotRun.disabled = false;
+    }
+  });
+
+  // 2026-09-14 fallback:旧浏览器(Chrome <119 / FF <88 / Safari <16)不支持
+  // :user-invalid,所以用 JS 在用户首次失焦时给 required input 加 .is-touched
+  // class,触发 CSS 红框。新浏览器优先用 :user-invalid(无需 JS)。
+  if (typeof modal.matches !== 'function' || !CSS.supports('selector(:user-invalid)')) {
+    modal.querySelectorAll<HTMLInputElement>('.lib-input[required], .lib-textarea[required]').forEach((el) => {
+      el.addEventListener('blur', () => el.classList.add('is-touched'), { once: true });
+    });
+  }
 }
 
 function closeModal(modal: HTMLElement): void {
@@ -1737,6 +2050,18 @@ function renderUserLibraryDetail(): void {
   const root = document.querySelector<HTMLElement>('[data-user-library-detail-id]');
   if (!root) return;
   const libId = root.dataset.userLibraryDetailId || '';
+  // 记录「最近打开」时间戳,首页 recent libraries 用
+  try {
+    const KEY = 'dpr_last_opened_libs_v1';
+    const raw = localStorage.getItem(KEY);
+    const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+    map[libId] = Date.now();
+    // 只保留最近 20 条,避免无限增长
+    const entries = Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 20);
+    const pruned: Record<string, number> = {};
+    for (const [k, v] of entries) pruned[k] = v;
+    localStorage.setItem(KEY, JSON.stringify(pruned));
+  } catch { /* ignore */ }
   const lib = listUserLibraries().find((l) => l.id === libId);
   if (!lib) {
     // 不存在:重定向回列表
@@ -1758,9 +2083,15 @@ function renderUserLibraryDetail(): void {
   const papers = allPapers
     .filter((p) => lib.paperIds.includes(p.canonicalArxivId))
     .sort((a, b) => {
-      const sa = typeof a.score === 'number' ? a.score : 0;
-      const sb = typeof b.score === 'number' ? b.score : 0;
-      if (sb !== sa) return sb - sa;
+      // 排序:score × (1 + 0.3 × noveltyScore), noveltyScore fallback = score/10
+      const getWeighted = (p: PaperLite) => {
+        const s = typeof p.score === 'number' ? p.score : 0;
+        const n = (lib.papers[p.canonicalArxivId]?.noveltyScore ?? s / 10);
+        return s * (1 + 0.3 * n);
+      };
+      const wa = getWeighted(a);
+      const wb = getWeighted(b);
+      if (wb !== wa) return wb - wa;
       return (b.date || '').localeCompare(a.date || '');
     });
 
@@ -1799,7 +2130,25 @@ function renderUserLibraryDetail(): void {
         </div>
         <div class="lib-detail-actions">
           <button type="button" class="btn btn-soft btn-sm" data-action="edit" data-lib-id="${escapeHtml(lib.id)}">📝 编辑文献库(全部)</button>
-          <button type="button" class="btn btn-soft btn-sm" data-action="delete" data-lib-id="${escapeHtml(lib.id)}">🗑 删除文献库</button>
+          <button type="button" class="btn btn-soft btn-sm btn-danger" data-action="delete" data-lib-id="${escapeHtml(lib.id)}">🗑 删除文献库</button>
+        </div>
+      </div>
+      <!-- 删除确认弹窗 -->
+      <div class="lib-delete-modal" id="lib-delete-modal" data-delete-modal data-lib-name="${escapeHtml(lib.name)}">
+        <div class="lib-delete-modal-backdrop" data-delete-modal-backdrop></div>
+        <div class="lib-delete-modal-content">
+          <h3>删除文献库</h3>
+          <p>确定要删除文献库「<strong>${escapeHtml(lib.name)}</strong>」吗?</p>
+          <p class="lib-delete-modal-hint">库内的论文不会从 docs 里删除,只是从你的收藏夹里移除。此操作不可撤销。</p>
+          <div class="lib-delete-modal-field">
+            <label for="lib-delete-confirm">请输入库名最后 4 个字符确认:</label>
+            <input type="text" id="lib-delete-confirm" class="lib-input" maxlength="4" placeholder="xxxx" autocomplete="off" />
+            <span class="lib-delete-modal-error" data-delete-error></span>
+          </div>
+          <div class="lib-delete-modal-actions">
+            <button type="button" class="btn btn-ghost" data-delete-cancel>取消</button>
+            <button type="button" class="btn btn-danger" data-delete-confirm disabled>确认删除</button>
+          </div>
         </div>
       </div>
       <div class="library-wb-export">
@@ -1860,8 +2209,9 @@ function renderUserLibraryDetail(): void {
                 <ol style="text-align: left; margin: 0.5rem 0; padding-left: 1.5rem; line-height: 1.8;">
                   <li>切到 <strong>「⚙️ 文献库配置」</strong> 标签 → 点「▶ 启动 Ingest」,系统从 arXiv 拉最近 30 天的候选论文</li>
                   <li>或在论文详情页右上角点 <strong>+ 加进文献库</strong> 手动加论文</li>
-                  <li>填几个 <strong>锚点论文</strong>(你认可的核心论文),LLM 会参考它们打更准的分</li>
+                  <li>填几个 <strong>锚点论文</strong>(你认可的核心论文,见「⚙️ 配置」底部),LLM 会按它们打更准的分</li>
                 </ol>
+                <p class="muted" style="margin: 0.5rem 0;">💡 <strong>锚点论文 = 评分锚</strong>:填 2-3 篇后,Ingest 会找跟它们主题/方法相似的论文。</p>
                 <button type="button" class="btn btn-primary btn-sm" data-action="switch-tab" data-tab="govern" style="margin-top: 0.5rem;">⚙️ 打开配置 + 启动 Ingest</button>
               </div>`
             : `<div class="wb-bulk-bar" data-bulk-bar hidden>
@@ -2025,9 +2375,15 @@ function renderUserLibraryDetail(): void {
     <section id="digest-panel" class="library-wb-panel" data-panel="digest">
       <div class="wb-digest">
         <div class="digest-header">
-          <h3>📰 每日简报</h3>
-          <p class="muted">基于 statement + 关键词 + inScope,聚合最近 7 天库内论文,LLM 生成中文解读。本地缓存 24h。</p>
-          <button type="button" class="btn btn-primary btn-sm" data-action="digest-generate" data-lib-id="${escapeHtml(lib.id)}">✨ 生成今日简报</button>
+          <h3>📰 简报与综述</h3>
+          <p class="muted">
+            <strong>日报</strong>:基于 statement + 关键词,聚合最近 7 天论文,LLM 生成 4 段解读(本地缓存 24h)。
+            <strong>学术综述</strong>:IMRaD 七段结构(Abstract / Introduction / Methodology / Key Findings / Discussion / Conclusion / References),1500-2500 字可投稿级别,覆盖近 30 天。
+          </p>
+          <div class="digest-actions">
+            <button type="button" class="btn btn-primary btn-sm" data-action="digest-generate" data-lib-id="${escapeHtml(lib.id)}">✨ 生成今日简报</button>
+            <button type="button" class="btn btn-soft btn-sm" data-action="digest-academic-gen" data-lib-id="${escapeHtml(lib.id)}" title="IMRaD 七段结构,1500-2500 字,可投稿级别">📑 生成学术综述</button>
+          </div>
         </div>
         <div id="lib-digest-mount" data-lib-digest-mount></div>
       </div>
@@ -2225,9 +2581,15 @@ function renderUserLibraryDetail(): void {
     }
     if (currentSort === 'score') {
       items = items.slice().sort((a, b) => {
-        const sa = typeof a.score === 'number' ? a.score : 0;
-        const sb = typeof b.score === 'number' ? b.score : 0;
-        if (sb !== sa) return sb - sa;
+        // 排序:score × (1 + 0.3 × noveltyScore), noveltyScore fallback = score/10
+        const getWeighted = (p: PaperLite) => {
+          const s = typeof p.score === 'number' ? p.score : 0;
+          const n = (lib.papers[p.canonicalArxivId]?.noveltyScore ?? s / 10);
+          return s * (1 + 0.3 * n);
+        };
+        const wa = getWeighted(a);
+        const wb = getWeighted(b);
+        if (wb !== wa) return wb - wa;
         return (b.date || '').localeCompare(a.date || '');
       });
     } else {
@@ -2578,6 +2940,24 @@ function renderUserLibraryDetail(): void {
       }
     });
   });
+  // 学术综述按钮(IMRaD 七段可投稿级,深度较深 30 天 / 60 篇)
+  mount.querySelectorAll<HTMLButtonElement>('[data-action="digest-academic-gen"]').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = btn.dataset.libId || lib.id;
+      const mount = document.getElementById('lib-digest-mount');
+      if (!mount) return;
+      mount.innerHTML = '<p class="muted"><span class="lib-spinner"></span> 正在生成学术综述(IMRaD 结构,1500-2500 字,通常需要 30-60s)…</p>';
+      try {
+        const { generateAcademicReport, listDigests } = await import('./library-digest');
+        const d = await generateAcademicReport(id, allPapers);
+        renderDigestMount(mount, d, listDigests(id));
+      } catch (err) {
+        mount.innerHTML = `<p class="muted error">生成失败:${escapeHtml((err as Error).message)}</p>`;
+      }
+    });
+  });
   // digest 历史里的「打开」按钮
   mount.addEventListener('click', (e) => {
     const t = e.target as HTMLElement;
@@ -2593,17 +2973,63 @@ function renderUserLibraryDetail(): void {
     });
   });
   mount.querySelector<HTMLButtonElement>('[data-action="delete"]')?.addEventListener('click', () => {
-    const ok = window.confirm(
-      `确定删除文献库「${lib.name}」吗?\n\n库内的论文不会从 docs 里删除,只是从你的收藏夹里移除。\n此操作不可撤销。`,
-    );
-    if (!ok) return;
-    const res = deleteLibrary(lib.id);
-    if (!res.ok) {
-      showToast(getApiResultMessage(res), 'error');
-    } else {
-      showToast('已删除', 'ok');
-      window.location.href = url('/libraries/');
-    }
+    // 打开删除确认弹窗
+    const modal = mount.querySelector<HTMLElement>('[data-delete-modal]');
+    const backdrop = mount.querySelector<HTMLElement>('[data-delete-modal-backdrop]');
+    const input = mount.querySelector<HTMLInputElement>('#lib-delete-confirm');
+    const confirmBtn = mount.querySelector<HTMLButtonElement>('[data-delete-confirm]');
+    const cancelBtn = mount.querySelector<HTMLButtonElement>('[data-delete-cancel]');
+    const errorSpan = mount.querySelector<HTMLElement>('[data-delete-error]');
+    if (!modal || !input || !confirmBtn || !cancelBtn || !errorSpan) return;
+
+    const libName = modal.dataset.libName || '';
+    const last4 = libName.slice(-4);
+
+    // 重置弹窗状态
+    input.value = '';
+    errorSpan.textContent = '';
+    confirmBtn.setAttribute('disabled', 'true');
+    modal.style.display = 'block';
+
+    // 输入验证
+    const checkInput = () => {
+      const val = input.value.trim();
+      if (val.toLowerCase() === last4.toLowerCase()) {
+        confirmBtn.removeAttribute('disabled');
+        errorSpan.textContent = '';
+      } else {
+        confirmBtn.setAttribute('disabled', 'true');
+        if (val.length > 0 && val.length !== last4.length) {
+          errorSpan.textContent = `需输入 ${last4.length} 个字符`;
+        } else {
+          errorSpan.textContent = '';
+        }
+      }
+    };
+
+    input.oninput = checkInput;
+
+    const closeModal = () => {
+      modal.style.display = 'none';
+    };
+
+    cancelBtn.onclick = closeModal;
+    backdrop?.onclick = closeModal;
+
+    confirmBtn.onclick = () => {
+      if ((confirmBtn.getAttribute('disabled') ?? '') === 'true') return;
+      const res = deleteLibrary(lib.id);
+      if (!res.ok) {
+        showToast(getApiResultMessage(res), 'error');
+        closeModal();
+      } else {
+        showToast('已删除', 'ok');
+        window.location.href = url('/libraries/');
+      }
+    };
+
+    // 聚焦输入框
+    setTimeout(() => input.focus(), 30);
   });
   mount.querySelector<HTMLButtonElement>('[data-action="add-papers"]')?.addEventListener('click', () => {
     window.location.href = url('/papers/');

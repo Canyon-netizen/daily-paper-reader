@@ -20,6 +20,9 @@
   <a href="#-5-分钟快速启动">
     <img src="https://img.shields.io/badge/Docs-Quick%20Start-blue?style=flat-square" alt="Docs" />
   </a>
+  <a href="https://github.com/Canyon-netizen/daily-paper-reader/actions/workflows/daily-paper-reader.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/Canyon-netizen/daily-paper-reader/daily-paper-reader.yml?style=flat-square" alt="daily-paper-reader CI" />
+  </a>
 </p>
 
 

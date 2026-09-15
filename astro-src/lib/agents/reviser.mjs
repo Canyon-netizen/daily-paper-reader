@@ -45,6 +45,8 @@
 // Prompt 模板
 // ---------------------------------------------------------------------------
 
+import { loadSkillContext } from "./skill-context-loader.mjs";
+
 const REVISER_SYSTEM_PROMPT = `你是一位科研论文修订者,负责根据审稿意见(reviewer concerns)修改草稿。
 
 # 任务
@@ -120,7 +122,7 @@ export async function reviseDraft(draft, verdict, opts = {}) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       raw = await opts.caller.callLLM({
-        system: REVISER_SYSTEM_PROMPT,
+        system: `${loadSkillContext("revise")}\n\n${REVISER_SYSTEM_PROMPT}`,
         user,
         model,
         temperature: 0.3,

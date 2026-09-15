@@ -850,6 +850,30 @@ export function deleteLibrary(id: string): WriteResult {
   return { ok: true, changed: true };
 }
 
+/** 从快照恢复库(供 undo 删除使用)。 */
+export function restoreLibrary(snapshot: UserLibrary): WriteResult & { id?: string } {
+  const id = snapshot.id;
+  if (!id) return { ok: false, reason: 'invalid' };
+  return commit(id, 'restore', (entry) => {
+    Object.assign(entry, {
+      name: snapshot.name,
+      statement: snapshot.statement,
+      hue: snapshot.hue,
+      paperIds: snapshot.paperIds?.slice() || [],
+      categories: snapshot.categories?.slice() || [],
+      inclusionKeywords: snapshot.inclusionKeywords?.slice() || [],
+      exclusionKeywords: snapshot.exclusionKeywords?.slice() || [],
+      rubric: snapshot.rubric?.slice() || [],
+      definition: snapshot.definition,
+      visibility: snapshot.visibility,
+      papers: { ...snapshot.papers },
+      conceptOverrides: { ...snapshot.conceptOverrides },
+      stages: snapshot.stages?.slice() || [],
+      draftRefs: snapshot.draftRefs?.slice() || [],
+    });
+  });
+}
+
 /** 加论文。重复加直接 noop(去重,保序)。 */
 export function addPaperToLibrary(libraryId: string, arxivId: string): WriteResult {
   const cid = canonicalArxivId(arxivId);

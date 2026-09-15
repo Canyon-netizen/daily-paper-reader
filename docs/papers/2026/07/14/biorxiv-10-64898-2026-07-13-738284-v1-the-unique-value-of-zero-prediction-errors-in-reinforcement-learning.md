@@ -9,7 +9,8 @@ categories:
   venue: []
   task: []
   method: []
-  type: []
+  type:
+    - empirical
 tags:
 - query:rl
 score: 0.9
@@ -184,6 +185,8 @@ method_pros_cons: {"Multi-Agent Reinforcement Learning (MARL)框架": {"pros": [
 method_comparison: "本文以MARL为统一框架，结合空间显式智能体模型与三动作行为库，系统比较了不同社会信息质量（位置/动作/收益线索）在不同环境波动性下的集体觅食行为表现，揭示了信息质量与生态情境的交互是塑造集体行为多样性的核心机制。"
 method_debate_generated_at: "2026-09-02T15:49:33.720012Z"
 method_debate_model: "minimax/MiniMax-M3"
+is_milestone: true
+resource_tier: medium
 ---
 
 

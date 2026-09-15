@@ -9,9 +9,10 @@ pdf: https://www.biorxiv.org/content/10.1101/2025.11.14.688412v3.full.pdf
 categories:
   venue: []
   task:
-  - mas
+    - mas
   method: []
-  type: []
+  type:
+    - empirical
 score: 0.8
 evidence: 多智能体强化学习模拟集体觅食
 tldr: 集体觅食需要在个体探索与社会信息利用之间权衡，但社会线索类型与环境波动如何塑造集体行为尚不清楚。本研究构建基于多智能体强化学习的空间显式模型，智能体追踪移动资源并在随机探索、私有追踪和社会吸引间选择，系统改变资源波动性与社会线索类型。结果显示，低质量线索产生脆弱策略，高质量信息则支持灵活多样的个体行为，揭示了信息质量与生态环境的交互是集体行为涌现的核心机制。
@@ -28,6 +29,7 @@ method_pros_cons: {"Multi-Agent Reinforcement Learning (MARL)框架": {"pros": [
 method_comparison: "本文构建统一的MARL仿真框架，对比位置、动作和收益三类社会线索在不同环境波动下的集体觅食表现，发现低质量线索（位置、动作）在稳定环境有效但波动下脆弱，而高质量收益线索支持灵活的行为多样性和鲁棒性。"
 method_debate_generated_at: "2026-09-01T11:51:20.599340Z"
 method_debate_model: "minimax/MiniMax-M3"
+resource_tier: medium
 ---
 
 

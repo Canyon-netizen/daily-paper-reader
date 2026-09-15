@@ -130,6 +130,24 @@ const selectedPaper = papers[0];
   <Navbar />
 
   <main class={`library-workbench hue-${lib.hue}`}>
+    {/* ===== 顶部 Status Bar (sticky) ===== */}
+    <div class="library-wb-status-bar" id="library-status-bar">
+      <div class="status-bar-inner">
+        <span class="status-item" data-status="papers">
+          <span class="status-label">论文</span>
+          <span class="status-value" id="status-paper-count">{papers.length}</span>
+        </span>
+        <span class="status-item" data-status="activity">
+          <span class="status-label">最近活动</span>
+          <span class="status-value" id="status-last-activity">—</span>
+        </span>
+        <span class="status-item" data-status="ingest">
+          <span class="status-label">同步状态</span>
+          <span class="status-value" id="status-ingest">已就绪</span>
+        </span>
+      </div>
+    </div>
+
     <header class="library-wb-hero">
       <div>
         <h1>{lib.title}</h1>
@@ -208,7 +226,7 @@ const selectedPaper = papers[0];
             第一个 (.wb-detail-default) 默认显示;之后用 #paper-<cx> 锚点切换。 */}
         <div class="wb-paper-detail" id="wb-detail-pane">
           {papers.length === 0 ? (
-            <p class="empty">没有可显示的论文</p>
+            <p class="empty">No papers yet — 加几篇试试</p>
           ) : (
             papers.map((p, i) => (
               <div id={`paper-${p.canonicalArxivId}`}
@@ -501,9 +519,9 @@ const selectedPaper = papers[0];
           <dt>库名 (中文)</dt>
           <dd>{lib.titleZh}</dd>
           <dt>研究方向陈述</dt>
-          <dd>{lib.description}</dd>
+          <dd data-statement-display>{lib.description}</dd>
           <dt>研究方向陈述(中文)</dt>
-          <dd>{lib.descriptionZh}</dd>
+          <dd data-statement-display-zh>{lib.descriptionZh}</dd>
           <dt>维护者</dt>
           <dd>{lib.curator}</dd>
           <dt>卡片色调</dt>
@@ -513,6 +531,36 @@ const selectedPaper = papers[0];
           <dt>入库方式</dt>
           <dd>公共库(从 docs/papers/** frontmatter 派生,无写路径)</dd>
         </dl>
+
+        <h3>个人文献库配置</h3>
+        <p class="empty">仅个人创建的文献库可编辑以下内容:</p>
+        <div class="govern-personal-section">
+          <div class="govern-field">
+            <label class="govern-label" for="lib-personal-statement">方向描述 (statement)</label>
+            <textarea
+              id="lib-personal-statement"
+              class="govern-textarea"
+              rows="3"
+              maxlength="200"
+              placeholder="描述你这个文献库的主题…"
+              data-lib-statement
+            ></textarea>
+            <div class="govern-field-hint">
+              1-200 字,显示在文献库卡片上。保存在本机浏览器,不同步到云端。
+            </div>
+          </div>
+          <div class="govern-actions">
+            <button type="button" class="export-btn primary" data-save-statement>保存</button>
+            <button type="button" class="export-btn" data-suggest-statement>✨ 自动生成</button>
+            <button type="button" class="export-btn" data-clear-statement>清空</button>
+            <span class="govern-save-status" data-save-status></span>
+          </div>
+          <div class="govern-suggest-panel" data-suggest-panel hidden>
+            <p class="govern-suggest-hint">生成耗时约 10 秒,点击一条应用:</p>
+            <div class="govern-suggest-list" data-suggest-list></div>
+            <button type="button" class="btn btn-ghost btn-sm" data-close-suggest>关闭</button>
+          </div>
+        </div>
 
         <h3>本月 LLM 用量</h3>
         <dl class="govern-dl">
@@ -831,6 +879,272 @@ const selectedPaper = papers[0];
           : '推送占位:阶段 4 接入 user-libraries/gist.ts';
       });
     });
+
+    // 文献库配置 tab:statement 编辑(仅个人库)
+    async function initGovernStatement(): Promise<void> {
+      const panel = document.getElementById('govern-panel');
+      const libId = panel?.dataset.libraryId;
+      if (!libId) return;
+
+      // 动态 import store
+      const store = await import('../../lib/user-libraries/store');
+      const { getUserLibrary, renameLibrary } = store;
+
+      const textarea = document.querySelector<HTMLTextAreaElement>('[data-lib-statement]');
+      const saveBtn = document.querySelector<HTMLButtonElement>('[data-save-statement]');
+      const suggestBtn = document.querySelector<HTMLButtonElement>('[data-suggest-statement]');
+      const clearBtn = document.querySelector<HTMLButtonElement>('[data-clear-statement]');
+      const statusSpan = document.querySelector<HTMLSpanElement>('[data-save-status]');
+      const displayEl = document.querySelector<HTMLElement>('[data-statement-display]');
+      const displayZhEl = document.querySelector<HTMLElement>('[data-statement-display-zh]');
+      const suggestPanel = document.querySelector<HTMLElement>('[data-suggest-panel]');
+      const suggestList = document.querySelector<HTMLElement>('[data-suggest-list]');
+      const closeSuggestBtn = document.querySelector<HTMLButtonElement>('[data-close-suggest]');
+      if (!textarea || !saveBtn || !suggestBtn || !clearBtn || !statusSpan) return;
+
+      // 尝试从 localStorage 读取个人库 statement
+      const STORAGE_KEY = `dpr_lib_stmt_${libId}`;
+      let localStatement = '';
+      try {
+        localStatement = localStorage.getItem(STORAGE_KEY) || '';
+      } catch { /* ignore */ }
+
+      // 优先用 localStorage,没有则尝试从用户库读取
+      const userLib = getUserLibrary(libId);
+      const initialStmt = localStatement || userLib?.statement || '';
+
+      textarea.value = initialStmt;
+
+      // 保存按钮
+      saveBtn.addEventListener('click', () => {
+        const newStmt = textarea.value.trim();
+        // 先存 localStorage
+        try {
+          if (newStmt) {
+            localStorage.setItem(STORAGE_KEY, newStmt);
+          } else {
+            localStorage.removeItem(STORAGE_KEY);
+          }
+        } catch (e) {
+          console.error('localStorage save failed:', e);
+        }
+
+        // 如果是个人库,同步到 store
+        if (userLib) {
+          const res = renameLibrary(libId, { statement: newStmt });
+          if (res.ok) {
+            statusSpan.textContent = '已保存';
+            statusSpan.style.color = 'var(--accent)';
+          } else {
+            statusSpan.textContent = '保存失败: ' + res.reason;
+            statusSpan.style.color = '#dc2626';
+          }
+        } else {
+          // 公共库只存 localStorage
+          statusSpan.textContent = '已保存(仅本地)';
+          statusSpan.style.color = 'var(--accent)';
+        }
+
+        // 更新显示
+        if (displayEl) displayEl.textContent = newStmt || lib.description;
+        if (displayZhEl) displayZhEl.textContent = newStmt || lib.descriptionZh;
+
+        setTimeout(() => { statusSpan.textContent = ''; }, 3000);
+      });
+
+      // 自动生成按钮
+      suggestBtn.addEventListener('click', async () => {
+        if (!suggestPanel || !suggestList) return;
+        const cfg = await import('../../scripts/settings').then(m => m.loadSettings());
+        if (!cfg?.apiKey) {
+          alert('请先在设置页配置 LLM key');
+          return;
+        }
+
+        // 读取 LLM proxy
+        const proxyUrl = (() => {
+          try {
+            const v = (localStorage.getItem('dpr_llm_proxy_v1') || '').trim();
+            if (!v) return '';
+            return /^https?:\/\//i.test(v) ? v.replace(/\/+$/, '') : `http://${v.replace(/\/+$/, '')}`;
+          } catch { return ''; }
+        })();
+        const effectiveBase = proxyUrl || (cfg.baseUrl || 'https://api.minimaxi.com/v1');
+        const url = `${effectiveBase.replace(/\/+$/, '')}/v1/chat/completions`.replace(/\/v1\/v1\//, '/v1/');
+        const model = cfg.model || 'MiniMax-M2.7-highspeed';
+
+        suggestBtn.disabled = true;
+        suggestBtn.textContent = '生成中...';
+        suggestList.innerHTML = '<p class="muted">正在调用 LLM 生成建议(约 10 秒)...</p>';
+        suggestPanel.hidden = false;
+
+        try {
+          const systemPrompt = `用户有一个文献库,名字叫「${lib.title}」(中文: ${lib.titleZh})。
+你要生成 3 句话研究方向描述,每句 20-40 个中文字,显示在文献库卡片上。
+要求:
+1. 用日常语言,避免「该领域」「研究范式」等学术套话
+2. 紧贴库名主题,不要泛泛而谈
+3. 每句要能独立作为研究方向描述
+
+输出严格 JSON 数组,每句一个字符串:
+["第一句描述","第二句描述","第三句描述"]`;
+
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(proxyUrl ? {} : { Authorization: `Bearer ${cfg.apiKey}` }),
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: '请生成 3 句研究方向描述' },
+              ],
+              temperature: 0.6,
+              response_format: { type: 'json_object' },
+              max_tokens: 500,
+            }),
+          });
+
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+          const data = await resp.json();
+          let content = (data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          const start = content.indexOf('[');
+          const end = content.lastIndexOf(']');
+          const arr = JSON.parse(content.slice(start, end + 1));
+
+          if (!Array.isArray(arr) || arr.length === 0) {
+            throw new Error('Invalid response');
+          }
+
+          suggestList.innerHTML = arr.map((s: string, i: number) =>
+            `<button type="button" class="govern-suggest-item" data-index="${i}">${s}</button>`
+          ).join('');
+
+          // 点击建议应用
+          suggestList.querySelectorAll<HTMLButtonElement>('.govern-suggest-item').forEach(btn => {
+            btn.addEventListener('click', () => {
+              textarea.value = btn.textContent || '';
+              suggestPanel.hidden = true;
+              textarea.focus();
+            });
+          });
+        } catch (e) {
+          console.error('Suggest failed:', e);
+          suggestList.innerHTML = `<p class="muted" style="color:#dc2626">生成失败: ${e instanceof Error ? e.message : '未知错误'}</p>`;
+        } finally {
+          suggestBtn.disabled = false;
+          suggestBtn.textContent = '✨ 自动生成';
+        }
+      });
+
+      // 关闭建议面板
+      closeSuggestBtn?.addEventListener('click', () => {
+        if (suggestPanel) suggestPanel.hidden = true;
+      });
+
+      // 清空按钮(两次确认)
+      let clearConfirm = false;
+      clearBtn.addEventListener('click', () => {
+        if (!clearConfirm) {
+          clearConfirm = true;
+          clearBtn.textContent = '确认清空?';
+          clearBtn.style.background = '#dc2626';
+          setTimeout(() => {
+            clearConfirm = false;
+            clearBtn.textContent = '清空';
+            clearBtn.style.background = '';
+          }, 4000);
+          return;
+        }
+        textarea.value = '';
+        clearConfirm = false;
+        clearBtn.textContent = '清空';
+        clearBtn.style.background = '';
+        // 触发保存逻辑
+        saveBtn.click();
+      });
+    }
+
+    // 页面加载时初始化 statement 编辑
+    void initGovernStatement();
+
+    // ===== Status Bar:从 localStorage 读最近活动时间 =====
+    async function initStatusBar(): Promise<void> {
+      const panel = document.getElementById('govern-panel');
+      const libId = panel?.dataset.libraryId;
+      if (!libId) return;
+
+      // 论文数:SSR 已渲染,这里只处理空库提示
+      const paperCountEl = document.getElementById('status-paper-count');
+      const paperCount = parseInt(paperCountEl?.textContent || '0', 10);
+      if (paperCount === 0 && paperCountEl) {
+        paperCountEl.textContent = '暂无';
+        paperCountEl.parentElement?.classList.add('empty');
+      }
+
+      // 最近活动:从 activity-log 读
+      const activityEl = document.getElementById('status-last-activity');
+      if (activityEl) {
+        try {
+          const { listLibraryActivity } = await import('../../lib/user-libraries/activity-log');
+          const activities = listLibraryActivity(libId, 1);
+          if (activities.length > 0) {
+            const last = activities[0];
+            const date = new Date(last.at);
+            const today = new Date();
+            const diffDays = Math.floor((today.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+            if (diffDays === 0) {
+              activityEl.textContent = `今天 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+            } else if (diffDays === 1) {
+              activityEl.textContent = '昨天';
+            } else if (diffDays < 7) {
+              activityEl.textContent = `${diffDays} 天前`;
+            } else {
+              activityEl.textContent = date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+            }
+          } else {
+            activityEl.textContent = '暂无活动';
+            activityEl.classList.add('empty-hint');
+          }
+        } catch (e) {
+          if (activityEl) activityEl.textContent = '—';
+          console.warn('[status-bar] load activity failed:', e);
+        }
+      }
+
+      // ingest 状态:从 localStorage 读最近 ingest 时间
+      const ingestEl = document.getElementById('status-ingest');
+      if (ingestEl) {
+        try {
+          const ingestKey = `dpr_library_ingest_${libId}`;
+          const lastIngest = localStorage.getItem(ingestKey);
+          if (lastIngest) {
+            const date = new Date(lastIngest);
+            const today = new Date();
+            const diffMs = today.getTime() - date.getTime();
+            const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+            if (diffHours < 1) {
+              const diffMins = Math.floor(diffMs / (1000 * 60));
+              ingestEl.textContent = diffMins < 1 ? '刚刚同步' : `${diffMins} 分钟前`;
+            } else if (diffHours < 24) {
+              ingestEl.textContent = `${diffHours} 小时前`;
+            } else {
+              ingestEl.textContent = date.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
+            }
+          } else {
+            ingestEl.textContent = '未同步';
+            ingestEl.classList.add('empty-hint');
+          }
+        } catch (e) {
+          if (ingestEl) ingestEl.textContent = '已就绪';
+        }
+      }
+    }
+
+    void initStatusBar();
 
     syncFromHash();
   </script>

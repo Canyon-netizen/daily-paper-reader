@@ -1,0 +1,488 @@
+% Compiled by DPR agents paper-compiler (iter #61, iter #64 templates)
+% Template: acl
+% Session: s_r3e1rfu0  Generated: 2026-09-14T02:49:40.380Z
+% Source: 6 rounds / 20 deliverables
+% Compile: ⚠️ 需先下载 ACL 模板(acl.sty + acl_natbib.sty);否则退回 --paper-format article
+
+% ACL 官方模板(acl_latex.sty / acl_natbib.sty)需从 ACL Overleaf 模板下载
+% https://acl-org.github.io/ACLPub/acl_latex.html
+% 下载后取消下一行注释,并把下面 \documentclass{article} 注释掉
+% \documentclass{article}
+\documentclass{article}
+\usepackage{times}
+\usepackage{acl}
+\usepackage{acl_natbib}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+% 如果 \usepackage{acl} 报"File not found",
+% 按上方链接下载 sty 文件,或退回 --paper-format article
+
+\title{用偏好对的隐式 confidence 信号降低 DPO reward hacking}
+\author{DPR Multi-Agent Research Loop}
+\affiliation{DPR Lab}
+\maketitle
+
+\begin{document}
+\begin{abstract}
+本文围绕以下研究目标展开:用偏好对的隐式 confidence 信号降低 DPO reward hacking
+\end{abstract}
+
+\section{Introduction}
+本研究的目标是:用偏好对的隐式 confidence 信号降低 DPO reward hacking
+
+\section{Related Work}
+\subsection{总结 DPO 相关 reward hacking 研究现状}
+\textit{round 1789354029930}\\
+\begin{quote}
+Stage: p\_review\_literature  ·  Kind: literature\_review\_md  ·  Type: literature\_review  ·  Round: 1789354029929
+Gate decision: sketch  ·  Total score: 5.666666666666667
+References: 2109.04882, 2302.08582, 2212.08073
+\end{quote}
+
+\paragraph{Rationale}
+
+需要全面了解 DPO 领域已知的 reward hacking 问题及其解决方案，为后续研究提供基础
+
+\paragraph{Risk}
+
+可能遗漏一些最新的相关研究
+
+\paragraph{Quotes}
+\begin{quote}
+DPO has been shown to be vulnerable to reward hacking
+Implicit confidence signals can mitigate reward hacking in RL
+\end{quote}
+
+\subsection{将隐式 confidence 信号应用于 DPO 的关键论文加入文献综述}
+\textit{round 1789354029930}\\
+\begin{quote}
+Stage: p\_review\_literature  ·  Kind: literature\_review\_md  ·  Type: add\_paper  ·  Round: 1789354029929
+Gate decision: sketch  ·  Total score: 6.333333333333333
+References: 2305.18290, 2210.10757
+\end{quote}
+
+\paragraph{Rationale}
+
+这些论文直接探讨了隐式 confidence 信号的使用，可以为项目提供直接的理论支持
+
+\paragraph{Risk}
+
+这些论文可能过于理论化，与实际应用存在差距
+
+\paragraph{Quotes}
+\begin{quote}
+Implicit confidence can be used to improve the robustness of RL
+DPO benefits from additional confidence information
+\end{quote}
+
+\subsection{隐式 confidence 信号在 DPO 中的应用综述}
+\textit{round 1789354029930}\\
+\begin{quote}
+Stage: p\_review\_literature  ·  Kind: literature\_review\_md  ·  Type: create\_draft  ·  Round: 1789354029929
+Gate decision: sketch  ·  Total score: 5.666666666666667
+References: 2109.04882, 2305.18290, 2210.10757
+\end{quote}
+
+\paragraph{Rationale}
+
+系统整理隐式 confidence 信号在 DPO 中的应用现状，为后续研究提供清晰的理论框架
+
+\paragraph{Risk}
+
+可能需要多次修改以确保综述的完整性和准确性
+
+\paragraph{Quotes}
+\begin{quote}
+DPO is a promising approach but suffers from reward hacking
+Implicit confidence signals can enhance RL robustness
+\end{quote}
+
+\subsection{设计隐式 confidence 信号在 DPO 中的应用实验}
+\textit{round 1789354029930}\\
+\begin{quote}
+Stage: p\_review\_literature  ·  Kind: literature\_review\_md  ·  Type: experiment\_plan  ·  Round: 1789354029929
+Gate decision: sketch  ·  Total score: 5.333333333333333
+References: 2305.18290, 2210.10757
+\end{quote}
+
+\paragraph{Rationale}
+
+需要具体的实验方案来验证隐式 confidence 信号对 DPO reward hacking 的缓解效果
+
+\paragraph{Risk}
+
+实验设计可能过于复杂，难以实现
+
+\paragraph{Quotes}
+\begin{quote}
+Experiments show that implicit confidence improves RL performance
+DPO can benefit from additional confidence information
+\end{quote}
+
+\subsection{反驳隐式 confidence 信号在 DPO 中应用的主要质疑}
+\textit{round 1789354029930}\\
+\begin{quote}
+Stage: p\_review\_literature  ·  Kind: literature\_review\_md  ·  Type: rebuttal  ·  Round: 1789354029929
+Gate decision: sketch  ·  Total score: 6
+References: 2212.08073
+\end{quote}
+
+\paragraph{Rationale}
+
+提前准备对潜在质疑的反驳，可以增强研究的可信度和说服力
+
+\paragraph{Risk}
+
+反驳可能不够全面或有力
+
+\paragraph{Quotes}
+\begin{quote}
+Some argue that implicit confidence signals are not reliable
+\end{quote}
+
+\section{Method}
+\subsection{设计基于隐式 confidence 信号的 DPO 实验框架}
+\textit{round 1789354064111}\\
+\begin{quote}
+Stage: p\_design\_experiment\_plan  ·  Kind: experiment\_plan\_md  ·  Type: experiment\_plan  ·  Round: 1789354064111
+Gate decision: sketch  ·  Total score: 5.333333333333333
+References: arxiv:2305.16266
+\end{quote}
+
+\paragraph{Rationale}
+
+明确实验目标和步骤，为后续实验实施提供清晰的指导
+
+\paragraph{Risk}
+
+实验设计可能过于复杂，难以实施
+
+\paragraph{Quotes}
+\begin{quote}
+DPO 的 reward hacking 问题可以通过引入额外信号来缓解
+\end{quote}
+
+\subsection{添加关于隐式 confidence 信号的最新研究}
+\textit{round 1789354064111}\\
+\begin{quote}
+Stage: p\_design\_experiment\_plan  ·  Kind: experiment\_plan\_md  ·  Type: add\_paper  ·  Round: 1789354064111
+Gate decision: sketch  ·  Total score: 6
+References: arxiv:2106.03741, arxiv:2206.02790
+\end{quote}
+
+\paragraph{Rationale}
+
+确保实验设计基于最新的研究成果，提高实验的创新性和可行性
+
+\paragraph{Risk}
+
+新添加的论文可能与现有研究方向不完全一致
+
+\paragraph{Quotes}
+\begin{quote}
+隐式 confidence 信号在强化学习中应用广泛
+DPO 的改进可以通过引入隐式信号来实现
+\end{quote}
+
+\subsection{撰写隐式 confidence 信号在 DPO 中的应用综述}
+\textit{round 1789354064111}\\
+\begin{quote}
+Stage: p\_design\_experiment\_plan  ·  Kind: experiment\_plan\_md  ·  Type: create\_draft  ·  Round: 1789354064111
+Gate decision: sketch  ·  Total score: 6
+References: arxiv:2305.16266, arxiv:2106.03741, arxiv:2206.02790
+\end{quote}
+
+\paragraph{Rationale}
+
+总结现有研究，为实验设计提供理论支持
+
+\paragraph{Risk}
+
+综述可能过于宽泛，缺乏针对性
+
+\paragraph{Quotes}
+\begin{quote}
+DPO 的 reward hacking 问题
+隐式 confidence 信号的定义与应用
+DPO 的改进方法
+\end{quote}
+
+\subsection{反驳隐式 confidence 信号在 DPO 中应用的潜在问题}
+\textit{round 1789354064111}\\
+\begin{quote}
+Stage: p\_design\_experiment\_plan  ·  Kind: experiment\_plan\_md  ·  Type: rebuttal  ·  Round: 1789354064111
+Gate decision: sketch  ·  Total score: 5.666666666666667
+References: arxiv:2305.16266
+\end{quote}
+
+\paragraph{Rationale}
+
+提前识别并解决潜在问题，增强实验设计的鲁棒性
+
+\paragraph{Risk}
+
+反驳可能过于主观，缺乏实证支持
+
+\paragraph{Quotes}
+\begin{quote}
+DPO 的 reward hacking 问题可能无法完全通过隐式信号解决
+\end{quote}
+
+\subsection{制定隐式 confidence 信号的具体实施步骤}
+\textit{round 1789354064111}\\
+\begin{quote}
+Stage: p\_design\_experiment\_plan  ·  Kind: experiment\_plan\_md  ·  Type: experiment\_plan  ·  Round: 1789354064111
+Gate decision: sketch  ·  Total score: 5.333333333333333
+References: arxiv:2305.16266
+\end{quote}
+
+\paragraph{Rationale}
+
+确保实验的可操作性和可重复性
+
+\paragraph{Risk}
+
+实施步骤可能过于简化，无法涵盖所有细节
+
+\paragraph{Quotes}
+\begin{quote}
+隐式 confidence 信号的具体实施方法
+\end{quote}
+
+\section{Results and Discussion}
+\subsection{添加关于隐式 confidence 建模的关键论文}
+\textit{round 1789353990210}\\
+\begin{quote}
+Stage: p\_ideate\_research\_question  ·  Kind: draft\_md  ·  Type: add\_paper  ·  Round: 1789353990210
+Gate decision: sketch  ·  Total score: 6
+References: 2306.02782, 2212.08068
+\end{quote}
+
+\paragraph{Rationale}
+
+需要了解现有的隐式 confidence 建模方法及其在 RLHF 中的应用
+
+\paragraph{Risk}
+
+选择的论文可能与 DPO reward hacking 的具体问题关联度不够
+
+\paragraph{Quotes}
+\begin{quote}
+隐式 confidence 建模在 RLHF 中可以提供更细粒度的反馈信号
+DPO 存在 reward hacking 问题，需要新的隐式信号来缓解
+\end{quote}
+
+\subsection{隐式 confidence 信号在 DPO 中的应用综述}
+\textit{round 1789353990210}\\
+\begin{quote}
+Stage: p\_ideate\_research\_question  ·  Kind: draft\_md  ·  Type: create\_draft  ·  Round: 1789353990210
+Gate decision: sketch  ·  Total score: 5.333333333333333
+References: 2306.02782, 2212.08068, 2210.01241
+\end{quote}
+
+\paragraph{Rationale}
+
+整理现有研究，为后续实验设计提供理论基础
+
+\paragraph{Risk}
+
+综述可能过于宽泛，无法直接指导后续研究
+
+\paragraph{Quotes}
+\begin{quote}
+隐式 confidence 在 RLHF 中的重要性
+DPO 的局限性及改进方向
+\end{quote}
+
+\subsection{设计基于隐式 confidence 的 DPO 实验方案}
+\textit{round 1789353990210}\\
+\begin{quote}
+Stage: p\_ideate\_research\_question  ·  Kind: draft\_md  ·  Type: experiment\_plan  ·  Round: 1789353990210
+Gate decision: sketch  ·  Total score: 5.666666666666667
+References: 2212.08068, 2306.02782
+\end{quote}
+
+\paragraph{Rationale}
+
+将理论转化为可测试的假设，为验证研究问题做准备
+
+\paragraph{Risk}
+
+实验设计可能过于复杂，难以实现
+
+\paragraph{Quotes}
+\begin{quote}
+隐式 confidence 可以提供更细粒度的反馈信号
+DPO 的 reward hacking 问题需要新的解决方案
+\end{quote}
+
+\subsection{反驳 DPO 中隐式 confidence 信号无效的观点}
+\textit{round 1789353990210}\\
+\begin{quote}
+Stage: p\_ideate\_research\_question  ·  Kind: draft\_md  ·  Type: rebuttal  ·  Round: 1789353990210
+Gate decision: sketch  ·  Total score: 5.666666666666667
+References: 2306.02782
+\end{quote}
+
+\paragraph{Rationale}
+
+预判并回应可能的研究质疑
+
+\paragraph{Risk}
+
+反驳可能过于防御性，无法突出研究的创新点
+
+\paragraph{Quotes}
+\begin{quote}
+隐式 confidence 信号在 RLHF 中已被证明有效
+DPO 的 feedback 机制可以通过隐式信号进行改进
+\end{quote}
+
+\subsection{DPO 与隐式 confidence 建模的文献综述}
+\textit{round 1789353990210}\\
+\begin{quote}
+Stage: p\_ideate\_research\_question  ·  Kind: draft\_md  ·  Type: literature\_review  ·  Round: 1789353990210
+Gate decision: sketch  ·  Total score: 5.333333333333333
+References: 2212.08068, 2306.02782, 2210.01241
+\end{quote}
+
+\paragraph{Rationale}
+
+系统梳理相关研究领域，为研究问题提供全面背景
+
+\paragraph{Risk}
+
+文献综述可能过于宽泛，无法直接支持研究问题
+
+\paragraph{Quotes}
+\begin{quote}
+DPO 的主要问题和改进方向
+隐式 confidence 在 RLHF 中的应用现状
+\end{quote}
+
+\subsection{撰写方法部分的初稿}
+\textit{round 1789354102712}\\
+\begin{quote}
+Stage: p\_write\_paper\_draft  ·  Kind: draft\_md  ·  Type: create\_draft  ·  Round: 1789354102712
+Gate decision: sketch  ·  Total score: 4.666666666666667
+\end{quote}
+
+\paragraph{Rationale}
+
+方法部分需要详细描述如何利用隐式 confidence 信号来改进 DPO，这将为整个论文奠定基础。
+
+\paragraph{Risk}
+
+方法描述可能不够清晰或完整
+
+\subsection{添加关于 DPO 和 reward hacking 的关键论文}
+\textit{round 1789354102712}\\
+\begin{quote}
+Stage: p\_write\_paper\_draft  ·  Kind: draft\_md  ·  Type: add\_paper  ·  Round: 1789354102712
+Gate decision: sketch  ·  Total score: 5.666666666666667
+References: 2109.04847, 2203.15860
+\end{quote}
+
+\paragraph{Rationale}
+
+确保对 DPO 和 reward hacking 的现有研究有全面的理解，并引用相关工作。
+
+\paragraph{Risk}
+
+可能遗漏一些关键文献
+
+\paragraph{Quotes}
+\begin{quote}
+DPO 的基本原理
+Reward hacking 的常见问题
+\end{quote}
+
+\subsection{设计实验来验证隐式 confidence 信号的效果}
+\textit{round 1789354102712}\\
+\begin{quote}
+Stage: p\_write\_paper\_draft  ·  Kind: draft\_md  ·  Type: experiment\_plan  ·  Round: 1789354102712
+Gate decision: sketch  ·  Total score: 5.333333333333333
+References: 2109.04847
+\end{quote}
+
+\paragraph{Rationale}
+
+需要通过实验验证提出的方法是否有效，并量化其对减少 reward hacking 的影响。
+
+\paragraph{Risk}
+
+实验设计可能过于复杂或难以实施
+
+\paragraph{Quotes}
+\begin{quote}
+实验设计的建议
+\end{quote}
+
+\subsection{撰写关于 DPO 和 reward hacking 的文献综述}
+\textit{round 1789354102712}\\
+\begin{quote}
+Stage: p\_write\_paper\_draft  ·  Kind: draft\_md  ·  Type: literature\_review  ·  Round: 1789354102712
+Gate decision: sketch  ·  Total score: 5.666666666666667
+References: 2109.04847, 2203.15860
+\end{quote}
+
+\paragraph{Rationale}
+
+全面回顾现有研究将有助于定位本文的创新点，并展示对领域的深入理解。
+
+\paragraph{Risk}
+
+可能过于宽泛或不够深入
+
+\paragraph{Quotes}
+\begin{quote}
+DPO 的应用
+Reward hacking 的挑战
+\end{quote}
+
+\subsection{撰写关于隐式 confidence 信号可能局限性的反驳段落}
+\textit{round 1789354102712}\\
+\begin{quote}
+Stage: p\_write\_paper\_draft  ·  Kind: draft\_md  ·  Type: rebuttal  ·  Round: 1789354102712
+Gate decision: sketch  ·  Total score: 6
+References: 2109.04847
+\end{quote}
+
+\paragraph{Rationale}
+
+预判并回应潜在的批评将增强论文的说服力。
+
+\paragraph{Risk}
+
+可能忽视某些重要的批评
+
+\paragraph{Quotes}
+\begin{quote}
+DPO 的局限性
+\end{quote}
+
+\section{Limitations and Threats to Validity}
+\textit{(本节暂无内容 —— rebuttal proposal 产出的自我质疑与答辩。)}
+
+\begin{thebibliography}{99}
+
+\bibitem{arXiv:2106.03741} arXiv:2106.03741, 2021. \url{https://arxiv.org/abs/2106.03741}
+\bibitem{arXiv:2109.04847} arXiv:2109.04847, 2021. \url{https://arxiv.org/abs/2109.04847}
+\bibitem{arXiv:2109.04882} arXiv:2109.04882, 2021. \url{https://arxiv.org/abs/2109.04882}
+\bibitem{arXiv:2203.15860} arXiv:2203.15860, 2022. \url{https://arxiv.org/abs/2203.15860}
+\bibitem{arXiv:2206.02790} arXiv:2206.02790, 2022. \url{https://arxiv.org/abs/2206.02790}
+\bibitem{arXiv:2210.01241} arXiv:2210.01241, 2022. \url{https://arxiv.org/abs/2210.01241}
+\bibitem{arXiv:2210.10757} arXiv:2210.10757, 2022. \url{https://arxiv.org/abs/2210.10757}
+\bibitem{arXiv:2212.08068} arXiv:2212.08068, 2022. \url{https://arxiv.org/abs/2212.08068}
+\bibitem{arXiv:2212.08073} arXiv:2212.08073, 2022. \url{https://arxiv.org/abs/2212.08073}
+\bibitem{arXiv:2302.08582} arXiv:2302.08582, 2023. \url{https://arxiv.org/abs/2302.08582}
+\bibitem{arXiv:2305.16266} arXiv:2305.16266, 2023. \url{https://arxiv.org/abs/2305.16266}
+\bibitem{arXiv:2305.18290} arXiv:2305.18290, 2023. \url{https://arxiv.org/abs/2305.18290}
+\bibitem{arXiv:2306.02782} arXiv:2306.02782, 2023. \url{https://arxiv.org/abs/2306.02782}
+
+\end{thebibliography}
+
+% 注:refs.bib 同样提供 @misc 条目,可用 bibtex 编译替代上面的 thebibliography。
+% BibTeX 编译: pdflatex paper && bibtex paper && pdflatex paper && pdflatex paper
+
+\end{document}

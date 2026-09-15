@@ -24,12 +24,26 @@ logs/
 # 每次本地维护都会重写,git diff 会一直吵;不入库
 archive/arxiv_seen.json
 archive/crawl_state.json
+archive/pipeline_error.log
 
 # Agent session 落盘产物(由 astro-src/scripts/agents-run.mjs 每次跑 round 写)
 # 每个 session 的 rounds/*.json + digest_*.md 是单次本地运行的中间产物,
 # 不像 recommend/arxiv_papers_*.json 那种共享 seed,不入库
 archive/*/rounds/
 archive/*/digest_*.md
+
+# 7-stage full-pipeline (2026-09-14) 中间产物 — 用户原话:「做实验的中途的
+# 日志文件啥的就不要推送了」。drafts/reviews/experiments 是 Designer agent
+# 的 proposal 草稿(LLM 单条产出),meta.json 是 session 元信息,
+# pipeline_<NNN>.json/.md 是 stage gate 状态;都是可重跑的中间产物。
+# 最终 paper 在 archive/<sid>/paper/ 下(由 --compile-paper 生成),
+# 是否入库见下方的 archive/*/paper/ 规则。
+archive/*/drafts/
+archive/*/reviews/
+archive/*/experiments/
+archive/*/meta.json
+archive/*/pipeline_*.json
+archive/*/pipeline_*.md
 
 # 本地环境配置与密钥
 .env

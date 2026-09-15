@@ -343,6 +343,279 @@
   background: var(--bg);
 }
 
+/* --- 删除确认弹窗(用户库详情页) --- */
+.lib-delete-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+.lib-delete-modal.show {
+  display: block;
+}
+.lib-delete-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+}
+.lib-delete-modal-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+}
+.lib-delete-modal-content h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.lib-delete-modal-content p {
+  margin: 0 0 0.5rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+.lib-delete-modal-hint {
+  font-size: 0.85rem !important;
+  color: var(--fg-subtle) !important;
+  padding: 0.5rem;
+  background: var(--bg-muted);
+  border-radius: 6px;
+  margin-bottom: 1rem !important;
+}
+.lib-delete-modal-field {
+  margin-bottom: 1rem;
+}
+.lib-delete-modal-field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 0.4rem;
+  color: var(--fg);
+}
+.lib-delete-modal-field .lib-input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 1rem;
+  font-family: monospace;
+  text-align: center;
+  letter-spacing: 0.2em;
+  text-transform: lowercase;
+}
+.lib-delete-modal-field .lib-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+.lib-delete-modal-error {
+  display: block;
+  font-size: 0.8rem;
+  color: #dc2626;
+  margin-top: 0.35rem;
+  min-height: 1.1em;
+}
+.lib-delete-modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+.lib-delete-modal-actions .btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* --- 2026-09-14 modal 体验修复(3 角色审计 + 用户反馈「无法滚动 / 不好看」):
+   - 可见滚动条(Windows 默认隐藏,加 reserve gutter + 自定义颜色)
+   - required 红框只在 :user-invalid 时出现(用户交互过且失焦),
+     旧浏览器 fallback 用 .is-touched class
+   - <details> 折叠高级选项,避免 modal 一上来就被撑爆 --- */
+.dpr-modal-body {
+  scrollbar-gutter: stable;
+}
+.dpr-modal-body::-webkit-scrollbar {
+  width: 8px;
+}
+.dpr-modal-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong, #4b5563);
+  border-radius: 4px;
+}
+.dpr-modal-body::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-subtle, #6b7280);
+}
+/* :user-invalid 是 Chrome 119+/FF 88+/Safari 16+ — 避免初始空 required 红框吓到人 */
+.lib-input:required:user-invalid,
+.lib-textarea:required:user-invalid {
+  border-color: var(--error, #dc2626);
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.15);
+}
+/* 旧浏览器 fallback:首次失焦后 JS 加 .is-touched */
+.lib-input.is-touched:required:invalid,
+.lib-textarea.is-touched:required:invalid {
+  border-color: var(--error, #dc2626);
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.15);
+}
+
+/* <details> 折叠样式 — 像 Polaris disclosure */
+.lib-advanced {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-top: 0.5rem;
+  overflow: hidden;
+  background: var(--bg);
+}
+.lib-advanced > summary {
+  cursor: pointer;
+  padding: 0.7rem 1rem;
+  background: var(--bg-muted, #f3f4f6);
+  font-weight: 600;
+  font-size: 0.9rem;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--fg);
+}
+.lib-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.lib-advanced > summary::after {
+  content: '▸';
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+  transition: transform 0.15s;
+}
+.lib-advanced[open] > summary {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-muted, #f3f4f6);
+}
+.lib-advanced[open] > summary::after {
+  transform: rotate(90deg);
+}
+.lib-advanced > .lib-advanced-body {
+  padding: 0.75rem 1rem 0.25rem;
+}
+.lib-advanced > .lib-advanced-body > .lib-field:last-child {
+  margin-bottom: 0.25rem;
+}
+
+/* 分组卡片 — 让基本字段视觉分组 */
+.lib-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem 0.5rem;
+  margin-bottom: 0.75rem;
+  background: var(--bg);
+}
+.lib-section-legend {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--fg-muted, #6b7280);
+  margin: -0.25rem 0 0.5rem;
+  letter-spacing: 0.02em;
+}
+
+/* 阈值快捷按钮行 */
+.lib-threshold-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+.lib-threshold-quick button.active {
+  background: var(--accent, #2563eb);
+  color: #fff;
+  border-color: var(--accent, #2563eb);
+}
+
+/* 画像决策表 */
+.lib-profile-decision {
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--bg-muted, #f3f4f6);
+  border-radius: 8px;
+  font-size: 0.83rem;
+  line-height: 1.6;
+}
+.lib-profile-decision-list {
+  margin: 0.25rem 0 0;
+  padding-left: 1.1rem;
+  list-style: '→ ';
+}
+.lib-profile-decision-list li {
+  padding: 0.1rem 0;
+}
+
+/* 「✨ 一句话生成」panel(2026-09-14 用户原话「建库操作要足够简单」):
+   1 textarea + 1 次 LLM 调用,产出 statement/关键词/exclude/categories 4 项,
+   比 3 步访谈更轻 */
+.lib-singleshot-panel {
+  margin-top: 0.5rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-muted, #f9fafb);
+}
+.lib-singleshot-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.5rem;
+}
+.lib-singleshot-head .muted {
+  font-size: 0.78rem;
+  color: var(--fg-subtle);
+}
+.lib-singleshot-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+.lib-singleshot-preview {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+}
+.lib-singleshot-loading {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.lib-singleshot-result {
+  font-size: 0.85rem;
+}
+.lib-singleshot-result h5 {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--fg-muted);
+  letter-spacing: 0.02em;
+}
+.lib-singleshot-result blockquote {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border-left: 3px solid var(--accent, #2563eb);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.lib-singleshot-apply {
+  margin-top: 0.6rem;
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* 表单字段(对照 Polaris FormField) */
 .lib-field {
   display: flex;
@@ -384,6 +657,13 @@
 .lib-textarea:focus {
   outline: none;
   border-color: var(--accent);
+}
+/* 2026-09-14:Chrome 默认 input:required:focus:invalid 给红框,
+   初始打开 modal 聚焦 name 时吓到小白。覆盖成 accent 蓝框。 */
+.lib-input:required:focus:invalid,
+.lib-textarea:required:focus:invalid {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
 }
 .lib-textarea { min-height: 70px; line-height: 1.5; }
 .lib-input--error,
@@ -1316,5 +1596,81 @@
   .lib-onboarding-dismiss {
     order: 1;
     margin-left: auto;
+  }
+}
+
+/* === Library 详情页移动端响应式(2026-09-15 R7 D.2.6) === */
+@media (max-width: 768px) {
+  /* tabs 变 stack 布局 */
+  .lib-tabs {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .lib-tab {
+    width: 100%;
+    justify-content: center;
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+  }
+
+  /* 按钮全宽 */
+  .lib-detail-actions .btn,
+  .lib-detail-actions .btn-primary,
+  .lib-detail-actions .btn-soft,
+  .lib-detail-actions .btn-ghost {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* 卡片变紧凑列表 */
+  .library-card {
+    padding: 0.75rem 0.9rem;
+  }
+  .library-card .lib-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+  .library-card .lib-title-row .lib-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .library-card .lib-statement {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  /* actionbar 堆叠 */
+  .libraries-actionbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .libraries-actionbar .libraries-actionbar-spacer {
+    display: none;
+  }
+
+  /* modal 全宽 */
+  .dpr-modal {
+    max-width: 100%;
+    margin: 0.5rem;
+    border-radius: 10px;
+  }
+  .dpr-modal-body {
+    padding: 0.85rem 1rem;
+  }
+
+  /* 字段行单列 */
+  .lib-field-row {
+    grid-template-columns: 1fr;
+  }
+
+  /* profile cards 2 列 */
+  .lib-profile-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 归档卡片单列 */
+  .user-lib-archived-grid {
+    grid-template-columns: 1fr;
   }
 }

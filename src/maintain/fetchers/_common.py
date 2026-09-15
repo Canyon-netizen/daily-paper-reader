@@ -218,6 +218,35 @@ def _backoff_seconds(attempt: int, *, base: float = 1.0, cap: float = 30.0) -> f
     return raw * random.uniform(0.5, 1.0)
 
 
+# R7.3 A.1.4:解析 Retry-After 头(RFC 7231 §7.1.3)
+#  - delta-seconds: 整数秒("120")
+#  - HTTP-date:     "Wed, 21 Oct 2026 07:28:00 GMT"
+# 缺/无/非法 → None,调用方回退到 _backoff_seconds。
+# clamp 到 [0, 300](>5 分钟基本是服务方给挂了,不再等)。
+def _parse_retry_after(value: str | None) -> float | None:
+    if not value:
+        return None
+    v = value.strip()
+    if not v:
+        return None
+    # delta-seconds
+    if v.isdigit():
+        return max(0.0, min(float(v), 300.0))
+    # HTTP-date(arXiv 偶发,Cloudflare 兜底)
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        target = parsedate_to_datetime(v)
+        if target is None:
+            return None
+        if target.tzinfo is None:
+            target = target.replace(tzinfo=timezone.utc)
+        delta = (target - datetime.now(timezone.utc)).total_seconds()
+        return max(0.0, min(delta, 300.0))
+    except Exception:
+        return None
+
+
 def make_session() -> requests.Session:
     """Return a ``requests.Session`` with retry middleware mounted.
 
@@ -312,9 +341,21 @@ def safe_html_get(
         except requests.exceptions.HTTPError as exc:
             last_error = exc
             if exc.response is not None and exc.response.status_code in RETRYABLE_HTTP_STATUSES:
-                _log("WARNING", f"[{label}] HTTP {exc.response.status_code} on {url} — will retry (attempt {attempt}/{retries})")
+                # R7.3 A.1.4:arXiv 429/503 返回 Retry-After 头时按它睡,
+                # 不再盲目走 _backoff_seconds(可能 1-2s,远不够 arXiv 要求 3-15s)。
+                retry_after = _parse_retry_after(exc.response.headers.get("Retry-After"))
+                if retry_after is not None:
+                    _log(
+                        "WARNING",
+                        f"[{label}] HTTP {exc.response.status_code} on {url} — Retry-After={retry_after:.1f}s (attempt {attempt}/{retries})",
+                    )
+                else:
+                    _log(
+                        "WARNING",
+                        f"[{label}] HTTP {exc.response.status_code} on {url} — will retry (attempt {attempt}/{retries})",
+                    )
                 if attempt < retries:
-                    sleep_impl(_backoff_seconds(attempt))
+                    sleep_impl(retry_after if retry_after is not None else _backoff_seconds(attempt))
                     continue
             raise
         except Exception as exc:  # noqa: BLE001 — we want the broad net here

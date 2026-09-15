@@ -14,6 +14,12 @@
 //   3. LLM 批量打分(M2.7-highspeed ~5s/30 篇)
 //   4. batchSetLibraryPaperMeta 一次性写入,发 paper-meta 事件
 //   5. 用户在 PapersTab 看到更新后的 score
+//
+// 2026-09-14 三角色审计后:
+//   - rubric 改为 SHARED_SCORING_RUBRIC(从 library-ingest 复用)
+//   - JSON 解析改为 parseScoredJson(防 markdown fence / 截断)
+//   - 注入 outOfScope + categories(学者视角 P1-1)
+//   - anchors 取最近 8 条(与 ingest 一致)
 
 import { showToast } from './toast';
 import { loadSettings } from './settings';
@@ -21,24 +27,9 @@ import { canonicalArxivId } from '../lib/arxiv';
 import { getUserLibrary, batchSetLibraryPaperMeta } from '../lib/user-libraries';
 import { recordUsage } from '../lib/llm-budget';
 import type { UserLibrary } from '../lib/user-libraries';
+import { SHARED_SCORING_RUBRIC, parseScoredJson } from './library-ingest';
 
 const LLM_BATCH = 15;
-
-const RESCORE_SYSTEM_PROMPT = (
-  '你是文献库评分助手。给定一个文献库的方向声明 + 关键词 + 范围内主题 + 锚点论文,'
-  + '给每篇论文打 0-1 相关度,并给一句话理由。\n'
-  + '评分标准(必须严格按此执行,不允许给 0.6-0.9 的中间分):\n'
-  + '• 1.0 分:论文核心贡献直接落在本库方向内,是本领域的原创研究(非跨领域)。\n'
-  + '• 0.5 分:论文提到本库核心概念但只是引用/应用/综述/博客,非主要贡献;'
-  + '或跨方向论文(用了本方向工具但目标是别的领域)。\n'
-  + '• 0.0 分:论文主题与本库方向完全无关,即使标题里有同义词。\n'
-  + '• 无法判断时统一给 0.5 分。\n'
-  + '注意:\n'
-  + '- 锚点论文是本库认可的核心里程碑,与锚点主题/方法/场景相似的论文给 1 分;\n'
-  + '- 即使标题不含所有关键词,只要用了相关技术/涉及相关子领域,就给 1 或 0.5,不要给 0。\n'
-  + '严格 JSON 输出,无 prose,无 <think>,无 markdown 代码块:'
-  + '{"scores":[{"i":1,"s":1.0,"r":"理由必须说明为什么是 0/0.5/1"},...]}'
-);
 
 /** 拉 + 打分 + 写入。进度回调给 UI 显示。 */
 export async function rescoreLibrary(
@@ -79,15 +70,20 @@ export async function rescoreLibrary(
 
   for (let i = 0; i < toScore.length; i += LLM_BATCH) {
     const batch = toScore.slice(i, i + LLM_BATCH);
-    const anchorList = (lib.definition?.anchors || []).slice(0, 8);
+    // 与 ingest 一致:取最近 8 条 anchor(学者视角 P0-3)
+    const anchorList = (lib.definition?.anchors || []).slice(-8);
     const anchorSection = anchorList.length > 0
-      ? `锚点论文(本库已认可的核心,相似者给 1 分):\n${anchorList.map((a, idx) => `${idx + 1}. ${a.value}${a.note ? ` (${a.note})` : ''}`).join('\n')}\n`
+      ? `锚点论文(本库已认可的核心,相似者给 1 或 0.75 分):\n${anchorList.map((a, idx) => `${idx + 1}. ${a.value}${a.note ? ` (${a.note})` : ''}`).join('\n')}\n`
       : '';
+    // 学者视角 P1-1:补 outOfScope + categories 让 LLM 边界判断更准
     const userMsg = [
       `## 文献库`,
       `陈述: ${lib.statement}`,
       lib.inclusionKeywords.length > 0 ? `必须命中关键词: ${lib.inclusionKeywords.join(', ')}` : '',
+      lib.exclusionKeywords.length > 0 ? `排除关键词: ${lib.exclusionKeywords.join(', ')}` : '',
       (lib.definition?.inScope || []).length > 0 ? `范围内: ${(lib.definition?.inScope || []).join('; ')}` : '',
+      (lib.definition?.outOfScope || []).length > 0 ? `范围外(语义层不关心): ${(lib.definition?.outOfScope || []).join('; ')}` : '',
+      lib.categories.length > 0 ? `arXiv 分类参考: ${lib.categories.join(', ')}` : '',
       '',
       anchorSection,
       `## 论文(本批 ${i + 1}-${i + batch.length}/${toScore.length} 篇)`,
@@ -103,7 +99,7 @@ export async function rescoreLibrary(
         body: JSON.stringify({
           model,
           messages: [
-            { role: 'system', content: RESCORE_SYSTEM_PROMPT },
+            { role: 'system', content: SHARED_SCORING_RUBRIC },
             { role: 'user', content: userMsg },
           ],
           temperature: 0.2,
@@ -121,20 +117,16 @@ export async function rescoreLibrary(
       if (usage) {
         recordUsage(libId, usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
       }
-      let content = (data.choices?.[0]?.message?.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-      const start = content.indexOf('{');
-      const end = content.lastIndexOf('}');
-      const obj = JSON.parse(content.slice(start, end + 1));
-      const arr = obj.scores || obj.results || [];
-      for (const it of arr) {
-        const idx = Number(it.i);
-        if (!Number.isFinite(idx) || idx < 1 || idx > batch.length) continue;
-        const s = Number(it.s);
-        if (!Number.isFinite(s)) continue;
+      const content = data.choices?.[0]?.message?.content || '';
+      // 用共享 parseScoredJson(评分员 P0-1:防 markdown fence + 截断)
+      const items = parseScoredJson(content);
+      for (const it of items) {
+        const idx = it.i;
+        if (idx < 1 || idx > batch.length) continue;
         const cx = canonicalArxivId(batch[idx - 1].canonicalArxivId);
         if (!cx) continue;
         scores.set(cx, {
-          score: Math.max(0, Math.min(1, s)),
+          score: Math.max(0, Math.min(1, it.s)),
           reason: String(it.r || '').slice(0, 200),
         });
       }

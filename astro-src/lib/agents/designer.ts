@@ -24,6 +24,9 @@ const DESIGNER_SYSTEM_PROMPT = `你是一位资深科研合作者,正在帮用�
 # 任务
 根据用户的 Project 当前状态 + 候选论文 + 用户目标,提出 3-8 个**下一步可执行**的研究动作。
 
+# 关键:立即输出 JSON
+不要在 <think> 块中思考。你必须直接以 JSON 数组 [ ... ] 形式给出最终输出,不得包含任何 markdown 包裹、注释或前置推理。如果你先想再输出,响应可能因 token 耗尽而停在 think 块里 — 那是不合格的。请**直接**输出 JSON。
+
 # 动作类型
 - add_paper: 把一篇论文加到 project 的某个阶段
 - create_draft: 为 project 创建一个写作草稿(综述/章节/博客)
@@ -51,7 +54,8 @@ const DESIGNER_SYSTEM_PROMPT = `你是一位资深科研合作者,正在帮用�
 - 每条 proposal 必须有 1+ paperIds 支撑(或明确说明为什么不需要)
 - 不要提"再读 5 篇论文"这种没产出的动作
 - 优先利用已有 ideas/experiments/writings 的素材
-- 输出必须是合法 JSON 数组,不要 markdown fence`;
+- 输出必须是合法 JSON 数组,不要 markdown fence;
+- 必须输出 JSON 数组(可以先内部 think,但最终输出必须是 JSON,而不是停在 think 里)`;
 
 function buildUserPrompt(input: RoundInput): string {
   const { project, candidates, user_goal, project_state, previous_rounds } = input;
@@ -130,7 +134,7 @@ export async function designerGenerate(
         user,
         model: opts.model,
         temperature: 0.7,
-        max_tokens: 2048,
+        max_tokens: 8192,
       });
       if (raw && raw.trim()) break;
     } catch (err) {
@@ -144,6 +148,7 @@ export async function designerGenerate(
   const proposals = parseProposals(raw, input.round);
   if (proposals.length === 0) {
     console.warn('[designer] parseProposals returned 0; falling back to stub');
+    console.warn('[designer] raw LLM output (first 600 chars):', raw.slice(0, 600));
     return stubProposals(input, maxProposals);
   }
   return proposals.slice(0, maxProposals);
@@ -154,34 +159,47 @@ export async function designerGenerate(
 // ---------------------------------------------------------------------------
 
 function parseProposals(raw: string, round: number): Proposal[] {
+  // 0. 剥 <think>...</think>(MiniMax-M3 默认带 think 块,会污染 JSON parse)
+  let cleaned = raw.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
   // 1. 直接 parse
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(cleaned);
   } catch {
     // 2. 剥 markdown fence
-    const m = raw.match(/```(?:json)?\s*([\s\S]+?)\s*```/);
+    const m = cleaned.match(/```(?:json)?\s*([\s\S]+?)\s*```/);
     if (m) {
       try { parsed = JSON.parse(m[1]); } catch { /* fall through */ }
     }
   }
   // 3. 找第一个 [ 到匹配的 ]
   if (!parsed) {
-    const i = raw.indexOf('[');
+    const i = cleaned.indexOf('[');
     if (i >= 0) {
       let depth = 0, j = i;
-      for (; j < raw.length; j++) {
-        if (raw[j] === '[') depth++;
-        else if (raw[j] === ']') { depth--; if (depth === 0) break; }
+      for (; j < cleaned.length; j++) {
+        if (cleaned[j] === '[') depth++;
+        else if (cleaned[j] === ']') { depth--; if (depth === 0) break; }
       }
       if (depth === 0) {
-        try { parsed = JSON.parse(raw.slice(i, j + 1)); } catch { /* */ }
+        try { parsed = JSON.parse(cleaned.slice(i, j + 1)); } catch { /* */ }
       }
     }
   }
   // 4. 单 object 包成 array
-  if (!parsed && raw.trim().startsWith('{')) {
-    try { parsed = [JSON.parse(raw)]; } catch { /* */ }
+  if (!parsed && cleaned.trim().startsWith('{')) {
+    try { parsed = [JSON.parse(cleaned)]; } catch { /* */ }
+  }
+  // 5. prose 包 JSON:{...},{...},{...}  — 抓顶层独立 object
+  if (!Array.isArray(parsed)) {
+    const objMatches = cleaned.match(/\{[\s\S]*?"type"\s*:\s*"(?:add_paper|create_draft|experiment_plan|literature_review|rebuttal)"[\s\S]*?\}/g);
+    if (objMatches && objMatches.length > 0) {
+      const objs = [];
+      for (const m of objMatches) {
+        try { objs.push(JSON.parse(m)); } catch { /* */ }
+      }
+      if (objs.length > 0) parsed = objs;
+    }
   }
 
   if (!Array.isArray(parsed)) return [];

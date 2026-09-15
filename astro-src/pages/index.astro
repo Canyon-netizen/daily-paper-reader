@@ -333,28 +333,52 @@ const newToday = items.filter((p) => p.date === today).length;
       mountDashboardStrip(mount, itemsForStrip);
     }
 
-    // 个人文献库快捷入口 — 从 localStorage 读,前 6 个按 updatedAt 排
+    // 个人文献库快捷入口 — 按「最近打开过」排序(dpr_last_opened_libs v1),fallback 到 updatedAt
     const recentSection = document.querySelector<HTMLElement>('[data-home-recent-libraries]');
     const recentList = document.querySelector<HTMLElement>('[data-home-recent-libraries-list]');
     if (recentSection && recentList) {
       try {
         const KEY = 'dpr_user_libraries_v1';
+        const LAST_OPENED_KEY = 'dpr_last_opened_libs_v1';
         const raw = localStorage.getItem(KEY);
         if (raw) {
           const libs = JSON.parse(raw) as Record<string, { id: string; name: string; statement: string; hue: string; paperIds: string[]; updatedAt: string }>;
-          const list = Object.values(libs).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || '')).slice(0, 6);
-          if (list.length > 0) {
+          const all = Object.values(libs);
+          // 读最近打开顺序(空 Map 则 fallback 到 updatedAt 排)
+          let lastOpened: Record<string, number> = {};
+          try {
+            const raw2 = localStorage.getItem(LAST_OPENED_KEY);
+            if (raw2) lastOpened = JSON.parse(raw2);
+          } catch { /* ignore */ }
+          const now = Date.now();
+          const ranked = all
+            .map((l) => {
+              const openedAt = lastOpened[l.id];
+              const score = typeof openedAt === 'number'
+                ? openedAt / 1e9 // 真实时间戳
+                : (l.updatedAt ? new Date(l.updatedAt).getTime() / 1e9 : 0);
+              return { l, score };
+            })
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 6);
+          if (ranked.length > 0) {
             recentSection.hidden = false;
-            recentList.innerHTML = list.map((l) => `
-              <a class="recent-paper-card hue-${escapeHtml(l.hue || 'emerald')}" href="/libraries/?id=${encodeURIComponent(l.id)}">
-                <div class="recent-paper-title">${escapeHtml(l.name)}</div>
-                <div class="recent-paper-meta">
-                  <span>📚 ${l.paperIds.length} 篇</span>
-                  <span>${l.updatedAt ? l.updatedAt.slice(0, 10) : ''}</span>
-                </div>
-                <div class="recent-paper-tldr">${escapeHtml((l.statement || '').slice(0, 80))}${(l.statement || '').length > 80 ? '…' : ''}</div>
-              </a>
-            `).join('');
+            recentList.innerHTML = ranked.map(({ l, score }) => {
+              const isRecentlyOpened = (typeof lastOpened[l.id] === 'number') && (now - lastOpened[l.id] < 7 * 24 * 3600 * 1000);
+              const timeLabel = isRecentlyOpened
+                ? `${Math.max(1, Math.round((now - lastOpened[l.id]) / (24 * 3600 * 1000)))} 天前打开`
+                : (l.updatedAt ? l.updatedAt.slice(0, 10) : '');
+              return `
+                <a class="recent-paper-card hue-${escapeHtml(l.hue || 'emerald')}" href="/libraries/?id=${encodeURIComponent(l.id)}">
+                  <div class="recent-paper-title">${escapeHtml(l.name)}</div>
+                  <div class="recent-paper-meta">
+                    <span>📚 ${l.paperIds.length} 篇</span>
+                    <span>${timeLabel}</span>
+                  </div>
+                  <div class="recent-paper-tldr">${escapeHtml((l.statement || '').slice(0, 80))}${(l.statement || '').length > 80 ? '…' : ''}</div>
+                </a>
+              `;
+            }).join('');
           }
         }
       } catch {
