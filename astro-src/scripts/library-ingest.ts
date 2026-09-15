@@ -50,6 +50,8 @@ interface IngestCandidate {
   date: string;
   /** LLM 0-1 相关度 */
   score: number;
+  /** 0-1 新颖性(用于排序加权:score × (1 + 0.3 × novelty)) */
+  novelty?: number;
   reason: string;
   /** 当前是否已在 paperIds */
   inLibrary: boolean;
@@ -258,7 +260,7 @@ export const SHARED_SCORING_RUBRIC = [
  *    4. 解析失败时退化为 regex 抓 i/s 字段(保住部分 batch)
  *
  *  返回空数组(永不抛)—— 调用方决定如何处理失败。 */
-export function parseScoredJson(content: string): Array<{ i: number; s: number; r?: string; axes?: Record<string, number> }> {
+export function parseScoredJson(content: string): Array<{ i: number; s: number; n?: number; r?: string; axes?: Record<string, number> }> {
   if (!content) return [];
   let cleaned = content
     .replace(/^```json\s*[\s\S]*?```\s*$/gm, '')
@@ -272,18 +274,19 @@ export function parseScoredJson(content: string): Array<{ i: number; s: number; 
     const obj = JSON.parse(cleaned.slice(start, end + 1));
     const arr = Array.isArray(obj?.scores) ? obj.scores : Array.isArray(obj?.results) ? obj.results : [];
     return arr
-      .map((it: { i?: unknown; s?: unknown; r?: unknown; axes?: unknown }) => {
+      .map((it: { i?: unknown; s?: unknown; n?: unknown; r?: unknown; axes?: unknown }) => {
         const i = Number(it.i);
         const s = Number(it.s);
         if (!Number.isFinite(i) || !Number.isFinite(s)) return null;
+        const n = typeof it.n === 'number' ? it.n : undefined;
         const r = typeof it.r === 'string' ? it.r : undefined;
         const axes = it.axes && typeof it.axes === 'object' ? (it.axes as Record<string, number>) : undefined;
-        return { i, s, r, axes };
+        return { i, s, n, r, axes };
       })
-      .filter((x: { i: number; s: number; r?: string; axes?: Record<string, number> } | null): x is { i: number; s: number; r?: string; axes?: Record<string, number> } => x !== null);
+      .filter((x: { i: number; s: number; n?: number; r?: string; axes?: Record<string, number> } | null): x is { i: number; s: number; n?: number; r?: string; axes?: Record<string, number> } => x !== null);
   } catch {
     // 兜底:regex 抓 {i:N, s:M} 模式,保住 batch 部分数据
-    const out: Array<{ i: number; s: number; r?: string }> = [];
+    const out: Array<{ i: number; s: number; n?: number; r?: string }> = [];
     const re = /"i"\s*:\s*(\d+)[^}]*?"s"\s*:\s*([\d.]+)/g;
     let m;
     while ((m = re.exec(cleaned)) !== null) {
@@ -298,16 +301,20 @@ export function parseScoredJson(content: string): Array<{ i: number; s: number; 
 async function scoreCandidatesWithLLM(
   lib: UserLibrary,
   candidates: Array<{ arxivId: string; title: string; abstract: string }>,
-): Promise<{ scores: Map<string, { score: number; reason: string }>; failedBatches: number }> {
+  onProgress?: (p: IngestProgress) => void,
+): Promise<{ scores: Map<string, { score: number; novelty?: number; reason: string }>; failedBatches: number }> {
   const cfg = loadSettings();
   if (!cfg?.apiKey) {
     showToast('请先在设置页配置 LLM key', 'error');
     return { scores: new Map(), failedBatches: 0 };
   }
-  const out = new Map<string, { score: number; reason: string }>();
+  const out = new Map<string, { score: number; novelty?: number; reason: string }>();
   const url = cfg.baseUrl || 'https://api.minimaxi.com/v1';
   const model = cfg.model || 'MiniMax-M2.7-highspeed';
   let failedBatches = 0;
+  const total = candidates.length;
+
+  onProgress?.({ stage: 'scoring', pct: 30, message: `正在 LLM 评分 (0/${total})…`, scored: { done: 0, total } });
 
   for (let i = 0; i < candidates.length; i += LLM_BATCH) {
     const batch = candidates.slice(i, i + LLM_BATCH);
@@ -376,8 +383,11 @@ async function scoreCandidatesWithLLM(
         const idx = it.i;
         if (idx < 1 || idx > batch.length) continue;
         const score = Math.max(0, Math.min(1, it.s));
+        // 提取 novelty(0-1),fallback 到 score/10
+        const novelty = typeof it.n === 'number' ? Math.max(0, Math.min(1, it.n)) : score / 10;
         out.set(batch[idx - 1].arxivId, {
           score,
+          novelty,
           reason: String(it.r || '').slice(0, 200),
         });
       }
@@ -387,6 +397,9 @@ async function scoreCandidatesWithLLM(
       showToast(`LLM 批量打分失败:(${(e as Error).message || 'unknown'})`, 'error');
       // 不阻断其它批 —— 已成功的 out 保留
     }
+    // 每批完成后更新进度
+    const done = Math.min(i + LLM_BATCH, total);
+    onProgress?.({ stage: 'scoring', pct: 30 + Math.round((done / total) * 50), message: `正在 LLM 评分 (${done}/${total})…`, scored: { done, total } });
   }
   return { scores: out, failedBatches };
 }
@@ -402,8 +415,11 @@ export async function runIngest(
     threshold?: number;
     /** 覆盖 library.definition.audienceProfile,主要给测试用。 */
     audienceProfile?: AudienceProfileId | null;
+    /** 进度回调,每个关键阶段触发 */
+    onProgress?: (p: IngestProgress) => void;
   } = {},
 ): Promise<IngestCandidate[]> {
+  const { onProgress } = opts;
   const lib = getUserLibrary(libId);
   if (!lib) throw new Error(`library ${libId} 不存在`);
   const daysBack = opts.daysBack ?? 30;
@@ -422,8 +438,13 @@ export async function runIngest(
   if (!query) {
     throw new Error('library 缺关键词 / 范围内主题,无法拼 arXiv 搜索');
   }
+  // Stage 1: Fetching from arXiv
+  onProgress?.({ stage: 'fetching', pct: 10, message: `正在拉取 arXiv 候选 (${daysBack} 天 / 上限 ${maxResults} 篇)…` });
   const raws = await fetchArxivCandidates(query, { daysBack, maxResults });
-  if (raws.length === 0) return [];
+  if (raws.length === 0) {
+    onProgress?.({ stage: 'done', pct: 100, message: '未找到候选论文' });
+    return [];
+  }
 
   // 去重:保留每个 canonicalArxivId 第一条
   const seen = new Set<string>();
@@ -438,11 +459,12 @@ export async function runIngest(
   const fresh = uniq.filter((r) => !inLib.has(canonicalArxivId(r.arxivId)));
 
   // LLM 打分(2026-09-14 评分员 P0-5:failedBatches 让 UI 知道漏打分)
+  onProgress?.({ stage: 'scoring', pct: 30, message: `正在 LLM 评分 (0/${fresh.length})…`, scored: { done: 0, total: fresh.length } });
   const { scores, failedBatches } = await scoreCandidatesWithLLM(lib, fresh.map((r) => ({
     arxivId: r.arxivId,
     title: r.title,
     abstract: r.abstract,
-  })));
+  })), onProgress);
   if (failedBatches > 0) {
     showToast(`有 ${failedBatches} 批打分失败,候选可能不全`, 'warn');
   }
@@ -450,6 +472,8 @@ export async function runIngest(
   const candidates: IngestCandidate[] = fresh.map((r) => {
     const cx = canonicalArxivId(r.arxivId) || r.arxivId;
     const meta = scores.get(r.arxivId);
+    // 新颖性 fallback:score/10(如果 LLM 没返回 novelty)
+    const novelty = meta?.novelty ?? (meta?.score ?? 0) / 10;
     return {
       cx,
       arxivId: r.arxivId,
@@ -458,13 +482,29 @@ export async function runIngest(
       abstract: r.abstract,
       date: r.date,
       score: meta?.score ?? 0,
+      novelty,
       reason: meta?.reason ?? '',
       inLibrary: inLib.has(cx),
     };
   });
-  // 排序:score 高 → 低
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates.filter((c) => c.score >= threshold);
+  // 排序:score × (1 + 0.3 × novelty), novelty fallback = score/10
+  onProgress?.({ stage: 'sorting', pct: 85, message: '正在排序…' });
+  const weightedScore = (c: IngestCandidate) => c.score * (1 + 0.3 * (c.novelty ?? c.score / 10));
+  candidates.sort((a, b) => weightedScore(b) - weightedScore(a));
+  const filtered = candidates.filter((c) => c.score >= threshold);
+  onProgress?.({ stage: 'done', pct: 100, message: `完成! 找到 ${filtered.length} 篇候选` });
+  return filtered;
+}
+
+export interface IngestProgress {
+  /** 当前阶段: 'fetching' | 'scoring' | 'sorting' | 'done' | 'error' */
+  stage: 'fetching' | 'scoring' | 'sorting' | 'done' | 'error';
+  /** 当前阶段进度 0-100 */
+  pct: number;
+  /** 当前状态文字 */
+  message: string;
+  /** 打分阶段:已处理/总数 */
+  scored?: { done: number; total: number };
 }
 
 /** 把候选一次性写入 library 的 papers(candidate 状态),不加入 paperIds。
@@ -478,6 +518,7 @@ export function persistCandidatesAsCandidate(libId: string, candidates: IngestCa
       meta: {
         status: 'candidate',
         relevanceScore: c.score,
+        noveltyScore: c.novelty,
         relevanceReason: c.reason,
       },
     })),

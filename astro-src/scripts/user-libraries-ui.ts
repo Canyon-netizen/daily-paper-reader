@@ -75,7 +75,7 @@ function escapeHtml(s: string): string {
 function renderCandidateList(
   mount: HTMLElement,
   libId: string,
-  candidates: Array<{ cx: string; arxivId: string; title: string; authors: string[]; abstract: string; date: string; score: number; reason: string; inLibrary: boolean }>,
+  candidates: Array<{ cx: string; arxivId: string; title: string; authors: string[]; abstract: string; date: string; score: number; novelty?: number; reason: string; inLibrary: boolean }>,
   threshold: number,
   daysBack: number,
 ): void {
@@ -83,7 +83,7 @@ function renderCandidateList(
     <div class="lib-ingest-panel">
       <div class="lib-ingest-header">
         <h3>🛰️ Ingest · 候选 ${candidates.length} 篇(阈值 ${threshold.toFixed(2)} · ${daysBack} 天)</h3>
-        <p class="muted">按相关度倒序。点「✓ 纳入」加进 paperIds;勾选多个后用顶部「✓ 纳入选中(N)」批量处理。</p>
+        <p class="muted">按相关度×(1+0.3×新颖性)倒序。新颖性越高越靠前。点「✓ 纳入」加进 paperIds;勾选多个后用顶部「✓ 纳入选中(N)」批量处理。</p>
         <div class="lib-ingest-batch">
           <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="check-all">☑ 全选</button>
           <button type="button" class="btn btn-soft btn-sm" data-ingest-batch="uncheck-all">☐ 全不选</button>
@@ -421,7 +421,15 @@ async function openIngestPanel(libId: string): Promise<void> {
     setStatus(`拉 arXiv 候选(${daysBack}天 / 上限 ${maxResults} 篇)…`);
     setProgress(15);
     try {
-      const candidates = await runIngest(libId, { daysBack, maxResults, threshold });
+      const candidates = await runIngest(libId, {
+        daysBack,
+        maxResults,
+        threshold,
+        onProgress: (p) => {
+          setProgress(p.pct);
+          setStatus(p.message);
+        },
+      });
       setProgress(100);
       if (candidates.length === 0) {
         mount.innerHTML = `
@@ -447,6 +455,7 @@ async function openIngestPanel(libId: string): Promise<void> {
 
       // 渲染候选列表(checkbox 多选已支持)
       renderCandidateList(mount, libId, candidates, threshold, daysBack);
+      showToast(`排序已更新:相关度×(1+0.3×新颖性),新颖论文会靠前`, 'info');
     } catch (e) {
       setStatus(`失败:${(e as Error).message || String(e)}`);
       showToast(`Ingest 失败:${(e as Error).message}`, 'error');
@@ -2074,9 +2083,15 @@ function renderUserLibraryDetail(): void {
   const papers = allPapers
     .filter((p) => lib.paperIds.includes(p.canonicalArxivId))
     .sort((a, b) => {
-      const sa = typeof a.score === 'number' ? a.score : 0;
-      const sb = typeof b.score === 'number' ? b.score : 0;
-      if (sb !== sa) return sb - sa;
+      // 排序:score × (1 + 0.3 × noveltyScore), noveltyScore fallback = score/10
+      const getWeighted = (p: PaperLite) => {
+        const s = typeof p.score === 'number' ? p.score : 0;
+        const n = (lib.papers[p.canonicalArxivId]?.noveltyScore ?? s / 10);
+        return s * (1 + 0.3 * n);
+      };
+      const wa = getWeighted(a);
+      const wb = getWeighted(b);
+      if (wb !== wa) return wb - wa;
       return (b.date || '').localeCompare(a.date || '');
     });
 
@@ -2115,7 +2130,25 @@ function renderUserLibraryDetail(): void {
         </div>
         <div class="lib-detail-actions">
           <button type="button" class="btn btn-soft btn-sm" data-action="edit" data-lib-id="${escapeHtml(lib.id)}">📝 编辑文献库(全部)</button>
-          <button type="button" class="btn btn-soft btn-sm" data-action="delete" data-lib-id="${escapeHtml(lib.id)}">🗑 删除文献库</button>
+          <button type="button" class="btn btn-soft btn-sm btn-danger" data-action="delete" data-lib-id="${escapeHtml(lib.id)}">🗑 删除文献库</button>
+        </div>
+      </div>
+      <!-- 删除确认弹窗 -->
+      <div class="lib-delete-modal" id="lib-delete-modal" data-delete-modal data-lib-name="${escapeHtml(lib.name)}">
+        <div class="lib-delete-modal-backdrop" data-delete-modal-backdrop></div>
+        <div class="lib-delete-modal-content">
+          <h3>删除文献库</h3>
+          <p>确定要删除文献库「<strong>${escapeHtml(lib.name)}</strong>」吗?</p>
+          <p class="lib-delete-modal-hint">库内的论文不会从 docs 里删除,只是从你的收藏夹里移除。此操作不可撤销。</p>
+          <div class="lib-delete-modal-field">
+            <label for="lib-delete-confirm">请输入库名最后 4 个字符确认:</label>
+            <input type="text" id="lib-delete-confirm" class="lib-input" maxlength="4" placeholder="xxxx" autocomplete="off" />
+            <span class="lib-delete-modal-error" data-delete-error></span>
+          </div>
+          <div class="lib-delete-modal-actions">
+            <button type="button" class="btn btn-ghost" data-delete-cancel>取消</button>
+            <button type="button" class="btn btn-danger" data-delete-confirm disabled>确认删除</button>
+          </div>
         </div>
       </div>
       <div class="library-wb-export">
@@ -2548,9 +2581,15 @@ function renderUserLibraryDetail(): void {
     }
     if (currentSort === 'score') {
       items = items.slice().sort((a, b) => {
-        const sa = typeof a.score === 'number' ? a.score : 0;
-        const sb = typeof b.score === 'number' ? b.score : 0;
-        if (sb !== sa) return sb - sa;
+        // 排序:score × (1 + 0.3 × noveltyScore), noveltyScore fallback = score/10
+        const getWeighted = (p: PaperLite) => {
+          const s = typeof p.score === 'number' ? p.score : 0;
+          const n = (lib.papers[p.canonicalArxivId]?.noveltyScore ?? s / 10);
+          return s * (1 + 0.3 * n);
+        };
+        const wa = getWeighted(a);
+        const wb = getWeighted(b);
+        if (wb !== wa) return wb - wa;
         return (b.date || '').localeCompare(a.date || '');
       });
     } else {

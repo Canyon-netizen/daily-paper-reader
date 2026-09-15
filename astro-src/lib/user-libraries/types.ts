@@ -202,6 +202,8 @@ export interface LibraryPaperMeta {
   relevanceScore?: number;
   /** 1-200 字:LLM 给的「为什么这个分」一句话 */
   relevanceReason?: string;
+  /** 0-1;新颖性分数,用于排序加权:score × (1 + 0.3 × noveltyScore) */
+  noveltyScore?: number;
   /** 1-500 字:本库专属 TL;DR(可能与论文 wiki_compiled 不同)。
    *  比如同一篇 RL 论文,在「LLM Agent」库里侧重 agent 部分,
    *  在「RL 算法」库里侧重算法部分。 */
