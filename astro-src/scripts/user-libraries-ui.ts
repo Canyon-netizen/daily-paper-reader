@@ -1641,6 +1641,70 @@ function setupNewLibraryModal(): void {
     });
   });
 
+  // D.1.3: library merge 检测 —— 用户在 name / statement 里输入时,实时计算
+  // 与现有库的 Jaccard 相似度,>= 0.5 时显示「⚠️ 这与已有库 X 重复」提示。
+  // 用字符 unigram + 分词 unigram 合并做相似度,容忍中英混排。
+  const mergeWarn = document.createElement('div');
+  mergeWarn.className = 'lib-merge-warning';
+  mergeWarn.hidden = true;
+  const nameField = modal.querySelector<HTMLElement>('[data-modal-name]')?.closest('.lib-field');
+  if (nameField) nameField.appendChild(mergeWarn);
+
+  function jaccard(a: Set<string>, b: Set<string>): number {
+    if (a.size === 0 && b.size === 0) return 0;
+    let inter = 0;
+    for (const x of a) if (b.has(x)) inter++;
+    const uni = a.size + b.size - inter;
+    return uni === 0 ? 0 : inter / uni;
+  }
+
+  function tokens(text: string): Set<string> {
+    const out = new Set<string>();
+    // word-level tokens (中英都吃)
+    for (const w of text.toLowerCase().split(/[\s,;.()\[\]{}'"\/]+/)) {
+      if (w.length >= 2) out.add(w);
+    }
+    // 字符 bigram (中文友好)
+    const cleaned = text.toLowerCase().replace(/\s+/g, '');
+    for (let i = 0; i < cleaned.length - 1; i++) {
+      out.add(cleaned.slice(i, i + 2));
+    }
+    return out;
+  }
+
+  function checkMerge(): { name: string; score: number }[] {
+    const nameInput = modal.querySelector<HTMLInputElement>('[data-modal-name]');
+    const stmtInput = modal.querySelector<HTMLTextAreaElement>('[data-modal-statement]');
+    const candidate = `${nameInput?.value || ''} ${stmtInput?.value || ''}`.trim();
+    if (candidate.length < 3) return [];
+    const t = tokens(candidate);
+    const out: { name: string; score: number }[] = [];
+    const editingId = modal.dataset.editId;
+    for (const lib of Object.values(listUserLibraries())) {
+      if (lib.id === editingId) continue; // 编辑自己不算重复
+      const lt = tokens(`${lib.name} ${lib.statement || ''}`);
+      const score = jaccard(t, lt);
+      if (score >= 0.5) out.push({ name: lib.name, score });
+    }
+    return out.sort((a, b) => b.score - a.score).slice(0, 3);
+  }
+
+  function renderMergeWarning(): void {
+    const matches = checkMerge();
+    if (matches.length === 0) {
+      mergeWarn.hidden = true;
+      mergeWarn.textContent = '';
+      return;
+    }
+    mergeWarn.hidden = false;
+    mergeWarn.innerHTML = `⚠️ 与已有库可能重复:<br>${matches
+      .map((m) => `<span class="lib-merge-row">${escapeHtml(m.name)} <em>(${(m.score * 100).toFixed(0)}%)</em></span>`)
+      .join('<br>')}`;
+  }
+
+  modal.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[data-modal-name], [data-modal-statement]')
+    .forEach((el) => el.addEventListener('input', renderMergeWarning));
+
   // D.1.1: 「从论文创建库」一键按钮 — 论文页 [data-create-library-from-paper]
   // 打开 modal,把论文 title/tldr 预填进 name/statement,并把论文设为第一个 anchor paper。
   document.querySelectorAll<HTMLElement>('[data-create-library-from-paper]').forEach((btn) => {
