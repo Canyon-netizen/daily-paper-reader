@@ -29,6 +29,7 @@ method_pros_cons: {"Multi-Agent Reinforcement Learning (MARL)框架": {"pros": [
 method_comparison: "本文构建统一的MARL仿真框架，对比位置、动作和收益三类社会线索在不同环境波动下的集体觅食表现，发现低质量线索（位置、动作）在稳定环境有效但波动下脆弱，而高质量收益线索支持灵活的行为多样性和鲁棒性。"
 method_debate_generated_at: "2026-09-01T11:51:20.599340Z"
 method_debate_model: "minimax/MiniMax-M3"
+resource_tier: medium
 ---
 
 
