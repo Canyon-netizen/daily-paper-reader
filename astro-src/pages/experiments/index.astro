@@ -107,6 +107,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
             rows="3"
             placeholder="描述你的实验假设..."
           ></textarea>
+          <button type="button" class="btn btn-sm btn-ghost" data-smart-template>📝 套用 SMART 模板</button>
         </div>
         <div class="form-group">
           <label for="exp-hypothesis-zh">实验假设 (中文)</label>
@@ -206,10 +207,27 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
   <script>
     import '../../scripts/experiments-ui';
     import { updateCounts } from '../../scripts/experiments-ui';
+    import { applySmartHypothesisTemplate } from '../../lib/experiments/smart-template';
 
     // Initialize counts on page load
     document.addEventListener('DOMContentLoaded', () => {
       updateCounts();
+
+      // E.2.1: SMART 模板按钮 —— 套用模板到 #exp-hypothesis(英文) +
+      // #exp-hypothesis-zh(中文),只在空时填,避免覆盖用户已有内容。
+      document.querySelectorAll('[data-smart-template]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const form = btn.closest('form') as HTMLFormElement | null;
+          if (!form) return;
+          const r = applySmartHypothesisTemplate(form, { alsoFillZh: true });
+          if (!r.applied) {
+            console.warn('[experiments] SMART template not applied:', r.reason);
+          } else {
+            const hypEl = form.querySelector<HTMLTextAreaElement>('#exp-hypothesis');
+            hypEl?.focus();
+          }
+        });
+      });
     });
   </script>
 </BaseLayout>
