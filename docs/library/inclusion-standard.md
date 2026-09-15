@@ -161,6 +161,34 @@ UI: `NewLibraryModal.astro` adds a "读者画像" picker at step 2 (after name, 
 statement), with 4 cards explaining each profile in one sentence + the default
 threshold shown next to it.
 
+### 4.1 Migrating libraries created before this field existed
+
+`audienceProfile` was added on 2026-09-14. Libraries created before then load
+through `sanitizeDefinition()` (in `astro-src/lib/user-libraries/store.ts`),
+which now also calls `suggestAudienceProfile()` with the library's statement +
+inclusion keywords. The function uses a small bilingual keyword taxonomy to
+guess a profile:
+
+| Bucket    | Example keywords (en + zh) |
+|-----------|----------------------------|
+| novice    | tutorial, primer, 入门, 教程, 基础 |
+| expert    | SOTA, novel, frontier, 前沿, 算法, 理论 |
+| reviewer  | benchmark, baseline, 评审, 比较 |
+| practitioner | deployment, production, 部署, 工业, 工程 |
+
+Returns `null` when signal is weak or tied — callers fall back to asking the
+user. The suggestion is **in-memory only** (not written back to Gist) so the
+taxonomy can evolve without forcing a migration pass over every legacy doc.
+Users can always override in the edit modal.
+
+Smoke-tested:
+- `'深度学习入门教程'` → `novice`
+- `'LLM 前沿 SOTA 算法'` → `expert`
+- `'paper review benchmark baseline'` → `reviewer`
+- `'production deployment system engineering'` → `practitioner`
+- `'入门 SOTA'` → `null` (tied buckets)
+- `'papers'` → `null` (no signal)
+
 ---
 
 ## 5. Validation: how to know the rubric is working
