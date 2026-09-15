@@ -34,6 +34,27 @@ const items = await defaultPaperRepository.list({ sortBy: 'date' });
 const digests = buildLibraryDigests(items);
 const totalPapers = items.length;
 
+// 最近 7 天入库的论文（从 paper id 提取目录路径，如 "2026/08/21/..." → "2026-08-21"）
+const sevenDaysAgo = new Date();
+sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+const sevenDaysAgoStr = sevenDaysAgo.toISOString().slice(0, 10); // "2026-09-08"
+const recentPapers = items
+  .filter((p) => {
+    // p.id 格式: "2026/08/21/2608.12626v1-xxx" → 提取 "2026-08-21"
+    const match = p.id.match(/^(\d{4})\/(\d{2})\/(\d{2})\//);
+    if (!match) return false;
+    const ingestDate = `${match[1]}-${match[2]}-${match[3]}`;
+    return ingestDate >= sevenDaysAgoStr;
+  })
+  .sort((a, b) => {
+    const getDate = (id: string) => {
+      const m = id.match(/^(\d{4})\/(\d{2})\/(\d{2})\//);
+      return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+    };
+    return getDate(b.id).localeCompare(getDate(a.id)); // 最新的在前
+  })
+  .slice(0, 10);
+
 // 详情模式 ?id=<userLibId> —— SSR 期拿不到 localStorage,所以这里只标
 // 「客户端会去查」,不展示具体内容。客户端 bootstrap 后,user-libraries-ui
 // 检测到 id param 就隐藏列表,渲染 detail 视图。
@@ -87,6 +108,29 @@ const isDetail = !!detailId;
           ➕ 新建文献库
         </button>
       </div>
+    )}
+
+    {/* 最近 7 天入库 widget */}
+    {!isDetail && recentPapers.length > 0 && (
+      <aside class="recent-ingest-widget">
+        <h3 class="recent-ingest-title">
+          <span class="recent-ingest-icon">📥</span>
+          最近 7 天入库
+          <span class="recent-ingest-count">{recentPapers.length} 篇</span>
+        </h3>
+        <div class="recent-ingest-list">
+          {recentPapers.map((p) => (
+            <a class="recent-ingest-item" href={base + '/papers/' + p.slug + '/'}>
+              <span class="recent-ingest-arxiv">{p.canonicalArxivId}</span>
+              <span class="recent-ingest-title-text">{p.title_zh || p.title}</span>
+              <span class="recent-ingest-date">{(() => {
+                const m = p.id.match(/^(\d{4})\/(\d{2})\/(\d{2})\//);
+                return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+              })()}</span>
+            </a>
+          ))}
+        </div>
+      </aside>
     )}
 
     {/* 列表模式 */}
