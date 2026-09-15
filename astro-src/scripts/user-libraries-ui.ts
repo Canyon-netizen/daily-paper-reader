@@ -2973,17 +2973,63 @@ function renderUserLibraryDetail(): void {
     });
   });
   mount.querySelector<HTMLButtonElement>('[data-action="delete"]')?.addEventListener('click', () => {
-    const ok = window.confirm(
-      `确定删除文献库「${lib.name}」吗?\n\n库内的论文不会从 docs 里删除,只是从你的收藏夹里移除。\n此操作不可撤销。`,
-    );
-    if (!ok) return;
-    const res = deleteLibrary(lib.id);
-    if (!res.ok) {
-      showToast(getApiResultMessage(res), 'error');
-    } else {
-      showToast('已删除', 'ok');
-      window.location.href = url('/libraries/');
-    }
+    // 打开删除确认弹窗
+    const modal = mount.querySelector<HTMLElement>('[data-delete-modal]');
+    const backdrop = mount.querySelector<HTMLElement>('[data-delete-modal-backdrop]');
+    const input = mount.querySelector<HTMLInputElement>('#lib-delete-confirm');
+    const confirmBtn = mount.querySelector<HTMLButtonElement>('[data-delete-confirm]');
+    const cancelBtn = mount.querySelector<HTMLButtonElement>('[data-delete-cancel]');
+    const errorSpan = mount.querySelector<HTMLElement>('[data-delete-error]');
+    if (!modal || !input || !confirmBtn || !cancelBtn || !errorSpan) return;
+
+    const libName = modal.dataset.libName || '';
+    const last4 = libName.slice(-4);
+
+    // 重置弹窗状态
+    input.value = '';
+    errorSpan.textContent = '';
+    confirmBtn.setAttribute('disabled', 'true');
+    modal.style.display = 'block';
+
+    // 输入验证
+    const checkInput = () => {
+      const val = input.value.trim();
+      if (val.toLowerCase() === last4.toLowerCase()) {
+        confirmBtn.removeAttribute('disabled');
+        errorSpan.textContent = '';
+      } else {
+        confirmBtn.setAttribute('disabled', 'true');
+        if (val.length > 0 && val.length !== last4.length) {
+          errorSpan.textContent = `需输入 ${last4.length} 个字符`;
+        } else {
+          errorSpan.textContent = '';
+        }
+      }
+    };
+
+    input.oninput = checkInput;
+
+    const closeModal = () => {
+      modal.style.display = 'none';
+    };
+
+    cancelBtn.onclick = closeModal;
+    backdrop?.onclick = closeModal;
+
+    confirmBtn.onclick = () => {
+      if ((confirmBtn.getAttribute('disabled') ?? '') === 'true') return;
+      const res = deleteLibrary(lib.id);
+      if (!res.ok) {
+        showToast(getApiResultMessage(res), 'error');
+        closeModal();
+      } else {
+        showToast('已删除', 'ok');
+        window.location.href = url('/libraries/');
+      }
+    };
+
+    // 聚焦输入框
+    setTimeout(() => input.focus(), 30);
   });
   mount.querySelector<HTMLButtonElement>('[data-action="add-papers"]')?.addEventListener('click', () => {
     window.location.href = url('/papers/');
