@@ -344,6 +344,15 @@ jobs:
             echo "  -> no translation changes; skipping commit"
           fi
 
+      - name: Notify failure
+        if: failure()
+        run: |
+          if [ -n "${{ secrets.SLACK_WEBHOOK }}" ]; then
+            curl -X POST "${{ secrets.SLACK_WEBHOOK }}" \
+              -H "Content-Type: application/json" \
+              -d '{"text": "❌ daily-paper-reader failed","attachments":[{"color":"danger","fields":[{"title":"Run ID","value":"${{ github.run_id}}"}]}]}'
+          fi
+
       - name: Trigger Cloudflare Pages rebuild
         # 用 .github/actions/ping-cf-pages-deploy-hook,缺失 secret 硬失败
         # (替代原来的 `if [ -z "$URL" ] exit 0` 静默跳过,见 PR 2026-07-24)
