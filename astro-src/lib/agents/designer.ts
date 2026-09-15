@@ -217,7 +217,7 @@ function normalizeProposal(
 ): Proposal {
   const base = makeEmptyProposal(round);
   base.id = `p_${round}_${idx}_${Math.random().toString(36).slice(2, 8)}`;
-  base.type = (['add_paper', 'create_draft', 'experiment_plan', 'literature_review', 'rebuttal'] as ProposalType[])
+  base.type = (['add_paper', 'create_draft', 'experiment_plan', 'literature_review', 'rebuttal', 'expand_draft', 'cite_paper', 'archive_paper'] as ProposalType[])
     .includes(raw.type as ProposalType) ? (raw.type as ProposalType) : 'add_paper';
   base.title = String(raw.title ?? '(untitled)').slice(0, 120);
   base.rationale = String(raw.rationale ?? '').slice(0, 500);

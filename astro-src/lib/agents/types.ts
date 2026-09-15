@@ -19,12 +19,43 @@ import type { UserLibrary } from '../user-libraries/types';
 // Proposal — Designer 输出
 // ---------------------------------------------------------------------------
 
+// F.1.1: 8 种 proposal types(原 5 种 + 3 种新增)。
+//   - add_paper: 加入新论文到 project
+//   - create_draft: 基于 evidence 创建 draft
+//   - experiment_plan: 设计实验验证 hypothesis
+//   - literature_review: 综述一段子领域
+//   - rebuttal: 写一段反驳某个 claim
+//   - expand_draft (新): 给现有 draft 加一个 section
+//   - cite_paper (新): 把 paper 加入现有 draft 的 cited list(不一定新建 draft)
+//   - archive_paper (新): 把 paper 从 project library 移除(已读过 / 不再相关)
 export type ProposalType =
   | 'add_paper'
   | 'create_draft'
   | 'experiment_plan'
   | 'literature_review'
-  | 'rebuttal';
+  | 'rebuttal'
+  | 'expand_draft'
+  | 'cite_paper'
+  | 'archive_paper';
+
+/** UI 显示用 — 中文标签 + 简短 icon。 */
+export const PROPOSAL_TYPE_LABELS: Record<ProposalType, { label: string; icon: string }> = {
+  add_paper: { label: '加入论文', icon: '➕' },
+  create_draft: { label: '创建草稿', icon: '📝' },
+  experiment_plan: { label: '设计实验', icon: '🔬' },
+  literature_review: { label: '写综述', icon: '📚' },
+  rebuttal: { label: '反驳', icon: '⚔️' },
+  expand_draft: { label: '扩展草稿', icon: '📈' },
+  cite_paper: { label: '引用论文', icon: '🔗' },
+  archive_paper: { label: '归档论文', icon: '🗃️' },
+};
+
+/** 判断一个字符串是不是合法的 ProposalType;不是则 null。 */
+export function parseProposalType(s: unknown): ProposalType | null {
+  if (typeof s !== 'string') return null;
+  if (s in PROPOSAL_TYPE_LABELS) return s as ProposalType;
+  return null;
+}
 
 export interface ProposalEvidence {
   paperIds: string[];          // canonical arxivId 列表
