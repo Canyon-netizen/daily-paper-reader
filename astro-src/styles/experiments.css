@@ -857,3 +857,95 @@
   color: var(--fg-muted);
   white-space: nowrap;
 }
+
+/* E.2.2: 变量设计向导 */
+.variable-wizard-modal {
+  max-width: 720px;
+  width: 90vw;
+}
+
+.variable-wizard-intro {
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+  margin-bottom: var(--space-3);
+}
+
+.variable-group {
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.1));
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.variable-group-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.variable-group-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.variable-group-items:empty::before {
+  content: '尚未添加变量';
+  display: block;
+  color: var(--fg-muted);
+  font-style: italic;
+  font-size: 0.85rem;
+  padding: var(--space-2) 0;
+}
+
+.variable-item {
+  background: var(--bg-muted);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-2);
+}
+
+.variable-item-row {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.variable-item-row:last-child {
+  margin-bottom: 0;
+}
+
+.variable-item input,
+.variable-item select {
+  flex: 1;
+  min-width: 100px;
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.15));
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.variable-item input:focus,
+.variable-item select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.variable-item [data-variable-remove] {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border, rgba(0, 0, 0, 0.15));
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  color: var(--fg-muted);
+}
+
+.variable-item [data-variable-remove]:hover {
+  color: #d33;
+  background: rgba(221, 51, 51, 0.08);
+}

@@ -127,6 +127,7 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
             rows="3"
             placeholder="描述实验方法、数据集、评估指标..."
           ></textarea>
+          <button type="button" class="btn btn-sm btn-ghost" data-variable-wizard>🧩 变量设计向导</button>
         </div>
         <div class="form-group">
           <label for="exp-method-zh">实验方法 (中文)</label>
@@ -208,6 +209,12 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     import '../../scripts/experiments-ui';
     import { updateCounts } from '../../scripts/experiments-ui';
     import { applySmartHypothesisTemplate } from '../../lib/experiments/smart-template';
+    import {
+      collectVariablesFromWizard,
+      renderVariableItemHtml,
+      renderVariableGroupHtml,
+      renderVariableSetMarkdown,
+    } from '../../lib/experiments/variable-wizard';
 
     // Initialize counts on page load
     document.addEventListener('DOMContentLoaded', () => {
@@ -228,6 +235,86 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
           }
         });
       });
+
+      // E.2.2: 变量设计向导 —— 打开 modal,让用户填 3 组变量,
+      // 完成后把 markdown 追加到 #exp-method。
+      document.querySelectorAll('[data-variable-wizard]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const form = btn.closest('form') as HTMLFormElement | null;
+          if (!form) return;
+          openVariableWizard(form);
+        });
+      });
     });
+
+    function openVariableWizard(form: HTMLFormElement): void {
+      // 复用已有的 modal,如果已经在 → 重新初始化内容
+      let modal = document.getElementById('exp-variable-wizard') as HTMLDialogElement | null;
+      if (!modal) {
+        modal = document.createElement('dialog');
+        modal.id = 'exp-variable-wizard';
+        modal.className = 'idea-modal';
+        document.body.appendChild(modal);
+      }
+      modal.innerHTML = `
+        <div class="modal-content variable-wizard-modal">
+          <div class="modal-header">
+            <h2>🧩 实验变量设计向导</h2>
+            <button type="button" class="modal-close" aria-label="关闭">×</button>
+          </div>
+          <p class="variable-wizard-intro">
+            为实验定义 3 类变量。完成后会自动追加到「实验方法」一栏,
+            也能作为 SMART 假设的衍生输入。
+          </p>
+          ${renderVariableGroupHtml('independent', '自变量 (Independent)')}
+          ${renderVariableGroupHtml('dependent', '因变量 (Dependent)')}
+          ${renderVariableGroupHtml('controlled', '控制变量 (Controlled)')}
+          <div class="form-actions">
+            <button type="button" class="btn btn-ghost modal-cancel">取消</button>
+            <button type="button" class="btn btn-primary" data-variable-apply>✅ 应用到方法</button>
+          </div>
+        </div>
+      `;
+      if (typeof modal.showModal === 'function') {
+        if (!modal.open) modal.showModal();
+      } else {
+        modal.setAttribute('open', '');
+      }
+
+      // 绑定内部事件
+      modal.querySelector('.modal-close')?.addEventListener('click', () => modal?.close());
+      modal.querySelector('.modal-cancel')?.addEventListener('click', () => modal?.close());
+
+      modal.querySelectorAll<HTMLButtonElement>('[data-add-variable]').forEach((addBtn) => {
+        addBtn.addEventListener('click', () => {
+          const group = addBtn.dataset.addVariable as 'independent' | 'dependent' | 'controlled';
+          const groupEl = modal?.querySelector(`[data-variable-group="${group}"] .variable-group-items`);
+          if (!groupEl) return;
+          const tmp = document.createElement('div');
+          tmp.innerHTML = renderVariableItemHtml(groupEl.children.length);
+          const itemEl = tmp.firstElementChild;
+          if (itemEl) {
+            groupEl.appendChild(itemEl);
+            bindVariableItemRemove(itemEl as HTMLElement);
+          }
+        });
+      });
+
+      modal.querySelector<HTMLButtonElement>('[data-variable-apply]')?.addEventListener('click', () => {
+        const set = collectVariablesFromWizard(modal);
+        const md = renderVariableSetMarkdown(set);
+        const methodEl = form.querySelector<HTMLTextAreaElement>('#exp-method');
+        if (methodEl && md) {
+          // 已有方法 → 追加到末尾;空 → 直接写
+          methodEl.value = methodEl.value.trim() ? `${methodEl.value.trim()}\n\n${md}` : md;
+        }
+        modal?.close();
+      });
+
+      function bindVariableItemRemove(itemEl: HTMLElement): void {
+        const btn = itemEl.querySelector<HTMLButtonElement>('[data-variable-remove]');
+        btn?.addEventListener('click', () => itemEl.remove());
+      }
+    }
   </script>
 </BaseLayout>
