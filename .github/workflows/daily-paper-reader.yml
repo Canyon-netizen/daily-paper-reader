@@ -2,8 +2,9 @@ name: daily-paper-reader
 
 on:
   schedule:
-    - cron: "30 18 * * *" # 每天一次:北京时间次日 02:30(UTC 18:30)
-    # - cron: "0 */6 * * *" # 旧版:每 6 小时一次(UTC 0/6/12/18)
+    - cron: "30 18 * * *" # 每天 UTC 18:30
+    # GH Actions 60 天无活跃 commit 会暂停 cron,加每周一唤醒
+    - cron: "0 0 * * 1"  # 每周一 00:00 UTC
   workflow_dispatch:
     inputs:
       run_enrich:
