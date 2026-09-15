@@ -343,6 +343,96 @@
   background: var(--bg);
 }
 
+/* --- 删除确认弹窗(用户库详情页) --- */
+.lib-delete-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+.lib-delete-modal.show {
+  display: block;
+}
+.lib-delete-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+}
+.lib-delete-modal-content {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+}
+.lib-delete-modal-content h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.lib-delete-modal-content p {
+  margin: 0 0 0.5rem;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+.lib-delete-modal-hint {
+  font-size: 0.85rem !important;
+  color: var(--fg-subtle) !important;
+  padding: 0.5rem;
+  background: var(--bg-muted);
+  border-radius: 6px;
+  margin-bottom: 1rem !important;
+}
+.lib-delete-modal-field {
+  margin-bottom: 1rem;
+}
+.lib-delete-modal-field label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-bottom: 0.4rem;
+  color: var(--fg);
+}
+.lib-delete-modal-field .lib-input {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 1rem;
+  font-family: monospace;
+  text-align: center;
+  letter-spacing: 0.2em;
+  text-transform: lowercase;
+}
+.lib-delete-modal-field .lib-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+.lib-delete-modal-error {
+  display: block;
+  font-size: 0.8rem;
+  color: #dc2626;
+  margin-top: 0.35rem;
+  min-height: 1.1em;
+}
+.lib-delete-modal-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+.lib-delete-modal-actions .btn-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* --- 2026-09-14 modal 体验修复(3 角色审计 + 用户反馈「无法滚动 / 不好看」):
    - 可见滚动条(Windows 默认隐藏,加 reserve gutter + 自定义颜色)
    - required 红框只在 :user-invalid 时出现(用户交互过且失焦),
