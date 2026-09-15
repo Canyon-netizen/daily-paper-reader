@@ -501,9 +501,9 @@ const selectedPaper = papers[0];
           <dt>库名 (中文)</dt>
           <dd>{lib.titleZh}</dd>
           <dt>研究方向陈述</dt>
-          <dd>{lib.description}</dd>
+          <dd data-statement-display>{lib.description}</dd>
           <dt>研究方向陈述(中文)</dt>
-          <dd>{lib.descriptionZh}</dd>
+          <dd data-statement-display-zh>{lib.descriptionZh}</dd>
           <dt>维护者</dt>
           <dd>{lib.curator}</dd>
           <dt>卡片色调</dt>
@@ -513,6 +513,30 @@ const selectedPaper = papers[0];
           <dt>入库方式</dt>
           <dd>公共库(从 docs/papers/** frontmatter 派生,无写路径)</dd>
         </dl>
+
+        <h3>个人文献库配置</h3>
+        <p class="empty">仅个人创建的文献库可编辑以下内容:</p>
+        <div class="govern-personal-section">
+          <div class="govern-field">
+            <label class="govern-label" for="lib-personal-statement">方向描述 (statement)</label>
+            <textarea
+              id="lib-personal-statement"
+              class="govern-textarea"
+              rows="3"
+              maxlength="200"
+              placeholder="描述你这个文献库的主题…"
+              data-lib-statement
+            ></textarea>
+            <div class="govern-field-hint">
+              1-200 字,显示在文献库卡片上。保存在本机浏览器,不同步到云端。
+            </div>
+          </div>
+          <div class="govern-actions">
+            <button type="button" class="export-btn primary" data-save-statement>保存</button>
+            <button type="button" class="export-btn" data-clear-statement>清空</button>
+            <span class="govern-save-status" data-save-status></span>
+          </div>
+        </div>
 
         <h3>本月 LLM 用量</h3>
         <dl class="govern-dl">
@@ -831,6 +855,100 @@ const selectedPaper = papers[0];
           : '推送占位:阶段 4 接入 user-libraries/gist.ts';
       });
     });
+
+    // 文献库配置 tab:statement 编辑(仅个人库)
+    async function initGovernStatement(): Promise<void> {
+      const panel = document.getElementById('govern-panel');
+      const libId = panel?.dataset.libraryId;
+      if (!libId) return;
+
+      // 动态 import store
+      const store = await import('../../lib/user-libraries/store');
+      const { getUserLibrary, renameLibrary } = store;
+
+      const textarea = document.querySelector<HTMLTextAreaElement>('[data-lib-statement]');
+      const saveBtn = document.querySelector<HTMLButtonElement>('[data-save-statement]');
+      const clearBtn = document.querySelector<HTMLButtonElement>('[data-clear-statement]');
+      const statusSpan = document.querySelector<HTMLSpanElement>('[data-save-status]');
+      const displayEl = document.querySelector<HTMLElement>('[data-statement-display]');
+      const displayZhEl = document.querySelector<HTMLElement>('[data-statement-display-zh]');
+      if (!textarea || !saveBtn || !clearBtn || !statusSpan) return;
+
+      // 尝试从 localStorage 读取个人库 statement
+      const STORAGE_KEY = `dpr_lib_stmt_${libId}`;
+      let localStatement = '';
+      try {
+        localStatement = localStorage.getItem(STORAGE_KEY) || '';
+      } catch { /* ignore */ }
+
+      // 优先用 localStorage,没有则尝试从用户库读取
+      const userLib = getUserLibrary(libId);
+      const initialStmt = localStatement || userLib?.statement || '';
+
+      textarea.value = initialStmt;
+
+      // 保存按钮
+      saveBtn.addEventListener('click', () => {
+        const newStmt = textarea.value.trim();
+        // 先存 localStorage
+        try {
+          if (newStmt) {
+            localStorage.setItem(STORAGE_KEY, newStmt);
+          } else {
+            localStorage.removeItem(STORAGE_KEY);
+          }
+        } catch (e) {
+          console.error('localStorage save failed:', e);
+        }
+
+        // 如果是个人库,同步到 store
+        if (userLib) {
+          const res = renameLibrary(libId, { statement: newStmt });
+          if (res.ok) {
+            statusSpan.textContent = '已保存';
+            statusSpan.style.color = 'var(--accent)';
+          } else {
+            statusSpan.textContent = '保存失败: ' + res.reason;
+            statusSpan.style.color = '#dc2626';
+          }
+        } else {
+          // 公共库只存 localStorage
+          statusSpan.textContent = '已保存(仅本地)';
+          statusSpan.style.color = 'var(--accent)';
+        }
+
+        // 更新显示
+        if (displayEl) displayEl.textContent = newStmt || lib.description;
+        if (displayZhEl) displayZhEl.textContent = newStmt || lib.descriptionZh;
+
+        setTimeout(() => { statusSpan.textContent = ''; }, 3000);
+      });
+
+      // 清空按钮(两次确认)
+      let clearConfirm = false;
+      clearBtn.addEventListener('click', () => {
+        if (!clearConfirm) {
+          clearConfirm = true;
+          clearBtn.textContent = '确认清空?';
+          clearBtn.style.background = '#dc2626';
+          setTimeout(() => {
+            clearConfirm = false;
+            clearBtn.textContent = '清空';
+            clearBtn.style.background = '';
+          }, 4000);
+          return;
+        }
+        textarea.value = '';
+        clearConfirm = false;
+        clearBtn.textContent = '清空';
+        clearBtn.style.background = '';
+        // 触发保存逻辑
+        saveBtn.click();
+      });
+    }
+
+    // 页面加载时初始化 statement 编辑
+    void initGovernStatement();
 
     syncFromHash();
   </script>
