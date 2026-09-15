@@ -61,7 +61,7 @@ Privacy: **zero PII**. No IP, no UA, no timestamps beyond epoch ms.
 
 ## 3. How users can inspect / clear
 
-In `/settings/` page (TODO: implement UI for next iteration):
+In `/settings/` page → "我的反馈日志" section (shipped 2026-09-14):
 
 - Show count by kind (`countByKind()`)
 - "导出 JSON" button — calls `exportFeedbackJson()`
