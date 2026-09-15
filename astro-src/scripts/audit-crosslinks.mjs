@@ -70,22 +70,28 @@ export function readCrosslinkFields(fm) {
     out.resource_tier = tierMatch[1].replace(/^['"]|['"]$/g, '').trim();
   }
 
-  // is_milestone: true | false
+  // is_milestone: true | false | (preserved raw value when neither)
   const msMatch = fm.match(/^is_milestone:\s*(.+)$/m);
   if (msMatch) {
-    const val = msMatch[1].trim();
-    out.is_milestone = val === 'true';
+    const val = msMatch[1].trim().replace(/^['"]|['"]$/g, '');
+    if (val === 'true') out.is_milestone = true;
+    else if (val === 'false') out.is_milestone = false;
+    else out.is_milestone = val; // preserve raw so auditPaper can flag invalid
   }
 
   return out;
 }
 
-/** 检查引用的 path 是否存在。 */
-export function validateRef(ref, filePath) {
+/** 检查引用的 path 是否存在。
+ *  @param {string} ref - relative path like "ideas/xxx.md" or "docs/ideas/xxx.md"
+ *  @param {string} filePath - source paper file path (unused, kept for API compat)
+ *  @param {string} [docsRoot=DOCS_ROOT] - override the docs root (default 'docs/')
+ */
+export function validateRef(ref, filePath, docsRoot = DOCS_ROOT) {
   // ref 已经是相对于 docs/ 的完整路径，如 "ideas/xxx.md" 或 "docs/ideas/xxx.md"
   // 统一去掉前缀 "docs/"（如果存在）
   const normalizedRef = ref.replace(/^docs\//, '');
-  const targetPath = join(DOCS_ROOT, normalizedRef);
+  const targetPath = join(docsRoot, normalizedRef);
   // 尝试 .md 后缀
   if (existsSync(targetPath + '.md')) return { valid: true };
   if (existsSync(targetPath)) return { valid: true };
@@ -94,8 +100,11 @@ export function validateRef(ref, filePath) {
   return { valid: false, targetPath };
 }
 
-/** 检查单篇论文的 cross-link 健康度。 */
-export function auditPaper(filePath) {
+/** 检查单篇论文的 cross-link 健康度。
+ *  @param {string} filePath - paper .md file path
+ *  @param {string} [docsRoot=DOCS_ROOT] - override the docs root for ref lookup
+ */
+export function auditPaper(filePath, docsRoot = DOCS_ROOT) {
   const issues = [];
   let raw;
   try {
@@ -128,7 +137,7 @@ export function auditPaper(filePath) {
   ];
 
   for (const { type, ref } of allRefs) {
-    const result = validateRef(ref, filePath);
+    const result = validateRef(ref, filePath, docsRoot);
     if (!result.valid) {
       issues.push(`invalid-ref(${type}:${ref})`);
     }
