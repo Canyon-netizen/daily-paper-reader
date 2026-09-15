@@ -44,7 +44,7 @@ const { id } = Astro.params;
   <Footer />
 
   <script define:vars={{ ideaId: id, baseUrl: base }}>
-    import { getIdea, updateIdea, deleteIdea, listIdeas } from '../../lib/ideas';
+    import { getIdea, updateIdea, deleteIdea, listIdeas, saveIdeaVersion } from '../../lib/ideas';
     import type { Idea, IdeaStatus } from '../../lib/ideas/types';
     import { renderMarkdownBody } from '../../lib/markdown/render';
     import { getAllExperiments } from '../../lib/experiments';
@@ -84,19 +84,27 @@ const { id } = Astro.params;
         day: 'numeric',
       });
 
-      const papersHtml = idea.relatedPapers.length > 0
-        ? `<div class="idea-detail-section">
-            <h4>关联论文</h4>
-            <div class="idea-papers-list">
+      const papersHtml = `
+        <div class="idea-detail-section">
+          <h4>关联论文</h4>
+          ${idea.relatedPapers.length > 0 ? `
+            <div class="idea-papers-grid">
               ${idea.relatedPapers.map((pid) => `
-                <a href="${baseUrl}/papers/${pid}/" class="idea-paper-link" target="_blank">
-                  <span class="paper-id">${pid}</span>
-                  <span class="paper-arrow">→</span>
-                </a>
+                <div class="idea-paper-card" data-paper-id="${escapeHtml(pid)}">
+                  <a href="${baseUrl}/papers/${encodeURIComponent(pid)}/" class="idea-paper-card-link" target="_blank">
+                    <span class="paper-id">${escapeHtml(pid)}</span>
+                    <span class="paper-arrow">→</span>
+                  </a>
+                  <button type="button" class="idea-paper-remove" data-remove-paper="${escapeHtml(pid)}" aria-label="解除关联 ${escapeHtml(pid)}">✕</button>
+                </div>
               `).join('')}
             </div>
-          </div>`
-        : '';
+          ` : '<p class="idea-papers-empty">尚未关联任何论文。</p>'}
+          <div class="idea-papers-add">
+            <input type="text" data-add-paper-input placeholder="输入 arXiv ID,如 1706.03762" class="idea-paper-input" />
+            <button type="button" class="btn btn-sm" data-add-paper>➕ 添加论文</button>
+          </div>
+        </div>`;
 
       const conceptsHtml = idea.relatedConcepts.length > 0
         ? `<div class="idea-detail-section">
@@ -201,6 +209,47 @@ const { id } = Astro.params;
           const updated = getIdea(idea.id);
           if (updated) renderDetail(updated);
         }
+      });
+
+      // E.1.4: 关联论文 — 添加
+      container.querySelector<HTMLButtonElement>('[data-add-paper]')?.addEventListener('click', () => {
+        const input = container.querySelector<HTMLInputElement>('[data-add-paper-input]');
+        if (!input) return;
+        const raw = input.value.trim();
+        if (!raw) return;
+        // 接受 1706.03762 / 1706.03762v1 / 20088.11826
+        const m = raw.match(/^(\d{4}\.\d{4,5})(v\d+)?$/);
+        if (!m) {
+          alert('arXiv ID 格式不对,期望形如 1706.03762 或 1706.03762v1');
+          return;
+        }
+        const normalized = m[1] + (m[2] || '');
+        if (idea.relatedPapers.includes(normalized)) {
+          alert(`论文 ${normalized} 已经在关联列表里`);
+          return;
+        }
+        const nextPapers = [...idea.relatedPapers, normalized];
+        const updated = updateIdea(idea.id, { relatedPapers: nextPapers });
+        if (updated) {
+          saveIdeaVersion(idea.id, { changeNote: `linked paper ${normalized}` });
+          renderDetail(updated);
+        }
+      });
+
+      // E.1.4: 关联论文 — 移除(整张卡上的 ✕)
+      container.querySelectorAll<HTMLButtonElement>('[data-remove-paper]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const pid = btn.dataset.removePaper;
+          if (!pid) return;
+          const nextPapers = idea.relatedPapers.filter((p) => p !== pid);
+          const updated = updateIdea(idea.id, { relatedPapers: nextPapers });
+          if (updated) {
+            saveIdeaVersion(idea.id, { changeNote: `unlinked paper ${pid}` });
+            renderDetail(updated);
+          }
+        });
       });
     }
 
