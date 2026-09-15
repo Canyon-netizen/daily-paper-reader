@@ -22,6 +22,7 @@ import { getLibrary, LIBRARIES, selectLibraryPapers } from '../../lib/libraries'
 import { paperHref } from '../../lib/paper';
 import { renderMarkdownBody } from '../../lib/markdown';
 import { computeLibraryStats } from '../../lib/library-stats';
+import { freshnessFromLatestDate } from '../../lib/library-freshness';
 import '../../styles/library-workbench.css';
 
 /** 把 wiki 5 节中文 markdown 渲染成 HTML,挂到 set:html 上。
@@ -129,6 +130,9 @@ const libraryStats = computeLibraryStats(items, lib);
 const topCategoryEntries = Object.entries(libraryStats.categoryDistribution)
   .sort((a, b) => b[1] - a[1])
   .slice(0, 5);
+
+// D.2.4: 库 freshness 指示器 —— 根据"最近一次匹配论文日期"派生颜色 badge。
+const libraryFreshness = freshnessFromLatestDate(libraryStats.newestDate);
 ---
 
 <BaseLayout
@@ -165,6 +169,13 @@ const topCategoryEntries = Object.entries(libraryStats.categoryDistribution)
           <span><span class="meta-num">{papers.length}</span> 篇论文</span>
           <span><span class="meta-num">{topConcepts.length}</span> 个高频概念</span>
           <span>维护 · {lib.curator}</span>
+          {/* D.2.4: 库新鲜度 badge —— "N 天前" / "今天更新" / "空库",颜色随时间衰减 */}
+          <span
+            class={`lib-freshness-badge lib-freshness-${libraryFreshness.color}`}
+            title="基于最近一篇命中论文的日期"
+          >
+            🕒 {libraryFreshness.label}
+          </span>
         </div>
       </div>
       <div class="library-wb-export">
