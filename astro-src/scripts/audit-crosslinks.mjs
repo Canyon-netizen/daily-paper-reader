@@ -81,8 +81,10 @@ function readCrosslinkFields(fm) {
 
 /** 检查引用的 path 是否存在。 */
 function validateRef(ref, filePath) {
-  // ref 可能是 "ideas/agent-planning-reasoning" 或 "experiments/xxx"
-  const targetPath = join(DOCS_ROOT, ref);
+  // ref 已经是相对于 docs/ 的完整路径，如 "ideas/xxx.md" 或 "docs/ideas/xxx.md"
+  // 统一去掉前缀 "docs/"（如果存在）
+  const normalizedRef = ref.replace(/^docs\//, '');
+  const targetPath = join(DOCS_ROOT, normalizedRef);
   // 尝试 .md 后缀
   if (existsSync(targetPath + '.md')) return { valid: true };
   if (existsSync(targetPath)) return { valid: true };
