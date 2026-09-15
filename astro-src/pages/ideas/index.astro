@@ -1,20 +1,120 @@
 ---
-// /ideas/ — Ideas list page (grid of idea cards)
+// /ideas/ — Ideas list page (SSR from docs/ideas/*.md)
+//
+// SSR-side: reads markdown files from docs/ideas/, parses frontmatter and body preview.
+// Supports filter by tag or title keyword.
 
+import fs from 'node:fs';
+import path from 'node:path';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import Navbar from '../../components/Navbar.astro';
 import Footer from '../../components/Footer.astro';
+import { parseFrontmatter } from '../../lib/paper-frontmatter/parse';
 import '../../styles/ideas.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+const IDEAS_DIR = path.resolve('./docs/ideas');
 
-// SSR-side: we can't read localStorage, so just render an empty shell
-// The client-side JS (ideas-ui.ts) will hydrate and load ideas from localStorage
+interface IdeaSummary {
+  id: string;
+  title: string;
+  titleZh: string;
+  status: 'draft' | 'active' | 'promoted' | 'archived';
+  tags: string[];
+  description: string;
+  paperCount: number;
+  updatedAt: string;
+}
+
+/** Extract paper count from ## 关联论文 section */
+function countRelatedPapers(body: string): number {
+  const match = body.match(/## 关联论文\n([\s\S]*?)(?=\n## |\n#$)/);
+  if (!match) return 0;
+  const lines = match[1].split('\n');
+  return lines.filter(l => /^\- \d{4}\.\d{4}/.test(l.trim())).length;
+}
+
+/** Get first 200 chars of description (strip ## headings) */
+function getDescriptionPreview(body: string): string {
+  // Remove all ## headings and get first 200 chars
+  const cleaned = body
+    .replace(/^## .+$/gm, '')
+    .replace(/^# .+$/gm, '')
+    .replace(/\n+/g, ' ')
+    .trim();
+  return cleaned.length > 200 ? cleaned.slice(0, 200) + '...' : cleaned;
+}
+
+/** Load all ideas from docs/ideas/*.md */
+function loadIdeasFromDisk(): IdeaSummary[] {
+  if (!fs.existsSync(IDEAS_DIR)) {
+    return [];
+  }
+
+  const files = fs.readdirSync(IDEAS_DIR).filter(f => f.endsWith('.md'));
+  const ideas: IdeaSummary[] = [];
+
+  for (const file of files) {
+    try {
+      const filePath = path.join(IDEAS_DIR, file);
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const parsed = parseFrontmatter(content);
+
+      if ('error' in parsed) {
+        console.warn(`[ideas] Failed to parse ${file}: ${parsed.error}`);
+        continue;
+      }
+
+      const fm = parsed.data as Record<string, unknown>;
+      const body = parsed.body;
+      const id = (fm.id as string) || file.replace(/\.md$/, '');
+
+      ideas.push({
+        id,
+        title: (fm.title as string) || id,
+        titleZh: (fm.title_zh as string) || '',
+        status: (fm.status as IdeaSummary['status']) || 'draft',
+        tags: Array.isArray(fm.tags) ? (fm.tags as string[]) : [],
+        description: getDescriptionPreview(body),
+        paperCount: countRelatedPapers(body),
+        updatedAt: (fm.updatedAt as string) || (fm.createdAt as string) || new Date().toISOString(),
+      });
+    } catch (err) {
+      console.warn(`[ideas] Error loading ${file}:`, err);
+    }
+  }
+
+  // Sort by updatedAt descending
+  ideas.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return ideas;
+}
+
+const allIdeas = loadIdeasFromDisk();
+
+// Status labels
+const statusLabels: Record<string, string> = {
+  draft: '草稿',
+  active: '进行中',
+  promoted: '推荐',
+  archived: '归档',
+};
+
+// Tag counts for filter pills
+const tagCounts = new Map<string, number>();
+for (const idea of allIdeas) {
+  for (const tag of idea.tags) {
+    tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+  }
+}
+const popularTags = Array.from(tagCounts.entries())
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 10)
+  .map(([tag, count]) => ({ tag, count }));
 ---
 
 <BaseLayout
   title="想法 · Daily Paper Reader"
-  description="记录和管理你的研究想法 — 从论文阅读中产生的 idea、工作实验计划、写作素材。"
+  description="从 docs/ideas/ 加载的研究想法列表，支持按标签或标题过滤。"
 >
   <Navbar />
 
@@ -22,243 +122,160 @@ const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
     <header class="ideas-hero">
       <h1>想法</h1>
       <p class="lead">
-        记录和管理你的 <strong>研究想法</strong>。
-        从论文阅读中产生的 idea、实验计划、写作素材，都在这里。
+        从论文阅读中产生的 <strong>研究想法</strong>。
+        共 <strong>{allIdeas.length}</strong> 个想法，已 SSR 渲染。
       </p>
     </header>
 
     <div class="ideas-actionbar">
-      <div class="ideas-filter" data-ideas-filter>
-        <button type="button" class="filter-pill active" data-idea-filter="all">全部</button>
-        <button type="button" class="filter-pill" data-idea-filter="draft">
-          草稿
-          <span class="status-tooltip" data-tooltip="起草中的想法，尚未开始验证">?</span>
-        </button>
-        <button type="button" class="filter-pill" data-idea-filter="active">
-          进行中
-          <span class="status-tooltip" data-tooltip="正在验证或探索的想法">?</span>
-        </button>
-        <button type="button" class="filter-pill" data-idea-filter="promoted">
-          推荐
-          <span class="status-tooltip" data-tooltip="已验证成功，值得分享或进一步发展">?</span>
-        </button>
-        <button type="button" class="filter-pill" data-idea-filter="archived">
-          归档
-          <span class="status-tooltip" data-tooltip="已搁置或不再活跃的想法">?</span>
-        </button>
+      <!-- Filter input -->
+      <div class="ideas-search">
+        <input
+          type="text"
+          id="ideas-filter-input"
+          class="ideas-filter-input"
+          placeholder="按标题或标签过滤..."
+          autocomplete="off"
+        />
       </div>
-      <span class="ideas-count" data-idea-count>加载中...</span>
-      <button type="button" class="btn btn-primary btn-sm" data-open-new-idea>
-        ➕ 新建想法
-      </button>
-      <button type="button" class="btn btn-sm" data-batch-create-experiments>
-        🚀 批量建实验
-      </button>
-      <button type="button" class="btn btn-sm" data-export-all>
-        💾 导出全部
-      </button>
+
+      <!-- Status filter pills -->
+      <div class="ideas-filter-pills" data-status-filter>
+        <button type="button" class="filter-pill active" data-status="all">全部</button>
+        <button type="button" class="filter-pill" data-status="draft">草稿</button>
+        <button type="button" class="filter-pill" data-status="active">进行中</button>
+        <button type="button" class="filter-pill" data-status="promoted">推荐</button>
+        <button type="button" class="filter-pill" data-status="archived">归档</button>
+      </div>
+
+      <span class="ideas-count" data-idea-count>{allIdeas.length} 个想法</span>
     </div>
 
-    <div id="batch-selection-bar" class="batch-selection-bar" hidden>
-      <span data-batch-count>已选 0 个</span>
-      <button type="button" class="btn btn-primary btn-sm" data-batch-create-selected>
-        🚀 批量创建实验
-      </button>
-      <button type="button" class="btn btn-ghost btn-sm" data-batch-clear>
-        清除选择
-      </button>
-    </div>
+    <!-- Popular tags -->
+    {popularTags.length > 0 && (
+      <div class="ideas-tags-bar">
+        <span class="ideas-tags-label">热门标签:</span>
+        {popularTags.map(({ tag, count }) => (
+          <button type="button" class="tag-pill" data-tag={tag}>
+            {tag} <span class="tag-count">({count})</span>
+          </button>
+        ))}
+      </div>
+    )}
 
-    <div id="ideas-empty-hint" class="ideas-empty-hint" hidden>
-      <p class="ideas-empty-hint-text">
-        还没有想法？读完论文后在 paper-analyzer 点「💡 保存为想法」，或在主题报告点「💡 提炼为想法」。
-      </p>
-    </div>
-
+    <!-- Ideas grid -->
     <div id="ideas-grid" class="ideas-grid">
-      <!-- Client-side rendered -->
-      <noscript>
-        <p class="ideas-nojs">
-          想法功能需要 JavaScript 渲染 — 数据存在浏览器 localStorage。
-        </p>
-      </noscript>
+      {allIdeas.map((idea) => (
+        <a href={`${base}/ideas/${idea.id}/`} class="idea-card" data-id={idea.id} data-status={idea.status} data-tags={JSON.stringify(idea.tags)}>
+          <div class="idea-card-header">
+            <span class={`idea-status-badge idea-status--${idea.status}`}>
+              {statusLabels[idea.status] || idea.status}
+            </span>
+          </div>
+          <h3 class="idea-title">{idea.titleZh || idea.title}</h3>
+          {idea.titleZh && idea.title !== idea.titleZh && (
+            <p class="idea-title-en">{idea.title}</p>
+          )}
+          <p class="idea-description">{idea.description}</p>
+          {idea.tags.length > 0 && (
+            <div class="idea-tags">
+              {idea.tags.slice(0, 5).map((tag) => (
+                <span class="idea-tag">{tag}</span>
+              ))}
+              {idea.tags.length > 5 && <span class="idea-tag">+{idea.tags.length - 5}</span>}
+            </div>
+          )}
+          <div class="idea-meta">
+            <span class="idea-paper-count">📄 {idea.paperCount} 篇论文</span>
+          </div>
+        </a>
+      ))}
+    </div>
+
+    <div id="ideas-empty" class="ideas-empty" hidden>
+      <div class="ideas-empty-icon">💡</div>
+      <h3 class="ideas-empty-title">没有匹配的想法</h3>
+      <p class="ideas-empty-desc">试试调整过滤条件</p>
     </div>
   </main>
 
   <Footer />
 
-  <!-- New Idea Modal -->
-  <dialog id="idea-modal" class="idea-modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>新建想法</h2>
-        <button type="button" class="modal-close" aria-label="关闭">×</button>
-      </div>
-      <form id="idea-form" class="idea-form">
-        <div class="form-group">
-          <label for="idea-title">标题</label>
-          <input
-            type="text"
-            id="idea-title"
-            name="title"
-            required
-            placeholder="例如: Transformer 注意力机制的可解释性改进"
-            maxlength="100"
-          />
-        </div>
-        <div class="form-group">
-          <label for="idea-description">描述</label>
-          <textarea
-            id="idea-description"
-            name="description"
-            required
-            rows="6"
-            placeholder="详细描述这个想法的背景、目标和预期价值..."
-          ></textarea>
-        </div>
-        <div class="form-group">
-          <label for="idea-related-papers">
-            关联论文 (arXiv ID, 逗号分隔)
-            <span class="field-hint">支持如 1706.03762, 2008.11826</span>
-          </label>
-          <input
-            type="text"
-            id="idea-related-papers"
-            name="relatedPapers"
-            placeholder="1706.03762, 2008.11826"
-          />
-        </div>
-        <div class="form-group">
-          <label for="idea-tags">标签 (逗号分隔)</label>
-          <input
-            type="text"
-            id="idea-tags"
-            name="tags"
-            placeholder="architecture, theory, nlp"
-          />
-        </div>
-
-        <!-- Methodology Section (collapsible) -->
-        <details class="methodology-details">
-          <summary class="methodology-summary">
-            <span>方法论 (可选)</span>
-            <button type="button" class="btn btn-ghost btn-sm methodology-template-btn" data-methodology-template="observation-hypothesis">
-              📝 观察→假设 模板
-            </button>
-          </summary>
-          <div class="methodology-fields">
-            <div class="form-group">
-              <label for="idea-methodology-observation">观察 (Observation)</label>
-              <textarea
-                id="idea-methodology-observation"
-                name="methodology_observation"
-                rows="2"
-                placeholder="描述你观察到的现象..."
-              ></textarea>
-            </div>
-            <div class="form-group">
-              <label for="idea-methodology-hypothesis">假设 (Hypothesis)</label>
-              <textarea
-                id="idea-methodology-hypothesis"
-                name="methodology_hypothesis"
-                rows="2"
-                placeholder="基于观察提出的假设..."
-              ></textarea>
-            </div>
-            <div class="form-group">
-              <label for="idea-methodology-method">方法 (Method)</label>
-              <textarea
-                id="idea-methodology-method"
-                name="methodology_method"
-                rows="2"
-                placeholder="验证假设的方法..."
-              ></textarea>
-            </div>
-            <div class="form-group">
-              <label for="idea-methodology-findings">发现 (Findings)</label>
-              <textarea
-                id="idea-methodology-findings"
-                name="methodology_findings"
-                rows="2"
-                placeholder="实验发现..."
-              ></textarea>
-            </div>
-          </div>
-        </details>
-
-        <div class="form-actions">
-          <button type="button" class="btn btn-ghost modal-cancel">取消</button>
-          <button type="submit" class="btn btn-primary">创建想法</button>
-        </div>
-      </form>
-    </div>
-  </dialog>
-
-  <!-- Batch Create Experiments Modal -->
-  <dialog id="batch-experiment-modal" class="batch-experiment-modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>批量创建实验</h2>
-        <button type="button" class="modal-close" aria-label="关闭">×</button>
-      </div>
-      <form id="batch-experiment-form" class="batch-experiment-form">
-        <div class="form-group">
-          <label for="batch-title-prefix">实验标题前缀</label>
-          <input
-            type="text"
-            id="batch-title-prefix"
-            name="titlePrefix"
-            placeholder="实验: "
-            value="实验: "
-          />
-        </div>
-        <div class="form-group">
-          <label for="batch-method">公共实验方法</label>
-          <textarea
-            id="batch-method"
-            name="method"
-            rows="3"
-            placeholder="待设计"
-          ></textarea>
-        </div>
-        <div class="form-group">
-          <label for="batch-tags">公共标签 (逗号分隔)</label>
-          <input
-            type="text"
-            id="batch-tags"
-            name="tags"
-            placeholder=""
-          />
-        </div>
-        <div class="form-group">
-          <label for="batch-description-prefix">公共描述前缀</label>
-          <textarea
-            id="batch-description-prefix"
-            name="descriptionPrefix"
-            rows="2"
-            placeholder=""
-          ></textarea>
-        </div>
-        <div id="batch-preview-container" class="batch-preview-container" hidden>
-          <h4>预览生成的实验</h4>
-          <pre id="batch-preview" class="batch-experiment-preview"></pre>
-        </div>
-        <div class="form-actions">
-          <button type="button" class="btn btn-ghost modal-cancel">取消</button>
-          <button type="button" id="batch-preview-btn" class="btn btn-secondary">📋 预览</button>
-          <button type="submit" class="btn btn-primary">🚀 一键创建</button>
-        </div>
-      </form>
-    </div>
-  </dialog>
-
   <script>
-    import '../../scripts/ideas-ui';
-    import { updateCounts } from '../../scripts/ideas-ui';
+    // Client-side filter logic
+    const filterInput = document.getElementById('ideas-filter-input') as HTMLInputElement;
+    const statusPills = document.querySelectorAll<HTMLButtonElement>('[data-status]');
+    const tagPills = document.querySelectorAll<HTMLButtonElement>('[data-tag]');
+    const cards = document.querySelectorAll<HTMLAnchorElement>('.idea-card');
+    const countEl = document.querySelector('[data-idea-count]');
+    const emptyEl = document.getElementById('ideas-empty');
 
-    // Initialize counts on page load
-    document.addEventListener('DOMContentLoaded', () => {
-      updateCounts();
+    let currentStatus = 'all';
+    let currentTag: string | null = null;
+    let currentSearch = '';
+
+    function filterCards() {
+      let visibleCount = 0;
+      const searchLower = currentSearch.toLowerCase();
+
+      cards.forEach(card => {
+        const status = card.dataset.status || '';
+        const tags = JSON.parse(card.dataset.tags || '[]') as string[];
+        const title = card.querySelector('.idea-title')?.textContent || '';
+        const titleEn = card.querySelector('.idea-title-en')?.textContent || '';
+
+        const matchStatus = currentStatus === 'all' || status === currentStatus;
+        const matchTag = !currentTag || tags.includes(currentTag);
+        const matchSearch = !searchLower ||
+          title.toLowerCase().includes(searchLower) ||
+          titleEn.toLowerCase().includes(searchLower) ||
+          tags.some(t => t.toLowerCase().includes(searchLower));
+
+        const visible = matchStatus && matchTag && matchSearch;
+        card.style.display = visible ? '' : 'none';
+        if (visible) visibleCount++;
+      });
+
+      if (countEl) {
+        countEl.textContent = `${visibleCount} 个想法`;
+      }
+      if (emptyEl) {
+        emptyEl.hidden = visibleCount > 0;
+      }
+    }
+
+    // Status pill click
+    statusPills.forEach(pill => {
+      pill.addEventListener('click', () => {
+        statusPills.forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        currentStatus = pill.dataset.status || 'all';
+        filterCards();
+      });
     });
+
+    // Tag pill click
+    tagPills.forEach(pill => {
+      pill.addEventListener('click', () => {
+        const tag = pill.dataset.tag || null;
+        if (currentTag === tag) {
+          currentTag = null;
+          pill.classList.remove('active');
+        } else {
+          tagPills.forEach(p => p.classList.remove('active'));
+          pill.classList.add('active');
+          currentTag = tag;
+        }
+        filterCards();
+      });
+    });
+
+    // Search input
+    if (filterInput) {
+      filterInput.addEventListener('input', () => {
+        currentSearch = filterInput.value;
+        filterCards();
+      });
+    }
   </script>
 </BaseLayout>
