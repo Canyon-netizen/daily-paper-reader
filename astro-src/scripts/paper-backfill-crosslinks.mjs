@@ -270,7 +270,7 @@ function walkPapers(root) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { dryRun: false, apply: false, limit: 0, useLlm: false };
+  const opts = { dryRun: false, apply: false, limit: 0, offset: 0, useLlm: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--dry-run') opts.dryRun = true;
@@ -279,8 +279,10 @@ function parseArgs() {
     else if (a === '--all') opts.limit = 0;
     else if (a.startsWith('--limit=')) opts.limit = parseInt(a.split('=')[1], 10) || 0;
     else if (a === '--limit') opts.limit = parseInt(args[++i], 10) || 0;
+    else if (a.startsWith('--offset=')) opts.offset = parseInt(a.split('=')[1], 10) || 0;
+    else if (a === '--offset') opts.offset = parseInt(args[++i], 10) || 0;
     else if (a === '--help' || a === '-h') {
-      console.log('用法: --dry-run | --apply | --limit N | --all | --use-llm');
+      console.log('用法: --dry-run | --apply | --limit N | --offset N | --all | --use-llm');
       process.exit(0);
     }
   }
@@ -293,7 +295,7 @@ function parseArgs() {
 async function main() {
   const opts = parseArgs();
   const mode = opts.apply ? 'apply' : 'dry-run';
-  console.log(`[paper-backfill-crosslinks] mode=${mode} llm=${opts.useLlm} limit=${opts.limit || 'all'}`);
+  console.log(`[paper-backfill-crosslinks] mode=${mode} llm=${opts.useLlm} limit=${opts.limit || 'all'} offset=${opts.offset}`);
 
   // 加载 ideas / experiments 索引
   const ideas = loadIdeas();
@@ -307,7 +309,11 @@ async function main() {
   const sample = [];
 
   for (const file of all) {
-    if (opts.limit && processed >= opts.limit) break;
+    if (opts.offset && processed < opts.offset) {
+      processed++;
+      continue;
+    }
+    if (opts.limit && processed >= opts.offset + opts.limit) break;
     processed++;
 
     let raw;
