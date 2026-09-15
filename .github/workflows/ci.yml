@@ -82,3 +82,9 @@ jobs:
 
       - name: Run audit-crosslinks
         run: node astro-src/scripts/audit-crosslinks.mjs --ci
+
+      - name: Run papers-freshness-report (warn-only)
+        # A.3.2: 监测论文抓取是否停滞。默认 warn-only(只输出不退出),
+        # 设 --ci 才能让 stale → exit 1。在 GH Actions 60 天空闲暂停 /
+        # arXiv 429 / secrets 丢失等场景里,这是最先被发现的信号。
+        run: node astro-src/scripts/papers-freshness-report.mjs --warn-days=7 || echo "[freshness] stale (informational)"
