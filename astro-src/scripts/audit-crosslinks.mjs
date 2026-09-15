@@ -22,6 +22,7 @@
 
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const PAPERS_ROOT = 'docs/papers';
 const DOCS_ROOT = 'docs';
@@ -29,14 +30,14 @@ const DOCS_ROOT = 'docs';
 const VALID_TIERS = new Set(['small', 'medium', 'large', 'xlarge', '', 'unknown', 'api_only']);
 
 /** 从 raw frontmatter 提取相关字段。 */
-function extractFrontmatter(raw) {
+export function extractFrontmatter(raw) {
   const m = raw.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
   if (!m) return { fm: '', body: raw };
   return { fm: m[1], body: raw.slice(m[0].length) };
 }
 
 /** 读取 frontmatter 中的 cross-link 字段。 */
-function readCrosslinkFields(fm) {
+export function readCrosslinkFields(fm) {
   const out = {
     related_ideas: [],
     related_experiments: [],
@@ -80,7 +81,7 @@ function readCrosslinkFields(fm) {
 }
 
 /** 检查引用的 path 是否存在。 */
-function validateRef(ref, filePath) {
+export function validateRef(ref, filePath) {
   // ref 已经是相对于 docs/ 的完整路径，如 "ideas/xxx.md" 或 "docs/ideas/xxx.md"
   // 统一去掉前缀 "docs/"（如果存在）
   const normalizedRef = ref.replace(/^docs\//, '');
@@ -94,7 +95,7 @@ function validateRef(ref, filePath) {
 }
 
 /** 检查单篇论文的 cross-link 健康度。 */
-function auditPaper(filePath) {
+export function auditPaper(filePath) {
   const issues = [];
   let raw;
   try {
@@ -154,7 +155,7 @@ function auditPaper(filePath) {
 }
 
 /** 给无 related_* 的论文加 is_orphan: true。 */
-function addOrphanFlag(filePath) {
+export function addOrphanFlag(filePath) {
   let raw;
   try {
     raw = readFileSync(filePath, 'utf8');
@@ -181,7 +182,7 @@ function addOrphanFlag(filePath) {
   }
 }
 
-function walkPapers(root) {
+export function walkPapers(root) {
   const out = [];
   function rec(dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -304,4 +305,8 @@ function main() {
   }
 }
 
-main();
+// 只在直接作为 CLI 调用时跑 main();被 test 导入时不跑。
+const isCLI = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isCLI) {
+  main();
+}
