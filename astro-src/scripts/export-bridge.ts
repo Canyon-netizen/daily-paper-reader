@@ -14,6 +14,7 @@
 import { renderBibtex } from './export/bibtex';
 import { renderCsl } from './export/csl';
 import { renderRis } from './export/ris';
+import { renderMarkdown } from './export/markdown';
 import { buildObsidianZip } from './export/obsidian';
 import { getUserNote, listStarred } from '../lib/user-library';
 import { downloadAsFile } from './export/trigger-download';
@@ -122,7 +123,7 @@ async function loadPapersByIds(canonicalIds: string[]): Promise<PaperInput[]> {
 }
 
 /** 通用导出入口。 */
-async function exportBySet(opts: ExportOptions, kind: 'bibtex' | 'csl' | 'ris' | 'zip'): Promise<void> {
+async function exportBySet(opts: ExportOptions, kind: 'bibtex' | 'csl' | 'ris' | 'zip' | 'md'): Promise<void> {
   if (opts.canonicalIds.length === 0) {
     setHint(opts.hintElementId, opts.emptyMessage, 'error');
     return;
@@ -134,20 +135,27 @@ async function exportBySet(opts: ExportOptions, kind: 'bibtex' | 'csl' | 'ris' |
       setHint(opts.hintElementId, '× fetch 失败(可能 docs 还未拷贝到 /papers/)', 'error');
       return;
     }
-    const ext = kind === 'bibtex' ? 'bib' : kind === 'csl' ? 'csl.json' : kind === 'ris' ? 'ris' : 'zip';
+    const ext = kind === 'bibtex' ? 'bib'
+      : kind === 'csl' ? 'csl.json'
+      : kind === 'ris' ? 'ris'
+      : kind === 'md' ? 'md'
+      : 'zip';
     const mime = kind === 'bibtex' ? 'application/x-bibtex'
       : kind === 'csl' ? 'application/vnd.citationstyles.csl+json'
       : kind === 'ris' ? 'application/x-research-info-systems'
+      : kind === 'md' ? 'text/markdown'
       : 'application/zip';
     const baseName = kind === 'bibtex' ? 'references'
       : kind === 'csl' ? 'library'
       : kind === 'ris' ? 'references'
+      : kind === 'md' ? 'library'
       : 'my-library';
     const filename = `${opts.filenamePrefix}-${baseName}.${ext}`;
     let content: string | Uint8Array;
     if (kind === 'bibtex') content = renderBibtex(papers);
     else if (kind === 'csl') content = renderCsl(papers);
     else if (kind === 'ris') content = renderRis(papers);
+    else if (kind === 'md') content = renderMarkdown(papers);
     else content = buildObsidianZip(papers);
     downloadAsFile(content, filename, mime);
     setHint(opts.hintElementId, `✓ ${opts.filenamePrefix} ${papers.length} 篇导出完成`, 'ok');
@@ -237,6 +245,12 @@ export async function exportLibraryRis(): Promise<void> {
   await exportBySet({ canonicalIds: readLibraryIds(), ...meta, emptyMessage: '该文献库暂无论文' }, 'ris');
 }
 
+// D.1.4: Markdown export — 单文件,标题 + 元数据 + TL;DR 摘要,论文间用 --- 分隔。
+export async function exportLibraryMarkdown(): Promise<void> {
+  const meta = readLibraryMeta();
+  await exportBySet({ canonicalIds: readLibraryIds(), ...meta, emptyMessage: '该文献库暂无论文' }, 'md');
+}
+
 export async function exportLibraryZip(): Promise<void> {
   const meta = readLibraryMeta();
   setHint(meta.hintId, '打包中…(手写 ZIP 较慢,几十篇约 1-2s)');
@@ -251,6 +265,7 @@ export function initLibraryExportButtons(): void {
       if (target === 'bibtex') void exportLibraryBibtex();
       else if (target === 'csl') void exportLibraryCsl();
       else if (target === 'ris') void exportLibraryRis();
+      else if (target === 'markdown' || target === 'md') void exportLibraryMarkdown();
       else if (target === 'obsidian') void exportLibraryZip();
     });
   });
