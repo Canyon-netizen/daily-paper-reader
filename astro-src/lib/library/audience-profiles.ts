@@ -353,6 +353,76 @@ export function getAudienceProfile(
   return AUDIENCE_PROFILES[id as AudienceProfileId] ?? null;
 }
 
+/**
+ * Infer an audience profile from a library's statement (and optionally its
+ * keywords) using a small keyword taxonomy. Used to migrate legacy libraries
+ * that were created before `audienceProfile` was added — the user can still
+ * change the result manually in settings.
+ *
+ * Returns `null` when no profile gets enough signal, so callers can fall back
+ * to asking the user explicitly. The taxonomy is intentionally conservative:
+ * the function only suggests when the input contains unambiguous signal
+ * (≥2 keyword hits in one bucket, or 1 hit with no competing bucket).
+ *
+ * Keep this in sync with docs/library/inclusion-standard.md §3.
+ */
+const PROFILE_HINTS: Record<AudienceProfileId, string[]> = {
+  novice: [
+    '入门', '基础', '教程', '综述', '通识', '概念', '初学',
+    'tutorial', 'primer', 'survey', 'overview', 'intro', 'introduction', 'basics',
+  ],
+  expert: [
+    '前沿', 'SOTA', '创新', 'novel', 'frontier', 'state-of-the-art',
+    '算法', '贡献', '理论', '推导', '证明', 'theorem',
+    '贡献', 'contribution', 'algorithm', 'proof',
+  ],
+  reviewer: [
+    '评审', '审稿', '评估', '比较', '基准', '基线', '缺陷',
+    'review', 'reviewer', 'evaluation', 'weakness', 'critique',
+    'benchmark', 'baseline', 'compare', 'comparison',
+  ],
+  practitioner: [
+    '部署', '工业', '应用', '工程', '系统', '落地', '生产', '上线',
+    '生产', '延迟', '吞吐', '可扩展', '实现',
+    'deploy', 'deployment', 'production', 'industrial', 'practitioner',
+    'engineering', 'system', 'implementation', 'latency', 'throughput', 'scalable',
+  ],
+};
+
+export function suggestAudienceProfile(args: {
+  statement?: string;
+  keywords?: string[];
+}): AudienceProfileId | null {
+  const haystack = [args.statement ?? '', ...(args.keywords ?? [])]
+    .join(' ')
+    .toLowerCase();
+  if (!haystack.trim()) return null;
+
+  const hits: Record<AudienceProfileId, number> = {
+    novice: 0,
+    expert: 0,
+    reviewer: 0,
+    practitioner: 0,
+  };
+  for (const profile of AUDIENCE_PROFILE_IDS) {
+    for (const hint of PROFILE_HINTS[profile]) {
+      if (haystack.includes(hint.toLowerCase())) hits[profile] += 1;
+    }
+  }
+
+  // Sort profiles by hit count desc; pick the best if unambiguous.
+  const ranked = (Object.entries(hits) as [AudienceProfileId, number][])
+    .sort((a, b) => b[1] - a[1]);
+  const [bestId, bestCount] = ranked[0];
+  const [, secondCount] = ranked[1];
+
+  // Need at least one strong signal; bail on noise (e.g. "前沿基础" is 2 hits
+  // but ambiguous, so require ≥2 + clear margin).
+  if (bestCount < 2) return null;
+  if (bestCount === secondCount) return null;
+  return bestId;
+}
+
 /** Build the LLM prompt addendum for a profile (or empty if none). */
 export function buildAudiencePromptAddendum(
   profile: LibraryAudienceProfile | null,
