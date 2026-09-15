@@ -238,7 +238,7 @@ def _insert_into_body(body: str, article: str) -> str:
 def translate_one(md_path: Path, url: str, key: str, model: str) -> tuple[Path, str, str]:
     """Returns (path, status, article_or_err). status in ('ok','skip','err').
 
-    跳过条件:body 已经包含完整的 5 节段(## 讨论与可借鉴点 或旧版 ## 结论)。
+    跳过条件:body 已经包含完整的 5 节段(## 讨论与可借鉴点 或旧版 ## 结论 / ## TLDR / ## 动机)。
     不能再单独信 wiki_compiled flag —— 旧版翻译时写过 flag 但 body
     实际没插入的情况确实存在,需要用 body 真实内容判。"""
     text = md_path.read_text(encoding="utf-8")
@@ -247,6 +247,8 @@ def translate_one(md_path: Path, url: str, key: str, model: str) -> tuple[Path, 
         has_wiki = (
             "## 讨论与可借鉴点" in (body or "")
             or "## 结论" in (body or "")
+            or "## TLDR" in (body or "")
+            or "## 动机" in (body or "")
         )
         if has_wiki:
             return (md_path, "skip", "already compiled (body has 5 sections)")
@@ -287,11 +289,13 @@ def main():
             continue
         if args.force:
             front["_force_recompile"] = True
-        # 跳过已翻译过的:看 body 里有没有「讨论与可借鉴点」或旧版的「结论」
+        # 跳过已翻译过的:看 body 里有没有「讨论与可借鉴点」或旧版的「结论 / TLDR / 动机」
         # (旧版 translate_polaris.py 用过 `## 结论`/`## TLDR` 无冒号;
         # wiki_compiled flag 不可靠 — 旧版写过 flag 但 body 未插入成功的也有)
         if not args.force and ("## 讨论与可借鉴点" in (body or "")
-                                  or "## 结论" in (body or "")):
+                                  or "## 结论" in (body or "")
+                                  or "## TLDR" in (body or "")
+                                  or "## 动机" in (body or "")):
             skipped_body += 1
             continue
         todo.append(f)
