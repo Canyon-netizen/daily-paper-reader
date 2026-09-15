@@ -143,3 +143,86 @@ export function mergeUserLibraries(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// D.1.5: 单库 Gist 同步开关
+//
+// 思路:不直接调 Gist HTTP(那是 lib/user-library/gist.ts 的活),只产出
+// 「只含这一个 lib」的序列化 block,以及把这个 block 合并回本地 doc 的工具。
+// 调用方拿到 block 后,可以走自己的 HTTP 通道(create/update gist)。
+//
+// 状态键:dpr_library_gist_<libId> → gistId(让 toggle 能复用同一个 gist,
+// 不用每次都新建)。
+// ---------------------------------------------------------------------------
+
+/** 从 doc 抽出单个 lib 的可同步 block(只含这个 lib 的 schemaVersion + items)。 */
+export function serializeLibraryForGist(doc: UserLibrariesDoc, libId: string): SerializedLibrariesBlock | null {
+  const lib = doc.libraries[libId];
+  if (!lib) return null;
+  return {
+    schemaVersion: USER_LIBRARIES_SCHEMA_VERSION,
+    items: { [libId]: lib },
+  };
+}
+
+/** 把远端拉回的单个 lib block 合并进本地 doc(lib 不存在则新增,存在则按
+ *  updatedAt 较新者覆盖)。返回新 doc 和 counts。 */
+export function mergeLibraryFromGist(
+  local: UserLibrariesDoc,
+  remoteBlock: SerializedLibrariesBlock,
+): { merged: UserLibrariesDoc; wasNew: boolean } {
+  const [remoteId, remoteLib] = Object.entries(remoteBlock.items)[0] ?? [];
+  if (!remoteId || !remoteLib) {
+    return { merged: local, wasNew: false };
+  }
+  const localLib = local.libraries[remoteId];
+  const wasNew = !localLib;
+  if (localLib && (localLib.updatedAt ?? 0) >= (remoteLib.updatedAt ?? 0)) {
+    return { merged: local, wasNew: false };
+  }
+  return {
+    merged: {
+      schemaVersion: USER_LIBRARIES_SCHEMA_VERSION,
+      libraries: { ...local.libraries, [remoteId]: remoteLib },
+    },
+    wasNew,
+  };
+}
+
+/** localStorage 里「这个 lib 是否走 gist 同步」的状态键 —— 用 toggleLibraryGistSync
+ * 维护,UI 可以在创建/编辑 modal 里读这个值来展示开关。 */
+export function getLibraryGistEnabled(libId: string): boolean {
+  try {
+    return localStorage.getItem(`dpr_library_gist_enabled_${libId}`) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setLibraryGistEnabled(libId: string, enabled: boolean): void {
+  try {
+    if (enabled) localStorage.setItem(`dpr_library_gist_enabled_${libId}`, '1');
+    else localStorage.removeItem(`dpr_library_gist_enabled_${libId}`);
+  } catch {
+    /* localStorage 不一定可用(SSR / 隐私模式) */
+  }
+}
+
+/** 该 lib 关联的 gist id(由调用方在 create/update gist 后写入)。
+ *  没有则返回 null。 */
+export function getLibraryGistId(libId: string): string | null {
+  try {
+    return localStorage.getItem(`dpr_library_gist_${libId}`);
+  } catch {
+    return null;
+  }
+}
+
+export function setLibraryGistId(libId: string, gistId: string | null): void {
+  try {
+    if (gistId) localStorage.setItem(`dpr_library_gist_${libId}`, gistId);
+    else localStorage.removeItem(`dpr_library_gist_${libId}`);
+  } catch {
+    /* localStorage 不可用 */
+  }
+}
