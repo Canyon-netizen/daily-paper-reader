@@ -21,6 +21,7 @@ import { defaultPaperRepository } from '../../lib/paper-repository';
 import { getLibrary, LIBRARIES, selectLibraryPapers } from '../../lib/libraries';
 import { paperHref } from '../../lib/paper';
 import { renderMarkdownBody } from '../../lib/markdown';
+import { computeLibraryStats } from '../../lib/library-stats';
 import '../../styles/library-workbench.css';
 
 /** 把 wiki 5 节中文 markdown 渲染成 HTML,挂到 set:html 上。
@@ -121,6 +122,13 @@ const conceptCategories = [
 ];
 
 const selectedPaper = papers[0];
+
+// D.2.3: 库统计面板数据(平均分 / 近 30 天新增 / top 作者 / 类目分布 / 日期范围)。
+// 用 computeLibraryStats(items, lib) 派生(items 已含 frontmatter 派生字段)。
+const libraryStats = computeLibraryStats(items, lib);
+const topCategoryEntries = Object.entries(libraryStats.categoryDistribution)
+  .sort((a, b) => b[1] - a[1])
+  .slice(0, 5);
 ---
 
 <BaseLayout
@@ -166,6 +174,59 @@ const selectedPaper = papers[0];
         <span id="lib-export-hint" class="export-hint"></span>
       </div>
     </header>
+
+    {/* D.2.3: 库统计面板 —— 平均分 / 近 30 天 / top 作者 / 类目分布 / 日期范围。
+        全部由 computeLibraryStats(items, lib) 派生(SSR,零 JS)。 */}
+    <section class="library-wb-stats" aria-label="库统计">
+      <div class="lib-stat-card">
+        <span class="lib-stat-label">平均相关度</span>
+        <span class="lib-stat-value">
+          {libraryStats.avgRelevanceScore.toFixed(2)}
+          <span class="lib-stat-scale">/ 1.0</span>
+        </span>
+        <span class="lib-stat-sub">
+          {libraryStats.scoreScale === 10
+            ? `原 scale 0..10,均分 ${libraryStats.rawAvgScore.toFixed(1)}`
+            : `原 scale 0..1`}
+        </span>
+      </div>
+      <div class="lib-stat-card">
+        <span class="lib-stat-label">近 30 天新增</span>
+        <span class="lib-stat-value">{libraryStats.recentCount}</span>
+        <span class="lib-stat-sub">篇论文被加入此库</span>
+      </div>
+      <div class="lib-stat-card lib-stat-card-wide">
+        <span class="lib-stat-label">top 作者</span>
+        {libraryStats.topAuthors.length === 0 ? (
+          <span class="lib-stat-sub">尚无作者数据</span>
+        ) : (
+          <ul class="lib-stat-authors">
+            {libraryStats.topAuthors.map((a) => <li>{a}</li>)}
+          </ul>
+        )}
+      </div>
+      <div class="lib-stat-card lib-stat-card-wide">
+        <span class="lib-stat-label">类目分布</span>
+        {topCategoryEntries.length === 0 ? (
+          <span class="lib-stat-sub">尚无类目数据</span>
+        ) : (
+          <ul class="lib-stat-cats">
+            {topCategoryEntries.map(([k, n]) => (
+              <li><code>{k}</code> <span class="lib-stat-cat-count">{n}</span></li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div class="lib-stat-card">
+        <span class="lib-stat-label">日期范围</span>
+        <span class="lib-stat-value lib-stat-range">
+          {libraryStats.newestDate ?? '—'}
+          <span class="lib-stat-range-sep">→</span>
+          {libraryStats.oldestDate ?? '—'}
+        </span>
+        <span class="lib-stat-sub">newest → oldest</span>
+      </div>
+    </section>
 
     <nav class="library-wb-tabs" aria-label="tab 切换">
       <a class="lib-wb-tab active" href="#papers" data-tab="papers">📄 论文库 <span class="tab-count">{papers.length}</span></a>

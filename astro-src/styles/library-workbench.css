@@ -75,6 +75,95 @@
   color: var(--accent);
   font-weight: 600;
 }
+
+/* D.2.3: 库统计面板 —— 平均分 / 近 30 天 / top 作者 / 类目分布 / 日期范围 */
+.library-wb-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin: 0.5rem 1.5rem 1.5rem;
+  padding: 1rem;
+  background: var(--bg-card, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+}
+.lib-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  min-width: 0;
+}
+.lib-stat-card-wide {
+  grid-column: span 2;
+}
+.lib-stat-label {
+  font-size: 0.7rem;
+  color: var(--fg-subtle);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+}
+.lib-stat-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--fg-strong, var(--fg));
+}
+.lib-stat-scale {
+  font-size: 0.8rem;
+  color: var(--fg-subtle);
+  font-weight: 400;
+  margin-left: 0.25rem;
+}
+.lib-stat-sub {
+  font-size: 0.7rem;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono);
+}
+.lib-stat-authors,
+.lib-stat-cats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+}
+.lib-stat-authors li {
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.06));
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+}
+.lib-stat-cats li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+}
+.lib-stat-cats code {
+  font-size: 0.75rem;
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.06));
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+}
+.lib-stat-cat-count {
+  color: var(--fg-subtle);
+  font-size: 0.75rem;
+}
+.lib-stat-range {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 1rem;
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+.lib-stat-range-sep {
+  color: var(--fg-subtle);
+  font-size: 0.85rem;
+}
 .library-wb-export {
   display: flex;
   flex-direction: column;
