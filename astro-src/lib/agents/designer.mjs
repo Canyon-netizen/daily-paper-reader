@@ -15,6 +15,7 @@ function makeEmptyProposal(round) {
 }
 
 // astro-src/lib/agents/designer.ts
+import { loadSkillContext } from "./skill-context-loader.mjs";
 var DESIGNER_SYSTEM_PROMPT = `\u4F60\u662F\u4E00\u4F4D\u8D44\u6DF1\u79D1\u7814\u5408\u4F5C\u8005,\u6B63\u5728\u5E2E\u7528\u6237\u63A8\u8FDB\u7814\u7A76\u9879\u76EE\u3002
 
 # \u4EFB\u52A1
@@ -99,7 +100,8 @@ ${user_goal}`);
 async function designerGenerate(input, caller, opts = {}) {
   const maxProposals = opts.maxProposals ?? 6;
   const user = buildUserPrompt(input);
-  const system = DESIGNER_SYSTEM_PROMPT;
+  // R7.1 B.1.2: 注入 [方法论上下文] 块,stage=ideation(对应 defining-research-question.md)
+  const system = `${loadSkillContext("ideation")}\n\n${DESIGNER_SYSTEM_PROMPT}`;
   let raw = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
