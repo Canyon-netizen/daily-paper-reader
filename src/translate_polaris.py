@@ -73,6 +73,56 @@ def iter_paper_md_files():
     return out
 
 
+# 文件名格式:`<arxiv-id>v<n>-<slug>.md`,arxiv-id 形如 `2607.21419`,版本号 `v1`/`v2` 可选。
+# 同一篇论文被流水线复制到多个 YYYY/MM/DD 目录时,版本号去掉只留 base id,
+# 这样可以正确识别"同一篇"并只翻译日期最新的一份。
+_ARXIV_ID_RE = re.compile(r"^(\d{4}\.\d{4,5})(v\d+)?")
+
+
+def canonical_arxiv_id_from_path(p: Path) -> str | None:
+    """从 paper md 文件名提取 canonical arxiv id(去掉版本号),识别失败返 None。"""
+    m = _ARXIV_ID_RE.match(p.name)
+    return m.group(1) if m else None
+
+
+def dedup_paper_files(files: list[Path]) -> list[Path]:
+    """按 canonical arxiv id 去重,同一 id 多份只保留日期路径最新的一份。
+
+    返回顺序:同 id 组内按日期降序选第一个(不重排整体顺序,只丢弃重复)。
+    日期路径:`docs/papers/YYYY/MM/DD/<id>v<n>-<slug>.md` 的目录段。
+    """
+    by_id: dict[str, Path] = {}
+    for f in files:
+        cid = canonical_arxiv_id_from_path(f)
+        if cid is None:
+            # 没法识别 arxiv id(自定义文件名),保留不动 —— 让后续 translate_one
+            # 自己处理(可能 err,但至少不会因为 dedup 静默丢掉)。
+            by_id[f"__noid__{f}"] = f
+            continue
+        existing = by_id.get(cid)
+        if existing is None or _date_key_from_path(f) > _date_key_from_path(existing):
+            by_id[cid] = f
+    return list(by_id.values())
+
+
+def _date_key_from_path(p: Path) -> tuple[int, ...]:
+    """从路径提取 `docs/papers/YYYY/MM/DD/...` 的日期段,作为排序 key。
+
+    找不到日期段返空 tuple(排到最后,等同于"无法判断新旧就保留")。
+    """
+    parts = p.parts
+    try:
+        i = parts.index("papers")
+    except ValueError:
+        return ()
+    if i + 3 >= len(parts):
+        return ()
+    y, m, d = parts[i + 1], parts[i + 2], parts[i + 3]
+    if not (y.isdigit() and m.isdigit() and d.isdigit()):
+        return ()
+    return (int(y), int(m), int(d))
+
+
 def parse_frontmatter(md: str):
     if not md.startswith("---"):
         return ({}, md)
@@ -276,6 +326,9 @@ def main():
     args = p.parse_args()
 
     files = iter_paper_md_files()
+    # 同 arxiv id 流水线被复制到多个日期目录时,只翻译最新一份;
+    # 否则旧版先翻译完,新版永远排在旧版后面却没机会跑(限 limit 时尤其)。
+    files = dedup_paper_files(files)
     todo: list[Path] = []
     skipped_body = 0
     for f in files:
