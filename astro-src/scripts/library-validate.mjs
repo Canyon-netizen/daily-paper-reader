@@ -2,7 +2,7 @@
 // astro-src/scripts/library-validate.mjs
 //
 // Validate a user-libraries JSON dump against the schema defined in
-// astro-src/lib/user-libraries/types.ts (R7 D.2.1).
+// astro-src/lib/user-libraries/types.ts (R7 D.2.1 + D.2.2).
 //
 // What this catches:
 //   - Missing required fields (id, name, statement, hue, papers, etc.)
@@ -10,6 +10,8 @@
 //   - hue not in the 7-color palette
 //   - paper entries with invalid status enum
 //   - papers keys not in canonical arxiv id form (\d{4}\.\d{4,5})
+//   - D.2.2: each paper marked "included" must exist in the corpus
+//     (docs/papers/<arxivId>/*.md) and have a non-extreme score
 //
 // Usage:
 //   node astro-src/scripts/library-validate.mjs --check
@@ -21,11 +23,12 @@
 // by default — user data lives in browser localStorage; this script
 // is for CI checks on exported dumps).
 
-import { readFileSync, existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const DEFAULT_PATH = 'docs/library/user-libraries.json';
+const PAPERS_ROOT = 'docs/papers';
 
 const REQUIRED_FIELDS = [
   'id', 'name', 'statement', 'hue', 'categories', 'rubric',
@@ -107,6 +110,96 @@ export function validateLibrary(lib, libId) {
   return { libId, errors, warnings };
 }
 
+// ---- D.2.2: anchor paper quality scoring ----
+
+/**
+ * Build a map of canonical arxiv-id -> file path by walking
+ * docs/papers/. Returns a Map for O(1) lookups. Skips underscore-
+ * prefixed, assets/, and topic-seeds-* directories.
+ */
+export function buildCorpusIndex(root = PAPERS_ROOT) {
+  const index = new Map();
+  if (!existsSync(root)) return index;
+  function rec(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('_') || entry.name === 'assets' || entry.name.startsWith('topic-seeds-')) continue;
+      const p = join(dir, entry.name);
+      if (entry.isDirectory()) rec(p);
+      else if (entry.isFile() && entry.name.endsWith('.md') && entry.name !== 'README.md') {
+        const id = entry.name.replace(/\.md$/, '');
+        // 第一段是 canonical arxiv id (YYYY.NNNNN),其余是 slug
+        const arxivId = id.split('-')[0];
+        if (ARXIV_ID_RE.test(arxivId)) index.set(arxivId, p);
+      }
+    }
+  }
+  rec(root);
+  return index;
+}
+
+function parseFrontmatterScore(content) {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return null;
+  const scoreMatch = m[1].match(/^score:\s*['"]?([0-9.]+)['"]?/m);
+  if (!scoreMatch) return null;
+  const s = parseFloat(scoreMatch[1]);
+  return Number.isFinite(s) ? s : null;
+}
+
+/**
+ * For each library, score the quality of its included papers:
+ *   - hasPaper:       paper.md exists in the corpus
+ *   - hasScore:       frontmatter has a numeric score
+ *   - scoreReasonable: 0.05 <= score <= 0.95 (or scaled to 0..10)
+ *   - highQualityCount: included papers that pass all 3 checks
+ *
+ * Returns per-library report with a 0..1 quality ratio.
+ */
+export function scoreLibraryAnchors(lib, corpusIndex, opts = {}) {
+  const root = opts.root ?? PAPERS_ROOT;
+  const papers = lib.papers && typeof lib.papers === 'object' && !Array.isArray(lib.papers)
+    ? Object.entries(lib.papers)
+    : [];
+  let includedCount = 0;
+  let highQualityCount = 0;
+  const details = [];
+  for (const [arxivId, meta] of papers) {
+    if (meta?.status !== 'included') continue;
+    includedCount++;
+    const filePath = corpusIndex.get(arxivId);
+    let hasScore = false;
+    let scoreReasonable = false;
+    if (filePath) {
+      try {
+        const raw = readFileSync(filePath, 'utf8');
+        const s = parseFrontmatterScore(raw);
+        if (s !== null) {
+          hasScore = true;
+          const scale = s > 1 ? 10 : 1;
+          scoreReasonable = s >= 0.05 * scale && s <= 0.95 * scale;
+        }
+      } catch {
+        /* read-error: leave hasScore=false */
+      }
+    }
+    if (filePath && hasScore && scoreReasonable) highQualityCount++;
+    details.push({ arxivId, hasPaper: !!filePath, hasScore, scoreReasonable });
+  }
+  const ratio = includedCount > 0 ? highQualityCount / includedCount : 1;
+  return { includedCount, highQualityCount, ratio, details };
+}
+
+export function validateAnchors(doc, corpusIndex, opts = {}) {
+  if (!doc?.libraries || typeof doc.libraries !== 'object') {
+    return { ok: false, errors: ['missing top-level "libraries" object'] };
+  }
+  const results = [];
+  for (const [libId, lib] of Object.entries(doc.libraries)) {
+    results.push({ libId, ...scoreLibraryAnchors(lib, corpusIndex, opts) });
+  }
+  return { ok: true, results };
+}
+
 export function validateLibraries(doc) {
   if (!doc || typeof doc !== 'object') {
     return { ok: false, errors: ['document is not an object'] };
@@ -127,18 +220,21 @@ export function validateLibraries(doc) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { check: false, ci: false, json: false, path: DEFAULT_PATH };
+  const opts = { check: false, ci: false, json: false, path: DEFAULT_PATH, quality: false, root: PAPERS_ROOT };
   for (const a of args) {
     if (a === '--check') opts.check = true;
     else if (a === '--ci') { opts.ci = true; opts.check = true; }
     else if (a === '--json') opts.json = true;
+    else if (a === '--quality') opts.quality = true;
     else if (a.startsWith('--path=')) opts.path = a.split('=')[1];
+    else if (a.startsWith('--root=')) opts.root = a.split('=')[1];
     else if (a === '--help' || a === '-h') {
-      console.log('用法: --check | --ci | --json | --path=PATH');
+      console.log('用法: --check | --ci | --json | --quality | --path=PATH | --root=PAPERS_ROOT');
+      console.log('  --quality  D.2.2: also score each library\'s included papers');
       process.exit(0);
     }
   }
-  if (!opts.check && !opts.json) opts.check = true;
+  if (!opts.check && !opts.json && !opts.quality) opts.check = true;
   return opts;
 }
 
@@ -163,9 +259,9 @@ function main() {
   const doc = loadLibraries(opts.path);
   const result = validateLibraries(doc);
 
-  if (opts.json) {
+  if (opts.json && !opts.quality) {
     console.log(JSON.stringify(result, null, 2));
-  } else {
+  } else if (!opts.quality) {
     if (!result.ok) {
       console.log(`\n[library-validate] FAIL: ${result.errors.join('; ')}`);
     } else {
@@ -183,7 +279,35 @@ function main() {
     }
   }
 
-  if (opts.ci && (!result.ok || result.results.some((r) => r.errors.length > 0))) {
+  // D.2.2 anchor quality (--quality flag)
+  let anchorResult = null;
+  if (opts.quality) {
+    const corpusIndex = buildCorpusIndex(opts.root);
+    anchorResult = validateAnchors(doc, corpusIndex, { root: opts.root });
+    if (opts.json) {
+      console.log(JSON.stringify({ schema: result, anchors: anchorResult }, null, 2));
+    } else {
+      console.log(`\n[library-validate] D.2.2 anchor quality (corpus=${corpusIndex.size} papers)`);
+      if (!anchorResult.ok) {
+        console.log(`  FAIL: ${anchorResult.errors.join('; ')}`);
+      } else {
+        for (const r of anchorResult.results) {
+          console.log(`  ${r.libId}: ${r.highQualityCount}/${r.includedCount} included (${(r.ratio * 100).toFixed(0)}%)`);
+        }
+        const lowQuality = anchorResult.results.filter((r) => r.includedCount >= 3 && r.ratio < 0.5);
+        if (lowQuality.length) {
+          console.log(`\n  libraries with <50% high-quality anchors:`);
+          for (const r of lowQuality) {
+            console.log(`    ${r.libId}: ${r.highQualityCount}/${r.includedCount}`);
+          }
+        }
+      }
+    }
+  }
+
+  const schemaFailed = !result.ok || result.results.some((r) => r.errors.length > 0);
+  const qualityFailed = anchorResult ? anchorResult.results.some((r) => r.includedCount >= 3 && r.ratio < 0.3) : false;
+  if (opts.ci && (schemaFailed || qualityFailed)) {
     process.exit(1);
   }
 }

@@ -1,17 +1,20 @@
 #!/usr/bin/env node
 // astro-src/scripts/library-validate.test.mjs
 //
-// Tests for library-validate.mjs (R7 D.2.1).
+// Tests for library-validate.mjs (R7 D.2.1 + D.2.2).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   validateLibrary,
   validateLibraries,
+  buildCorpusIndex,
+  scoreLibraryAnchors,
+  validateAnchors,
 } from './library-validate.mjs';
 
 const validLibrary = {
@@ -187,4 +190,160 @@ test('CLI: --json emits JSON', async () => {
   const out = JSON.parse(r.stdout);
   assert.equal(out.ok, true);
   assert.equal(out.results.length, 1);
+});
+
+// ----- D.2.2: anchor quality scoring -----
+
+function makePaperFile(dir, arxivId, score) {
+  const content = `---
+arxivId: "${arxivId}"
+score: ${score}
+date: 2026-01-15
+---
+
+# Title
+
+Body.
+`;
+  const slug = `${arxivId}-some-slug`;
+  const subdir = join(dir, arxivId.split('.')[0]);
+  mkdirSync(subdir, { recursive: true });
+  writeFileSync(join(subdir, `${slug}.md`), content);
+  return join(subdir, `${slug}.md`);
+}
+
+test('buildCorpusIndex: indexes arxiv-id from filename', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'corpus-'));
+  makePaperFile(tmp, '2401.01234', '0.7');
+  makePaperFile(tmp, '2402.05678', '0.8');
+  const idx = buildCorpusIndex(tmp);
+  assert.equal(idx.size, 2);
+  assert.ok(idx.has('2401.01234'));
+  assert.ok(idx.has('2402.05678'));
+});
+
+test('buildCorpusIndex: skips underscore, assets, topic-seeds', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'corpus-'));
+  makePaperFile(tmp, '2401.01234', '0.7');
+  mkdirSync(join(tmp, '_drafts'), { recursive: true });
+  writeFileSync(join(tmp, '_drafts', '9999.99999-draft.md'), '---\nscore: 0.5\n---\n');
+  mkdirSync(join(tmp, 'assets'), { recursive: true });
+  writeFileSync(join(tmp, 'assets', 'image.md'), 'irrelevant');
+  const idx = buildCorpusIndex(tmp);
+  assert.equal(idx.size, 1);
+  assert.ok(idx.has('2401.01234'));
+});
+
+test('scoreLibraryAnchors: all included papers exist & have reasonable score', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'corpus-'));
+  makePaperFile(tmp, '2401.01234', '0.7');
+  makePaperFile(tmp, '2402.05678', '0.8');
+  const idx = buildCorpusIndex(tmp);
+  const lib = {
+    papers: {
+      '2401.01234': { status: 'included' },
+      '2402.05678': { status: 'included' },
+      '2403.00000': { status: 'candidate' }, // not counted
+    },
+  };
+  const r = scoreLibraryAnchors(lib, idx);
+  assert.equal(r.includedCount, 2);
+  assert.equal(r.highQualityCount, 2);
+  assert.equal(r.ratio, 1);
+});
+
+test('scoreLibraryAnchors: missing paper file counts as low quality', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'corpus-'));
+  makePaperFile(tmp, '2401.01234', '0.7');
+  const idx = buildCorpusIndex(tmp);
+  const lib = {
+    papers: {
+      '2401.01234': { status: 'included' },
+      '9999.99999': { status: 'included' }, // not in corpus
+    },
+  };
+  const r = scoreLibraryAnchors(lib, idx);
+  assert.equal(r.includedCount, 2);
+  assert.equal(r.highQualityCount, 1);
+  assert.equal(r.ratio, 0.5);
+});
+
+test('scoreLibraryAnchors: extreme score counted as low quality', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'corpus-'));
+  makePaperFile(tmp, '2401.01234', '0.01'); // too low
+  makePaperFile(tmp, '2402.05678', '0.99'); // too high
+  const idx = buildCorpusIndex(tmp);
+  const lib = {
+    papers: {
+      '2401.01234': { status: 'included' },
+      '2402.05678': { status: 'included' },
+    },
+  };
+  const r = scoreLibraryAnchors(lib, idx);
+  assert.equal(r.highQualityCount, 0);
+});
+
+test('scoreLibraryAnchors: 0..10 scale also handled', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'corpus-'));
+  makePaperFile(tmp, '2401.01234', '7'); // 0..10 scale, reasonable
+  makePaperFile(tmp, '2402.05678', '0.5'); // 0..10 scale but extreme (<0.5)
+  const idx = buildCorpusIndex(tmp);
+  const lib = {
+    papers: {
+      '2401.01234': { status: 'included' },
+      '2402.05678': { status: 'included' },
+    },
+  };
+  const r = scoreLibraryAnchors(lib, idx);
+  // scale 7 > 1 → 0..10. threshold: 0.05*10=0.5 → 7 ok; 0.5 also ok (boundary)
+  assert.equal(r.highQualityCount, 2);
+});
+
+test('scoreLibraryAnchors: empty library has ratio 1', () => {
+  const idx = new Map();
+  const r = scoreLibraryAnchors({ papers: {} }, idx);
+  assert.equal(r.includedCount, 0);
+  assert.equal(r.ratio, 1);
+});
+
+test('validateAnchors: returns per-library results', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'corpus-'));
+  makePaperFile(tmp, '2401.01234', '0.7');
+  const idx = buildCorpusIndex(tmp);
+  const doc = {
+    libraries: {
+      a: { papers: { '2401.01234': { status: 'included' } } },
+      b: { papers: {} },
+    },
+  };
+  const r = validateAnchors(doc, idx);
+  assert.equal(r.ok, true);
+  assert.equal(r.results.length, 2);
+  assert.equal(r.results[0].includedCount, 1);
+  assert.equal(r.results[0].highQualityCount, 1);
+  assert.equal(r.results[1].includedCount, 0);
+});
+
+test('CLI: --quality reports anchor scores', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const corpusTmp = mkdtempSync(join(tmpdir(), 'corpus-cli-'));
+  mkdirSync(join(corpusTmp, '2401'), { recursive: true });
+  writeFileSync(join(corpusTmp, '2401', '2401.01234-slug.md'), '---\nscore: 0.7\n---\nbody\n');
+  const libTmp = mkdtempSync(join(tmpdir(), 'lib-cli-'));
+  const libPath = join(libTmp, 'libs.json');
+  writeFileSync(libPath, JSON.stringify({
+    libraries: {
+      a: {
+        name: 'Test', statement: 's', hue: 'cyan',
+        categories: [], rubric: [], stages: [], drafts: [],
+        papers: { '2401.01234': { status: 'included' } },
+      },
+    },
+  }));
+  const r = spawnSync('node', [
+    'astro-src/scripts/library-validate.mjs', '--quality', `--path=${libPath}`, `--root=${corpusTmp}`,
+  ], { encoding: 'utf8' });
+  assert.equal(r.status, 0, `stderr=${r.stderr}`);
+  assert.match(r.stdout, /D\.2\.2 anchor quality/);
+  assert.match(r.stdout, /1\/1 included/);
 });
