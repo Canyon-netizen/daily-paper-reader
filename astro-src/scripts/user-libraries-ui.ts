@@ -1614,6 +1614,33 @@ function setupNewLibraryModal(): void {
     });
   });
 
+  // D.1.2: 7 个库 seed template —— 在 NewLibraryModal 顶部的一排 chip 按钮。
+  // 点一下用模板预填 name / statement / keywords(关键词进 hidden inclusionKeywords)。
+  const LIBRARY_TEMPLATES: Record<string, { name: string; statement: string; keywords?: string[] }> = {
+    'rl':           { name: '强化学习',     statement: 'RL 理论、策略优化、探索与利用。',     keywords: ['reinforcement learning', 'PPO', 'DQN'] },
+    'llm-agent':    { name: 'LLM Agent',    statement: '工具调用、规划、代码代理。',         keywords: ['LLM', 'agent', 'tool use'] },
+    'game-ai':      { name: '博弈 AI',      statement: '博弈代理、在线决策。',              keywords: ['game', 'MCTS'] },
+    'multi-agent':  { name: '多智能体',     statement: '合作 / 竞争多智能体系统。',          keywords: ['multi-agent', 'MARL'] },
+    'reasoning':    { name: '推理与对齐',   statement: '思维链、RLHF、机制可解释。',         keywords: ['CoT', 'RLHF'] },
+    'robotics':     { name: '机器人',       statement: '虚实迁移、运动控制。',              keywords: ['robotics', 'sim-to-real'] },
+    'alignment':    { name: '对齐可解释',   statement: '引导向量、潜空间干预。',            keywords: ['steering', 'interpretability'] },
+  };
+  document.querySelectorAll<HTMLElement>('[data-template]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const tpl = LIBRARY_TEMPLATES[btn.dataset.template || ''];
+      if (!tpl) return;
+      const nameEl = modal.querySelector<HTMLInputElement>('[data-modal-name]');
+      const stmtEl = modal.querySelector<HTMLTextAreaElement>('[data-modal-statement]');
+      if (nameEl) nameEl.value = tpl.name;
+      if (stmtEl) stmtEl.value = tpl.statement;
+      // inclusionKeywords 在高级折叠里;如果有 input 把它填上
+      const kwEl = modal.querySelector<HTMLInputElement>('[data-modal-keywords]');
+      if (kwEl && tpl.keywords) kwEl.value = tpl.keywords.join(', ');
+    });
+  });
+
   // D.1.1: 「从论文创建库」一键按钮 — 论文页 [data-create-library-from-paper]
   // 打开 modal,把论文 title/tldr 预填进 name/statement,并把论文设为第一个 anchor paper。
   document.querySelectorAll<HTMLElement>('[data-create-library-from-paper]').forEach((btn) => {
