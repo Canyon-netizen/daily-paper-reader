@@ -189,6 +189,14 @@ const tabTitle = plainZh || plainEn || id;
                       data-add-to-library={paper.canonicalArxivId || ' '}
                       aria-label="加进文献库"
                     ><span data-add-to-library-label>+ 加进文献库</span><span data-in-libs-count class="in-libraries-count" style="display:none;"></span></button>
+                    {/* D.1.1: 从当前论文一键创建新文献库 — modal 由 scripts/user-libraries-ui.ts 接管,
+                        会用论文的 title_zh / tldr 预填 name / statement,并把这篇设为 anchor paper。 */}
+                    <button
+                      type="button"
+                      class="create-library-from-paper-btn"
+                      data-create-library-from-paper={paper.canonicalArxivId || ' '}
+                      aria-label="从这篇论文创建文献库"
+                    >📚 从此创建文献库</button>
                     <button
                       type="button"
                       id="paper-hide-btn"
@@ -237,6 +245,15 @@ const tabTitle = plainZh || plainEn || id;
               {paper.title_zh && paper.title && paper.title !== paper.title_zh && (
                 <h2 class="paper-title-en" set:html={renderTitleHtml(paper.title)}></h2>
               )}
+              {/* D.1.1: 论文摘要 — scripts/user-libraries-ui.ts 读它来预填 modal 的
+                  name / statement / anchor paper。无 visible 样式,纯数据载体。 */}
+              <div
+                class="paper-summary-source"
+                hidden
+                data-paper-summary={paper.canonicalArxivId || paper.arxivId || ' '}
+                data-paper-title={plainZh || plainEn || ' '}
+                data-paper-tldr={paper.tldr || ' '}
+              ></div>
 
               {/* 跨库视图:这篇论文所在的全部用户库。客户端 paper-cross-libraries.ts
                   读 localStorage dpr_user_libraries_v1 后渲染。

@@ -1614,6 +1614,36 @@ function setupNewLibraryModal(): void {
     });
   });
 
+  // D.1.1: 「从论文创建库」一键按钮 — 论文页 [data-create-library-from-paper]
+  // 打开 modal,把论文 title/tldr 预填进 name/statement,并把论文设为第一个 anchor paper。
+  document.querySelectorAll<HTMLElement>('[data-create-library-from-paper]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const arxivId = btn.dataset.createLibraryFromPaper || '';
+      // 切到「新建」态
+      delete modal.dataset.editId;
+      const titleEl = modal.querySelector<HTMLElement>('#new-library-modal-title');
+      if (titleEl) titleEl.textContent = '新建文献库';
+      const submitBtn = modal.querySelector<HTMLButtonElement>('[data-modal-submit]');
+      if (submitBtn) submitBtn.textContent = '创建个人文献库';
+      openModal(modal);
+      // 预填 name / statement / anchor paper —— 用论文 frontmatter 的 title_zh
+      // / title / tldr。失败兜底:留空。
+      const paperEl = arxivId
+        ? document.querySelector<HTMLElement>(`[data-paper-summary="${arxivId}"]`)
+        : null;
+      const title = paperEl?.dataset.paperTitle || '';
+      const tldr = paperEl?.dataset.paperTldr || '';
+      const nameEl = modal.querySelector<HTMLInputElement>('[data-modal-name]');
+      const stmtEl = modal.querySelector<HTMLTextAreaElement>('[data-modal-statement]');
+      const anchorEl = modal.querySelector<HTMLInputElement>('[data-modal-anchor]');
+      if (nameEl) nameEl.value = (title || arxivId).slice(0, 32);
+      if (stmtEl) stmtEl.value = tldr.slice(0, 200);
+      if (anchorEl) anchorEl.value = arxivId;
+    });
+  });
+
   // 同步默认 hue 到 hidden input
   const initialActive = modal.querySelector<HTMLElement>('.lib-hue-chip.active');
   const initialHue = (initialActive?.dataset.hue as LibraryHue) || 'emerald';
