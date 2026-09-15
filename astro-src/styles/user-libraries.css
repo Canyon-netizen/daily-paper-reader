@@ -1598,3 +1598,79 @@
     margin-left: auto;
   }
 }
+
+/* === Library 详情页移动端响应式(2026-09-15 R7 D.2.6) === */
+@media (max-width: 768px) {
+  /* tabs 变 stack 布局 */
+  .lib-tabs {
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .lib-tab {
+    width: 100%;
+    justify-content: center;
+    padding: 0.6rem 1rem;
+    border-radius: 6px;
+  }
+
+  /* 按钮全宽 */
+  .lib-detail-actions .btn,
+  .lib-detail-actions .btn-primary,
+  .lib-detail-actions .btn-soft,
+  .lib-detail-actions .btn-ghost {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* 卡片变紧凑列表 */
+  .library-card {
+    padding: 0.75rem 0.9rem;
+  }
+  .library-card .lib-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.4rem;
+  }
+  .library-card .lib-title-row .lib-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .library-card .lib-statement {
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+  }
+
+  /* actionbar 堆叠 */
+  .libraries-actionbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .libraries-actionbar .libraries-actionbar-spacer {
+    display: none;
+  }
+
+  /* modal 全宽 */
+  .dpr-modal {
+    max-width: 100%;
+    margin: 0.5rem;
+    border-radius: 10px;
+  }
+  .dpr-modal-body {
+    padding: 0.85rem 1rem;
+  }
+
+  /* 字段行单列 */
+  .lib-field-row {
+    grid-template-columns: 1fr;
+  }
+
+  /* profile cards 2 列 */
+  .lib-profile-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 归档卡片单列 */
+  .user-lib-archived-grid {
+    grid-template-columns: 1fr;
+  }
+}
