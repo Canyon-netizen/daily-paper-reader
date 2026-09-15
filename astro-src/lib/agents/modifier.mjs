@@ -20570,9 +20570,37 @@ async function modifierApply(verdicts, proposals, input, adapter) {
   }
   return { applied, skipped };
 }
+// astro-src/lib/agents/modifier.ts
+import { loadSkillContext } from "./skill-context-loader.mjs";
+
+// R7.1 B.1.3: 按 proposal.type 映射到 skill stage
+const MOD_TYPE_TO_STAGE = {
+  add_paper: "literature",
+  literature_review: "literature",
+  experiment_plan: "experiment",
+  create_draft: "draft",
+  paper_draft: "draft",
+  rebuttal: "revise",
+  citation_review: "literature",
+  dataset_curation: "experiment",
+  related_work: "draft",
+};
+
+/** R7.1 B.1.3 公开 helper:返回 proposal type 对应的 skill stage,fallback 'draft' */
+export function getModifierStageFor(proposalType) {
+  return MOD_TYPE_TO_STAGE[proposalType] ?? "draft";
+}
+
+/** R7.1 B.1.3 helper:返回该 stage 的 [方法论上下文 · ...] 块,直接拼到 LLM system prompt 顶部 */
+export function getModifierSkillContext(proposalType) {
+  return loadSkillContext(getModifierStageFor(proposalType));
+}
+
 async function applyOne(p, isPromoted, input, adapter) {
   const actions = [];
   const now = Date.now();
+  // R7.1 B.1.3: 把 stage 附到 proposal 上,adapter 调 LLM 时可读
+  p._modifierStage = getModifierStageFor(p.type);
   if (adapter.appendActivity) {
     await adapter.appendActivity({
       projectId: input.project.id,
