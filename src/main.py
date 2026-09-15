@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,37 @@ SKIMS_FETCH_DAYS_THRESHOLD = 11
 # SKIMS_FETCH_DAYS_THRESHOLD: 切到 arXiv skims API 的天数阈值;与目录结构无关,
 #   但若改 LONG_RANGE_DAYS_THRESHOLD 建议同步,使 fetch mode 与生成目录口径一致。
 BLT_PROVIDER_BASE_KEYWORDS = ("bltcy.ai", "gptbest.vip", "blt", "gptbest")
+
+
+def setup_global_exception_handler() -> None:
+    """注册全局异常处理器,捕获 KeyboardInterrupt 外所有异常并写日志."""
+
+    def exception_handler(exc_type, exc_value, exc_traceback):
+        # KeyboardInterrupt 让它自然传播,不写入日志
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+
+        # 构造日志路径
+        archive_dir = os.path.join(ROOT_DIR, "archive")
+        os.makedirs(archive_dir, exist_ok=True)
+        log_path = os.path.join(archive_dir, "pipeline_error.log")
+
+        # 格式化错误信息
+        timestamp = datetime.now().isoformat()
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        log_msg = f"[{timestamp}] {exc_type.__name__}: {exc_value}\n{tb_str}\n"
+
+        # 追加写入日志文件
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(log_msg)
+
+        # 同时打印到 stderr,让 cron/terminal 也能看到
+        print(log_msg, file=sys.stderr, flush=True)
+
+        sys.exit(1)
+
+    sys.excepthook = exception_handler
 
 
 def run_step(label: str, args: list[str], env: dict[str, str] | None = None) -> None:
@@ -1607,4 +1639,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    setup_global_exception_handler()
     main()
