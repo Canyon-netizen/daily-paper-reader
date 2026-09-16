@@ -39,6 +39,15 @@ const lastUpdated = await getLastUpdatedDate();
 // 今日新增(按 date 匹配今天 UTC,简单起见用昨日更新兜底)
 const today = new Date().toISOString().slice(0, 10);
 const newToday = items.filter((p) => p.date === today).length;
+
+// H.3.1: 今日推荐 — 综合 recent + categories 命中,挑 3 篇
+// 简单实现:取最近 3 篇有 title_zh 的论文
+const dailyRecs = items.slice(0, 8).filter((p) => p.title_zh || p.title).slice(0, 3);
+
+// H.3.1: 最近动态 — 最近 7 天有更新的论文流(去重),按 date desc
+const recentActivity = items
+  .filter((p) => p.date && p.date >= new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10))
+  .slice(0, 5);
 ---
 
 <BaseLayout
@@ -105,6 +114,51 @@ const newToday = items.filter((p) => p.date === today).length;
         <div class="recent-papers-grid" data-home-recent-libraries-list></div>
       </section>
     </header>
+
+    {/* H.3.1: 今日推荐(基于 recent 论文流,挑 3 篇) */}
+    {dailyRecs.length > 0 && (
+      <section class="home-daily-recs">
+        <header class="home-daily-recs-head">
+          <h2 class="home-daily-recs-title">📌 今日推荐</h2>
+          <p class="home-daily-recs-desc">基于今日新增与近期热度筛选</p>
+        </header>
+        <div class="home-daily-recs-grid">
+          {dailyRecs.map((p) => (
+            <a class="home-daily-rec" href={base + '/papers/' + p.slug + '/'}>
+              <div class="home-daily-rec-title">{p.title_zh || p.title}</div>
+              {p.title_zh && p.title && (
+                <div class="home-daily-rec-en">{p.title}</div>
+              )}
+              <div class="home-daily-rec-meta">
+                <span class="home-daily-rec-arxiv">{p.canonicalArxivId}</span>
+                <span class="home-daily-rec-cat">{(p as { primaryCategory?: string }).primaryCategory || 'cs'}</span>
+              </div>
+            </a>
+          ))}
+        </div>
+      </section>
+    )}
+
+    {/* H.3.1: 最近动态 — 7 天内的论文更新 */}
+    {recentActivity.length > 0 && (
+      <section class="home-activity-feed">
+        <header class="home-activity-head">
+          <h2 class="home-activity-title">📰 最近动态</h2>
+          <p class="home-activity-desc">近 7 天新收录 {recentActivity.length} 篇论文</p>
+        </header>
+        <ul class="home-activity-list">
+          {recentActivity.map((p) => (
+            <li class="home-activity-item">
+              <span class="home-activity-date">{p.date?.slice(5) || '?'}</span>
+              <a class="home-activity-link" href={base + '/papers/' + p.slug + '/'}>
+                {p.title_zh || p.title || p.canonicalArxivId}
+              </a>
+              <span class="home-activity-arxiv">{p.canonicalArxivId}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    )}
 
     {/* 最新论文快捷入口 (R5:在快捷入口后面渲染论文卡片) */}
     {items.length > 0 && (
