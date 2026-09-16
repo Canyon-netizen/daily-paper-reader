@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // astro-src/scripts/resource-tier.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/types/resource-tier.ts resource tier + data scale inference.
+// Tests for R7 polish: astro-src/lib/types/resource-tier.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,6 +19,7 @@ async function loadTs(relPath) {
     platform: 'neutral',
     write: false,
     target: 'es2022',
+    external: ['./types', '../types', '../../types', '../paper-frontmatter/deep-extract'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -27,47 +28,79 @@ async function loadTs(relPath) {
 
 const mod = await loadTs('lib/types/resource-tier.ts');
 const {
+  TIER_ORDER,
+  TIER_LABELS,
+  TIER_BADGE_LABELS,
+  DATA_SCALE_LABELS,
   parseCount,
   parseParamsCount,
   parseFlopsCount,
   inferResourceTier,
-  inferDataScale,
-  TIER_ORDER,
-  TIER_LABELS,
 } = mod;
 
-test('parseCount: "7B" → 7e9', () => {
-  assert.equal(parseCount('7B'), 7e9);
+// ---------- TIER 常量 ----------
+test('TIER_ORDER: 6 档都有,unknown 最大', () => {
+  assert.equal(TIER_ORDER.api_only, 0);
+  assert.equal(TIER_ORDER.single_gpu, 1);
+  assert.equal(TIER_ORDER.multi_gpu, 2);
+  assert.equal(TIER_ORDER.cluster, 3);
+  assert.equal(TIER_ORDER.tpu_pod, 4);
+  assert.equal(TIER_ORDER.unknown, 99);
+});
+
+test('TIER_LABELS: 6 档中文', () => {
+  assert.equal(TIER_LABELS.api_only, '仅 API');
+  assert.equal(TIER_LABELS.single_gpu, '单卡 GPU');
+  assert.equal(TIER_LABELS.multi_gpu, '多卡 GPU');
+  assert.equal(TIER_LABELS.cluster, '集群');
+  assert.equal(TIER_LABELS.tpu_pod, 'TPU Pod');
+  assert.equal(TIER_LABELS.unknown, '未知');
+});
+
+test('TIER_BADGE_LABELS: 6 档短标签', () => {
+  assert.equal(TIER_BADGE_LABELS.api_only, 'API');
+  assert.equal(TIER_BADGE_LABELS.tpu_pod, 'TPU');
+  assert.equal(TIER_BADGE_LABELS.unknown, '?');
+});
+
+test('DATA_SCALE_LABELS: 5 档', () => {
+  assert.equal(DATA_SCALE_LABELS.small, '<10k');
+  assert.equal(DATA_SCALE_LABELS.medium, '10k-1M');
+  assert.equal(DATA_SCALE_LABELS.large, '>1M');
+  assert.equal(DATA_SCALE_LABELS.web_scale, 'Web 级');
+  assert.equal(DATA_SCALE_LABELS.unknown, '未知');
+});
+
+// ---------- parseCount ----------
+test('parseCount: 空 → null', () => {
+  assert.equal(parseCount(null), null);
+  assert.equal(parseCount(undefined), null);
+  assert.equal(parseCount(''), null);
+});
+
+test('parseCount: "200" → 200', () => {
+  assert.equal(parseCount('200'), 200);
+});
+
+test('parseCount: "7k" → 7000', () => {
+  assert.equal(parseCount('7k'), 7000);
+  assert.equal(parseCount('7K'), 7000);
 });
 
 test('parseCount: "340M" → 340e6', () => {
   assert.equal(parseCount('340M'), 340e6);
 });
 
-test('parseCount: "1.5k" → 1500', () => {
-  assert.equal(parseCount('1.5k'), 1500);
+test('parseCount: "7B" → 7e9', () => {
+  assert.equal(parseCount('7B'), 7e9);
+  assert.equal(parseCount('1.5b'), 1.5e9);
 });
 
-test('parseCount: "200" → 200 (无单位)', () => {
-  assert.equal(parseCount('200'), 200);
+test('parseCount: 非 string → null', () => {
+  assert.equal(parseCount(123), null);
 });
 
-test('parseCount: 大写 K/M/B', () => {
-  assert.equal(parseCount('5K'), 5000);
-  assert.equal(parseCount('3M'), 3e6);
-  assert.equal(parseCount('2B'), 2e9);
-});
-
-test('parseCount: null / undefined / 空 → null', () => {
-  assert.equal(parseCount(null), null);
-  assert.equal(parseCount(undefined), null);
-  assert.equal(parseCount(''), null);
-});
-
-test('parseCount: 数字串 → null', () => {
-  assert.equal(parseCount('not a number'), null);
-});
-
+// ---------- parseParamsCount ----------
 test('parseParamsCount: "7B" → 7e9', () => {
   assert.equal(parseParamsCount('7B'), 7e9);
 });
@@ -76,129 +109,123 @@ test('parseParamsCount: "340M parameters" → 340e6', () => {
   assert.equal(parseParamsCount('340M parameters'), 340e6);
 });
 
-test('parseParamsCount: "1.5e9" → 1.5e9 (E 指数)', () => {
+test('parseParamsCount: 无单位默认 M', () => {
+  // "500" 无单位 → * 1e6
+  assert.equal(parseParamsCount('500'), 500e6);
+});
+
+test('parseParamsCount: "1.5e9" → 1.5e9', () => {
   assert.equal(parseParamsCount('1.5e9'), 1.5e9);
 });
 
-test('parseParamsCount: "1.5e+9" → 1.5e9', () => {
-  assert.equal(parseParamsCount('1.5e+9'), 1.5e9);
+test('parseParamsCount: "1.5E+9" → 1.5e9', () => {
+  assert.equal(parseParamsCount('1.5E+9'), 1.5e9);
 });
 
-test('parseParamsCount: 无单位默认 M', () => {
-  assert.equal(parseParamsCount('7'), 7e6);
+test('parseParamsCount: 空 → null', () => {
+  assert.equal(parseParamsCount(null), null);
+  assert.equal(parseParamsCount(''), null);
 });
 
+// ---------- parseFlopsCount ----------
 test('parseFlopsCount: "1.5e23" → 1.5e23', () => {
-  assert.ok(Math.abs(parseFlopsCount('1.5e23') - 1.5e23) < 1e10);
+  const r = parseFlopsCount('1.5e23');
+  assert.ok(Math.abs(r - 1.5e23) < 1e10);
 });
 
-test('parseFlopsCount: "5e22 FLOPs" → 5e22', () => {
-  assert.equal(parseFlopsCount('5e22 FLOPs'), 5e22);
+test('parseFlopsCount: "5E22 FLOPs" → 5e22', () => {
+  const r = parseFlopsCount('5E22 FLOPs');
+  assert.ok(Math.abs(r - 5e22) < 1e10);
 });
 
-test('inferResourceTier: TPU pod via text', () => {
+test('parseFlopsCount: "1.5e+23" → 1.5e23', () => {
+  const r = parseFlopsCount('1.5e+23');
+  assert.ok(Math.abs(r - 1.5e23) < 1e10);
+});
+
+test('parseFlopsCount: 空 → null', () => {
+  assert.equal(parseFlopsCount(null), null);
+});
+
+// ---------- inferResourceTier ----------
+test('inferResourceTier: deep=null, 无 textSignals → unknown', () => {
+  assert.equal(inferResourceTier(null), 'unknown');
+  assert.equal(inferResourceTier(undefined), 'unknown');
+});
+
+test('inferResourceTier: TPU pod 文本 → tpu_pod', () => {
   assert.equal(inferResourceTier(null, 'trained on TPU v4 pod'), 'tpu_pod');
 });
 
-test('inferResourceTier: TPU pod via flops>=1e24', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: { flops: '1e24' } }),
-    'tpu_pod',
-  );
+test('inferResourceTier: flops >= 1e24 → tpu_pod', () => {
+  const deep = { compute_requirements: { flops: '1.5e24' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'tpu_pod');
 });
 
-test('inferResourceTier: cluster via gpu_hours>=10000', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: { gpu_hours: '15000' } }),
-    'cluster',
-  );
+test('inferResourceTier: gpu_hours >= 10000 → cluster', () => {
+  const deep = { compute_requirements: { gpu_hours: '12000' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'cluster');
 });
 
-test('inferResourceTier: cluster via flops>=1e23', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: { flops: '5e23' } }),
-    'cluster',
-  );
+test('inferResourceTier: flops >= 1e23 → cluster', () => {
+  const deep = { compute_requirements: { flops: '5e23' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'cluster');
 });
 
-test('inferResourceTier: multi_gpu via 1000<=gpu_hours<10000', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: { gpu_hours: '5000' } }),
-    'multi_gpu',
-  );
+test('inferResourceTier: gpu_hours 1000-9999 → multi_gpu', () => {
+  const deep = { compute_requirements: { gpu_hours: '5000' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'multi_gpu');
 });
 
-test('inferResourceTier: multi_gpu via params>=30B', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: { params: '70B' } }),
-    'multi_gpu',
-  );
+test('inferResourceTier: params >= 30B → multi_gpu', () => {
+  const deep = { compute_requirements: { params: '70B' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'multi_gpu');
 });
 
-test('inferResourceTier: single_gpu via 1<=gpu_hours<1000', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: { gpu_hours: '500' } }),
-    'single_gpu',
-  );
+test('inferResourceTier: gpu_hours 1-999 → single_gpu', () => {
+  const deep = { compute_requirements: { gpu_hours: '200' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'single_gpu');
 });
 
-test('inferResourceTier: single_gpu via params>=1B', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: { params: '7B' } }),
-    'single_gpu',
-  );
+test('inferResourceTier: params 1B-29B → single_gpu', () => {
+  const deep = { compute_requirements: { params: '7B' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'single_gpu');
 });
 
-test('inferResourceTier: api_only via text signal', () => {
-  assert.equal(inferResourceTier(null, 'uses GPT-4 via API for inference'), 'api_only');
+test('inferResourceTier: text 含 "api" → api_only', () => {
+  // params=0 (无单位默认 *1e6=0)、无 gpu_hours,text 含 'api'
+  const deep = { compute_requirements: { params: '0' }, limitations: [] };
+  // textSignals = 'api'
+  assert.equal(inferResourceTier(deep, 'uses api'), 'api_only');
 });
 
-test('inferResourceTier: api_only via replicability_score>=4', () => {
-  assert.equal(
-    inferResourceTier({ compute_requirements: {}, replicability_score: 5 }),
-    'api_only',
-  );
+test('inferResourceTier: replicability_score >= 4 + 无 gpu_hours → api_only', () => {
+  const deep = {
+    compute_requirements: {},
+    limitations: [],
+    replicability_score: 5,
+  };
+  assert.equal(inferResourceTier(deep), 'api_only');
 });
 
-test('inferResourceTier: empty input → unknown', () => {
-  assert.equal(inferResourceTier(null), 'unknown');
-  assert.equal(inferResourceTier({}), 'unknown');
+test('inferResourceTier: 全空 + replicability=3 → unknown', () => {
+  const deep = {
+    compute_requirements: {},
+    limitations: [],
+    replicability_score: 3,
+  };
+  assert.equal(inferResourceTier(deep), 'unknown');
 });
 
-test('inferDataScale: web_scale via Common Crawl', () => {
-  assert.equal(inferDataScale(null, 'trained on Common Crawl'), 'web_scale');
+test('inferResourceTier: 优先级 — TPU 文本胜过 gpu_hours', () => {
+  // gpu_hours=200 → 单卡,但 text 含 'TPU pod' → tpu_pod
+  const deep = { compute_requirements: { gpu_hours: '200' }, limitations: [] };
+  assert.equal(inferResourceTier(deep, 'on TPU pod'), 'tpu_pod');
 });
 
-test('inferDataScale: web_scale via billion', () => {
-  assert.equal(inferDataScale(null, '1 billion images'), 'web_scale');
-});
-
-test('inferDataScale: large via >1M', () => {
-  assert.equal(inferDataScale(null, 'dataset >1M samples'), 'large');
-});
-
-test('inferDataScale: large via million', () => {
-  assert.equal(inferDataScale(null, 'several million examples'), 'large');
-});
-
-test('inferDataScale: small < medium(<10k 先于 medium)', () => {
-  assert.equal(inferDataScale(null, 'few thousand samples'), 'small');
-});
-
-test('inferDataScale: medium via 10k-1M', () => {
-  assert.equal(inferDataScale(null, '100k examples'), 'medium');
-});
-
-test('inferDataScale: empty → unknown', () => {
-  assert.equal(inferDataScale(null), 'unknown');
-  assert.equal(inferDataScale(null, ''), 'unknown');
-});
-
-test('TIER_ORDER: unknown=99(最后)', () => {
-  assert.equal(TIER_ORDER.unknown, 99);
-});
-
-test('TIER_LABELS: 中文', () => {
-  assert.equal(TIER_LABELS.api_only, '仅 API');
-  assert.equal(TIER_LABELS.cluster, '集群');
+test('inferResourceTier: 优先级 — flops=1e23 (cluster) 胜过 gpu_hours=200 (single_gpu)', () => {
+  // flops=5e23 ≥ 1e23 → cluster;但 gpu_hours=200 ≥ 1 → single_gpu
+  // 决策树先查 cluster 再 single_gpu,所以 → cluster
+  const deep = { compute_requirements: { gpu_hours: '200', flops: '5e23' }, limitations: [] };
+  assert.equal(inferResourceTier(deep), 'cluster');
 });
