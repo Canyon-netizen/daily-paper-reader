@@ -68,6 +68,54 @@ jobs:
             --deselect "tests/test_local_debug_env.py" \
             --deselect "tests/test_p01_fetch_failure.py"
 
+  # I.1.1: pytest 全套 — 跑所有测试(包括 live network 类),每周触发一次。
+  # 失败时只 warn,不阻塞 PR(让 contributor 知道有 breakage 但不卡住开发)。
+  pytest-full:
+    name: pytest (full, scheduled)
+    if: github.event_name == 'push'  # 只在 push(默认 cron)跑,PR 上不跑避免长 CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-cpu.txt
+            requirements-local-models.txt
+            requirements-paper-media.txt
+
+      - name: Install deps (含 sqlite3 — full run 需要)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-cov
+
+      - name: Run pytest (full)
+        continue-on-error: true  # 失败不阻塞,只上报
+        run: |
+          python -m pytest tests/ -q \
+            --cov=src --cov-report=xml --cov-report=term \
+            -W ignore::DeprecationWarning 2>&1 | tee pytest-full.log
+          exit 0  # 不让失败阻塞下一步
+        env:
+          # CI 上访问这些 endpoint 通常需要 secrets;失败没关系,warn-only
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL || '' }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY || '' }}
+
+      - name: Upload pytest-full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-full-log
+          path: pytest-full.log
+          retention-days: 7
+
   audit-crosslinks:
     name: audit cross-links
     runs-on: ubuntu-latest
