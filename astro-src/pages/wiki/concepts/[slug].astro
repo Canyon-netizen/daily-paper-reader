@@ -55,6 +55,26 @@ const sparklinePts = recentHistory.length >= 2
 const sparklineMax = recentHistory.length > 0
   ? Math.max(...recentHistory.map((s) => s.paper_count), 1)
   : 0;
+
+// G.3.3: 准备 local subgraph data(本 concept + top 相关 → cytoscape 渲染)
+// 把 related 转成 cytoscape elements 格式
+const graphData = {
+  centerSlug: slugStr,
+  nodes: [
+    { id: slugStr, label: meta?.display_name || slugStr, weight: meta?.paper_count || 1, category: meta?.category || 'other' },
+    ...related.slice(0, 30).map((r) => ({
+      id: r.slug,
+      label: r.display_name,
+      weight: r.paper_count,
+      category: r.category,
+    })),
+  ],
+  edges: related.slice(0, 30).map((r) => ({
+    source: slugStr,
+    target: r.slug,
+    weight: r.co_count,
+  })),
+};
 ---
 
 <BaseLayout
@@ -135,6 +155,20 @@ const sparklineMax = recentHistory.length > 0
           )}
 
           {related.length > 0 && (
+            <article class="concept-detail-section">
+              <h2>概念关系可视化</h2>
+              <p class="concept-detail-empty">
+                本概念与共现相关概念的局部图(中心节点 = 本概念,周围节点 = 高频共现概念,
+                边粗细 = 共现论文数)。点击节点跳转到对应概念。
+              </p>
+              <div class="concept-cy" id="concept-cy" data-graph={JSON.stringify(graphData)}></div>
+              <noscript>
+                <p class="concept-detail-empty">需要启用 JavaScript 才能看到关系图。</p>
+              </noscript>
+            </article>
+          )}
+
+          {related.length > 0 && (
             <article class="concept-detail-section concept-related">
               <h2>共现相关概念</h2>
               <p class="concept-detail-empty">
@@ -179,6 +213,103 @@ const sparklineMax = recentHistory.length > 0
 
   <Footer />
 </BaseLayout>
+
+<script>
+  // G.3.3: 概念关系图(cytoscape + fcose 持续受力模拟)
+  // 与 /concepts 页不同的是:这里只画本概念 + top 30 相关,中心节点固定,
+  // 点击节点跳到对应概念详情页。
+  const cyEl = document.getElementById('concept-cy') as HTMLDivElement | null;
+  if (cyEl) {
+    const raw = cyEl.getAttribute('data-graph') || '{}';
+    let graphData: { centerSlug?: string; nodes: { id: string; label: string; weight: number; category: string }[]; edges: { source: string; target: string; weight: number }[] };
+    try {
+      graphData = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (!graphData.nodes || graphData.nodes.length === 0) return;
+
+    (async () => {
+      let cytoscape: any;
+      let fcose: any;
+      try {
+        cytoscape = (await import('cytoscape')).default;
+        fcose = (await import('cytoscape-fcose')).default;
+      } catch (e) {
+        console.warn('[concept-cy] cytoscape/fcose not available:', e);
+        return;
+      }
+      cytoscape.use(fcose);
+
+      const categoryColor: Record<string, string> = {
+        method: '#7c5cff',
+        problem: '#ef4444',
+        dataset: '#0891b2',
+        metric: '#059669',
+        methodology: '#d97706',
+        task: '#0284c7',
+        other: '#9ca3af',
+      };
+
+      const cy = cytoscape({
+        container: cyEl,
+        elements: [
+          ...graphData.nodes.map((n) => ({
+            data: { id: n.id, label: n.label, weight: n.weight, category: n.category, color: categoryColor[n.category] || categoryColor.other },
+          })),
+          ...graphData.edges.map((e) => ({
+            data: { source: e.source, target: e.target, weight: e.weight },
+          })),
+        ],
+        style: [
+          {
+            selector: 'node',
+            style: {
+              'background-color': 'data(color)',
+              'label': 'data(label)',
+              'font-size': '11px',
+              'color': '#1f2937',
+              'text-valign': 'bottom',
+              'text-halign': 'center',
+              'text-margin-y': 4,
+              'width': 'mapData(weight, 1, 50, 18, 56)',
+              'height': 'mapData(weight, 1, 50, 18, 56)',
+              'text-background-color': '#fff',
+              'text-background-opacity': 0.9,
+              'text-background-padding': 2,
+              'text-background-shape': 'roundrectangle',
+              'text-wrap': 'wrap',
+              'text-max-width': '100px',
+            },
+          },
+          {
+            selector: `node[id = "${graphData.centerSlug}"]`,
+            style: { 'border-color': '#1f2937', 'border-width': 3 },
+          },
+          {
+            selector: 'edge',
+            style: {
+              'line-color': '#94a3b8',
+              'width': 'mapData(weight, 1, 20, 1, 5)',
+              'curve-style': 'bezier',
+              'opacity': 0.6,
+            },
+          },
+        ],
+        layout: { name: 'fcose', quality: 'default', animate: false },
+      });
+
+      cy.on('tap', 'node', (evt: any) => {
+        const node = evt.target;
+        const id = node.id();
+        if (id && id !== graphData.centerSlug) {
+          const base = (document.querySelector('meta[name="base-url"]') as HTMLMetaElement)?.content || '';
+          window.location.href = `${base}/wiki/concepts/${id}/`;
+        }
+      });
+    })();
+  }
+</script>
 
 <style>
   .concept-detail-head h1 {
@@ -356,5 +487,13 @@ const sparklineMax = recentHistory.length > 0
     height: 60px;
     display: block;
     margin-top: 0.5rem;
+  }
+  /* G.3.3 cytoscape container */
+  .concept-cy {
+    width: 100%;
+    height: 380px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
   }
 </style>
