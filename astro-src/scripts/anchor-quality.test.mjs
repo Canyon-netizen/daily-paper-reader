@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // astro-src/scripts/anchor-quality.test.mjs
 //
-// Tests for R7 D.2.2 anchor paper quality scoring.
+// Tests for R7 polish: astro-src/lib/libraries/anchor-quality.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'node',
+    platform: 'neutral',
     write: false,
     target: 'es2022',
   });
@@ -28,61 +28,124 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/libraries/anchor-quality.ts');
 const { scoreAnchorPaper, rankAnchorPapers } = mod;
 
-const knownPapers = new Map([
-  ['2501.00001', { arxivId: '2501.00001', citations: 150, date: '2026-08-01', milestone: true }],
-  ['2501.00002', { arxivId: '2501.00002', citations: 30, date: '2026-06-01' }],
-  ['2501.00003', { arxivId: '2501.00003', citations: 5, date: '2024-01-01', milestone: false }],
-  ['2501.00004', { arxivId: '2501.00004', citations: 0, date: '2025-01-01' }],
-  ['2501.00005', { arxivId: '2501.00005' }], // No data
-]);
+function nowMinusYears(years) {
+  return new Date(Date.now() - years * 365 * 24 * 60 * 60 * 1000).toISOString();
+}
 
-test('scoreAnchorPaper: high quality paper (citations + recent + milestone)', () => {
-  const result = scoreAnchorPaper('2501.00001', knownPapers);
-  assert.ok(result.score >= 0.9, `Expected high score, got ${result.score}`);
-  assert.ok(result.reasons.length >= 3);
+test('scoreAnchorPaper: 未知 paper → 0 + reasons 全标缺', () => {
+  const r = scoreAnchorPaper('xxx', new Map());
+  assert.equal(r.score, 0);
+  assert.ok(r.reasons.includes('No citation data'));
+  assert.ok(r.reasons.includes('No date data'));
+  assert.ok(r.reasons.includes('Not a milestone'));
 });
 
-test('scoreAnchorPaper: moderate quality (citations + recent, no milestone)', () => {
-  const result = scoreAnchorPaper('2501.00002', knownPapers);
-  assert.ok(result.score >= 0.3 && result.score <= 0.7, `Expected moderate score, got ${result.score}`);
+test('scoreAnchorPaper: 100+ citations → 0.4', () => {
+  const map = new Map([['p1', { arxivId: 'p1', citations: 150 }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0.4); // 没有 recency 和 milestone
+  assert.ok(r.reasons.includes('High citations (100+)'));
 });
 
-test('scoreAnchorPaper: low quality (low citations + old)', () => {
-  const result = scoreAnchorPaper('2501.00003', knownPapers);
-  assert.ok(result.score < 0.3, `Expected low score, got ${result.score}`);
+test('scoreAnchorPaper: 50-99 citations → 0.35', () => {
+  const map = new Map([['p1', { arxivId: 'p1', citations: 60 }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0.35);
 });
 
-test('scoreAnchorPaper: unknown paper returns zero score', () => {
-  const result = scoreAnchorPaper('2501.99999', knownPapers);
-  assert.equal(result.score, 0);
-  assert.ok(result.reasons.length > 0);
+test('scoreAnchorPaper: 10-50 citations 线性内插', () => {
+  const map = new Map([['p1', { arxivId: 'p1', citations: 30 }]]);
+  const r = scoreAnchorPaper('p1', map);
+  // 0.3 - (30-10)*0.01 = 0.1
+  assert.ok(Math.abs(r.score - 0.1) < 1e-9);
 });
 
-test('scoreAnchorPaper: missing fields handled gracefully', () => {
-  const result = scoreAnchorPaper('2501.00005', knownPapers);
-  assert.ok(result.score >= 0 && result.score <= 1);
+test('scoreAnchorPaper: 0-10 citations 线性 0.02/cit', () => {
+  const map = new Map([['p1', { arxivId: 'p1', citations: 5 }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0.1); // 5 * 0.02
 });
 
-test('scoreAnchorPaper: score clamped to 0-1', () => {
-  const papersMax = new Map([['max', { arxivId: 'max', citations: 1000, date: '2026-09-01', milestone: true }]]);
-  const result = scoreAnchorPaper('max', papersMax);
-  assert.ok(result.score <= 1);
+test('scoreAnchorPaper: recency <6 个月 → +0.3', () => {
+  const map = new Map([['p1', { arxivId: 'p1', date: nowMinusYears(0.3) }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0.3);
+  assert.ok(r.reasons.includes('Recent (<6 months)'));
 });
 
-test('rankAnchorPapers: returns sorted array', () => {
-  const ids = ['2501.00001', '2501.00002', '2501.00003', '2501.00004'];
-  const ranked = rankAnchorPapers(ids, knownPapers);
-  assert.equal(ranked.length, 4);
-  // Should be sorted descending
-  for (let i = 1; i < ranked.length; i++) {
-    assert.ok(ranked[i-1].score >= ranked[i].score);
-  }
+test('scoreAnchorPaper: recency 6-12 个月 → +0.2', () => {
+  const map = new Map([['p1', { arxivId: 'p1', date: nowMinusYears(0.8) }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0.2);
 });
 
-test('rankAnchorPapers: includes all input IDs', () => {
-  const ids = ['2501.00001', '2501.00004'];
-  const ranked = rankAnchorPapers(ids, knownPapers);
-  const rankedIds = ranked.map(r => r.id);
-  assert.ok(rankedIds.includes('2501.00001'));
-  assert.ok(rankedIds.includes('2501.00004'));
+test('scoreAnchorPaper: recency 1-2 年 → +0.1', () => {
+  const map = new Map([['p1', { arxivId: 'p1', date: nowMinusYears(1.5) }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0.1);
+});
+
+test('scoreAnchorPaper: recency >2 年 → +0', () => {
+  const map = new Map([['p1', { arxivId: 'p1', date: nowMinusYears(3) }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0);
+  assert.ok(r.reasons.includes('Older paper (>2 years)'));
+});
+
+test('scoreAnchorPaper: milestone=true → +0.3', () => {
+  const map = new Map([['p1', { arxivId: 'p1', milestone: true }]]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.equal(r.score, 0.3);
+  assert.ok(r.reasons.includes('Milestone paper'));
+});
+
+test('scoreAnchorPaper: 综合高分数(citations+recency+milestone)', () => {
+  const map = new Map([
+    ['p1', { arxivId: 'p1', citations: 200, date: nowMinusYears(0.2), milestone: true }],
+  ]);
+  const r = scoreAnchorPaper('p1', map);
+  // 0.4 + 0.3 + 0.3 = 1.0
+  assert.equal(r.score, 1.0);
+});
+
+test('scoreAnchorPaper: 夹紧到 [0,1](score 不会超 1)', () => {
+  // 即使各项相加 = 1.0,clamp 后还是 1.0
+  const map = new Map([
+    ['p1', { arxivId: 'p1', citations: 200, date: nowMinusYears(0.1), milestone: true }],
+  ]);
+  const r = scoreAnchorPaper('p1', map);
+  assert.ok(r.score <= 1.0);
+});
+
+test('rankAnchorPapers: 按 score desc 排序', () => {
+  const map = new Map([
+    ['high', { arxivId: 'high', citations: 200, milestone: true }],
+    ['low', { arxivId: 'low', citations: 1 }],
+    ['mid', { arxivId: 'mid', citations: 50 }],
+  ]);
+  const r = rankAnchorPapers(['low', 'mid', 'high'], map);
+  assert.equal(r[0].id, 'high');
+  assert.equal(r[0].score, 0.7); // 0.35 + 0.3
+  assert.equal(r[1].id, 'mid');
+  assert.equal(r[2].id, 'low');
+});
+
+test('rankAnchorPapers: 空数组 → 空', () => {
+  const r = rankAnchorPapers([], new Map());
+  assert.deepEqual(r, []);
+});
+
+test('rankAnchorPapers: 未知 arxivId → score=0 排在最后', () => {
+  const map = new Map([['known', { arxivId: 'known', citations: 50 }]]);
+  const r = rankAnchorPapers(['unknown', 'known'], map);
+  assert.equal(r[0].id, 'known');
+  assert.equal(r[1].id, 'unknown');
+  assert.equal(r[1].score, 0);
+});
+
+test('rankAnchorPapers: 返回 {arxivId, score} 字段', () => {
+  const map = new Map([['p1', { arxivId: 'p1', citations: 50 }]]);
+  const r = rankAnchorPapers(['p1'], map);
+  assert.equal(r[0].id, 'p1');
+  assert.equal(typeof r[0].score, 'number');
 });
