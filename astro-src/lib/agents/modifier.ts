@@ -10,6 +10,11 @@
  *   - **dry_run 隔离**:--dry-run 时只输出"如果执行会做什么",不动 localStorage。
  *   - **失败隔离**:单条 apply 失败不影响其他;记录到 ModifierSkip。
  *   - **审计**:每次成功 append activity(沿用 lib/projects/activity 的 audit 表)。
+ *
+ * F.3.2: cross-reference enforcement — 每个 deliverable (create_draft /
+ * literature_review / rebuttal) 必须至少引用 MIN_CITATIONS 篇 supporting papers。
+ * F.3.3: bibliography formatting — DeliverableFormat + BibliographyStyle 决定
+ * citation 输出格式(BibTeX entry / natbib inline / biblatex tag)。
  */
 
 import type {
@@ -19,6 +24,113 @@ import type {
   Proposal,
   RoundInput,
 } from './types';
+
+// ---------------------------------------------------------------------------
+// F.3.2 + F.3.3 — cross-reference + bibliography 配置
+// ---------------------------------------------------------------------------
+
+/** 每个 deliverable 至少引用的 supporting paper 数(R7 F.3.2)。 */
+export const MIN_CITATIONS = 3;
+
+/** 参考文献格式(R7 F.3.3)。 */
+export type BibliographyStyle = 'bibtex' | 'natbib' | 'biblatex';
+
+/** Deliverable format 决定 section order + citation style。 */
+export type DeliverableFormatName = 'arxiv' | 'acl' | 'journal';
+
+export interface BibliographyConfig {
+  format: DeliverableFormatName;
+  /** 引用风格(arxiv → plain / acl → acl / journal → ieee)。 */
+  citationStyle: BibliographyStyle;
+  /** section 顺序。 */
+  sectionOrder: string[];
+}
+
+export const FORMAT_TEMPLATES: Record<DeliverableFormatName, BibliographyConfig> = {
+  arxiv: {
+    format: 'arxiv',
+    citationStyle: 'bibtex',
+    sectionOrder: ['abstract', 'intro', 'method', 'experiment', 'related', 'conclusion'],
+  },
+  acl: {
+    format: 'acl',
+    citationStyle: 'natbib',
+    sectionOrder: ['abstract', 'intro', 'related', 'method', 'experiment', 'conclusion'],
+  },
+  journal: {
+    format: 'journal',
+    citationStyle: 'biblatex',
+    sectionOrder: ['abstract', 'intro', 'method', 'results', 'discussion', 'conclusion'],
+  },
+};
+
+export function getBibliographyConfig(format: DeliverableFormatName): BibliographyConfig {
+  return FORMAT_TEMPLATES[format] || FORMAT_TEMPLATES.arxiv;
+}
+
+/**
+ * 检查 proposal 的 cross-reference 是否达标(F.3.2)。
+ *  - create_draft / literature_review / rebuttal → 必须有 ≥ MIN_CITATIONS 个 paper
+ *  - 其它 type(add_paper / experiment_plan 等)→ 不强制,返回 ok
+ *  - paperId 格式校验(YYMM.NNNNN vN 可选)
+ */
+export function checkCrossReference(
+  p: Proposal,
+  minCitations: number = MIN_CITATIONS,
+): { ok: boolean; reason?: string; validPaperIds: string[]; invalidPaperIds: string[] } {
+  const ARXIV_RE = /^\d{4}\.\d{4,5}(v\d+)?$/;
+  // 不强制的 type
+  const skipTypes = new Set(['add_paper', 'experiment_plan', 'archive_paper']);
+  if (skipTypes.has(p.type)) {
+    return { ok: true, validPaperIds: p.evidence.paperIds, invalidPaperIds: [] };
+  }
+
+  const valid: string[] = [];
+  const invalid: string[] = [];
+  for (const id of p.evidence.paperIds) {
+    if (ARXIV_RE.test(id)) valid.push(id);
+    else invalid.push(id);
+  }
+
+  if (valid.length < minCitations) {
+    return {
+      ok: false,
+      reason: `cross-reference 不达标: ${valid.length} 篇 < ${minCitations} 最低要求`,
+      validPaperIds: valid,
+      invalidPaperIds: invalid,
+    };
+  }
+  return { ok: true, validPaperIds: valid, invalidPaperIds: invalid };
+}
+
+/**
+ * 把 proposal 的 paperIds 渲染成 bibliography block(F.3.3)。
+ *  - bibtex: 用 [@key] 引用 + 文末 thebibliography 段
+ *  - natbib: 用 \citep{key} 引用 + 文末 thebibliography
+ *  - biblatex: 用 \autocite{key} 引用 + 文末 printbibliography(伪代码)
+ */
+export function renderBibliography(
+  p: Proposal,
+  style: BibliographyStyle,
+): string {
+  const ids = p.evidence.paperIds;
+  if (ids.length === 0) return '';
+  const items = ids.map((id, i) => `  [${i + 1}] ${id} — (placeholder title)`).join('\n');
+  switch (style) {
+    case 'bibtex':
+      return `\\bibliographystyle{plain}\n\\begin{thebibliography}{99}\n${ids
+        .map((id, i) => `\\bibitem{${id}} ${id} (placeholder)`)
+        .join('\n')}\n\\end{thebibliography}`;
+    case 'natbib':
+      return `\\begin{thebibliography}{99}\n${items}\n\\end{thebibliography}`;
+    case 'biblatex':
+      return `\\printbibliography\n% entries:\n${ids
+        .map((id) => `  @article{${id}, title={...}, author={...}, year={...}}`)
+        .join('\n')}`;
+    default:
+      return items;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 上游模块 adapter 接口(浏览器 / CLI 各实现一份)
