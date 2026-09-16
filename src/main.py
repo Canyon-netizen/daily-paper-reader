@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import json
+import logging
 import os
 import re
 import subprocess
@@ -36,6 +37,14 @@ from src._failure_taxonomy import (
     VALIDATION_ERROR,
     DEGRADED,
 )
+
+# Setup basic logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("pipeline")
 
 try:
     import yaml  # type: ignore
@@ -1000,6 +1009,8 @@ def _step_fetch_arxiv(config: dict) -> dict:
         )
         return {"status": "succeeded"}
     except Exception as e:
+        import traceback
+        logger.error(f"Step 1 fetch_arxiv failed: {e}\n{traceback.format_exc()}")
         return {"status": "failed", "error": str(e)}
 
 

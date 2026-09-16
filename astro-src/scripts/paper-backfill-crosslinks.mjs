@@ -1,20 +1,23 @@
 #!/usr/bin/env node
 // astro-src/scripts/paper-backfill-crosslinks.mjs
 //
-// 启发式批量回填论文 frontmatter 的 related_ideas / related_experiments 字段。
+// 启发式批量回填论文 frontmatter 的 related_ideas / related_experiments /
+// related_papers / related_concepts 字段。
 //
-// 问题:大量论文缺少 related_ideas / related_experiments 跨模块链接。
+// 问题:大量论文缺少 related_* 跨模块链接。
 //
 // 设计:
-//   - 启发式匹配: tags → ideas/experiments, keyword overlap
-//   - LLM fallback (可选): 需要 LLM_BASE_URL 环境变量
+//   - 启发式匹配: shared categories/authors → related_papers,
+//     shared concepts → related_concepts
+//   - LLM fallback (可选): 需要 LLM_API_URL / LLM_API_KEY 环境变量
 //   - 与现有值合并(union),去重
-//   - CLI: --dry-run, --apply, --limit N, --all, --use-llm
+//   - CLI: --dry-run, --apply, --limit N, --all, --llm, --heuristic
 //
 // 用法:
 //   node astro-src/scripts/paper-backfill-crosslinks.mjs --dry-run --limit 10
 //   node astro-src/scripts/paper-backfill-crosslinks.mjs --apply --limit 10
-//   node astro-src/scripts/paper-backfill-crosslinks.mjs --apply --all --use-llm
+//   node astro-src/scripts/paper-backfill-crosslinks.mjs --apply --all --llm
+//   node astro-src/scripts/paper-backfill-crosslinks.mjs --heuristic --dry-run
 
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -23,7 +26,7 @@ const PAPERS_ROOT = 'docs/papers';
 const IDEAS_ROOT = 'docs/ideas';
 const EXPERIMENTS_ROOT = 'docs/experiments';
 
-// ========== 1. 加载 ideas / experiments 索引 ==========
+// ========== 1. 加载 ideas / experiments / papers 索引 ==========
 
 function loadIdeas() {
   const out = [];
@@ -63,6 +66,52 @@ function loadExperiments() {
   return out;
 }
 
+// 加载所有论文用于 related_papers 匹配
+function loadAllPapers() {
+  const out = [];
+  function rec(dir) {
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name.startsWith('_') || entry.name === 'assets') continue;
+        if (entry.name.startsWith('topic-seeds-')) continue;
+        const p = join(dir, entry.name);
+        if (entry.isDirectory()) rec(p);
+        else if (entry.isFile() && entry.name.endsWith('.md') && !entry.name.endsWith('.txt')) {
+          const raw = readFileSync(p, 'utf8');
+          const { fm } = extractFrontmatter(raw);
+          if (!fm) return;
+          const titleMatch = fm.match(/^title:\s*(.+?)$/m);
+          const title = titleMatch ? titleMatch[1].replace(/^['"]|['"]$/g, '').trim() : '';
+          // 提取 authors
+          const authorsMatch = fm.match(/^authors:\s*(.+)$/m);
+          const authors = authorsMatch ? authorsMatch[1].replace(/^['"]|['"]$/g, '').split(',').map(a => a.trim().toLowerCase()) : [];
+          // 提取 categories (task/method)
+          const catsBlock = fm.match(/^categories:\s*\{([^}]+)\}/m);
+          const categories = catsBlock ? catsBlock[1].split(',').map(c => c.trim().toLowerCase()) : [];
+          const taskMatch = catsBlock ? catsBlock[1].match(/task:\s*\[([^\]]*)\]/) : null;
+          const methodMatch = catsBlock ? catsBlock[1].match(/method:\s*\[([^\]]*)\]/) : null;
+          const tasks = taskMatch ? taskMatch[1].split(',').map(t => t.trim().toLowerCase()) : [];
+          const methods = methodMatch ? methodMatch[1].split(',').map(m => m.trim().toLowerCase()) : [];
+          const arxivMatch = p.match(/(\d{4}\.\d{4,5})/);
+          const arxivId = arxivMatch ? arxivMatch[1] : null;
+          out.push({
+            id: arxivId,
+            path: p,
+            title,
+            authors,
+            categories: [...tasks, ...methods],
+            keywords: extractKeywords(title),
+          });
+        }
+      }
+    } catch (e) {
+      // skip permission errors
+    }
+  }
+  rec(PAPERS_ROOT);
+  return out;
+}
+
 // ========== 2. 关键词提取 ==========
 
 function extractKeywords(text) {
@@ -77,7 +126,7 @@ function extractKeywords(text) {
 
 // ========== 3. 启发式匹配 ==========
 
-/** 从 paper frontmatter 提取 title, tags, abstract */
+/** 从 paper frontmatter 提取 title, tags, abstract, authors, categories */
 function extractPaperMeta(fm, body) {
   const titleMatch = fm.match(/^title:\s*(.+?)$/m);
   const title = titleMatch ? titleMatch[1].replace(/^['"]|['"]$/g, '').trim() : '';
@@ -91,7 +140,26 @@ function extractPaperMeta(fm, body) {
   const abstractMatch = fm.match(/^abstract_en:\s*(.+?)$/m);
   const abstract = abstractMatch ? abstractMatch[1].replace(/^['"]|['"]$/g, '').trim() : '';
 
-  return { title, tags: searchTags, abstract, keywords: extractKeywords(title + ' ' + abstract) };
+  // 提取 authors
+  const authorsMatch = fm.match(/^authors:\s*(.+)$/m);
+  const authors = authorsMatch ? authorsMatch[1].replace(/^['"]|['"]$/g, '').split(',').map(a => a.trim().toLowerCase()) : [];
+
+  // 提取 categories (task/method)
+  const catsBlock = fm.match(/^categories:\s*\{([^}]+)\}/m);
+  const categories = catsBlock ? catsBlock[1].split(',').map(c => c.trim().toLowerCase()) : [];
+  const taskMatch = catsBlock ? catsBlock[1].match(/task:\s*\[([^\]]*)\]/) : null;
+  const methodMatch = catsBlock ? catsBlock[1].match(/method:\s*\[([^\]]*)\]/) : null;
+  const tasks = taskMatch ? taskMatch[1].split(',').map(t => t.trim().toLowerCase()) : [];
+  const methods = methodMatch ? methodMatch[1].split(',').map(m => m.trim().toLowerCase()) : [];
+
+  return {
+    title,
+    tags: searchTags,
+    abstract,
+    authors,
+    categories: [...tasks, ...methods],
+    keywords: extractKeywords(title + ' ' + abstract)
+  };
 }
 
 /** 启发式匹配 ideas */
@@ -140,38 +208,91 @@ function matchExperiments(paperMeta, experiments) {
   return [...matched];
 }
 
+/** 启发式匹配 related_papers: shared categories/authors */
+function matchRelatedPapers(paperMeta, allPapers, currentPath) {
+  const matched = new Set();
+  const paperAuthors = new Set(paperMeta.authors || []);
+  const paperCats = new Set(paperMeta.categories || []);
+
+  for (const p of allPapers) {
+    if (p.path === currentPath) continue; // skip self
+
+    // 1. shared authors
+    const sharedAuthors = p.authors.filter(a => paperAuthors.has(a));
+    if (sharedAuthors.length >= 1) {
+      matched.add(p.path);
+    }
+
+    // 2. shared categories (task/method)
+    const sharedCats = p.categories.filter(c => paperCats.has(c));
+    if (sharedCats.length >= 2) {
+      matched.add(p.path);
+    }
+  }
+  return [...matched];
+}
+
+/** 启发式匹配 related_concepts: shared concepts */
+function matchRelatedConcepts(paperMeta, allPapers, currentPath) {
+  const matched = new Set();
+  const paperKw = new Set(paperMeta.keywords);
+
+  for (const p of allPapers) {
+    if (p.path === currentPath) continue; // skip self
+
+    // keyword overlap (concepts are essentially keywords)
+    const sharedKw = p.keywords.filter(kw => paperKw.has(kw) && kw.length > 3);
+    if (sharedKw.length >= 2) {
+      matched.add(p.path);
+    }
+  }
+  return [...matched];
+}
+
 // ========== 4. LLM fallback (可选) ==========
 
-async function callLLMFallback(paperMeta, ideas, experiments) {
-  const baseUrl = process.env.LLM_BASE_URL;
+async function callLLMFallback(paperMeta, ideas, experiments, allPapers) {
+  const baseUrl = process.env.LLM_API_URL || process.env.LLM_BASE_URL;
+  const apiKey = process.env.LLM_API_KEY;
   if (!baseUrl) return null;
 
-  const ideaSummaries = ideas.map(i => `  - ${i.id}: ${i.title}`).join('\n');
-  const expSummaries = experiments.map(e => `  - ${e.id}: ${e.title}`).join('\n');
+  const ideaSummaries = ideas.slice(0, 20).map(i => `  - ${i.id}: ${i.title}`).join('\n');
+  const expSummaries = experiments.slice(0, 20).map(e => `  - ${e.id}: ${e.title}`).join('\n');
+  const paperSummaries = allPapers.slice(0, 30).map(p => `  - ${p.id || p.path}: ${p.title}`).join('\n');
 
-  const prompt = `You are a research assistant. Given a paper's metadata, recommend which ideas and experiments from the library are related.
+  const prompt = `You are a research assistant. Given a paper's metadata, recommend which ideas, experiments, and other papers from the library are related.
 
 Paper title: ${paperMeta.title}
 Paper tags: ${paperMeta.tags.join(', ') || '(none)'}
+Paper authors: ${paperMeta.authors?.join(', ') || '(none)'}
+Paper categories: ${paperMeta.categories?.join(', ') || '(none)'}
 Paper abstract: ${paperMeta.abstract.slice(0, 500)}
 
 Available ideas:
-${ideaSummaries}
+${ideaSummaries || '(none)'}
 
 Available experiments:
-${expSummaries}
+${expSummaries || '(none)'}
+
+Available papers:
+${paperSummaries || '(none)'}
 
 Respond with JSON only (no markdown):
 {
   "related_ideas": ["docs/ideas/xxx.md", ...],
-  "related_experiments": ["docs/experiments/yyy.md", ...]
+  "related_experiments": ["docs/experiments/yyy.md", ...],
+  "related_papers": ["docs/papers/.../xxx.md", ...],
+  "related_concepts": ["concept1", "concept2", ...]
 }
 Only include entries that are truly relevant. Return empty arrays if none.`;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
   try {
     const res = await fetch(`${baseUrl}/v1/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({
         model: 'default',
         messages: [{ role: 'user', content: prompt }],
