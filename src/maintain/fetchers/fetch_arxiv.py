@@ -4,6 +4,7 @@ import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError as _HTTPError
 
 from src.supabase_source import (
     get_supabase_read_config,
@@ -49,6 +50,43 @@ CATEGORIES_TO_FETCH = [
     "physics", "cond-mat", "hep-ph", "hep-th", "gr-qc", "astro-ph",
 ]
 RANGE_TOKEN_RE = re.compile(r"^\d{8}-\d{8}$")
+
+
+def _parse_retry_after(value: str | None) -> float:
+    """解析 Retry-After header(秒数字符串)→ float seconds。失败兜底 20s。"""
+    if not value:
+        return 20.0
+    try:
+        return max(1.0, float(value))
+    except (TypeError, ValueError):
+        return 20.0
+
+
+def results_with_429_retry(client: arxiv.Client, search: arxiv.Search, *, max_attempts: int = 3):
+    """包装 client.results(search) → generator。
+
+    arxiv.Client 自身 num_retries=5 但不解析 Retry-After header,429 时仍走固定退避。
+    这里在外面再包一层:遇到 HTTPError(429) 时按 Retry-After 等指定秒数重试,
+    直到 max_attempts 用完再 raise。
+    """
+    attempt = 0
+    while True:
+        try:
+            yield from client.results(search)
+            return
+        except _HTTPError as e:
+            # urllib 的 HTTPError 在 e.code 暴露状态码;arxiv 在 429 时透传。
+            if getattr(e, "code", None) != 429 or attempt >= max_attempts - 1:
+                raise
+            retry_hdr = None
+            try:
+                retry_hdr = e.headers.get("Retry-After") if e.headers else None
+            except Exception:
+                retry_hdr = None
+            wait_s = _parse_retry_after(retry_hdr)
+            log(f"⚠️ arXiv 返回 429,Retry-After={retry_hdr or '<missing>'} → sleep {wait_s:.1f}s (attempt {attempt + 1}/{max_attempts})")
+            time.sleep(wait_s)
+            attempt += 1
 
 
 def load_config() -> dict:
@@ -265,7 +303,7 @@ def fetch_category_in_windows(
 
         count = 0
         try:
-            for r in client.results(search):
+            for r in results_with_429_retry(client, search):
                 pid = r.get_short_id()
                 if pid in seen_ids:
                     continue
