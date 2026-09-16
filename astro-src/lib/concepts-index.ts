@@ -220,6 +220,7 @@ export async function buildConceptIndex(): Promise<ConceptIndex> {
     relatedBySlug,
     totalPapersWithConcepts: paperConceptsList.length,
     totalPapers: paperIds.length,
+    builtAt: new Date().toISOString().slice(0, 10),
   };
   return cached;
 }
@@ -261,4 +262,27 @@ export function buildWikilinkResolver(
 /** 清缓存 — 给测试用。 */
 export function _resetConceptIndexCache(): void {
   cached = null;
+}
+
+/** R7 G.1.3: 给当前 index 所有 entry 拍一份 snapshot 推到 history。
+ *  返回当天的 ISO date。给 build script 调,默认一天一个 snapshot。 */
+export async function recordConceptSnapshots(index: ConceptIndex): Promise<string> {
+  const { snapshotConceptState } = await import('./concepts/version');
+  const today = index.builtAt || new Date().toISOString().slice(0, 10);
+  for (const entry of index.bySlug.values()) {
+    const snap = snapshotConceptState(entry, today);
+    if (!entry.history) entry.history = [];
+    // 同一日期不重复 push
+    if (entry.history.length > 0 && entry.history[entry.history.length - 1].date === today) continue;
+    entry.history.push(snap);
+  }
+  return today;
+}
+
+/** R7 G.1.3: 给定 slug 返回历史快照(可能为空)。 */
+export function getConceptHistory(
+  index: ConceptIndex,
+  slug: string,
+): import('./concepts/version').ConceptSnapshot[] {
+  return index.bySlug.get(slug)?.history || [];
 }

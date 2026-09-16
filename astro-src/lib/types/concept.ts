@@ -36,6 +36,8 @@ export interface ConceptIndexEntry {
   /** 引用此概念的论文 id 列表(papers/<YYYY>/<MM>/<arxivid>)。
    *  SSR-only,不进浏览器。 */
   paper_ids: string[];
+  /** 该 concept 的历史快照(G.1.3)。可选 — 老 build 没有 history。 */
+  history?: import('../concepts/version').ConceptSnapshot[];
 }
 
 /** 共现相关概念。 */
@@ -58,4 +60,6 @@ export interface ConceptIndex {
   totalPapersWithConcepts: number;
   /** 总论文数(全 docs/papers)。 */
   totalPapers: number;
+  /** build 时戳(YYYY-MM-DD) — 用于决定要不要 push 新 snapshot。 */
+  builtAt?: string;
 }
