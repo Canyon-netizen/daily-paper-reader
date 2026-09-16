@@ -1,0 +1,81 @@
+/* /styles/a11y.css — H.2.2 全站 a11y 基础样式
+ *
+ * 设计要点:
+ *   - :focus-visible 替代 :focus:只在键盘 focus 时显示 ring,鼠标点击不显示
+ *     (避免按钮被点后留下"丑陋的蓝框")
+ *   - 颜色用 --color-focus 变量,默认 fallback 到 --accent
+ *   - prefers-reduced-motion 媒体查询:尊重用户系统设置,关掉所有 shimmer / 动画
+ *   - skip-link:跳过导航直接到 main 内容(可后续在 layout 里加 <a class="skip-link">)
+ *   - sr-only:屏幕阅读器专用 class
+ */
+
+:root {
+  --color-focus: var(--accent, #4f46e5);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+}
+
+/* Keyboard-only focus ring */
+:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: 2px;
+}
+
+/* Mouse focus 不显示 */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Skip link (layout 里用 <a href="#main" class="skip-link">) */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: 0.5rem 1rem;
+  background: var(--bg-elevated, #fff);
+  color: var(--fg, #111);
+  border: 2px solid var(--color-focus);
+  border-radius: 4px;
+  z-index: 1000;
+  font-weight: 600;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  left: 1rem;
+  top: 1rem;
+}
+
+/* Screen reader only (对视觉用户隐藏) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Reduced motion:尊重系统设置,关掉所有动效 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* 高对比度模式:加粗边框 + 强 focus 颜色 */
+@media (prefers-contrast: more) {
+  :root {
+    --focus-ring-width: 3px;
+    --color-focus: #1d4ed8;
+  }
+  a, button {
+    text-decoration: underline;
+  }
+}
