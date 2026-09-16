@@ -402,7 +402,7 @@ function walkPapers(root) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { dryRun: false, apply: false, limit: 0, offset: 0, useLlm: false, useHeuristic: true };
+  const opts = { dryRun: false, apply: false, limit: 0, offset: 0, useLlm: false, useHeuristic: true, id: null };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--dry-run') opts.dryRun = true;
@@ -410,6 +410,8 @@ function parseArgs() {
     else if (a === '--llm' || a === '--use-llm') opts.useLlm = true;
     else if (a === '--heuristic') opts.useHeuristic = true;
     else if (a === '--all') opts.limit = 0;
+    else if (a.startsWith('--id=')) opts.id = a.split('=')[1];
+    else if (a === '--id') opts.id = args[++i];
     else if (a.startsWith('--limit=')) opts.limit = parseInt(a.split('=')[1], 10) || 0;
     else if (a === '--limit') opts.limit = parseInt(args[++i], 10) || 0;
     else if (a.startsWith('--offset=')) opts.offset = parseInt(a.split('=')[1], 10) || 0;
@@ -420,6 +422,7 @@ function parseArgs() {
   --apply            写入 related_* 字段
   --llm              使用 LLM 推断(需 LLM_API_URL/LLM_API_KEY)
   --heuristic        使用启发式匹配(default)
+  --id <arxiv>       仅处理指定 arxiv ID 的论文
   --limit N          仅处理前 N 篇
   --offset N         跳过前 N 篇
   --all              处理全部(与 --limit 0 等效)`);
@@ -446,10 +449,19 @@ async function main() {
   const all = walkPapers(PAPERS_ROOT);
   console.log(`[paper-backfill-crosslinks] found ${all.length} papers`);
 
+  // 如果指定了 --id,过滤只处理匹配的论文
+  const filtered = opts.id
+    ? all.filter(f => f.includes(opts.id))
+    : all;
+
+  if (opts.id) {
+    console.log(`[paper-backfill-crosslinks] filtered to ${filtered.length} papers matching id=${opts.id}`);
+  }
+
   let processed = 0, updated = 0, skipped = 0, errors = 0;
   const sample = [];
 
-  for (const file of all) {
+  for (const file of filtered) {
     if (opts.offset && processed < opts.offset) {
       processed++;
       continue;
