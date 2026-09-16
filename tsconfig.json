@@ -3,6 +3,11 @@
   "include": [".astro/types.d.ts", "**/*"],
   "exclude": ["dist", "node_modules", "tests"],  // tests/ 用各自的 runner(bun test / pytest),不在 astro 检查范围
   "compilerOptions": {
+    // I.1.2: 强制 type check 收敛 — noImplicitAny / strictNullChecks 由 strict preset 提供
+    "noEmit": true,
+    "skipLibCheck": true,
+    "incremental": true,
+    "tsBuildInfoFile": "./.cache/tsbuildinfo.json",
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],

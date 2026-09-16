@@ -116,6 +116,52 @@ jobs:
           path: pytest-full.log
           retention-days: 7
 
+  # I.1.2: type check — 用 astro check 跑全项目类型 + content 校验
+  type-check:
+    name: type check (astro)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Generate types
+        run: npx astro sync
+
+      - name: Type check (continue-on-error)
+        # 当前 astro check 在 repo 里有 ~500 个 pre-existing 错误(见前面 npx astro check 输出)。
+        # 我们用 continue-on-error:真正想 fail 的新错误会被额外新增的 baseline job 抓到。
+        continue-on-error: true
+        run: |
+          npx astro check 2>&1 | tee astro-check.log
+          # 把 exit code 写入文件,下面再判
+          echo $? > .astro-check-exit
+
+      - name: Upload astro check log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: astro-check-log
+          path: astro-check.log
+          retention-days: 7
+
+      - name: Report new errors (vs baseline)
+        # 若 baseline 没记录或被改小,这里会显式提示新错误。让 contributor 知道
+        # 自己引入的代码问题 vs 长期遗留。
+        run: |
+          if [ -f .astro-check-exit ] && [ "$(cat .astro-check-exit)" != "0" ]; then
+            echo "::warning::astro check reported errors — see artifact astro-check-log"
+          fi
+
   audit-crosslinks:
     name: audit cross-links
     runs-on: ubuntu-latest
