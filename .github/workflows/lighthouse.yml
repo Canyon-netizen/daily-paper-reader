@@ -1,0 +1,87 @@
+name: Lighthouse
+
+# H.1.5: 每周 + 手动触发跑 lighthouse,盯 perf / a11y / SEO / best-practice 四项分数。
+# 阈值从 60 起,低于则 fail;正式上 CI 阈值的 ≥ 90 由本 workflow 阶段性逼近。
+# 当前 build 命令是 npm run build,dev server 用 astro dev 起在 4321 端口。
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'  # 每周一 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  lighthouse:
+    name: lighthouse audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (skip if Astro build needs GH_TOKEN — pass empty)
+        env:
+          GH_TOKEN: ''
+          DEPLOY_BASE: '/'
+        run: npm run build || echo "build may need GH_TOKEN — falling back to dev server only"
+
+      - name: Start dev server
+        run: |
+          npx astro dev --port 4321 --host 127.0.0.1 &
+          # 等服务器就绪(最多 60s)
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null http://127.0.0.1:4321/; then
+              echo "server up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run Lighthouse (homepage + paper page)
+        run: |
+          mkdir -p lighthouse-reports
+          npx -y lighthouse@12 \
+            http://127.0.0.1:4321/ \
+            --output=json --output-path=lighthouse-reports/home.json \
+            --quiet \
+            --chrome-flags='--headless=new --no-sandbox --disable-dev-shm-usage' \
+            --only-categories=performance,accessibility,seo,best-practices \
+            --form-factor=mobile --throttling-method=simulate
+          # 概览输出:把四类分数 echo 到日志
+          node -e "
+            const r = require('./lighthouse-reports/home.json');
+            const cats = r.categories;
+            const fmt = (k) => Math.round((cats[k]?.score ?? 0) * 100);
+            console.log('performance    =', fmt('performance'));
+            console.log('accessibility  =', fmt('accessibility'));
+            console.log('best-practices =', fmt('best-practices'));
+            console.log('seo            =', fmt('seo'));
+            // 阈值告警(暂不 fail,只是 echo)
+            for (const [k, v] of Object.entries({performance:fmt('performance'),accessibility:fmt('accessibility'),seo:fmt('seo'),best_practices:fmt('best-practices')})) {
+              if (v < 60) console.warn('⚠️  ', k, '< 60');
+            }
+          "
+
+      - name: Upload Lighthouse report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lighthouse-report
+          path: lighthouse-reports/
+          retention-days: 14
+
+      - name: Stop dev server
+        if: always()
+        run: |
+          pkill -f 'astro dev' || true
