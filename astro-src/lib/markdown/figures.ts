@@ -52,9 +52,13 @@ export function buildFiguresCarouselHtml(
     const captionHtml = fig.caption
       ? `<figcaption>${unit} ${i + 1} / ${total}:${alt}</figcaption>`
       : `<figcaption>${unit} ${i + 1} / ${total}</figcaption>`;
+    // H.1.2: lazy + async decode,固定 width/height 减少 layout shift
+    const dims = (typeof fig.width === 'number' && typeof fig.height === 'number' && fig.width > 0 && fig.height > 0)
+      ? ` width="${fig.width}" height="${fig.height}"`
+      : '';
     parts.push(
       `<figure class="paper-slide" data-index="${i}">` +
-        `<div class="paper-slide-frame"><img src="${src}" loading="lazy" alt="${alt}" /></div>` +
+        `<div class="paper-slide-frame"><img src="${src}" loading="lazy" decoding="async"${dims} alt="${alt}" /></div>` +
         captionHtml +
       `</figure>`,
     );
