@@ -28,7 +28,8 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/agents/batch.ts');
 const { batchPrompts, calculateOptimalBatchSize } = mod;
 
-test('batchPrompts: 空数组 → 0 batches', () => {
+// ---------- batchPrompts ----------
+test('batchPrompts: 空数组 → 0 batch', () => {
   const r = batchPrompts([]);
   assert.deepEqual(r.batches, []);
   assert.equal(r.metadata.total, 0);
@@ -36,68 +37,81 @@ test('batchPrompts: 空数组 → 0 batches', () => {
 });
 
 test('batchPrompts: 默认 batchSize=10', () => {
-  const prompts = Array.from({ length: 25 }, (_, i) => 'p' + i);
-  const r = batchPrompts(prompts);
-  // 25/10 = 3 batches(10, 10, 5)
-  assert.equal(r.batches.length, 3);
-  assert.equal(r.batches[0].length, 10);
-  assert.equal(r.batches[1].length, 10);
-  assert.equal(r.batches[2].length, 5);
+  const r = batchPrompts(['a', 'b']);
   assert.equal(r.metadata.batchSize, 10);
-  assert.equal(r.metadata.total, 25);
 });
 
-test('batchPrompts: 自定义 batchSize', () => {
-  const r = batchPrompts(['a', 'b', 'c', 'd', 'e'], { batchSize: 2 });
-  // 5/2 = 3 batches(2,2,1)
+test('batchPrompts: < batchSize → 1 batch', () => {
+  const r = batchPrompts(['a', 'b', 'c']);
+  assert.equal(r.batches.length, 1);
+  assert.deepEqual(r.batches[0], ['a', 'b', 'c']);
+  assert.equal(r.metadata.batchCount, 1);
+});
+
+test('batchPrompts: 精确整除', () => {
+  const r = batchPrompts(['a', 'b', 'c', 'd', 'e', 'f'], { batchSize: 2 });
   assert.equal(r.batches.length, 3);
-  assert.deepEqual(r.batches[0], ['a', 'b']);
-  assert.deepEqual(r.batches[1], ['c', 'd']);
+  assert.deepEqual(r.batches, [['a', 'b'], ['c', 'd'], ['e', 'f']]);
+});
+
+test('batchPrompts: 余数 batch', () => {
+  const r = batchPrompts(['a', 'b', 'c', 'd', 'e'], { batchSize: 2 });
+  assert.equal(r.batches.length, 3);
   assert.deepEqual(r.batches[2], ['e']);
 });
 
-test('batchPrompts: 整除边界', () => {
-  const r = batchPrompts(['a', 'b', 'c', 'd'], { batchSize: 2 });
+test('batchPrompts: batchSize=1 → 每个 prompt 单独 batch', () => {
+  const r = batchPrompts(['a', 'b'], { batchSize: 1 });
   assert.equal(r.batches.length, 2);
-  assert.deepEqual(r.batches[0], ['a', 'b']);
-  assert.deepEqual(r.batches[1], ['c', 'd']);
-});
-
-test('batchPrompts: 单元素 batchSize', () => {
-  const r = batchPrompts(['a', 'b', 'c'], { batchSize: 1 });
-  assert.equal(r.batches.length, 3);
   assert.deepEqual(r.batches[0], ['a']);
 });
 
-test('batchPrompts: 顺序保持', () => {
-  const r = batchPrompts(['a', 'b', 'c', 'd'], { batchSize: 2 });
-  assert.deepEqual(r.batches.flat(), ['a', 'b', 'c', 'd']);
+test('batchPrompts: metadata 字段', () => {
+  const r = batchPrompts(['a', 'b', 'c'], { batchSize: 2 });
+  assert.equal(r.metadata.total, 3);
+  assert.equal(r.metadata.batchCount, 2);
+  assert.equal(r.metadata.batchSize, 2);
 });
 
+test('batchPrompts: batchSize=100 → 1 batch', () => {
+  const r = batchPrompts(['a', 'b', 'c'], { batchSize: 100 });
+  assert.equal(r.batches.length, 1);
+});
+
+test('batchPrompts: 不修改输入数组', () => {
+  const orig = ['a', 'b', 'c'];
+  batchPrompts(orig, { batchSize: 2 });
+  assert.deepEqual(orig, ['a', 'b', 'c']);
+});
+
+// ---------- calculateOptimalBatchSize ----------
 test('calculateOptimalBatchSize: total=0 → 10', () => {
   assert.equal(calculateOptimalBatchSize(0), 10);
 });
 
-test('calculateOptimalBatchSize: total < 0 → 10', () => {
+test('calculateOptimalBatchSize: total 负数 → 10', () => {
   assert.equal(calculateOptimalBatchSize(-5), 10);
 });
 
 test('calculateOptimalBatchSize: 默认 maxConcurrent=5', () => {
-  // total=100 → ceil(100/5) = 20
-  assert.equal(calculateOptimalBatchSize(100), 20);
+  // 25 / 5 = 5
+  assert.equal(calculateOptimalBatchSize(25), 5);
 });
 
 test('calculateOptimalBatchSize: 自定义 maxConcurrent', () => {
-  // total=20, maxConcurrent=4 → ceil(20/4) = 5
-  assert.equal(calculateOptimalBatchSize(20, 4), 5);
+  // 100 / 10 = 10
+  assert.equal(calculateOptimalBatchSize(100, 10), 10);
 });
 
-test('calculateOptimalBatchSize: 不整除时向上取整', () => {
-  // total=21, maxConcurrent=5 → ceil(21/5) = 5
-  assert.equal(calculateOptimalBatchSize(21, 5), 5);
+test('calculateOptimalBatchSize: 整除 → 精确', () => {
+  assert.equal(calculateOptimalBatchSize(50, 5), 10);
 });
 
-test('calculateOptimalBatchSize: total=1', () => {
-  // ceil(1/5) = 1
-  assert.equal(calculateOptimalBatchSize(1), 1);
+test('calculateOptimalBatchSize: 非整除 → ceil', () => {
+  // 7 / 3 = 2.33 → ceil = 3
+  assert.equal(calculateOptimalBatchSize(7, 3), 3);
+});
+
+test('calculateOptimalBatchSize: 1 prompt / 5 concurrent → ceil(1/5)=1', () => {
+  assert.equal(calculateOptimalBatchSize(1, 5), 1);
 });
