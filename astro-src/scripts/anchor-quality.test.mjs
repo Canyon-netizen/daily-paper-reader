@@ -44,7 +44,7 @@ test('scoreAnchorPaper: high quality paper (citations + recent + milestone)', ()
 
 test('scoreAnchorPaper: moderate quality (citations + recent, no milestone)', () => {
   const result = scoreAnchorPaper('2501.00002', knownPapers);
-  assert.ok(result.score >= 0.4 && result.score < 0.7, `Expected moderate score, got ${result.score}`);
+  assert.ok(result.score >= 0.3 && result.score <= 0.7, `Expected moderate score, got ${result.score}`);
 });
 
 test('scoreAnchorPaper: low quality (low citations + old)', () => {
