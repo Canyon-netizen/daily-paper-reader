@@ -137,3 +137,47 @@ export function deleteEvent(eventId: string): boolean {
   setStorage(storage);
   return true;
 }
+
+/**
+ * Search events by query (case-insensitive).
+ * Matches against the summary field.
+ *
+ * @param query - Search query string
+ * @returns Array of matching events
+ */
+export function searchEvents(query: string): ActivityEvent[] {
+  if (!query || query.trim() === '') {
+    return getAllEvents();
+  }
+
+  const lowerQuery = query.toLowerCase().trim();
+  const storage = getStorage();
+
+  return storage.events.filter((event) =>
+    event.summary.toLowerCase().includes(lowerQuery)
+  );
+}
+
+/**
+ * Filter events by date range.
+ *
+ * @param start - Start date (inclusive), ISO string or epoch ms
+ * @param end - End date (inclusive), ISO string or epoch ms
+ * @returns Array of events in range
+ */
+export function filterByDateRange(
+  start: string | number,
+  end: string | number
+): ActivityEvent[] {
+  // Convert to epoch ms if ISO string
+  const startMs = typeof start === 'string' ? new Date(start).getTime() : start;
+  const endMs = typeof end === 'string' ? new Date(end).getTime() : end;
+
+  if (isNaN(startMs) || isNaN(endMs)) {
+    return [];
+  }
+
+  const storage = getStorage();
+
+  return storage.events.filter((event) => event.ts >= startMs && event.ts <= endMs);
+}
