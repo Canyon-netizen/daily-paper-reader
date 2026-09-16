@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // astro-src/scripts/audience-thresholds.test.mjs
 //
-// Tests for R7 LP.1 audience thresholds.
+// Tests for R7 polish: astro-src/lib/libraries/audience-thresholds.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'node',
+    platform: 'neutral',
     write: false,
     target: 'es2022',
   });
@@ -30,60 +30,60 @@ const {
   getThresholdsForAudience,
   getAllAudienceProfiles,
   getAudienceLabel,
-  AudienceProfile,
 } = mod;
 
-test('getThresholdsForAudience: novice has low thresholds', () => {
+test('getThresholdsForAudience: novice 低阈值', () => {
   const t = getThresholdsForAudience('novice');
-  assert.equal(t.minRelevance, 0.50);
+  assert.equal(t.minRelevance, 0.5);
   assert.equal(t.minQuality, 0.45);
   assert.equal(t.maxResults, 50);
 });
 
-test('getThresholdsForAudience: expert has high thresholds', () => {
+test('getThresholdsForAudience: expert 高阈值', () => {
   const t = getThresholdsForAudience('expert');
   assert.equal(t.minRelevance, 0.75);
-  assert.equal(t.minQuality, 0.70);
+  assert.equal(t.minQuality, 0.7);
   assert.equal(t.maxResults, 20);
 });
 
-test('getThresholdsForAudience: reviewer has very high thresholds', () => {
+test('getThresholdsForAudience: reviewer 极高阈值', () => {
   const t = getThresholdsForAudience('reviewer');
-  assert.equal(t.minRelevance, 0.80);
+  assert.equal(t.minRelevance, 0.8);
   assert.equal(t.minQuality, 0.75);
   assert.equal(t.maxResults, 15);
 });
 
-test('getThresholdsForAudience: practitioner has mid thresholds', () => {
+test('getThresholdsForAudience: practitioner 中阈值', () => {
   const t = getThresholdsForAudience('practitioner');
-  assert.equal(t.minRelevance, 0.60);
+  assert.equal(t.minRelevance, 0.6);
   assert.equal(t.minQuality, 0.55);
   assert.equal(t.maxResults, 30);
 });
 
-test('getThresholdsForAudience: reviewer threshold > expert > practitioner > novice', () => {
-  const r = getThresholdsForAudience('reviewer');
-  const e = getThresholdsForAudience('expert');
-  const p = getThresholdsForAudience('practitioner');
-  const n = getThresholdsForAudience('novice');
-
-  assert.ok(r.minRelevance > e.minRelevance);
-  assert.ok(e.minRelevance > p.minRelevance);
-  assert.ok(p.minRelevance > n.minRelevance);
+test('getThresholdsForAudience: 返回值有 3 个字段', () => {
+  const t = getThresholdsForAudience('novice');
+  assert.equal(Object.keys(t).length, 3);
 });
 
-test('getAllAudienceProfiles: returns all 4 profiles', () => {
-  const profiles = getAllAudienceProfiles();
-  assert.equal(profiles.length, 4);
-  assert.ok(profiles.includes('novice'));
-  assert.ok(profiles.includes('expert'));
-  assert.ok(profiles.includes('reviewer'));
-  assert.ok(profiles.includes('practitioner'));
+test('getAllAudienceProfiles: 4 个 profile', () => {
+  const ps = getAllAudienceProfiles();
+  assert.equal(ps.length, 4);
+  assert.ok(ps.includes('novice'));
+  assert.ok(ps.includes('expert'));
+  assert.ok(ps.includes('reviewer'));
+  assert.ok(ps.includes('practitioner'));
 });
 
-test('getAudienceLabel: returns label for each profile', () => {
+test('getAudienceLabel: 中英混合标签', () => {
   assert.ok(getAudienceLabel('novice').includes('Novice'));
+  assert.ok(getAudienceLabel('novice').includes('入门小白'));
   assert.ok(getAudienceLabel('expert').includes('Expert'));
   assert.ok(getAudienceLabel('reviewer').includes('Reviewer'));
   assert.ok(getAudienceLabel('practitioner').includes('Practitioner'));
+});
+
+test('getAudienceLabel: 4 个 profile 都返回非空', () => {
+  for (const p of getAllAudienceProfiles()) {
+    assert.ok(getAudienceLabel(p).length > 0);
+  }
 });
