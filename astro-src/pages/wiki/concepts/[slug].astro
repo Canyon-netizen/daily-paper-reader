@@ -16,6 +16,7 @@ import {
   getConceptDetail,
 } from '../../../lib/concept-detail';
 import { sparklinePoints } from '../../../lib/concepts/version';
+import ConceptEditModal from '../../../components/ConceptEditModal.astro';
 import '../../../styles/page.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
@@ -82,6 +83,14 @@ const sparklineMax = recentHistory.length > 0
           <p class="concept-detail-slug">
             slug: <code>{meta.slug}</code>
           </p>
+          {/* G.3.2: 编辑 modal 入口 */}
+          <ConceptEditModal
+            slug={meta.slug}
+            display_name={meta.display_name}
+            category={meta.category}
+            novelty={meta.novelty}
+            centrality={meta.centrality}
+          />
         </header>
 
         <section class="concept-detail-body">

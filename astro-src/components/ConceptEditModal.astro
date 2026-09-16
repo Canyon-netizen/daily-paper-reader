@@ -1,0 +1,248 @@
+---
+// components/ConceptEditModal.astro
+//
+// R7 G.3.2: 概念编辑 modal — 预填当前 entry 字段,生成 patch YAML。
+//
+// 因为 concept 真值在 docs/papers/*.md frontmatter 里,真正的"编辑"是要改这些
+// markdown。这个 modal 不直接动盘,而是生成一段 YAML 片段,把"想改成什么"展示给
+// 用户 → 用户拿去改 frontmatter → 重新 build → 概念页反映变更。
+//
+// patch YAML 形如:
+//
+//   # 修改 display_name:
+//   - op: replace
+//     path: /display_name
+//     value: '...'
+//
+//   # 或简单 patch(覆盖整段):
+//   concepts:
+//     - slug: foo
+//       display_name: ...
+//
+// 这里选择**简化版**:生成"建议的新 YAML 数组元素"(用户在原 markdown 里 replace)。
+
+export interface Props {
+  slug: string;
+  display_name: string;
+  category: string;
+  novelty?: number;
+  centrality?: number;
+}
+
+const { slug, display_name, category, novelty, centrality } = Astro.props as Props;
+
+const novNum = typeof novelty === 'number' && Number.isFinite(novelty) ? novelty : undefined;
+const cenNum = typeof centrality === 'number' && Number.isFinite(centrality) ? centrality : undefined;
+
+const suggestedYaml = [
+  `- slug: ${slug}`,
+  `  display_name: ${display_name}`,
+  `  category: ${category}`,
+  novNum !== undefined ? `  novelty: ${novNum}` : '',
+  cenNum !== undefined ? `  centrality: ${cenNum}` : '',
+].filter(Boolean).join('\n');
+---
+
+<button type="button" class="concept-edit-trigger" id="concept-edit-trigger">
+  ✎ 编辑
+</button>
+
+<dialog class="concept-edit-modal" id="concept-edit-modal">
+  <header class="concept-edit-head">
+    <h2>编辑概念 · <code>{slug}</code></h2>
+    <button type="button" class="concept-edit-close" id="concept-edit-close">×</button>
+  </header>
+
+  <p class="concept-edit-hint">
+    概念真值在 <code>docs/papers/*.md</code> 的 frontmatter。
+    在下面修改字段 → 生成 YAML 片段 → 复制回对应论文的 markdown 中 → git commit → 重 build。
+  </p>
+
+  <form class="concept-edit-form" id="concept-edit-form">
+    <label class="concept-edit-field">
+      <span>显示名</span>
+      <input name="display_name" type="text" value={display_name} required />
+    </label>
+    <label class="concept-edit-field">
+      <span>category</span>
+      <select name="category">
+        {['method', 'problem', 'dataset', 'metric', 'methodology', 'task', 'other'].map((c) => (
+          <option value={c} selected={c === category}>{c}</option>
+        ))}
+      </select>
+    </label>
+    <div class="concept-edit-row">
+      <label class="concept-edit-field">
+        <span>novelty</span>
+        <input name="novelty" type="number" step="0.05" min="0" max="1"
+               value={novelty !== undefined ? novelty : 0.5} />
+      </label>
+      <label class="concept-edit-field">
+        <span>centrality</span>
+        <input name="centrality" type="number" step="0.05" min="0" max="1"
+               value={centrality !== undefined ? centrality : 0.5} />
+      </label>
+    </div>
+
+    <div class="concept-edit-output">
+      <h3>建议的 YAML 片段</h3>
+      <pre class="concept-edit-yaml" id="concept-edit-yaml">{suggestedYaml}</pre>
+      <button type="button" class="concept-edit-copy" id="concept-edit-copy">复制 YAML</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+  const trigger = document.getElementById('concept-edit-trigger');
+  const modal = document.getElementById('concept-edit-modal') as HTMLDialogElement | null;
+  const closeBtn = document.getElementById('concept-edit-close');
+  const form = document.getElementById('concept-edit-form') as HTMLFormElement | null;
+  const yamlEl = document.getElementById('concept-edit-yaml') as HTMLPreElement | null;
+  const copyBtn = document.getElementById('concept-edit-copy');
+
+  trigger?.addEventListener('click', () => {
+    if (modal && typeof modal.showModal === 'function') {
+      modal.showModal();
+    }
+  });
+
+  closeBtn?.addEventListener('click', () => modal?.close());
+
+  // 实时重生成 YAML
+  function refreshYAML() {
+    if (!form || !yamlEl) return;
+    const fd = new FormData(form);
+    const lines: string[] = [];
+    lines.push(`- slug: ${form.dataset.slug ?? '<slug>'}`);
+    lines.push(`  display_name: ${fd.get('display_name') ?? '<display_name>'}`);
+    lines.push(`  category: ${fd.get('category') ?? 'method'}`);
+    const nov = parseFloat(String(fd.get('novelty') ?? '0.5'));
+    if (Number.isFinite(nov)) lines.push(`  novelty: ${nov}`);
+    const cen = parseFloat(String(fd.get('centrality') ?? '0.5'));
+    if (Number.isFinite(cen)) lines.push(`  centrality: ${cen}`);
+    yamlEl.textContent = lines.join('\n');
+  }
+
+  form?.addEventListener('input', refreshYAML);
+
+  copyBtn?.addEventListener('click', async () => {
+    const text = yamlEl?.textContent ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+      copyBtn.textContent = '✓ 已复制';
+      setTimeout(() => { copyBtn.textContent = '复制 YAML'; }, 1500);
+    } catch {
+      copyBtn.textContent = '复制失败';
+    }
+  });
+</script>
+
+<style>
+  .concept-edit-trigger {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.3rem 0.7rem;
+    color: var(--fg-muted);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: border-color 150ms, color 150ms;
+  }
+  .concept-edit-trigger:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .concept-edit-modal {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0;
+    max-width: 560px;
+    width: 90%;
+    background: var(--bg-elevated);
+    color: var(--fg);
+  }
+  .concept-edit-modal::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .concept-edit-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .concept-edit-head h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
+  .concept-edit-close {
+    background: transparent;
+    border: none;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    color: var(--fg-muted);
+  }
+  .concept-edit-hint {
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+    margin: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .concept-edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+  .concept-edit-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.85rem;
+  }
+  .concept-edit-field input,
+  .concept-edit-field select {
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    font-family: inherit;
+  }
+  .concept-edit-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+  }
+  .concept-edit-output {
+    margin-top: 0.5rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+  }
+  .concept-edit-output h3 {
+    margin: 0 0 0.5rem;
+    font-size: 0.9rem;
+  }
+  .concept-edit-yaml {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.5rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    margin: 0 0 0.5rem;
+  }
+  .concept-edit-copy {
+    padding: 0.35rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--fg);
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .concept-edit-copy:hover { border-color: var(--accent); }
+</style>
