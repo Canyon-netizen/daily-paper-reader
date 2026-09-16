@@ -113,6 +113,8 @@ export default defineConfig({
     server: {
       // 开发时允许跨域,方便调试
       cors: true,
+      // H.1.4: dev server 也发 cache headers,方便本地测 cache 行为
+      headers: { 'Cache-Control': 'public, max-age=3600, s-maxage=86400' },
     },
     // GH_TOKEN 是 GitHub PAT,绝不能进客户端 bundle。
     // Astro 默认会把 process.env.* 同步到 import.meta.env(包括客户端),
