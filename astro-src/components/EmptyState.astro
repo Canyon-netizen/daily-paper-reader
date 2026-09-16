@@ -1,0 +1,104 @@
+---
+// components/EmptyState.astro
+//
+// R7 H.2.4: 空状态统一组件。
+//
+// 用法:
+//   <EmptyState
+//     title="还没有论文"
+//     description="导入 arXiv 论文后会自动出现在这里。"
+//     icon="📭"
+//     actionLabel="去导入"
+//     actionHref="/papers/"
+//   />
+
+export interface Props {
+  /** 标题(必填) */
+  title: string;
+  /** 详细描述(可选) */
+  description?: string;
+  /** emoji 或单字符图标 */
+  icon?: string;
+  /** CTA 按钮文本 */
+  actionLabel?: string;
+  /** CTA 跳转链接 */
+  actionHref?: string;
+  /** CTA 外部链接(设了会用 target=_blank + rel) */
+  actionExternal?: boolean;
+  /** 自定义 class */
+  class?: string;
+}
+
+const {
+  title,
+  description,
+  icon = '📭',
+  actionLabel,
+  actionHref,
+  actionExternal = false,
+  class: extraClass = '',
+} = Astro.props as Props;
+---
+
+<section class:list={['empty-state', extraClass]} role="status">
+  <div class="empty-state-icon" aria-hidden="true">{icon}</div>
+  <h2 class="empty-state-title">{title}</h2>
+  {description && <p class="empty-state-desc">{description}</p>}
+  {actionLabel && actionHref && (
+    <a
+      class="empty-state-action"
+      href={actionHref}
+      target={actionExternal ? '_blank' : undefined}
+      rel={actionExternal ? 'noopener' : undefined}
+    >
+      {actionLabel} →
+    </a>
+  )}
+</section>
+
+<style>
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 3rem 1.5rem;
+    margin: 1.5rem auto;
+    border: 1px dashed var(--border, rgba(0, 0, 0, 0.12));
+    border-radius: var(--radius-md, 8px);
+    background: var(--bg-elevated, rgba(0, 0, 0, 0.02));
+    color: var(--fg-muted, #666);
+    max-width: 480px;
+  }
+  .empty-state-icon {
+    font-size: 2.5rem;
+    line-height: 1;
+    margin-bottom: 0.75rem;
+    opacity: 0.7;
+  }
+  .empty-state-title {
+    font-size: 1.1rem;
+    margin: 0 0 0.5rem;
+    color: var(--fg, #111);
+    font-weight: 600;
+  }
+  .empty-state-desc {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    margin: 0 0 1rem;
+    max-width: 360px;
+  }
+  .empty-state-action {
+    display: inline-block;
+    padding: 0.5rem 1.2rem;
+    background: var(--accent, #4f46e5);
+    color: white;
+    border-radius: var(--radius-sm, 4px);
+    text-decoration: none;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: filter 150ms;
+  }
+  .empty-state-action:hover { filter: brightness(0.95); }
+</style>
