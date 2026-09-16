@@ -35,6 +35,23 @@ const GROUPS: { id: string; label: string }[] = [
   { id: 'q-bio', label: 'q-bio — 量化生物' },
 ];
 
+// H.3.3: settings tabs(按节锚点导航)+ 客户端 search filter
+const SETTINGS_TABS: { id: string; label: string; icon: string }[] = [
+  { id: 'llm', label: 'LLM', icon: '🤖' },
+  { id: 'arxiv', label: 'arXiv 类目', icon: '📂' },
+  { id: 'gist', label: 'GitHub 同步', icon: '🐙' },
+  { id: 'library', label: '我的图书馆', icon: '📚' },
+  { id: 'export', label: '导出', icon: '📦' },
+  { id: 'create', label: '新增文献库', icon: '➕' },
+  { id: 'paper-save', label: '保存论文', icon: '💾' },
+  { id: 'analyzer-sync', label: '分析同步', icon: '🔄' },
+  { id: 'deepdive', label: 'Deep Dive', icon: '🔬' },
+  { id: 'topic', label: '搜集主题', icon: '🎯' },
+];
+// 当前 tab 从 URL ?tab= 读;默认 'llm'
+const url = new URL(Astro.request.url);
+const activeTab = url.searchParams.get('tab') || 'llm';
+
 function catOptions(groupId: string): string {
   return ARXIV_CATEGORIES.filter((c) => c.group === groupId).map((c) =>
     `<label class="settings-cat-option">
@@ -62,13 +79,39 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
       <a class="settings-page-back" href={import.meta.env.BASE_URL + 'paper-analyzer/'}>← 返回论文分析</a>
     </header>
 
+    {/* H.3.3: tab nav + search filter */}
+    <nav class="settings-tabs" aria-label="设置分区">
+      {SETTINGS_TABS.map((t) => (
+        <a
+          href={`?tab=${t.id}`}
+          class:list={['settings-tab', { 'settings-tab-active': t.id === activeTab }]}
+          aria-current={t.id === activeTab ? 'page' : undefined}
+        >
+          <span class="settings-tab-icon">{t.icon}</span>
+          <span class="settings-tab-label">{t.label}</span>
+        </a>
+      ))}
+    </nav>
+
+    <div class="settings-search-row">
+      <input
+        type="search"
+        id="settings-search"
+        class="settings-search-input"
+        placeholder="搜索设置项(标题 / 描述)..."
+        autocomplete="off"
+        aria-label="搜索设置项"
+      />
+      <span class="settings-search-count" id="settings-search-count" aria-live="polite"></span>
+    </div>
+
     <div id="settings-saved-hint" class="settings-saved-hint" aria-live="polite">
       <span class="settings-saved-hint-icon">✓</span>
       <span>已自动保存</span>
     </div>
 
     <!-- ===== LLM 设置 ===== -->
-    <section class="settings-card">
+    <section class="settings-card" id="settings-llm" data-settings-section="llm" data-settings-search="LLM 调用 API 提供商 模型 密钥 测试连接">
       <h2 class="settings-card-title">LLM 调用</h2>
       <p class="settings-card-sub">
         用于"论文分析"页面调用大模型生成中文摘要 / TLDR / 笔记。
@@ -503,5 +546,33 @@ const providerOptions = Object.entries(PROVIDER_PRESETS).map(([key, p]) =>
 
   <script>
     import '../scripts/settings-page.ts';
+  </script>
+
+  <script>
+    // H.3.3: 客户端 search filter — 按标题 / data-settings-search 关键字匹配,
+    // 不匹配的卡片 hidden,匹配的高亮。
+    const input = document.getElementById('settings-search') as HTMLInputElement | null;
+    const cards = Array.from(document.querySelectorAll<HTMLElement>('[data-settings-section]'));
+    const countEl = document.getElementById('settings-search-count');
+
+    function applyFilter() {
+      if (!input) return;
+      const q = input.value.trim().toLowerCase();
+      let visible = 0;
+      for (const card of cards) {
+        const titleEl = card.querySelector('.settings-card-title');
+        const title = (titleEl?.textContent || '').toLowerCase();
+        const keywords = (card.dataset.settingsSearch || '').toLowerCase();
+        const matched = q === '' || title.includes(q) || keywords.includes(q);
+        card.hidden = !matched;
+        if (matched) visible++;
+      }
+      if (countEl) {
+        countEl.textContent = q === '' ? '' : `匹配 ${visible} / ${cards.length} 节`;
+      }
+    }
+
+    input?.addEventListener('input', applyFilter);
+    applyFilter();
   </script>
 </BaseLayout>
