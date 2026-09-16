@@ -1,0 +1,386 @@
+---
+// pages/wiki/concepts/new.astro
+//
+// G.3.1: 概念创建 UI。
+//
+// 真值来源是 docs/papers/*.md frontmatter 的 `concepts` 段;用户在这里填表
+// 生成一个 YAML frontmatter 片段(不是直接写文件),复制到对应 paper 的
+// markdown 顶部即可新增/修改一个 concept 引用。
+//
+// 步骤:
+//   1. 填 slug / display_name / category / novelty / centrality / 引用 paper arxiv id
+//   2. 实时校验: kebab-case slug、不重复、可选 arxiv id 格式
+//   3. 生成 YAML 片段,可在 textarea 里复制
+//   4. (可选) 选多篇 paper → 多行 YAML 数组
+//
+// 这是纯 SSR,不做客户端提交 — 与其他 wiki 工具一致,落盘 = git commit。
+
+import BaseLayout from '../../../layouts/BaseLayout.astro';
+import Navbar from '../../../components/Navbar.astro';
+import Footer from '../../../components/Footer.astro';
+import { buildConceptIndex } from '../../../lib/concepts-index';
+import { renderConceptYamlSnippet, validateConceptDraft } from '../../../lib/concepts/draft';
+import '../../../styles/page.css';
+
+const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
+
+const idx = await buildConceptIndex();
+const existingSlugs = [...idx.bySlug.keys()].sort();
+const categories = ['method', 'problem', 'dataset', 'metric', 'methodology', 'task', 'other'];
+
+// 收集当前所有 paper id 供下拉参考(仅展示前 200 个)
+const recentPaperIds = idx.totalPapersWithConcepts > 0
+  ? [...idx.bySlug.values()]
+      .flatMap((e) => e.paper_ids)
+      .filter((v, i, arr) => arr.indexOf(v) === i)
+      .sort()
+      .reverse()
+      .slice(0, 200)
+  : [];
+
+// demo 数据用 ?demo=1 注入(测试 / 截图)
+const url = new URL(Astro.request.url);
+const useDemo = url.searchParams.get('demo') === '1';
+
+const initialDraft = {
+  slug: useDemo ? 'activation-steering' : '',
+  display_name: useDemo ? 'Activation Steering' : '',
+  category: useDemo ? 'method' : 'method',
+  novelty: useDemo ? 0.8 : 0.5,
+  centrality: useDemo ? 0.7 : 0.5,
+  parent: '',
+  arxivIds: [] as string[],
+  description: '',
+};
+
+// 演示一次校验 + YAML 生成(SSR 时)
+const demoCheck = validateConceptDraft({ ...initialDraft }, existingSlugs);
+const demoYaml = renderConceptYamlSnippet({ ...initialDraft });
+---
+
+<BaseLayout
+  title="新建概念 · 概念图谱"
+  description="为论文笔记补录 / 修正概念条目。"
+>
+  <Navbar />
+
+  <main class="concepts-page concept-new-page">
+    <a class="concepts-back" href={base + '/concepts/'}>← 返回概念图谱</a>
+
+    <header class="concept-new-head">
+      <h1>新建概念</h1>
+      <p class="concept-new-sub">
+        概念真值来自 <code>docs/papers/*.md</code> 的 frontmatter <code>concepts:</code> 段。
+        在下面填好字段,生成的 YAML 片段会出现在右侧 — 复制到对应论文 markdown 顶部即可。
+      </p>
+    </header>
+
+    <section class="concept-new-body">
+      <form class="concept-new-form" id="concept-new-form" autocomplete="off">
+        <label class="concept-field">
+          <span class="concept-field-label">slug *</span>
+          <input
+            name="slug"
+            type="text"
+            placeholder="kebab-case,如 activation-steering"
+            pattern="^[a-z0-9]+(-[a-z0-9]+)*$"
+            required
+            value={initialDraft.slug}
+          />
+          <span class="concept-field-hint">小写字母 + 数字 + 中划线。会用作 URL 路径的一部分。</span>
+        </label>
+
+        <label class="concept-field">
+          <span class="concept-field-label">显示名 *</span>
+          <input
+            name="display_name"
+            type="text"
+            placeholder="如 Activation Steering"
+            required
+            value={initialDraft.display_name}
+          />
+        </label>
+
+        <label class="concept-field">
+          <span class="concept-field-label">category *</span>
+          <select name="category" required>
+            {categories.map((c) => (
+              <option value={c} selected={c === initialDraft.category}>{c}</option>
+            ))}
+          </select>
+        </label>
+
+        <div class="concept-field-row">
+          <label class="concept-field">
+            <span class="concept-field-label">novelty (0..1)</span>
+            <input
+              name="novelty"
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              value={initialDraft.novelty}
+            />
+          </label>
+          <label class="concept-field">
+            <span class="concept-field-label">centrality (0..1)</span>
+            <input
+              name="centrality"
+              type="number"
+              step="0.05"
+              min="0"
+              max="1"
+              value={initialDraft.centrality}
+            />
+          </label>
+        </div>
+
+        <label class="concept-field">
+          <span class="concept-field-label">parent slug(可选)</span>
+          <input
+            name="parent"
+            type="text"
+            list="existing-slugs"
+            placeholder="父概念 slug,如 transformer"
+            value={initialDraft.parent}
+          />
+          <datalist id="existing-slugs">
+            {existingSlugs.map((s) => <option value={s}></option>)}
+          </datalist>
+        </label>
+
+        <label class="concept-field">
+          <span class="concept-field-label">引用 paper arxiv id(每行一个,可空)</span>
+          <textarea
+            name="arxivIds"
+            rows="3"
+            placeholder="2506.12345&#10;2506.67890"
+          ></textarea>
+          <span class="concept-field-hint">从已有 {recentPaperIds.length} 个 paper id 选 → 仅展示前 200 个作为示例,实际可填完整 arxiv id。</span>
+        </label>
+
+        <div class="concept-new-actions">
+          <button type="submit" class="concept-new-generate">生成 YAML</button>
+          <button type="reset" class="concept-new-reset">重置</button>
+        </div>
+
+        <div class="concept-new-validation" id="concept-new-validation">
+          {demoCheck.errors.length > 0 && (
+            <ul class="concept-new-errors">
+              {demoCheck.errors.map((e) => <li>{e}</li>)}
+            </ul>
+          )}
+          {demoCheck.warnings.length > 0 && (
+            <ul class="concept-new-warnings">
+              {demoCheck.warnings.map((w) => <li>{w}</li>)}
+            </ul>
+          )}
+          {demoCheck.errors.length === 0 && demoCheck.warnings.length === 0 && (
+            <p class="concept-new-ok">✓ 字段合法 — 提交后将生成 YAML 片段。</p>
+          )}
+        </div>
+      </form>
+
+      <aside class="concept-new-output">
+        <h2>YAML 片段</h2>
+        <p class="concept-new-output-hint">
+          复制到对应 paper markdown 顶部的 frontmatter 里
+          <code>concepts:</code> 数组中。
+        </p>
+        <pre class="concept-new-yaml" id="concept-new-yaml">{demoYaml}</pre>
+        <button type="button" class="concept-new-copy" id="concept-new-copy">复制到剪贴板</button>
+      </aside>
+    </section>
+
+    <section class="concept-new-existing">
+      <h2>已存在的 concept slug</h2>
+      <p class="concept-new-output-hint">共 {existingSlugs.length} 个。下拉中已用 datalist 暴露,可填到 parent 字段。</p>
+      <details>
+        <summary>展开列表</summary>
+        <ul class="concept-new-sluglist">
+          {existingSlugs.slice(0, 200).map((s) => (
+            <li><a href={base + '/wiki/concepts/' + s}>{s}</a></li>
+          ))}
+        </ul>
+        {existingSlugs.length > 200 && (
+          <p class="concept-new-output-hint">… 还有 {existingSlugs.length - 200} 个未展开</p>
+        )}
+      </details>
+    </section>
+  </main>
+
+  <Footer />
+</BaseLayout>
+
+<script>
+  // 客户端逻辑:复制按钮 + 占位(主交互走 SSR,刷新页面重新生成 YAML)
+  const yamlEl = document.getElementById('concept-new-yaml') as HTMLPreElement | null;
+  const copyBtn = document.getElementById('concept-new-copy') as HTMLButtonElement | null;
+
+  copyBtn?.addEventListener('click', async () => {
+    const text = yamlEl?.textContent ?? '';
+    try {
+      await navigator.clipboard.writeText(text);
+      copyBtn.textContent = '✓ 已复制';
+      setTimeout(() => { copyBtn.textContent = '复制到剪贴板'; }, 1500);
+    } catch {
+      copyBtn.textContent = '复制失败 — 请手动选取';
+    }
+  });
+</script>
+
+<style>
+  .concept-new-page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1rem 1.5rem 4rem;
+  }
+  .concept-new-head h1 {
+    font-size: 1.75rem;
+    margin: 0.5rem 0 0.25rem;
+  }
+  .concept-new-sub {
+    color: var(--fg-muted);
+    margin: 0 0 1rem;
+  }
+  .concept-new-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1rem;
+  }
+  @media (max-width: 720px) {
+    .concept-new-body { grid-template-columns: 1fr; }
+  }
+  .concept-new-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .concept-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .concept-field-label {
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+  }
+  .concept-field input,
+  .concept-field select,
+  .concept-field textarea {
+    padding: 0.5rem 0.7rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--fg);
+    font-family: inherit;
+    font-size: 0.95rem;
+  }
+  .concept-field-hint {
+    font-size: 0.75rem;
+    color: var(--fg-subtle);
+  }
+  .concept-field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+  }
+  .concept-new-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .concept-new-generate,
+  .concept-new-reset,
+  .concept-new-copy {
+    padding: 0.45rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--fg);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: border-color 150ms;
+  }
+  .concept-new-generate {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+  }
+  .concept-new-generate:hover { filter: brightness(0.95); }
+  .concept-new-reset:hover,
+  .concept-new-copy:hover {
+    border-color: var(--accent);
+  }
+  .concept-new-validation {
+    margin-top: 0.5rem;
+  }
+  .concept-new-errors,
+  .concept-new-warnings {
+    list-style: none;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+  }
+  .concept-new-errors {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #b91c1c;
+  }
+  .concept-new-warnings {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    color: #92400e;
+  }
+  .concept-new-ok {
+    color: var(--fg-muted);
+    font-size: 0.85rem;
+  }
+  .concept-new-output {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 1rem;
+    height: fit-content;
+    position: sticky;
+    top: 1rem;
+  }
+  .concept-new-output h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.1rem;
+  }
+  .concept-new-output-hint {
+    font-size: 0.85rem;
+    color: var(--fg-muted);
+    margin: 0 0 0.5rem;
+  }
+  .concept-new-yaml {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+  }
+  .concept-new-existing {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+  .concept-new-sluglist {
+    columns: 4;
+    list-style: none;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+  .concept-new-sluglist li { padding: 0.1rem 0; }
+  @media (max-width: 720px) {
+    .concept-new-sluglist { columns: 2; }
+  }
+</style>
