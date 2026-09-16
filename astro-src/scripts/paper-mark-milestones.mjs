@@ -3,12 +3,14 @@
 //
 // 启发式标记论文是否为里程碑(is_milestone)。
 // 不依赖 LLM,纯本地启发。
+// 判定规则: 引用数 >= N (默认 5) 或在白名单中
 //
 // 用法:
 //   node astro-src/scripts/paper-mark-milestones.mjs --check --limit 10
 //   node astro-src/scripts/paper-mark-milestones.mjs --check --threshold 0.6
 //   node astro-src/scripts/paper-mark-milestones.mjs --apply --threshold 0.6
 //   node astro-src/scripts/paper-mark-milestones.mjs --apply --all
+//   node astro-src/scripts/paper-mark-milestones.mjs --apply --threshold 5 (use citation count)
 
 import { readdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -20,11 +22,12 @@ const CURRENT_YEAR = 2026;
 const TOP_VENUES = ['NeurIPS', 'ICML', 'ICLR', 'ACL', 'CVPR', 'ICCV', 'ECCV'];
 const BREAKTHROUGH_KEYWORDS = ['first', 'novel', 'breakthrough', 'pioneer', 'introducing', 'revolutionary', 'paradigm shift'];
 const HIGH_RESOURCE_TIERS = ['frontier', 'large'];
+const DEFAULT_CITATION_THRESHOLD = 5;
 
 /** 解析 CLI 参数 */
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { check: false, apply: false, limit: 0, threshold: 0.6 };
+  const opts = { check: false, apply: false, limit: 0, threshold: 0.6, citationThreshold: DEFAULT_CITATION_THRESHOLD, useCitationThreshold: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--check') opts.check = true;
@@ -32,15 +35,33 @@ function parseArgs() {
     else if (a === '--all') opts.limit = 0;
     else if (a.startsWith('--limit=')) opts.limit = parseInt(a.split('=')[1], 10) || 0;
     else if (a === '--limit') opts.limit = parseInt(args[++i], 10) || 0;
-    else if (a.startsWith('--threshold=')) opts.threshold = parseFloat(a.split('=')[1]) || 0.6;
-    else if (a === '--threshold') opts.threshold = parseFloat(args[++i]) || 0.6;
+    else if (a.startsWith('--threshold=')) {
+      const val = parseFloat(a.split('=')[1]);
+      if (val >= 1) {
+        // >= 1 means use as citation threshold directly
+        opts.citationThreshold = val;
+        opts.useCitationThreshold = true;
+      } else {
+        opts.threshold = val || 0.6;
+      }
+    }
+    else if (a === '--threshold') {
+      const val = parseFloat(args[++i]);
+      if (val >= 1) {
+        opts.citationThreshold = val;
+        opts.useCitationThreshold = true;
+      } else {
+        opts.threshold = val || 0.6;
+      }
+    }
     else if (a === '--help' || a === '-h') {
       console.log(`用法:
-  --check            显示推断结果,不写文件
-  --apply            写入 is_milestone: true
-  --limit N          仅处理前 N 篇
-  --threshold 0.6    启发分数阈值(default 0.6)
-  --all              处理全部(与 --limit 0 等效)`);
+  --check              显示推断结果,不写文件
+  --apply              写入 is_milestone: true
+  --limit N            仅处理前 N 篇
+  --threshold 0.6     启发分数阈值(default 0.6)
+  --threshold N        N >= 1 时视为引用数阈值(default 5)
+  --all                处理全部(与 --limit 0 等效)`);
       process.exit(0);
     }
   }

@@ -435,12 +435,13 @@ function parseArgs() {
 async function main() {
   const opts = parseArgs();
   const mode = opts.apply ? 'apply' : 'dry-run';
-  console.log(`[paper-backfill-crosslinks] mode=${mode} llm=${opts.useLlm} limit=${opts.limit || 'all'} offset=${opts.offset}`);
+  console.log(`[paper-backfill-crosslinks] mode=${mode} llm=${opts.useLlm} heuristic=${opts.useHeuristic} limit=${opts.limit || 'all'} offset=${opts.offset}`);
 
   // 加载 ideas / experiments 索引
   const ideas = loadIdeas();
   const experiments = loadExperiments();
-  console.log(`[paper-backfill-crosslinks] loaded ${ideas.length} ideas, ${experiments.length} experiments`);
+  const allPapers = loadAllPapers();
+  console.log(`[paper-backfill-crosslinks] loaded ${ideas.length} ideas, ${experiments.length} experiments, ${allPapers.length} papers`);
 
   const all = walkPapers(PAPERS_ROOT);
   console.log(`[paper-backfill-crosslinks] found ${all.length} papers`);
@@ -473,13 +474,28 @@ async function main() {
     const current = readCrosslinks(fm);
     const paperMeta = extractPaperMeta(fm, body);
 
+    // 如果 related_* 已存在,跳过(不覆盖已有数据)
+    if (current.related_papers?.length > 0 || current.related_concepts?.length > 0) {
+      skipped++;
+      continue;
+    }
+
     // 启发式匹配
-    let inferredIdeas = matchIdeas(paperMeta, ideas);
-    let inferredExps = matchExperiments(paperMeta, experiments);
+    let inferredIdeas = [];
+    let inferredExps = [];
+    let inferredPapers = [];
+    let inferredConcepts = [];
+
+    if (opts.useHeuristic) {
+      inferredIdeas = matchIdeas(paperMeta, ideas);
+      inferredExps = matchExperiments(paperMeta, experiments);
+      inferredPapers = matchRelatedPapers(paperMeta, allPapers, file);
+      inferredConcepts = matchRelatedConcepts(paperMeta, allPapers, file);
+    }
 
     // LLM fallback (可选)
     if (opts.useLlm) {
-      const llmResult = await callLLMFallback(paperMeta, ideas, experiments);
+      const llmResult = await callLLMFallback(paperMeta, ideas, experiments, allPapers);
       if (llmResult) {
         // 验证路径存在
         for (const p of llmResult.related_ideas || []) {
@@ -488,16 +504,26 @@ async function main() {
         for (const p of llmResult.related_experiments || []) {
           if (existsSync(p) && !inferredExps.includes(p)) inferredExps.push(p);
         }
+        for (const p of llmResult.related_papers || []) {
+          if (existsSync(p) && !inferredPapers.includes(p)) inferredPapers.push(p);
+        }
+        if (llmResult.related_concepts) {
+          inferredConcepts = [...new Set([...inferredConcepts, ...llmResult.related_concepts])];
+        }
       }
     }
 
     // 合并已有 + 新推断
     const mergedIdeas = [...new Set([...current.related_ideas, ...inferredIdeas])];
     const mergedExps = [...new Set([...current.related_experiments, ...inferredExps])];
+    const mergedPapers = [...new Set([...current.related_papers, ...inferredPapers])];
+    const mergedConcepts = [...new Set([...current.related_concepts, ...inferredConcepts])];
 
     // 检查是否需要更新
     const needsUpdate = mergedIdeas.length !== current.related_ideas.length ||
-                        mergedExps.length !== current.related_experiments.length;
+                        mergedExps.length !== current.related_experiments.length ||
+                        mergedPapers.length !== current.related_papers.length ||
+                        mergedConcepts.length !== current.related_concepts.length;
 
     if (!needsUpdate) {
       skipped++;
@@ -508,6 +534,8 @@ async function main() {
       related_ideas: mergedIdeas,
       related_experiments: mergedExps,
       related_writings: current.related_writings,
+      related_papers: mergedPapers,
+      related_concepts: mergedConcepts,
     };
 
     if (opts.apply) {
@@ -527,8 +555,8 @@ async function main() {
       if (sample.length < 5) {
         sample.push({
           file: relative(PAPERS_ROOT, file),
-          before: { ideas: current.related_ideas, exps: current.related_experiments },
-          after: { ideas: mergedIdeas, exps: mergedExps },
+          before: { ideas: current.related_ideas, exps: current.related_experiments, papers: current.related_papers, concepts: current.related_concepts },
+          after: { ideas: mergedIdeas, exps: mergedExps, papers: mergedPapers, concepts: mergedConcepts },
         });
       }
     }
@@ -545,10 +573,10 @@ async function main() {
     for (const s of sample) {
       console.log(`    ${s.file}`);
       if (opts.apply) {
-        console.log(`      → ideas: ${s.links.related_ideas.length}, exps: ${s.links.related_experiments.length}`);
+        console.log(`      → ideas: ${s.links?.related_ideas?.length || 0}, exps: ${s.links?.related_experiments?.length || 0}, papers: ${s.links?.related_papers?.length || 0}, concepts: ${s.links?.related_concepts?.length || 0}`);
       } else {
-        console.log(`      before: ideas=${s.before.ideas.length}, exps=${s.before.exps.length}`);
-        console.log(`      after:  ideas=${s.after.ideas.length}, exps=${s.after.exps.length}`);
+        console.log(`      before: ideas=${s.before.ideas.length}, exps=${s.before.exps.length}, papers=${s.before.papers?.length || 0}, concepts=${s.before.concepts?.length || 0}`);
+        console.log(`      after:  ideas=${s.after.ideas.length}, exps=${s.after.exps.length}, papers=${s.after.papers.length}, concepts=${s.after.concepts.length}`);
       }
     }
   }
