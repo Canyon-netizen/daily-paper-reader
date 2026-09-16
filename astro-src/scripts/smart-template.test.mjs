@@ -2,8 +2,7 @@
 // astro-src/scripts/smart-template.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/experiments/smart-template.ts.
-// 测试 SMART_HYPOTHESIS_MARKDOWN 常量 + renderSmartHypothesisTemplate。
-// applySmartHypothesisTemplate 因为依赖 DOM,不在此测试。
+// 只测纯函数;applySmartHypothesisTemplate 需要 DOM,跳过。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,43 +29,51 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/experiments/smart-template.ts');
 const { SMART_HYPOTHESIS_MARKDOWN, renderSmartHypothesisTemplate } = mod;
 
-test('SMART_HYPOTHESIS_MARKDOWN: 非空字符串', () => {
-  assert.ok(typeof SMART_HYPOTHESIS_MARKDOWN === 'string');
-  assert.ok(SMART_HYPOTHESIS_MARKDOWN.length > 100);
+test('SMART_HYPOTHESIS_MARKDOWN: 含 5 个 SMART 章节标题', () => {
+  const m = SMART_HYPOTHESIS_MARKDOWN;
+  assert.ok(m.includes('### Specific'));
+  assert.ok(m.includes('### Measurable'));
+  assert.ok(m.includes('### Achievable'));
+  assert.ok(m.includes('### Relevant'));
+  assert.ok(m.includes('### Time-bound'));
 });
 
-test('SMART_HYPOTHESIS_MARKDOWN: 5 个 SMART 章节标题', () => {
-  const text = SMART_HYPOTHESIS_MARKDOWN;
-  assert.ok(text.includes('Specific'));
-  assert.ok(text.includes('Measurable'));
-  assert.ok(text.includes('Achievable'));
-  assert.ok(text.includes('Relevant'));
-  assert.ok(text.includes('Time-bound'));
-});
-
-test('SMART_HYPOTHESIS_MARKDOWN: Hypothesis Statement 总结行', () => {
+test('SMART_HYPOTHESIS_MARKDOWN: 含 Hypothesis Statement', () => {
   assert.ok(SMART_HYPOTHESIS_MARKDOWN.includes('## Hypothesis Statement'));
 });
 
-test('SMART_HYPOTHESIS_MARKDOWN: 占位用 [方括号]', () => {
-  const text = SMART_HYPOTHESIS_MARKDOWN;
-  // 应有多个 [xxx] 占位
-  const matches = text.match(/\[[^\]]+\]/g) || [];
-  assert.ok(matches.length >= 5);
+test('SMART_HYPOTHESIS_MARKDOWN: 含占位符 [方括号]', () => {
+  // 至少 5 个 [..]
+  const count = (SMART_HYPOTHESIS_MARKDOWN.match(/\[[^\]]*\]/g) || []).length;
+  assert.ok(count >= 5, `expected >= 5 placeholders, got ${count}`);
 });
 
-test('renderSmartHypothesisTemplate: 返回 SMART 模板', () => {
-  const t = renderSmartHypothesisTemplate();
-  assert.equal(t, SMART_HYPOTHESIS_MARKDOWN);
+test('SMART_HYPOTHESIS_MARKDOWN: 含自变量/因变量/评估指标', () => {
+  const m = SMART_HYPOTHESIS_MARKDOWN;
+  assert.ok(m.includes('自变量'));
+  assert.ok(m.includes('因变量'));
+  assert.ok(m.includes('评估指标'));
 });
 
-test('renderSmartHypothesisTemplate: 每次返回新字符串(不可变?)', () => {
-  const a = renderSmartHypothesisTemplate();
-  const b = renderSmartHypothesisTemplate();
-  // 源实现是 `return SMART_HYPOTHESIS_MARKDOWN` — 应当 ===
-  assert.equal(a, b);
+test('SMART_HYPOTHESIS_MARKDOWN: 含里程碑 M1/M2/M3', () => {
+  assert.ok(SMART_HYPOTHESIS_MARKDOWN.includes('M1'));
+  assert.ok(SMART_HYPOTHESIS_MARKDOWN.includes('M2'));
+  assert.ok(SMART_HYPOTHESIS_MARKDOWN.includes('M3'));
 });
 
-test('SMART_HYPOTHESIS_MARKDOWN: 含 Markdown 二级标题 ##', () => {
-  assert.ok(SMART_HYPOTHESIS_MARKDOWN.includes('## '));
+test('SMART_HYPOTHESIS_MARKDOWN: 顶部 SMART Hypothesis 主标题', () => {
+  assert.ok(SMART_HYPOTHESIS_MARKDOWN.startsWith('## SMART Hypothesis'));
+});
+
+test('renderSmartHypothesisTemplate: 返回 SMART_HYPOTHESIS_MARKDOWN 引用', () => {
+  const r = renderSmartHypothesisTemplate();
+  assert.equal(r, SMART_HYPOTHESIS_MARKDOWN);
+});
+
+test('renderSmartHypothesisTemplate: 每次调用返回非空字符串', () => {
+  for (let i = 0; i < 3; i++) {
+    const r = renderSmartHypothesisTemplate();
+    assert.ok(typeof r === 'string');
+    assert.ok(r.length > 100);
+  }
 });
