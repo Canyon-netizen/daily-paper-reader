@@ -104,7 +104,7 @@ describe('formatMarkdown', () => {
   const formatMarkdown = (groups) => {
     let md = '# Changelog (R7)\n\n';
     for (const [section, prefix] of Object.entries(SCOPE_PREFIXES)) {
-      const commits = groups[section];
+      const commits = groups[section] ?? [];
       if (commits.length === 0) continue;
       md += `## ${section}. ${prefix}\n\n`;
       for (const c of commits) {

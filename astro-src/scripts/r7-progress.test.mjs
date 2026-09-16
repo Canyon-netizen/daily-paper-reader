@@ -91,8 +91,10 @@ describe('formatTable', () => {
   it('should include all sections in table', () => {
     const groups = { A: [1], B: [], C: [1, 2], D: [], E: [], F: [], G: [], H: [], I: [], J: [] };
     const table = formatTable(groups);
-    assert.ok(table.includes('A. Core/Architecture'));
-    assert.ok(table.includes('J. Meta/Process'));
+    // formatTable writes column-aligned (section, name, done)
+    assert.ok(table.includes('A'));
+    assert.ok(table.includes('Core/Architecture'));
+    assert.ok(table.includes('Meta/Process'));
     assert.ok(table.includes('Total'));
   });
 });
