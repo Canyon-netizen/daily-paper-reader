@@ -15,6 +15,7 @@ import {
   getAllConceptSlugs,
   getConceptDetail,
 } from '../../../lib/concept-detail';
+import { sparklinePoints } from '../../../lib/concepts/version';
 import '../../../styles/page.css';
 
 const base = (import.meta.env.BASE_URL || '/').replace(/\/$/, '');
@@ -30,6 +31,7 @@ const detail = slugStr ? await getConceptDetail(slugStr) : null;
 const meta = detail?.entry || null;
 const related = detail?.related || [];
 const citingPapers = detail?.citingPapers || [];
+const recentHistory = detail?.recentHistory || [];
 
 // G.2.1: 按 category 分组 related,每组按 co_count 降序(已经在 lib 里排过)。
 const relatedGroups: { category: string; items: typeof related }[] = [];
@@ -44,6 +46,14 @@ const relatedGroups: { category: string; items: typeof related }[] = [];
     relatedGroups.push({ category: cat, items: groups.get(cat)! });
   }
 }
+
+// G.2.2: 算 sparkline points
+const sparklinePts = recentHistory.length >= 2
+  ? sparklinePoints(recentHistory, 300, 60)
+  : '';
+const sparklineMax = recentHistory.length > 0
+  ? Math.max(...recentHistory.map((s) => s.paper_count), 1)
+  : 0;
 ---
 
 <BaseLayout
@@ -75,6 +85,25 @@ const relatedGroups: { category: string; items: typeof related }[] = [];
         </header>
 
         <section class="concept-detail-body">
+          {/* G.2.2: 概念热度趋势(近 90 天 sparkline) */}
+          {recentHistory.length >= 2 && (
+            <section class="concept-evolution">
+              <h2>概念热度趋势(近 90 天)</h2>
+              <p class="concept-detail-empty">
+                引用此概念的论文数随时间变化。共 {recentHistory.length} 个数据点,峰值 {sparklineMax} 篇/天。
+              </p>
+              <svg class="concept-sparkline" viewBox="0 0 300 60" preserveAspectRatio="none">
+                <polyline
+                  points={sparklinePts}
+                  fill="none"
+                  stroke="var(--accent)"
+                  stroke-width="1.5"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </section>
+          )}
+
           {citingPapers.length > 0 && (
             <article class="concept-detail-section">
               <h2>引用本概念的论文({citingPapers.length})</h2>
@@ -298,5 +327,25 @@ const relatedGroups: { category: string; items: typeof related }[] = [];
     color: var(--fg-subtle);
     font-family: var(--font-mono);
     white-space: nowrap;
+  }
+  /* G.2.2 sparkline */
+  .concept-evolution {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+  }
+  .concept-evolution h2 {
+    font-size: 1rem;
+    margin: 0 0 0.4rem;
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+  }
+  .concept-sparkline {
+    width: 100%;
+    height: 60px;
+    display: block;
+    margin-top: 0.5rem;
   }
 </style>

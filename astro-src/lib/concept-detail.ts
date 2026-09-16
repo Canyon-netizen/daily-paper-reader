@@ -9,10 +9,12 @@ import {
   getRelatedConcepts,
 } from './concepts-index';
 import { readPaper } from './paper';
+import { recentSnapshots } from './concepts/version';
 import type {
   ConceptIndexEntry,
   RelatedConcept,
 } from './types/concept';
+import type { ConceptSnapshot } from './concepts/version';
 
 export interface ConceptDetail {
   entry: ConceptIndexEntry;
@@ -25,6 +27,8 @@ export interface ConceptDetail {
     canonicalArxivId: string;
     centrality: number;
   }>;
+  /** G.2.2: 近 90 天快照,按时间升序(供 sparkline 用)。 */
+  recentHistory: ConceptSnapshot[];
 }
 
 export async function getAllConceptSlugs(): Promise<string[]> {
@@ -91,6 +95,7 @@ export async function getConceptDetail(slug: string): Promise<ConceptDetail | nu
   return {
     entry,
     related,
+    recentHistory: recentSnapshots(entry.history || []),
     citingPapers: citingPapersRaw.map((p) => ({
       id: p.id,
       title: p.title || '',
