@@ -164,3 +164,37 @@ export function clearCitedPapers(writingId: string): void {
   delete storage[writingId];
   setStorage(storage);
 }
+
+/** 合并两套引用列表,返回合并结果和差异. */
+export function mergeCitedPapers(
+  existing: readonly string[],
+  newRefs: readonly string[],
+): { merged: string[]; added: string[]; removed: string[] } {
+  const existingCanons = existing.map((id) => id.replace(/v\d+$/, ''));
+  const newCanons = newRefs.map((id) => id.replace(/v\d+$/, ''));
+
+  const existingSet = new Set(existingCanons);
+  const newSet = new Set(newCanons);
+
+  const added: string[] = [];
+  const removed: string[] = [];
+
+  // 找出新增的
+  for (let i = 0; i < newRefs.length; i++) {
+    if (!existingSet.has(newCanons[i])) {
+      added.push(newRefs[i]);
+    }
+  }
+
+  // 找出被删除的
+  for (let i = 0; i < existing.length; i++) {
+    if (!newSet.has(existingCanons[i])) {
+      removed.push(existing[i]);
+    }
+  }
+
+  // merged = newRefs 作为基础 (按 newRefs 顺序)
+  const merged = [...newRefs];
+
+  return { merged, added, removed };
+}
