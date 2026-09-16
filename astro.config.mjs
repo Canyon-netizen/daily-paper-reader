@@ -129,5 +129,23 @@ export default defineConfig({
       noExternal: [/.*-disk\.mjs$/],
     },
     plugins: [diskExternalForClientOnly()],
+    build: {
+      rollupOptions: {
+        output: {
+          // H.1.1: 手动拆分 vendor chunk,避免单 bundle 把 cytoscape / pdfjs
+          // 之类的大家伙塞进每个路由。manualChunks 仅影响 client bundle,
+          // SSR 不走 rollup chunking 不影响。
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (/cytoscape/.test(id)) return 'vendor-cytoscape';
+              if (/pdfjs-dist/.test(id)) return 'vendor-pdf';
+              if (/katex/.test(id)) return 'vendor-katex';
+              if (/react|react-dom/.test(id)) return 'vendor-react';
+            }
+            return undefined;
+          },
+        },
+      },
+    },
   },
 });
