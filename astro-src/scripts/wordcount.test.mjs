@@ -45,8 +45,8 @@ test('estimateWords: 纯英文', () => {
 test('estimateWords: 中英混合', () => {
   const result = estimateWords('这是中文 English mixed 混合文本');
   assert.equal(result.chinese, 8);
-  assert.equal(result.english, 3);
-  assert.equal(result.total, 11);
+  assert.equal(result.english, 2);
+  assert.equal(result.total, 10);
 });
 
 test('estimateWords: 空字符串', () => {
