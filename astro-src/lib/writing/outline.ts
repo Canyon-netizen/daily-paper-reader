@@ -157,3 +157,8 @@ export function estimateWritingDays(outline: readonly OutlineNode[], wordsPerDay
   if (total === 0) return 0;
   return Math.max(1, Math.ceil(total / wordsPerDay));
 }
+
+/** 为给定 writing type 返回一个带空 placeholders 的模板大纲。 */
+export function suggestOutlineForType(type: WritingType): OutlineNode[] {
+  return generateOutline(type, []);
+}
