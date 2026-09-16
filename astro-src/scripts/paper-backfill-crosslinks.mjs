@@ -325,8 +325,14 @@ function extractFrontmatter(raw) {
 }
 
 function readCrosslinks(fm) {
-  const out = { related_ideas: [], related_experiments: [], related_writings: [] };
-  for (const key of ['related_ideas', 'related_experiments', 'related_writings']) {
+  const out = {
+    related_ideas: [],
+    related_experiments: [],
+    related_writings: [],
+    related_papers: [],
+    related_concepts: []
+  };
+  for (const key of ['related_ideas', 'related_experiments', 'related_writings', 'related_papers', 'related_concepts']) {
     const reBracket = new RegExp(`^\\s+${key}:\\s*\\[([^\\]]*)\\]`, 'm');
     const m1 = fm.match(reBracket);
     if (m1 && m1[1].trim()) {
@@ -343,7 +349,12 @@ function readCrosslinks(fm) {
 }
 
 function renderCrosslinksBlock(links) {
-  return `related_ideas: [${links.related_ideas.map(p => `"${p}"`).join(', ')}]\nrelated_experiments: [${links.related_experiments.map(p => `"${p}"`).join(', ')}]\nrelated_writings: [${links.related_writings.map(p => `"${p}"`).join(', ')}]\n`;
+  return `related_ideas: [${links.related_ideas.map(p => `"${p}"`).join(', ')}]
+related_experiments: [${links.related_experiments.map(p => `"${p}"`).join(', ')}]
+related_writings: [${links.related_writings.map(p => `"${p}"`).join(', ')}]
+related_papers: [${links.related_papers.map(p => `"${p}"`).join(', ')}]
+related_concepts: [${links.related_concepts.map(c => `"${c}"`).join(', ')}]
+`;
 }
 
 function replaceCrosslinks(raw, newLinks) {
@@ -356,7 +367,7 @@ function replaceCrosslinks(raw, newLinks) {
   }
   // 逐个替换
   let newFm = fm;
-  for (const key of ['related_ideas', 'related_experiments', 'related_writings']) {
+  for (const key of ['related_ideas', 'related_experiments', 'related_writings', 'related_papers', 'related_concepts']) {
     const re = new RegExp(`^(\\s+${key}:\\s*\\[)([^\\]]*)(\\])`, 'm');
     const match = newFm.match(re);
     if (match) {
@@ -391,19 +402,27 @@ function walkPapers(root) {
 
 function parseArgs() {
   const args = process.argv.slice(2);
-  const opts = { dryRun: false, apply: false, limit: 0, offset: 0, useLlm: false };
+  const opts = { dryRun: false, apply: false, limit: 0, offset: 0, useLlm: false, useHeuristic: true };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--dry-run') opts.dryRun = true;
     else if (a === '--apply') opts.apply = true;
-    else if (a === '--use-llm') opts.useLlm = true;
+    else if (a === '--llm' || a === '--use-llm') opts.useLlm = true;
+    else if (a === '--heuristic') opts.useHeuristic = true;
     else if (a === '--all') opts.limit = 0;
     else if (a.startsWith('--limit=')) opts.limit = parseInt(a.split('=')[1], 10) || 0;
     else if (a === '--limit') opts.limit = parseInt(args[++i], 10) || 0;
     else if (a.startsWith('--offset=')) opts.offset = parseInt(a.split('=')[1], 10) || 0;
     else if (a === '--offset') opts.offset = parseInt(args[++i], 10) || 0;
     else if (a === '--help' || a === '-h') {
-      console.log('用法: --dry-run | --apply | --limit N | --offset N | --all | --use-llm');
+      console.log(`用法:
+  --dry-run          显示推断结果,不写文件(default)
+  --apply            写入 related_* 字段
+  --llm              使用 LLM 推断(需 LLM_API_URL/LLM_API_KEY)
+  --heuristic        使用启发式匹配(default)
+  --limit N          仅处理前 N 篇
+  --offset N         跳过前 N 篇
+  --all              处理全部(与 --limit 0 等效)`);
       process.exit(0);
     }
   }

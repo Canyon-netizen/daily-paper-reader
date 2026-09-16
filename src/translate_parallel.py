@@ -85,10 +85,15 @@ if __name__ == "__main__":
         print("usage: python -m src.translate_parallel <chunk.json> [chunk2.json ...]")
         sys.exit(1)
 
+    # Collect all paper names from chunk files (dedup by preserving order)
     all_names = []
+    seen = set()
     for arg in sys.argv[1:]:
         with open(arg) as f:
             names = json.load(f)
-        all_names.extend(names)
+        for n in names:
+            if n not in seen:
+                seen.add(n)
+                all_names.append(n)
 
     asyncio.run(main_async(all_names))
