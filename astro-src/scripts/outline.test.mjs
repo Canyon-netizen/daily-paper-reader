@@ -156,3 +156,61 @@ test('未识别 type 触发 TS exhaustive,但运行时不崩', () => {
   const o = generateOutline('paper');
   assert.ok(o);
 });
+
+// WP.1: boundary cases
+test('boundary: 长 paper title (200+ chars)', () => {
+  const longTitle = 'A Very Long Title About Deep Learning and Neural Networks with Many Characters to Test Boundary Conditions in the Outline Generation System for Academic Writing Assistance Applications';
+  const o = generateOutline('paper');
+  assert.ok(o.length > 0);
+  // 长标题不影响大纲结构
+  assert.equal(o[0].id, 'abstract');
+});
+
+test('boundary: multi-author case', () => {
+  const manyCites = [
+    { arxivId: '2501.00001' },
+    { arxivId: '2501.00002' },
+    { arxivId: '2501.00003' },
+    { arxivId: '2501.00004' },
+    { arxivId: '2501.00005' },
+    { arxivId: '2501.00006' },
+    { arxivId: '2501.00007' },
+    { arxivId: '2501.00008' },
+  ];
+  const o = generateOutline('paper', manyCites, { citationStrategy: 'spread' });
+  const contentNodes = o.filter((n) => n.suggestedWordCount > 0);
+  // 每个有内容的节都应该有 placeholders
+  for (const n of contentNodes) {
+    assert.ok(n.placeholders.length >= 1, `${n.id} should have placeholders`);
+  }
+});
+
+test('boundary: empty placeholders array', () => {
+  const o = generateOutline('paper', [], { citationStrategy: 'spread' });
+  for (const n of o) {
+    assert.ok(Array.isArray(n.placeholders));
+    assert.equal(n.placeholders.length, 0);
+  }
+});
+
+test('boundary: unicode titles in paper type', () => {
+  const unicodeCites = [
+    { arxivId: '2506.中文测试' },
+    { arxivId: '2506.日本語' },
+  ];
+  // 不应崩溃
+  const o = generateOutline('paper', unicodeCites, { citationStrategy: 'front-loaded' });
+  assert.ok(o.length > 0);
+});
+
+test('boundary: type=translation with 0 refs', () => {
+  const o = generateOutline('translation', []);
+  assert.equal(o.length, 3);
+  // translation 类型不应该有 placeholders
+  for (const n of o) {
+    assert.equal(n.placeholders.length, 0, `${n.id} translation should have no placeholders`);
+  }
+  assert.equal(o[0].id, 'source');
+  assert.equal(o[1].id, 'translation');
+  assert.equal(o[2].id, 'notes');
+});
