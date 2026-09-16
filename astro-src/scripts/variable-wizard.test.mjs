@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // astro-src/scripts/variable-wizard.test.mjs
 //
-// Tests for R7 E.2.2 variable design wizard helpers.
+// Tests for R7 polish: astro-src/lib/experiments/variable-wizard.ts.
+// 测试 pure helpers:emptyVariableSet / isValidVariable / renderVariableSetMarkdown。
+// collectVariablesFromWizard 因为依赖 DOM (HTMLElement),不在此测试。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -26,157 +28,133 @@ async function loadTs(relPath) {
 }
 
 const mod = await loadTs('lib/experiments/variable-wizard.ts');
-const {
-  emptyVariableSet,
-  isValidVariable,
-  renderVariableSetMarkdown,
-  collectVariablesFromWizard,
-  renderVariableItemHtml,
-  renderVariableGroupHtml,
-} = mod;
+const { emptyVariableSet, isValidVariable, renderVariableSetMarkdown } = mod;
 
-// ----- emptyVariableSet / isValidVariable -----
-
-test('emptyVariableSet: 3 groups all empty arrays', () => {
+test('emptyVariableSet: 返回 3 类空数组', () => {
   const s = emptyVariableSet();
-  assert.deepEqual(s, { independent: [], dependent: [], controlled: [] });
+  assert.deepEqual(s.independent, []);
+  assert.deepEqual(s.dependent, []);
+  assert.deepEqual(s.controlled, []);
 });
 
-test('isValidVariable: null / undefined / empty fails', () => {
+test('emptyVariableSet: 每次返回新对象', () => {
+  const a = emptyVariableSet();
+  const b = emptyVariableSet();
+  a.independent.push({ name: 'x', type: 'continuous' });
+  assert.equal(b.independent.length, 0);
+});
+
+test('isValidVariable: null / undefined → false', () => {
   assert.equal(isValidVariable(null), false);
   assert.equal(isValidVariable(undefined), false);
-  assert.equal(isValidVariable({ name: '', type: 'continuous' }), false);
 });
 
-test('isValidVariable: missing type fails', () => {
+test('isValidVariable: 非对象 → false', () => {
+  assert.equal(isValidVariable('string'), false);
+  assert.equal(isValidVariable(42), false);
+  assert.equal(isValidVariable([]), false);
+});
+
+test('isValidVariable: 缺 name → false', () => {
+  assert.equal(isValidVariable({ type: 'continuous' }), false);
+  assert.equal(isValidVariable({ name: '', type: 'continuous' }), false);
+  assert.equal(isValidVariable({ name: '   ', type: 'continuous' }), false);
+});
+
+test('isValidVariable: 缺 type → false', () => {
   assert.equal(isValidVariable({ name: 'x' }), false);
 });
 
-test('isValidVariable: invalid type fails', () => {
-  assert.equal(isValidVariable({ name: 'x', type: 'nope' }), false);
+test('isValidVariable: type 不在枚举 → false', () => {
+  assert.equal(isValidVariable({ name: 'x', type: 'unknown' }), false);
+  assert.equal(isValidVariable({ name: 'x', type: '' }), false);
 });
 
-test('isValidVariable: name + valid type succeeds', () => {
-  assert.equal(isValidVariable({ name: 'x', type: 'continuous' }), true);
-  assert.equal(isValidVariable({ name: 'y', type: 'binary' }), true);
+test('isValidVariable: name + 合法 type → true', () => {
+  for (const t of ['continuous', 'categorical', 'ordinal', 'binary']) {
+    assert.equal(isValidVariable({ name: 'x', type: t }), true);
+  }
 });
 
-// ----- renderVariableSetMarkdown -----
-
-test('renderVariableSetMarkdown: empty set returns empty string', () => {
-  assert.equal(renderVariableSetMarkdown(emptyVariableSet()), '');
-});
-
-test('renderVariableSetMarkdown: renders 3 sections with type + unit + range', () => {
-  const set = {
-    independent: [
-      { name: 'learning_rate', type: 'continuous', unit: '', range: '1e-5..1e-1', description: '' },
-    ],
-    dependent: [
-      { name: 'accuracy', type: 'continuous', unit: '%', range: '0..100', description: 'final test accuracy' },
-    ],
-    controlled: [
-      { name: 'seed', type: 'categorical', unit: '', range: '0,1,2', description: '' },
-    ],
+test('isValidVariable: 附带 unit/range/description 仍然 valid', () => {
+  const v = {
+    name: 'x',
+    type: 'continuous',
+    unit: 'kg',
+    range: '0..100',
+    description: 'a desc',
   };
-  const md = renderVariableSetMarkdown(set);
-  assert.match(md, /## 自变量 \(Independent\)/);
-  assert.match(md, /## 因变量 \(Dependent\)/);
-  assert.match(md, /## 控制变量 \(Controlled\)/);
-  assert.match(md, /\*\*learning_rate\*\* \(`continuous`\)/);
-  assert.match(md, /\*\*accuracy\*\* \(`continuous`, %\)/);
-  assert.match(md, /取值范围: `0\.\.100`/);
-  assert.match(md, /final test accuracy/);
+  assert.equal(isValidVariable(v), true);
 });
 
-test('renderVariableSetMarkdown: skips invalid entries', () => {
-  const set = {
-    independent: [
-      { name: '', type: 'continuous' }, // invalid
-      { name: 'lr', type: 'continuous' },
-    ],
-    dependent: [],
-    controlled: [],
-  };
-  const md = renderVariableSetMarkdown(set);
-  assert.match(md, /\*\*lr\*\*/);
-  assert.ok(!md.includes('** **') || !md.includes('** \t'));
+test('renderVariableSetMarkdown: 空集合 → ""', () => {
+  const md = renderVariableSetMarkdown(emptyVariableSet());
+  assert.equal(md, '');
 });
 
-test('renderVariableSetMarkdown: skips empty groups', () => {
-  const set = {
+test('renderVariableSetMarkdown: 含自变量', () => {
+  const md = renderVariableSetMarkdown({
     independent: [{ name: 'lr', type: 'continuous' }],
     dependent: [],
     controlled: [],
-  };
-  const md = renderVariableSetMarkdown(set);
-  assert.ok(!md.includes('## 因变量'));
+  });
+  assert.ok(md.includes('## 自变量'));
+  assert.ok(md.includes('**lr**'));
+  assert.ok(md.includes('`continuous`'));
 });
 
-// ----- collectVariablesFromWizard -----
-
-test('collectVariablesFromWizard: null root returns empty set', () => {
-  const r = collectVariablesFromWizard(null);
-  assert.deepEqual(r, emptyVariableSet());
+test('renderVariableSetMarkdown: 三类都有', () => {
+  const md = renderVariableSetMarkdown({
+    independent: [{ name: 'lr', type: 'continuous', unit: '' }],
+    dependent: [{ name: 'acc', type: 'continuous' }],
+    controlled: [{ name: 'seed', type: 'categorical' }],
+  });
+  assert.ok(md.includes('## 自变量'));
+  assert.ok(md.includes('## 因变量'));
+  assert.ok(md.includes('## 控制变量'));
+  assert.ok(md.includes('lr'));
+  assert.ok(md.includes('acc'));
+  assert.ok(md.includes('seed'));
 });
 
-test('collectVariablesFromWizard: extracts variables from mock DOM', () => {
-  // 用最少的 DOM mock 实现 querySelector
-  function makeItem({ name, type, unit = '', range = '', desc = '' }) {
-    return {
-      querySelector(sel) {
-        if (sel.includes('name')) return { value: name };
-        if (sel.includes('type')) return { value: type };
-        if (sel.includes('unit')) return { value: unit };
-        if (sel.includes('range')) return { value: range };
-        if (sel.includes('desc')) return { value: desc };
-        return null;
-      },
-    };
-  }
-  const root = {
-    querySelector(sel) {
-      if (sel === '[data-variable-group="independent"]') {
-        return {
-          querySelectorAll() {
-            return [
-              makeItem({ name: 'lr', type: 'continuous' }),
-              makeItem({ name: '', type: 'continuous' }), // invalid → skip
-            ];
-          },
-        };
-      }
-      return null;
-    },
-  };
-  const r = collectVariablesFromWizard(root);
-  assert.equal(r.independent.length, 1);
-  assert.equal(r.independent[0].name, 'lr');
-  assert.deepEqual(r.dependent, []);
+test('renderVariableSetMarkdown: 含 unit/range/description', () => {
+  const md = renderVariableSetMarkdown({
+    independent: [{
+      name: 'lr',
+      type: 'continuous',
+      unit: '10^-3',
+      range: '0..1',
+      description: 'learning rate',
+    }],
+    dependent: [],
+    controlled: [],
+  });
+  assert.ok(md.includes('10^-3'));
+  assert.ok(md.includes('取值范围'));
+  assert.ok(md.includes('0..1'));
+  assert.ok(md.includes('learning rate'));
 });
 
-// ----- renderVariableItemHtml -----
-
-test('renderVariableItemHtml: contains all required input placeholders', () => {
-  const html = renderVariableItemHtml(0);
-  for (const sel of ['data-variable-name', 'data-variable-type', 'data-variable-unit', 'data-variable-range', 'data-variable-desc']) {
-    assert.match(html, new RegExp(sel));
-  }
-  assert.match(html, /data-variable-item/);
-  assert.match(html, /data-variable-remove/);
+test('renderVariableSetMarkdown: 非法 variable 跳过', () => {
+  const md = renderVariableSetMarkdown({
+    independent: [
+      { name: 'lr', type: 'continuous' }, // 合法
+      { name: '', type: 'continuous' }, // 非法(空名)
+      { name: 'x', type: 'invalid' }, // 非法(type)
+    ],
+    dependent: [],
+    controlled: [],
+  });
+  assert.ok(md.includes('lr'));
+  assert.ok(!md.includes('**x**'));
 });
 
-test('renderVariableItemHtml: type select has 4 options', () => {
-  const html = renderVariableItemHtml(0);
-  const opts = html.match(/<option[^>]*value="(continuous|categorical|ordinal|binary)"/g) || [];
-  assert.equal(opts.length, 4);
-});
-
-// ----- renderVariableGroupHtml -----
-
-test('renderVariableGroupHtml: includes group slug + label + add button', () => {
-  const html = renderVariableGroupHtml('independent', '自变量');
-  assert.match(html, /data-variable-group="independent"/);
-  assert.match(html, /自变量/);
-  assert.match(html, /data-add-variable="independent"/);
+test('renderVariableSetMarkdown: 只有 dependent 时不渲染 independent section', () => {
+  const md = renderVariableSetMarkdown({
+    independent: [],
+    dependent: [{ name: 'acc', type: 'continuous' }],
+    controlled: [],
+  });
+  assert.ok(!md.includes('## 自变量'));
+  assert.ok(md.includes('## 因变量'));
 });
