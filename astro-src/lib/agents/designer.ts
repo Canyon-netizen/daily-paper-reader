@@ -14,6 +14,7 @@
 
 import type { Proposal, ProposalType, RoundInput } from './types';
 import { makeEmptyProposal } from './types';
+import { loadSkillContext } from './skill-context-loader';
 
 // ---------------------------------------------------------------------------
 // Prompt 模板(中文,与上游 topic-search 的中文 prompt 风格一致)
@@ -124,7 +125,8 @@ export async function designerGenerate(
 ): Promise<Proposal[]> {
   const maxProposals = opts.maxProposals ?? 6;
   const user = buildUserPrompt(input);
-  const system = DESIGNER_SYSTEM_PROMPT;
+  // R7 B.1.2: 注入 [方法论上下文] 块,stage=experiment(对应 experiment-design.md)
+  const system = `${loadSkillContext('experiment')}\n\n${DESIGNER_SYSTEM_PROMPT}`;
 
   let raw = '';
   for (let attempt = 0; attempt < 2; attempt++) {

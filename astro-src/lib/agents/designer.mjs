@@ -100,8 +100,8 @@ ${user_goal}`);
 async function designerGenerate(input, caller, opts = {}) {
   const maxProposals = opts.maxProposals ?? 6;
   const user = buildUserPrompt(input);
-  // R7.1 B.1.2: 注入 [方法论上下文] 块,stage=ideation(对应 defining-research-question.md)
-  const system = `${loadSkillContext("ideation")}\n\n${DESIGNER_SYSTEM_PROMPT}`;
+  // R7.1 B.1.2: 注入 [方法论上下文] 块,stage=experiment(对应 experiment-design.md)
+  const system = `${loadSkillContext("experiment")}\n\n${DESIGNER_SYSTEM_PROMPT}`;
   let raw = "";
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
