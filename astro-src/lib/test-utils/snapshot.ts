@@ -5,7 +5,7 @@
 // 提供 assertSnapshot 函数用于 LLM 输出稳定性测试。snapshot 存储在
 // astro-src/scripts/__snapshots__/*.json
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -99,7 +99,6 @@ export function assertSnapshot(
 /** 获取 snapshot 列表(用于清理或对比)。 */
 export function listSnapshots(): string[] {
   ensureSnapshotDir();
-  const { readdirSync } = require('node:fs');
   try {
     return readdirSync(SNAPSHOT_DIR)
       .filter((f: string) => f.endsWith('.json'))
@@ -111,7 +110,6 @@ export function listSnapshots(): string[] {
 
 /** 删除指定 snapshot。 */
 export function deleteSnapshot(name: string): void {
-  const { unlinkSync } = require('node:fs');
   const path = getSnapshotPath(name);
   try {
     unlinkSync(path);

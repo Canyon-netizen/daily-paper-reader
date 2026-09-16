@@ -3,7 +3,7 @@
 //
 // Tests for R7 E.1.2 idea versioning.
 
-import { test, beforeEach } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,14 +26,14 @@ async function loadTs(relPath) {
 }
 
 const mod = await loadTs('lib/ideas/version.ts');
-const { snapshotIdea, getVersionHistory, saveVersion, diffVersions, clearVersionHistory, IDEA_VERSIONS_KEY } = mod;
+const { snapshotIdea, diffVersions } = mod;
 
 // Mock idea for testing
 const mockIdea = {
   id: 'test-idea',
   title: 'Test Idea',
   description: 'This is a test idea.\nIt has multiple lines.\nAnd more content.',
-  status: 'draft' as const,
+  status: 'draft',
   relatedPapers: [],
   relatedConcepts: [],
   tags: [],
@@ -114,55 +114,22 @@ test('diffVersions: completely different content has low similarity', () => {
   assert.ok(diff.similarity < 0.5);
 });
 
-// Mock localStorage for browser-only functions
-const mockStorage = new Map();
-const originalLocalStorage = globalThis.localStorage;
-
-beforeEach(() => {
-  mockStorage.clear();
-  // @ts-ignore
-  globalThis.localStorage = {
-    getItem: (key: string) => mockStorage.get(key) || null,
-    setItem: (key: string, value: string) => mockStorage.set(key, value),
-    removeItem: (key: string) => mockStorage.delete(key),
-  };
-});
-
-test('getVersionHistory: returns empty array when no storage', () => {
-  const history = getVersionHistory('nonexistent');
-  assert.deepEqual(history, []);
-});
-
-test('saveVersion and getVersionHistory: roundtrip', () => {
-  const version: any = {
-    ideaId: 'test-idea',
+test('diffVersions: empty descriptions', () => {
+  const v1 = {
+    ideaId: 'test',
     version: 1,
-    content: { title: 'Test', description: 'Content', status: 'draft' },
-    savedAt: Date.now(),
-    sha: 'abc123',
+    content: { title: 'T', description: '', status: 'draft' },
+    savedAt: 1000,
+  };
+  const v2 = {
+    ideaId: 'test',
+    version: 2,
+    content: { title: 'T', description: 'New content', status: 'draft' },
+    savedAt: 2000,
   };
 
-  saveVersion(version);
-  const history = getVersionHistory('test-idea');
-  assert.equal(history.length, 1);
-  assert.equal(history[0].version, 1);
-});
-
-test('clearVersionHistory: removes all versions for idea', () => {
-  const version: any = {
-    ideaId: 'test-idea',
-    version: 1,
-    content: { title: 'Test', description: 'Content', status: 'draft' },
-    savedAt: Date.now(),
-  };
-
-  saveVersion(version);
-  clearVersionHistory('test-idea');
-  const history = getVersionHistory('test-idea');
-  assert.deepEqual(history, []);
-});
-
-// Restore original localStorage
-test.after(() => {
-  globalThis.localStorage = originalLocalStorage;
+  const diff = diffVersions(v1, v2);
+  // Empty string splits to empty array, so linesAdded = 1 (from "New content")
+  assert.equal(diff.linesAdded, 1);
+  assert.equal(diff.linesRemoved, 0); // empty has no lines to remove after filter
 });

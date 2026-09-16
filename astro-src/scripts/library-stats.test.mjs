@@ -35,7 +35,7 @@ const mockLibrary = {
   description: 'Test',
   descriptionZh: '测试',
   tags: ['task:rl', 'method:rlhf'],
-  dimension: 'task' as const,
+  dimension: 'task',
   curator: 'test',
   hue: 'blue',
 };

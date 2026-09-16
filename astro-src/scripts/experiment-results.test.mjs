@@ -3,11 +3,21 @@
 //
 // Tests for R7 E.2.3 experiment result tracking.
 
-import { test, beforeEach } from 'node:test';
+import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
+
+// Mock window before loading
+const mockStorage = new Map();
+globalThis.window = {
+  localStorage: {
+    getItem: (key) => mockStorage.get(key) || null,
+    setItem: (key, value) => mockStorage.set(key, value),
+    removeItem: (key) => mockStorage.delete(key),
+  }
+};
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -27,20 +37,6 @@ async function loadTs(relPath) {
 
 const mod = await loadTs('lib/experiments/results.ts');
 const { recordResult, getResults, computeDelta, clearResults, getResultSummary, genResultId } = mod;
-
-// Mock localStorage
-const mockStorage = new Map();
-const originalLocalStorage = globalThis.localStorage;
-
-beforeEach(() => {
-  mockStorage.clear();
-  // @ts-ignore
-  globalThis.localStorage = {
-    getItem: (key: string) => mockStorage.get(key) || null,
-    setItem: (key: string, value: string) => mockStorage.set(key, value),
-    removeItem: (key: string) => mockStorage.delete(key),
-  };
-});
 
 test('recordResult: creates result with ID and timestamp', () => {
   const result = recordResult('exp-1', {
@@ -118,9 +114,4 @@ test('genResultId: generates unique IDs', () => {
   const id1 = genResultId();
   const id2 = genResultId();
   assert.notEqual(id1, id2);
-});
-
-// Restore original localStorage
-test.after(() => {
-  globalThis.localStorage = originalLocalStorage;
 });

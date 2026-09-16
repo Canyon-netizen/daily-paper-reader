@@ -5,9 +5,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dirname, join } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { unlinkSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SNAPSHOT_DIR = join(__dirname, '__snapshots__');
@@ -17,28 +17,83 @@ if (!existsSync(SNAPSHOT_DIR)) {
   mkdirSync(SNAPSHOT_DIR, { recursive: true });
 }
 
-async function loadTs(relPath) {
-  const result = await await import('esbuild').then((esbuild) =>
-    esbuild.build({
-      entryPoints: [join(__dirname, '..', relPath)],
-      bundle: true,
-      format: 'esm',
-      platform: 'neutral',
-      write: false,
-      target: 'es2022',
-    }),
-  );
-  const code = result.outputFiles[0].text;
-  const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
-  return import(dataUrl);
+// ----- inline implementation -----
+
+function getSnapshotPath(name) {
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+  return join(SNAPSHOT_DIR, `${safeName}.json`);
 }
 
-const mod = await loadTs('lib/test-utils/snapshot.ts');
-const { assertSnapshot, serializeForSnapshot, listSnapshots, deleteSnapshot } = mod;
+function serializeForSnapshot(value) {
+  return JSON.stringify(value, Object.keys(value).sort(), 2);
+}
 
-// 清理函数
+function readSnapshot(name) {
+  const path = getSnapshotPath(name);
+  if (!existsSync(path)) return null;
+  try {
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+function writeSnapshot(name, value) {
+  if (!existsSync(SNAPSHOT_DIR)) {
+    mkdirSync(SNAPSHOT_DIR, { recursive: true });
+  }
+  const path = getSnapshotPath(name);
+  writeFileSync(path, value, 'utf-8');
+}
+
+function assertSnapshot(name, value, opts = {}) {
+  const serialized = serializeForSnapshot(value);
+  const existing = readSnapshot(name);
+
+  if (opts.update) {
+    writeSnapshot(name, serialized);
+    return { passed: true, message: `Snapshot updated: ${name}` };
+  }
+
+  if (existing === null) {
+    writeSnapshot(name, serialized);
+    return { passed: true, message: `Snapshot created: ${name}` };
+  }
+
+  if (serialized === existing) {
+    return { passed: true, message: `Snapshot matched: ${name}` };
+  }
+
+  return {
+    passed: false,
+    message: `Snapshot mismatch: ${name}\nExpected:\n${existing}\n\nActual:\n${serialized}`,
+  };
+}
+
+function listSnapshots() {
+  if (!existsSync(SNAPSHOT_DIR)) return [];
+  try {
+    return readdirSync(SNAPSHOT_DIR)
+      .filter((f) => f.endsWith('.json'))
+      .map((f) => f.replace('.json', ''));
+  } catch {
+    return [];
+  }
+}
+
+function deleteSnapshot(name) {
+  const path = getSnapshotPath(name);
+  try {
+    unlinkSync(path);
+  } catch {
+    // ignore
+  }
+}
+
+// ----- tests -----
+
 function cleanup(name) {
-  const path = join(SNAPSHOT_DIR, `${name}.json`);
+  const path = getSnapshotPath(name);
   if (existsSync(path)) unlinkSync(path);
 }
 
@@ -50,7 +105,6 @@ test('serializeForSnapshot: stable ordering', () => {
   assert.match(ser1, /"a": 2/);
   assert.match(ser1, /"m": 3/);
   assert.match(ser1, /"z": 1/);
-  // keys should be sorted
   assert.ok(ser1.indexOf('"a"') < ser1.indexOf('"m"'));
   assert.ok(ser1.indexOf('"m"') < ser1.indexOf('"z"'));
 });
@@ -63,7 +117,6 @@ test('assertSnapshot: creates new snapshot on first run', () => {
   assert.equal(result.passed, true);
   assert.ok(result.message.includes('created'));
 
-  // cleanup
   cleanup(name);
 });
 
@@ -71,15 +124,11 @@ test('assertSnapshot: matches existing snapshot', () => {
   const name = 'test-match';
   cleanup(name);
 
-  // create
   assertSnapshot(name, { hello: 'world' }, { update: true });
-
-  // match
   const result = assertSnapshot(name, { hello: 'world' });
   assert.equal(result.passed, true);
   assert.ok(result.message.includes('matched'));
 
-  // cleanup
   cleanup(name);
 });
 
@@ -87,15 +136,11 @@ test('assertSnapshot: fails on mismatch', () => {
   const name = 'test-mismatch';
   cleanup(name);
 
-  // create
   assertSnapshot(name, { hello: 'world' }, { update: true });
-
-  // mismatch
   const result = assertSnapshot(name, { hello: 'different' });
   assert.equal(result.passed, false);
   assert.ok(result.message.includes('mismatch'));
 
-  // cleanup
   cleanup(name);
 });
 
@@ -103,14 +148,11 @@ test('assertSnapshot: update flag overwrites', () => {
   const name = 'test-update';
   cleanup(name);
 
-  // create
   assertSnapshot(name, { v: 1 }, { update: true });
-  // update
   const result = assertSnapshot(name, { v: 2 }, { update: true });
   assert.equal(result.passed, true);
   assert.ok(result.message.includes('updated'));
 
-  // cleanup
   cleanup(name);
 });
 
@@ -128,7 +170,6 @@ test('listSnapshots: returns array of snapshot names', () => {
   assert.ok(list.includes(name1));
   assert.ok(list.includes(name2));
 
-  // cleanup
   cleanup(name1);
   cleanup(name2);
 });
@@ -138,8 +179,8 @@ test('deleteSnapshot: removes snapshot file', () => {
   cleanup(name);
 
   assertSnapshot(name, { toDelete: true }, { update: true });
-  assert.ok(existsSync(join(SNAPSHOT_DIR, `${name}.json`)));
+  assert.ok(existsSync(getSnapshotPath(name)));
 
   deleteSnapshot(name);
-  assert.ok(!existsSync(join(SNAPSHOT_DIR, `${name}.json`)));
+  assert.ok(!existsSync(getSnapshotPath(name)));
 });

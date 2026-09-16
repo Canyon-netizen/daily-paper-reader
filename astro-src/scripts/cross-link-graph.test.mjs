@@ -29,7 +29,7 @@ const mod = await loadTs('lib/libraries/cross-link-graph.ts');
 const { buildCrossLinkGraph } = mod;
 
 function makeLib(id, title = 'Test Lib') {
-  return { id, title, titleZh: title, description: '', descriptionZh: '', tags: [], dimension: 'task' as const, curator: 'test', hue: 'blue' };
+  return { id, title, titleZh: title, description: '', descriptionZh: '', tags: [], dimension: 'task', curator: 'test', hue: 'blue' };
 }
 
 function makePaper(id, title = 'Test Paper', opts = {}) {

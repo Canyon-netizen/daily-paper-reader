@@ -28,7 +28,7 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/ideas/from-paper.ts');
 const { createIdeaFromPaper, previewIdeaFromPaper } = mod;
 
-const samplePaper: any = {
+const samplePaper = {
   arxivId: '2501.12345',
   title: 'A Novel Method for Reinforcement Learning with Deep Networks',
   tldr: 'We propose a new RL algorithm that achieves state-of-the-art results.',
