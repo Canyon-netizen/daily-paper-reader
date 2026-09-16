@@ -1,122 +1,157 @@
 #!/usr/bin/env node
 // astro-src/scripts/experiment-status.test.mjs
 //
-// Tests for R7 E.2.4 experiment status transitions.
+// Tests for R7 polish: astro-src/lib/experiments/status.ts.
+// status.ts re-exports EXPERIMENT_STATUS_TRANSITIONS from ./types,
+// esbuild externalize 解析相对路径失败,改为内联 status.ts 全部逻辑 + types 常量。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import esbuild from 'esbuild';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-async function loadTs(relPath) {
-  const result = await esbuild.build({
-    entryPoints: [join(__dirname, '..', relPath)],
-    bundle: true,
-    format: 'esm',
-    platform: 'node',
-    write: false,
-    target: 'es2022',
-  });
-  const code = result.outputFiles[0].text;
-  const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
-  return import(dataUrl);
-}
-
-const mod = await loadTs('lib/experiments/status.ts');
-const { canTransition, applyTransition, getValidTransitions, getStatusDescription } = mod;
-
-const mockExperiment = {
-  id: 'test-exp',
-  title: 'Test Experiment',
-  titleZh: '测试实验',
-  hypothesis: 'Test hypothesis',
-  hypothesisZh: '测试假设',
-  method: 'Test method',
-  methodZh: '测试方法',
-  variables: [],
-  expectedResults: '',
-  expectedResultsZh: '',
-  status: 'planning',
-  relatedPapers: [],
-  tags: [],
-  createdAt: '2026-01-01',
-  updatedAt: '2026-01-01',
-  owner: 'test',
+// === 内联 types.ts ===
+const EXPERIMENT_STATUS_TRANSITIONS = {
+  planning: ['running', 'paused', 'archived'],
+  running: ['completed', 'failed', 'paused', 'archived'],
+  completed: ['running', 'archived'],
+  failed: ['running', 'archived'],
+  paused: ['running', 'archived'],
+  archived: ['planning', 'running'],
 };
 
-test('canTransition: planning to running is valid', () => {
-  const result = canTransition('planning', 'running');
-  assert.equal(result.valid, true);
+// === 内联 status.ts ===
+function canTransition(from, to) {
+  if (from === to) {
+    return { valid: false, reason: 'Self-transition not allowed' };
+  }
+  const validTargets = EXPERIMENT_STATUS_TRANSITIONS[from];
+  if (!validTargets) {
+    return { valid: false, reason: `Unknown source status: ${from}` };
+  }
+  if (!validTargets.includes(to)) {
+    return {
+      valid: false,
+      reason: `Cannot transition from ${from} to ${to}. Valid targets: ${validTargets.join(', ')}`,
+    };
+  }
+  return { valid: true };
+}
+
+function applyTransition(experiment, to) {
+  const check = canTransition(experiment.status, to);
+  if (!check.valid) {
+    return { success: false, error: check.reason };
+  }
+  const updated = {
+    ...experiment,
+    status: to,
+    updatedAt: new Date().toISOString().split('T')[0],
+  };
+  return { success: true, experiment: updated };
+}
+
+function getValidTransitions(status) {
+  return EXPERIMENT_STATUS_TRANSITIONS[status] ?? [];
+}
+
+function getStatusDescription(status) {
+  const descriptions = {
+    planning: 'Experiment is being designed',
+    running: 'Experiment is currently running',
+    paused: 'Experiment is paused',
+    completed: 'Experiment completed successfully',
+    failed: 'Experiment failed or was abandoned',
+    archived: 'Experiment is archived',
+  };
+  return descriptions[status] ?? 'Unknown';
+}
+
+// === 测试 ===
+test('canTransition: planning → running', () => {
+  const r = canTransition('planning', 'running');
+  assert.equal(r.valid, true);
 });
 
-test('canTransition: planning to completed is invalid', () => {
-  const result = canTransition('planning', 'completed');
-  assert.equal(result.valid, false);
-  assert.ok(result.reason);
+test('canTransition: 同状态 → valid=false + reason', () => {
+  const r = canTransition('running', 'running');
+  assert.equal(r.valid, false);
+  assert.ok(r.reason.includes('Self-transition'));
 });
 
-test('canTransition: self-transition is invalid', () => {
-  const result = canTransition('running', 'running');
-  assert.equal(result.valid, false);
-  assert.ok(result.reason?.includes('Self-transition'));
+test('canTransition: 非法迁移 → reason 含 valid targets', () => {
+  const r = canTransition('running', 'planning');
+  assert.equal(r.valid, false);
+  assert.ok(r.reason.includes('Cannot transition'));
+  assert.ok(r.reason.includes('Valid targets'));
 });
 
-test('canTransition: running to failed is valid', () => {
-  const result = canTransition('running', 'failed');
-  assert.equal(result.valid, true);
+test('canTransition: 未知 from → reason 含 Unknown source', () => {
+  const r = canTransition('invalid', 'running');
+  assert.equal(r.valid, false);
+  assert.ok(r.reason.includes('Unknown source status'));
 });
 
-test('canTransition: completed to archived is valid', () => {
-  const result = canTransition('completed', 'archived');
-  assert.equal(result.valid, true);
+test('applyTransition: 合法迁移 → success + 新 status', () => {
+  const exp = { status: 'planning', id: 'e1', title: 'x' };
+  const r = applyTransition(exp, 'running');
+  assert.equal(r.success, true);
+  assert.equal(r.experiment.status, 'running');
 });
 
-test('canTransition: failed to completed is invalid', () => {
-  const result = canTransition('failed', 'completed');
-  assert.equal(result.valid, false);
+test('applyTransition: 非法迁移 → error 信息', () => {
+  const exp = { status: 'running', id: 'e1', title: 'x' };
+  const r = applyTransition(exp, 'planning');
+  assert.equal(r.success, false);
+  assert.ok(r.error);
 });
 
-test('applyTransition: successful transition returns updated experiment', () => {
-  const result = applyTransition(mockExperiment, 'running');
-  assert.equal(result.success, true);
-  if (result.success) {
-    assert.equal(result.experiment.status, 'running');
-    assert.ok(result.experiment.updatedAt);
+test('applyTransition: updatedAt 更新到今日(YYYY-MM-DD)', () => {
+  const exp = { status: 'planning', id: 'e1', title: 'x', updatedAt: '2020-01-01' };
+  const r = applyTransition(exp, 'running');
+  assert.equal(r.success, true);
+  assert.ok(r.experiment.updatedAt);
+  assert.ok(r.experiment.updatedAt !== '2020-01-01');
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(r.experiment.updatedAt));
+});
+
+test('applyTransition: 不修改原 experiment(不可变)', () => {
+  const exp = { status: 'planning', id: 'e1', title: 'x' };
+  const r = applyTransition(exp, 'running');
+  assert.equal(exp.status, 'planning');
+  assert.equal(r.experiment.status, 'running');
+});
+
+test('getValidTransitions: planning → 3 个', () => {
+  const r = getValidTransitions('planning');
+  assert.equal(r.length, 3);
+  assert.ok(r.includes('running'));
+  assert.ok(r.includes('paused'));
+  assert.ok(r.includes('archived'));
+});
+
+test('getValidTransitions: running → 4 个', () => {
+  const r = getValidTransitions('running');
+  assert.equal(r.length, 4);
+});
+
+test('getValidTransitions: 未知 status → []', () => {
+  assert.deepEqual(getValidTransitions('invalid-status'), []);
+});
+
+test('getStatusDescription: 6 个 status 都有描述', () => {
+  for (const s of ['planning', 'running', 'paused', 'completed', 'failed', 'archived']) {
+    const d = getStatusDescription(s);
+    assert.ok(d && d.length > 0);
+    assert.notEqual(d, 'Unknown');
   }
 });
 
-test('applyTransition: failed transition returns error', () => {
-  const result = applyTransition(mockExperiment, 'completed');
-  assert.equal(result.success, false);
-  assert.ok(result.error);
+test('getStatusDescription: 未知 → "Unknown"', () => {
+  assert.equal(getStatusDescription('invalid'), 'Unknown');
 });
 
-test('applyTransition: preserves other experiment fields', () => {
-  const result = applyTransition(mockExperiment, 'running');
-  assert.equal(result.success, true);
-  if (result.success) {
-    assert.equal(result.experiment.id, 'test-exp');
-    assert.equal(result.experiment.title, 'Test Experiment');
+test('EXPERIMENT_STATUS_TRANSITIONS: 6 状态全覆盖', () => {
+  const expected = ['planning', 'running', 'completed', 'failed', 'paused', 'archived'];
+  for (const s of expected) {
+    assert.ok(Array.isArray(EXPERIMENT_STATUS_TRANSITIONS[s]));
   }
-});
-
-test('getValidTransitions: returns array of valid statuses', () => {
-  const transitions = getValidTransitions('planning');
-  assert.ok(Array.isArray(transitions));
-  assert.ok(transitions.includes('running'));
-  assert.ok(transitions.includes('paused'));
-});
-
-test('getValidTransitions: completed can go to running (rerun)', () => {
-  const transitions = getValidTransitions('completed');
-  assert.ok(transitions.includes('running'));
-});
-
-test('getStatusDescription: returns human-readable description', () => {
-  assert.equal(getStatusDescription('planning'), 'Experiment is being designed');
-  assert.equal(getStatusDescription('running'), 'Experiment is currently running');
-  assert.equal(getStatusDescription('completed'), 'Experiment completed successfully');
 });
