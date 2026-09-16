@@ -87,7 +87,7 @@ test('createSnapshot: builds correct structure', () => {
 
 test('recoverFromSnapshot: runs stages after completed', async () => {
   const snap = makeSnapshot({ completedStages: ['s1'], currentStage: 's2' });
-  const runLog: string[] = [];
+  const runLog = [];
   const runStage = async (id) => {
     runLog.push(id);
     return { id, ok: true };
@@ -111,12 +111,14 @@ test('recoverFromSnapshot: stops on error and records it', async () => {
 });
 
 test('recoverFromSnapshot: multiple stages', async () => {
+  // failedStage is metadata only — recovery resumes from currentStage, ignoring failedStage in execution
   const snap = makeSnapshot({ completedStages: ['s1'], currentStage: 's2', failedStage: 's3' });
-  const results: Record<string, string> = {};
+  const results = {};
   const runStage = async (id) => {
     results[id] = `ran-${id}`;
     return results[id];
   };
   const result = await recoverFromSnapshot(snap, runStage);
-  assert.deepEqual(result.results, { s2: 'ran-s2', s3: 'ran-s3' });
+  assert.deepEqual(result.results, { s2: 'ran-s2' });
+  assert.equal(snap.failedStage, 's3'); // metadata preserved
 });

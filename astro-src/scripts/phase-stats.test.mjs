@@ -115,24 +115,24 @@ test('computePhaseStats: sorts by count descending', () => {
 
 test('getTotalPhaseItems: sums all counts', () => {
   const stats = [
-    { phase: 'literature' as const, count: 10, latestAt: null },
-    { phase: 'idea' as const, count: 5, latestAt: null },
-    { phase: 'experiment' as const, count: 3, latestAt: null },
+    { phase: 'literature', count: 10, latestAt: null },
+    { phase: 'idea', count: 5, latestAt: null },
+    { phase: 'experiment', count: 3, latestAt: null },
   ];
   assert.equal(getTotalPhaseItems(stats), 18);
 });
 
 test('getDominantPhase: returns phase with most items', () => {
   const stats = [
-    { phase: 'literature' as const, count: 10, latestAt: null },
-    { phase: 'idea' as const, count: 5, latestAt: null },
+    { phase: 'literature', count: 10, latestAt: null },
+    { phase: 'idea', count: 5, latestAt: null },
   ];
   assert.equal(getDominantPhase(stats), 'literature');
 });
 
 test('getDominantPhase: returns null when all zero', () => {
   const stats = [
-    { phase: 'literature' as const, count: 0, latestAt: null },
+    { phase: 'literature', count: 0, latestAt: null },
   ];
   assert.equal(getDominantPhase(stats), null);
 });

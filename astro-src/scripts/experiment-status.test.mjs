@@ -39,7 +39,7 @@ const mockExperiment = {
   variables: [],
   expectedResults: '',
   expectedResultsZh: '',
-  status: 'planning' as const,
+  status: 'planning',
   relatedPapers: [],
   tags: [],
   createdAt: '2026-01-01',

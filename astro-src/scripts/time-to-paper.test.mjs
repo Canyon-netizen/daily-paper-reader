@@ -29,7 +29,7 @@ const mod = await loadTs('lib/dashboard/time-to-paper.ts');
 const { computeTimeToPaper, aggregateTimeToPaper, addStatusTransition, markPublished } = mod;
 
 // Helper to create timestamp N days ago
-const daysAgo = (n: number) => Date.now() - n * 24 * 60 * 60 * 1000;
+const daysAgo = (n) => Date.now() - n * 24 * 60 * 60 * 1000;
 
 test('computeTimeToPaper: calculates days from first seen', () => {
   const timeline = {
@@ -65,19 +65,24 @@ test('computeTimeToPaper: calculates days per phase', () => {
 });
 
 test('computeTimeToPaper: identifies bottlenecks', () => {
+  // Each phase's duration = (next transition ts) - (this transition ts).
+  // Sorted transitions: literature at day 28, idea at day 10, experiment at day 5.
+  //   literature lasts 18d (until idea starts), idea lasts 5d, experiment lasts 5d
+  //   (until publishedAt = day 0).
+  // Bottleneck: literature (longest).
   const timeline = {
     arxivId: '2501.00001',
     firstSeenAt: daysAgo(30),
     statusTransitions: [
-      { phase: 'literature', ts: daysAgo(28) }, // 2 days
-      { phase: 'idea', ts: daysAgo(10) },        // 18 days - longest
-      { phase: 'experiment', ts: daysAgo(5) },   // 5 days
+      { phase: 'literature', ts: daysAgo(28) },
+      { phase: 'idea', ts: daysAgo(10) },
+      { phase: 'experiment', ts: daysAgo(5) },
     ],
     publishedAt: daysAgo(0),
   };
 
   const result = computeTimeToPaper(timeline);
-  assert.ok(result.bottlenecks.includes('idea'));
+  assert.ok(result.bottlenecks.includes('literature'));
 });
 
 test('computeTimeToPaper: uses now if not published', () => {
