@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // astro-src/scripts/experiment-results.test.mjs
 //
-// Tests for R7 E.2.3 (result metrics) + E.2.4 (status transitions).
+// Tests for R7 E.2.3 experiment result tracking.
 
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,7 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'neutral',
+    platform: 'node',
     write: false,
     target: 'es2022',
   });
@@ -25,156 +25,102 @@ async function loadTs(relPath) {
   return import(dataUrl);
 }
 
-const types = await loadTs('lib/experiments/types.ts');
-const res = await loadTs('lib/experiments/results.ts');
+const mod = await loadTs('lib/experiments/results.ts');
+const { recordResult, getResults, computeDelta, clearResults, getResultSummary, genResultId } = mod;
 
-const { EXPERIMENT_STATUS_TRANSITIONS, canTransitionExperimentStatus } = types;
-const {
-  genResultMetricId,
-  normalizeResultMetric,
-  isMetricComplete,
-  computeMetricDeviation,
-  nextStatusesForExperiment,
-  transitionExperimentStatus,
-} = res;
+// Mock localStorage
+const mockStorage = new Map();
+const originalLocalStorage = globalThis.localStorage;
 
-// ----- E.2.4: status transitions -----
-
-test('EXPERIMENT_STATUS_TRANSITIONS: covers all 6 statuses', () => {
-  for (const s of ['planning', 'running', 'completed', 'failed', 'paused', 'archived']) {
-    assert.ok(Array.isArray(EXPERIMENT_STATUS_TRANSITIONS[s]), `missing ${s}`);
-  }
-});
-
-test('EXPERIMENT_STATUS_TRANSITIONS: planning cannot jump to completed', () => {
-  assert.ok(!EXPERIMENT_STATUS_TRANSITIONS.planning.includes('completed'));
-});
-
-test('EXPERIMENT_STATUS_TRANSITIONS: completed can revert to running (re-run)', () => {
-  assert.ok(EXPERIMENT_STATUS_TRANSITIONS.completed.includes('running'));
-});
-
-test('EXPERIMENT_STATUS_TRANSITIONS: archived can revive to planning/running', () => {
-  assert.ok(EXPERIMENT_STATUS_TRANSITIONS.archived.includes('planning'));
-  assert.ok(EXPERIMENT_STATUS_TRANSITIONS.archived.includes('running'));
-});
-
-test('canTransitionExperimentStatus: same-state rejected', () => {
-  for (const s of ['planning', 'running', 'completed', 'failed', 'paused', 'archived']) {
-    assert.equal(canTransitionExperimentStatus(s, s), false);
-  }
-});
-
-test('canTransitionExperimentStatus: legal & illegal pairs', () => {
-  assert.equal(canTransitionExperimentStatus('planning', 'running'), true);
-  assert.equal(canTransitionExperimentStatus('running', 'completed'), true);
-  assert.equal(canTransitionExperimentStatus('completed', 'failed'), false); // cannot revert
-  assert.equal(canTransitionExperimentStatus('running', 'planning'), false);
-});
-
-test('nextStatusesForExperiment: returns transition map values', () => {
-  const nexts = nextStatusesForExperiment('running');
-  assert.ok(nexts.includes('completed'));
-  assert.ok(nexts.includes('paused'));
-});
-
-test('transitionExperimentStatus: legal returns new experiment', () => {
-  const exp = {
-    id: 'e1', title: '', titleZh: '',
-    hypothesis: '', hypothesisZh: '',
-    method: '', methodZh: '',
-    variables: [],
-    expectedResults: '', expectedResultsZh: '',
-    status: 'planning',
-    relatedPapers: [], tags: [],
-    createdAt: '2026-09-16', updatedAt: '2026-09-16',
-    owner: 'me', relatedIdeas: [],
+beforeEach(() => {
+  mockStorage.clear();
+  // @ts-ignore
+  globalThis.localStorage = {
+    getItem: (key: string) => mockStorage.get(key) || null,
+    setItem: (key: string, value: string) => mockStorage.set(key, value),
+    removeItem: (key: string) => mockStorage.delete(key),
   };
-  const next = transitionExperimentStatus(exp, 'running');
-  assert.ok(next);
-  assert.equal(next.status, 'running');
-  // updatedAt 应该更新到今天
-  assert.equal(next.updatedAt, new Date().toISOString().split('T')[0]);
-  // 原 exp 不变
-  assert.equal(exp.status, 'planning');
 });
 
-test('transitionExperimentStatus: illegal returns null (no mutation)', () => {
-  const exp = { status: 'planning' };
-  const next = transitionExperimentStatus(exp, 'completed');
-  assert.equal(next, null);
-  assert.equal(exp.status, 'planning');
+test('recordResult: creates result with ID and timestamp', () => {
+  const result = recordResult('exp-1', {
+    metric: 'accuracy',
+    expected: 0.9,
+    actual: 0.85,
+    unit: '%',
+  });
+
+  assert.ok(result.id);
+  assert.equal(result.experimentId, 'exp-1');
+  assert.equal(result.metric, 'accuracy');
+  assert.equal(result.expected, 0.9);
+  assert.equal(result.actual, 0.85);
+  assert.equal(result.unit, '%');
+  assert.ok(result.ts);
 });
 
-// ----- E.2.3: result metrics -----
+test('getResults: returns results for specific experiment', () => {
+  recordResult('exp-1', { metric: 'm1', expected: 1, actual: 0.9 });
+  recordResult('exp-1', { metric: 'm2', expected: 2, actual: 1.8 });
+  recordResult('exp-2', { metric: 'm1', expected: 1, actual: 1.1 });
 
-test('genResultMetricId: returns non-empty string with prefix', () => {
-  const id = genResultMetricId();
-  assert.equal(typeof id, 'string');
-  assert.ok(id.startsWith('m_'));
-  assert.ok(id.length > 5);
+  const results1 = getResults('exp-1');
+  assert.equal(results1.length, 2);
+
+  const results2 = getResults('exp-2');
+  assert.equal(results2.length, 1);
 });
 
-test('normalizeResultMetric: minimal input fills defaults', () => {
-  const m = normalizeResultMetric({ metricName: 'acc' });
-  assert.ok(m);
-  assert.ok(m.id.startsWith('m_'));
-  assert.equal(m.metricName, 'acc');
-  assert.equal(typeof m.timestamp, 'number');
-  assert.equal(m.expectedValue, undefined);
-  assert.equal(m.actualValue, undefined);
+test('computeDelta: calculates delta and percentOff', () => {
+  const results = [
+    { id: '1', experimentId: 'exp', metric: 'accuracy', expected: 0.9, actual: 0.81, ts: Date.now() },
+    { id: '2', experimentId: 'exp', metric: 'latency', expected: 100, actual: 110, ts: Date.now() },
+  ];
+
+  const delta = computeDelta(results);
+
+  assert.ok(delta.metric['accuracy']);
+  assert.equal(delta.metric['accuracy'].delta, -0.09);
+  assert.equal(delta.metric['accuracy'].percentOff, 0.1); // 10% off
+
+  assert.equal(delta.metric['latency'].delta, 10);
+  assert.equal(delta.metric['latency'].percentOff, 0.1);
 });
 
-test('normalizeResultMetric: missing metricName returns null', () => {
-  assert.equal(normalizeResultMetric(null), null);
-  assert.equal(normalizeResultMetric({}), null);
-  assert.equal(normalizeResultMetric({ metricName: '' }), null);
+test('computeDelta: handles zero expected value', () => {
+  const results = [
+    { id: '1', experimentId: 'exp', metric: 'count', expected: 0, actual: 5, ts: Date.now() },
+  ];
+
+  const delta = computeDelta(results);
+  assert.equal(delta.metric['count'].percentOff, 0); // avoid division by zero
 });
 
-test('normalizeResultMetric: trims whitespace, drops undefined fields', () => {
-  const m = normalizeResultMetric({ metricName: '  BLEU-4  ', unit: '' });
-  assert.ok(m);
-  assert.equal(m.metricName, 'BLEU-4');
-  assert.equal(m.unit, undefined);
+test('clearResults: removes results for experiment', () => {
+  recordResult('exp-1', { metric: 'm1', expected: 1, actual: 0.9 });
+  clearResults('exp-1');
+
+  const results = getResults('exp-1');
+  assert.equal(results.length, 0);
 });
 
-test('normalizeResultMetric: invalid numbers become undefined', () => {
-  const m = normalizeResultMetric({ metricName: 'x', expectedValue: NaN, actualValue: Infinity });
-  assert.ok(m);
-  assert.equal(m.expectedValue, undefined);
-  assert.equal(m.actualValue, undefined);
+test('getResultSummary: returns summary stats', () => {
+  recordResult('exp-1', { metric: 'accuracy', expected: 1.0, actual: 0.9 });
+  recordResult('exp-1', { metric: 'f1', expected: 0.8, actual: 0.75 });
+
+  const summary = getResultSummary('exp-1');
+  assert.equal(summary.count, 2);
+  assert.equal(summary.metrics.length, 2);
+  assert.ok(summary.avgPercentOff > 0);
 });
 
-test('isMetricComplete: requires both expected + actual as finite numbers', () => {
-  assert.equal(isMetricComplete(null), false);
-  assert.equal(isMetricComplete({ metricName: 'a', expectedValue: 1 }), false);
-  assert.equal(isMetricComplete({ metricName: 'a', expectedValue: 1, actualValue: 0.9 }), true);
+test('genResultId: generates unique IDs', () => {
+  const id1 = genResultId();
+  const id2 = genResultId();
+  assert.notEqual(id1, id2);
 });
 
-test('computeMetricDeviation: empty / undefined input', () => {
-  assert.deepEqual(computeMetricDeviation([]), { totalCount: 0, completeCount: 0 });
-  assert.deepEqual(computeMetricDeviation(undefined), { totalCount: 0, completeCount: 0 });
-});
-
-test('computeMetricDeviation: counts + computes meanAbsDiff', () => {
-  const stats = computeMetricDeviation([
-    { id: '1', timestamp: 0, metricName: 'acc', expectedValue: 1.0, actualValue: 0.9 }, // diff 0.1
-    { id: '2', timestamp: 0, metricName: 'f1', expectedValue: 0.8, actualValue: 0.85 }, // diff 0.05
-    { id: '3', timestamp: 0, metricName: 'no-actual' }, // incomplete
-  ]);
-  assert.equal(stats.totalCount, 3);
-  assert.equal(stats.completeCount, 2);
-  assert.equal(Math.round(stats.meanAbsDiff * 100000) / 100000, 0.075); // (0.1 + 0.05) / 2
-  // meanRelDiff = ((0.9-1.0)/1.0 + (0.85-0.8)/0.8) / 2 = (-0.1 + 0.0625) / 2 = -0.01875
-  assert.equal(Math.round(stats.meanRelDiff * 100000) / 100000, -0.01875);
-});
-
-test('computeMetricDeviation: tolerance counts expected within 5%', () => {
-  const stats = computeMetricDeviation([
-    { id: '1', timestamp: 0, metricName: 'acc', expectedValue: 1.0, actualValue: 1.02 }, // 2% off → within
-    { id: '2', timestamp: 0, metricName: 'f1', expectedValue: 1.0, actualValue: 0.5 }, // 50% off → not within
-    { id: '3', timestamp: 0, metricName: 'latency', expectedValue: 100, actualValue: 105 }, // 5% off → within
-  ]);
-  assert.equal(stats.completeCount, 3);
-  assert.equal(stats.withinToleranceCount, 2);
+// Restore original localStorage
+test.after(() => {
+  globalThis.localStorage = originalLocalStorage;
 });

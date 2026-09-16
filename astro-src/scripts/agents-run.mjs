@@ -498,6 +498,28 @@ if (args.help) {
 }
 
 // ---------------------------------------------------------------------------
+// B.1.7: Startup research-skills detection
+// ---------------------------------------------------------------------------
+
+function logResearchSkills() {
+  const SKILL_DIR = 'docs/research-skills';
+  const { readdirSync, existsSync, statSync } = require('node:fs');
+  if (!existsSync(SKILL_DIR)) return;
+  try {
+    const files = readdirSync(SKILL_DIR).filter(f => f.endsWith('.md') && !f.startsWith('_'));
+    if (files.length > 0) {
+      const skillNames = files.map(f => f.replace('.md', '')).join(', ');
+      console.error(`[agents] ${files.length} research skills loaded: ${skillNames}`);
+    }
+  } catch (e) {
+    // graceful: skip if cannot read
+  }
+}
+
+// Run skills detection early (before any agent runs)
+logResearchSkills();
+
+// ---------------------------------------------------------------------------
 // LLM caller(OpenAI-compatible chat completions via fetch)
 // ---------------------------------------------------------------------------
 

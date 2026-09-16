@@ -1,130 +1,160 @@
 // astro-src/lib/experiments/results.ts
 //
-// R7 E.2.3 / E.2.4: 结构化 result metric + experiment status 转换辅助。
+// R7 E.2.3: Experiment result tracking.
 //
-// 目的:把「experiment.status: from→to 是否合法」「result metric 是否完整」
-// 等纯函数提到 lib/,让 UI 只负责渲染和事件,逻辑可单测。
+// Track expected vs actual results for experiments.
 
-import type {
-  Experiment,
-  ExperimentResultMetric,
-  ExperimentStatus,
-} from './types';
-import {
-  EXPERIMENT_STATUS_TRANSITIONS,
-  canTransitionExperimentStatus,
-} from './types';
+import type { Experiment } from './types';
 
-/** 重新导出 transition map / helper,方便 UI 一处导入。 */
-export { EXPERIMENT_STATUS_TRANSITIONS, canTransitionExperimentStatus };
+/** Experiment result record. */
+export interface ExperimentResult {
+  id: string;
+  experimentId: string;
+  metric: string;
+  expected: number;
+  actual: number;
+  unit?: string;
+  ts: number;
+}
 
-/** 生成一个 metric id —— 够 unique,但 SSR-safe(不依赖 crypto.randomUUID 全局)。 */
-export function genResultMetricId(): string {
-  return `m_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+/** Storage for experiment results. */
+const RESULTS_KEY = 'dpr_experiment_results_v1';
+
+/** Delta computation result for a metric. */
+export interface MetricDelta {
+  expected: number;
+  actual: number;
+  delta: number;
+  percentOff: number;
+}
+
+/** Delta computation result for all metrics. */
+export interface ComputeDeltaResult {
+  metric: Record<string, MetricDelta>;
 }
 
 /**
- * 把 metric 标准化 —— 缺字段填默认值,多余字段剔除。
- * 返回值是新的对象,不修改原 metric。
+ * Generate a unique result ID.
  */
-export function normalizeResultMetric(m: Partial<ExperimentResultMetric> | null | undefined): ExperimentResultMetric | null {
-  if (!m || typeof m !== 'object') return null;
-  const metricName = typeof m.metricName === 'string' ? m.metricName.trim() : '';
-  if (!metricName) return null;
-  const out: ExperimentResultMetric = {
-    id: typeof m.id === 'string' && m.id ? m.id : genResultMetricId(),
-    timestamp: typeof m.timestamp === 'number' && Number.isFinite(m.timestamp) ? m.timestamp : Date.now(),
-    metricName,
-    expectedValue: typeof m.expectedValue === 'number' && Number.isFinite(m.expectedValue) ? m.expectedValue : undefined,
-    actualValue: typeof m.actualValue === 'number' && Number.isFinite(m.actualValue) ? m.actualValue : undefined,
-    unit: typeof m.unit === 'string' && m.unit ? m.unit : undefined,
-    notes: typeof m.notes === 'string' && m.notes ? m.notes : undefined,
-  };
-  // 清理掉 undefined 字段
-  if (out.expectedValue === undefined) delete out.expectedValue;
-  if (out.actualValue === undefined) delete out.actualValue;
-  if (out.unit === undefined) delete out.unit;
-  if (out.notes === undefined) delete out.notes;
-  return out;
-}
-
-/** 判断一个 metric 是否「完整」(至少 expected+actual 都有 number 值)。 */
-export function isMetricComplete(m: ExperimentResultMetric | null | undefined): boolean {
-  if (!m) return false;
-  return typeof m.expectedValue === 'number'
-    && typeof m.actualValue === 'number'
-    && Number.isFinite(m.expectedValue)
-    && Number.isFinite(m.actualValue);
+export function genResultId(): string {
+  return `r_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
 /**
- * 计算一组完整 metrics 的偏差统计:
- *   - meanAbsDiff  = mean(|actual - expected|)
- *   - meanRelDiff  = mean((actual - expected) / max(|expected|, ε))
- *   - withinTolerance = count(within 5%)
- *   - totalCount, completeCount
+ * Record a result for an experiment.
  *
- * 只统计 isMetricComplete 的 metrics。
+ * @param experimentId - The experiment ID
+ * @param result - The result to record
+ * @returns The recorded result with ID
  */
-export interface MetricDeviationStats {
-  totalCount: number;
-  completeCount: number;
-  meanAbsDiff?: number;
-  meanRelDiff?: number;
-  withinToleranceCount?: number;
-}
-
-export function computeMetricDeviation(
-  metrics: readonly ExperimentResultMetric[] | undefined,
-  toleranceRel = 0.05,
-): MetricDeviationStats {
-  if (!metrics || metrics.length === 0) {
-    return { totalCount: 0, completeCount: 0 };
-  }
-  let complete = 0;
-  let absSum = 0;
-  let relSum = 0;
-  let within = 0;
-  for (const m of metrics) {
-    if (!isMetricComplete(m)) continue;
-    complete++;
-    const diff = (m.actualValue as number) - (m.expectedValue as number);
-    const exp = m.expectedValue as number;
-    absSum += Math.abs(diff);
-    if (Math.abs(exp) > 1e-9) {
-      relSum += diff / exp;
-    }
-    if (exp !== 0 && Math.abs(diff / exp) <= toleranceRel) within++;
-  }
-  if (complete === 0) {
-    return { totalCount: metrics.length, completeCount: 0 };
-  }
-  return {
-    totalCount: metrics.length,
-    completeCount: complete,
-    meanAbsDiff: absSum / complete,
-    meanRelDiff: relSum / complete,
-    withinToleranceCount: within,
+export function recordResult(
+  experimentId: string,
+  result: Omit<ExperimentResult, 'id' | 'experimentId' | 'ts'>
+): ExperimentResult {
+  const fullResult: ExperimentResult = {
+    id: genResultId(),
+    experimentId,
+    metric: result.metric,
+    expected: result.expected,
+    actual: result.actual,
+    unit: result.unit,
+    ts: Date.now(),
   };
-}
 
-/** 拿到一个 experiment 状态可去的下一状态列表。 */
-export function nextStatusesForExperiment(s: ExperimentStatus): ExperimentStatus[] {
-  return EXPERIMENT_STATUS_TRANSITIONS[s] ?? [];
+  if (typeof window !== 'undefined') {
+    const results = getAllResults();
+    results.push(fullResult);
+    localStorage.setItem(RESULTS_KEY, JSON.stringify(results));
+  }
+
+  return fullResult;
 }
 
 /**
- * 尝试修改 experiment 的 status。返回新 experiment(不可变),或者 null
- * 表示转换非法(也不修改原对象)。
+ * Get all results for an experiment.
+ *
+ * @param experimentId - The experiment ID
+ * @returns Array of results
  */
-export function transitionExperimentStatus(
-  exp: Experiment,
-  to: ExperimentStatus,
-): Experiment | null {
-  if (!canTransitionExperimentStatus(exp.status, to)) return null;
+export function getResults(experimentId: string): ExperimentResult[] {
+  if (typeof window === 'undefined') return [];
+
+  const all = getAllResults();
+  return all.filter((r) => r.experimentId === experimentId);
+}
+
+/**
+ * Get all results from storage.
+ */
+function getAllResults(): ExperimentResult[] {
+  if (typeof window === 'undefined') return [];
+
+  try {
+    const raw = localStorage.getItem(RESULTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Compute delta between expected and actual for a set of results.
+ *
+ * @param results - Array of results
+ * @returns Delta computation result
+ */
+export function computeDelta(results: ExperimentResult[]): ComputeDeltaResult {
+  const metric: Record<string, MetricDelta> = {};
+
+  for (const r of results) {
+    const delta = r.actual - r.expected;
+    const percentOff = r.expected !== 0 ? Math.abs(delta / r.expected) : 0;
+
+    metric[r.metric] = {
+      expected: r.expected,
+      actual: r.actual,
+      delta,
+      percentOff: Math.round(percentOff * 10000) / 10000, // 4 decimal places
+    };
+  }
+
+  return { metric };
+}
+
+/**
+ * Clear all results for an experiment.
+ *
+ * @param experimentId - The experiment ID
+ */
+export function clearResults(experimentId: string): void {
+  if (typeof window === 'undefined') return;
+
+  const all = getAllResults();
+  const filtered = all.filter((r) => r.experimentId !== experimentId);
+  localStorage.setItem(RESULTS_KEY, JSON.stringify(filtered));
+}
+
+/**
+ * Get summary stats for an experiment.
+ */
+export function getResultSummary(experimentId: string): {
+  count: number;
+  avgPercentOff: number;
+  metrics: string[];
+} {
+  const results = getResults(experimentId);
+  const delta = computeDelta(results);
+
+  const metrics = Object.keys(delta.metric);
+  const percentOffs = metrics.map((m) => delta.metric[m].percentOff);
+  const avgPercentOff =
+    percentOffs.length > 0
+      ? percentOffs.reduce((a, b) => a + b, 0) / percentOffs.length
+      : 0;
+
   return {
-    ...exp,
-    status: to,
-    updatedAt: new Date().toISOString().split('T')[0],
+    count: results.length,
+    avgPercentOff: Math.round(avgPercentOff * 10000) / 10000,
+    metrics,
   };
 }

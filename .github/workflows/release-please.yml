@@ -1,0 +1,47 @@
+# R7 I.3.2: release-please workflow
+#
+# 在 push 到 main 时运行,自动根据 conventional commits 生成 changelog
+# 和版本号更新。
+
+name: release-please
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/release-please-action@v4
+        with:
+          # token 默认用 GITHUB_TOKEN,不需要显式配置
+          release-type: node
+          default-branch: main
+          # 用 config 文件
+          config-file: .github/release-please.yml
+          # 输出文件
+          output-file: RELEASE_PLEASE_DRAFT
+        id: release
+
+      # 可选:自动创建 GitHub Release
+      # - 如果想手动确认,可以把下面这段注释掉
+      # - release-please 会创建 PR,合并后才触发 actual release
+      # - 这里只在 release-please action 完成后跑
+      # - 实际发布需要合并 release PR
+      - name: Create GitHub Release
+        if: ${{ steps.release.outputs.releases_created }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          release_name: Release ${{ steps.release.outputs.tag }}
+          body: ${{ steps.release.outputs.body }}
+          draft: false
+          prerelease: false

@@ -112,6 +112,13 @@ function readScore(fm) {
   return parseFloat(m[1]);
 }
 
+/** 从 frontmatter 提取 citations */
+function readCitations(fm) {
+  const m = fm.match(/^\s*citations:\s*(.+)$/m);
+  if (!m) return null;
+  return parseInt(m[1], 10);
+}
+
 /** 从 frontmatter 提取 date */
 function readDate(fm) {
   const m = fm.match(/^\s*date:\s*(\d{4}-\d{2}-\d{2})/m);
@@ -251,7 +258,8 @@ function extractArxivId(file) {
 function main() {
   const opts = parseArgs();
   const mode = opts.apply ? 'apply' : 'check';
-  console.log(`[paper-mark-milestones] mode=${mode} threshold=${opts.threshold} limit=${opts.limit || 'all'}`);
+  const thresholdMode = opts.useCitationThreshold ? 'citations' : 'score';
+  console.log(`[paper-mark-milestones] mode=${mode} threshold=${opts.useCitationThreshold ? opts.citationThreshold : opts.threshold} (${thresholdMode}) limit=${opts.limit || 'all'}`);
 
   const whitelist = loadWhitelist();
   if (Object.keys(whitelist).length > 0) {
@@ -309,7 +317,35 @@ function main() {
       continue;
     }
 
-    // 启发式计算
+    // 引用数阈值模式
+    if (opts.useCitationThreshold) {
+      const citations = readCitations(fm);
+      const isMilestone = citations !== null && citations >= opts.citationThreshold;
+      const reason = `citations=${citations} >= ${opts.citationThreshold}`;
+
+      if (opts.check) {
+        results.push({
+          file: relative(PAPERS_ROOT, file),
+          citations,
+          isMilestone,
+          reason,
+        });
+      } else if (opts.apply && isMilestone) {
+        const newRaw = replaceIsMilestone(raw, true);
+        try {
+          writeFileSync(file, newRaw, 'utf8');
+          marked++;
+          results.push({ file: relative(PAPERS_ROOT, file), status: 'marked', citations, reason });
+        } catch (e) {
+          errors++;
+        }
+      } else {
+        if (!isMilestone) skipped++;
+      }
+      continue;
+    }
+
+    // 启发式分数模式
     const { total, reasons } = computeMilestoneScore(fm);
     const isMilestone = total >= opts.threshold;
 

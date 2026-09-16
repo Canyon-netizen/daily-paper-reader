@@ -1,0 +1,53 @@
+# R7 I.3.2: release-please configuration
+#
+# Conventional commits → version bump:
+#   - feat: → minor version bump
+#   - fix: → patch version bump
+#   - perf: → patch version bump
+#   - docs: → patch version bump (no release)
+#   - refactor: → patch version bump
+#   - test: → patch version bump (no release)
+#   - chore: → patch version bump (no release)
+#
+# See: https://github.com/googleapis/release-please
+
+plugins:
+  - - node-workspace
+    - packages:
+        - package-name: '.'
+
+release-type: node
+
+# 每次 push main 自动触发
+primary-branch: main
+
+# 手动控制的分支(可选)
+protected-major-branches:
+  - 'v1-maintenance'
+
+# changelog 配置
+changelogSections:
+  - type: feat
+    section: Features
+    hidden: false
+  - type: fix
+    section: Bug Fixes
+    hidden: false
+  - type: perf
+    section: Performance
+    hidden: false
+  - type: refactor
+    section: Refactoring
+    hidden: false
+  - type: docs
+    section: Documentation
+    hidden: false
+  - type: test
+    section: Tests
+    hidden: true
+  - type: chore
+    section: Maintenance
+    hidden: true
+
+# version 策略
+versioningStrategy: node

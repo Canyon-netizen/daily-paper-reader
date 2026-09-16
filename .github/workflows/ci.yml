@@ -181,3 +181,47 @@ jobs:
         # A.3.2: 监测论文抓取是否停滞。用 --ci 模式,若 paper 新鲜度超过阈值则 exit 1。
         # 在 GH Actions 60 天空闲暂停 / arXiv 429 / secrets 丢失等场景里,这是最先被发现的信号。
         run: node astro-src/scripts/papers-freshness-report.mjs --ci --warn-days=7
+
+  # I.1.3: ESLint
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint
+
+  # I.1.4: perf budget check (warn-only)
+  perf-budget:
+    name: perf budget
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Run perf budget
+        continue-on-error: true
+        run: node astro-src/scripts/perf-budget.mjs --ci
