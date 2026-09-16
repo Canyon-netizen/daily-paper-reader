@@ -30,6 +30,20 @@ const detail = slugStr ? await getConceptDetail(slugStr) : null;
 const meta = detail?.entry || null;
 const related = detail?.related || [];
 const citingPapers = detail?.citingPapers || [];
+
+// G.2.1: 按 category 分组 related,每组按 co_count 降序(已经在 lib 里排过)。
+const relatedGroups: { category: string; items: typeof related }[] = [];
+{
+  const groups = new Map<string, typeof related>();
+  for (const r of related) {
+    if (!groups.has(r.category)) groups.set(r.category, []);
+    groups.get(r.category)!.push(r);
+  }
+  const sortedCats = Array.from(groups.keys()).sort();
+  for (const cat of sortedCats) {
+    relatedGroups.push({ category: cat, items: groups.get(cat)! });
+  }
+}
 ---
 
 <BaseLayout
@@ -83,21 +97,29 @@ const citingPapers = detail?.citingPapers || [];
           )}
 
           {related.length > 0 && (
-            <article class="concept-detail-section">
+            <article class="concept-detail-section concept-related">
               <h2>共现相关概念</h2>
               <p class="concept-detail-empty">
                 在引用本概念的论文中,与下列概念同时出现的次数(降序)。
               </p>
-              <div class="concept-related-chips">
-                {related.slice(0, 30).map((r) => (
-                  <a class="concept-related-chip" href={base + '/wiki/concepts/' + r.slug}>
-                    <span class="concept-related-name">{r.display_name}</span>
-                    <span class="concept-related-meta">
-                      {r.category} · 共现 {r.co_count}
-                    </span>
-                  </a>
-                ))}
-              </div>
+              {relatedGroups.map((g) => (
+                <section class="concept-related-group">
+                  <h3 class="concept-related-cat">
+                    {g.category}
+                    <span class="concept-related-cat-count">{g.items.length}</span>
+                  </h3>
+                  <ul class="concept-graph">
+                    {g.items.slice(0, 10).map((r) => (
+                      <li class="concept-graph-item">
+                        <a href={base + '/wiki/concepts/' + r.slug}>
+                          <span class="concept-graph-name">{r.display_name}</span>
+                          <span class="co-count">{r.co_count} 次共现</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ))}
             </article>
           )}
 
@@ -217,5 +239,64 @@ const citingPapers = detail?.citingPapers || [];
     font-size: 0.7rem;
     color: var(--fg-subtle);
     font-family: var(--font-mono);
+  }
+  /* G.2.1 grouped related-graph */
+  .concept-related-group {
+    margin-top: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+  }
+  .concept-related-cat {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    margin: 0 0 0.5rem;
+    font-size: 0.95rem;
+    color: var(--fg-muted);
+    font-family: var(--font-mono);
+  }
+  .concept-related-cat-count {
+    font-size: 0.75rem;
+    padding: 0.1em 0.5em;
+    border-radius: 999px;
+    background: var(--bg);
+    color: var(--fg-subtle);
+    border: 1px solid var(--border);
+  }
+  .concept-graph {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .concept-graph-item a {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 4px;
+    text-decoration: none;
+    color: var(--fg);
+    transition: background 150ms;
+  }
+  .concept-graph-item a:hover {
+    background: var(--accent-soft);
+  }
+  .concept-graph-name {
+    font-weight: 500;
+  }
+  .concept-graph-item a:hover .concept-graph-name {
+    color: var(--accent);
+  }
+  .co-count {
+    font-size: 0.75rem;
+    color: var(--fg-subtle);
+    font-family: var(--font-mono);
+    white-space: nowrap;
   }
 </style>
