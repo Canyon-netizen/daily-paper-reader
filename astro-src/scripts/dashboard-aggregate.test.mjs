@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // astro-src/scripts/dashboard-aggregate.test.mjs
 //
-// Tests for R7 LP.7 dashboard data aggregation.
+// Tests for R7 polish: astro-src/lib/dashboard/aggregate.ts.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'node',
+    platform: 'neutral',
     write: false,
     target: 'es2022',
   });
@@ -28,62 +28,118 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/dashboard/aggregate.ts');
 const { aggregateDashboard, formatDashboardSummary } = mod;
 
-const mockActivityFeed = [
-  { kind: 'paper_added' },
-  { kind: 'paper_added' },
-  { kind: 'idea_created' },
-  { kind: 'experiment_logged' },
-];
-
-const mockPhaseStats = {
-  planning: 5,
-  running: 3,
-  completed: 10,
-  archived: 2,
-};
-
-const mockTimeToPaper = [3, 5, 7, 2, 10]; // days
-
-test('aggregateDashboard: aggregates activity by kind', () => {
-  const result = aggregateDashboard(mockActivityFeed, mockPhaseStats, mockTimeToPaper);
-
-  assert.ok(result.activity.length >= 3);
-  const paperAdded = result.activity.find(a => a.kind === 'paper_added');
-  assert.ok(paperAdded);
-  assert.equal(paperAdded.count, 2);
+test('aggregateDashboard: 空 activity/phase/timeToPaper', () => {
+  const r = aggregateDashboard([], {}, []);
+  assert.deepEqual(r.activity, []);
+  assert.deepEqual(r.phaseDistribution, {});
+  assert.equal(r.avgDaysToPublish, 0);
 });
 
-test('aggregateDashboard: includes phase distribution', () => {
-  const result = aggregateDashboard(mockActivityFeed, mockPhaseStats, mockTimeToPaper);
-
-  assert.equal(result.phaseDistribution.planning, 5);
-  assert.equal(result.phaseDistribution.running, 3);
-  assert.equal(result.phaseDistribution.completed, 10);
+test('aggregateDashboard: 聚合 activity by kind', () => {
+  const r = aggregateDashboard(
+    [{ kind: 'fetch' }, { kind: 'fetch' }, { kind: 'analyze' }],
+    {},
+    []
+  );
+  // 顺序按首次出现
+  assert.deepEqual(r.activity, [
+    { kind: 'fetch', count: 2 },
+    { kind: 'analyze', count: 1 },
+  ]);
 });
 
-test('aggregateDashboard: calculates average days to publish', () => {
-  const result = aggregateDashboard(mockActivityFeed, mockPhaseStats, mockTimeToPaper);
-
-  // (3+5+7+2+10)/5 = 5.4
-  assert.ok(Math.abs(result.avgDaysToPublish - 5.4) < 0.01);
+test('aggregateDashboard: phase 分布直接传递', () => {
+  const r = aggregateDashboard([], { intake: 5, review: 3 }, []);
+  assert.deepEqual(r.phaseDistribution, { intake: 5, review: 3 });
 });
 
-test('aggregateDashboard: handles empty time to paper', () => {
-  const result = aggregateDashboard(mockActivityFeed, mockPhaseStats, []);
-
-  assert.equal(result.avgDaysToPublish, 0);
+test('aggregateDashboard: timeToPaper 平均', () => {
+  const r = aggregateDashboard([], {}, [2, 4, 6]);
+  assert.equal(r.avgDaysToPublish, 4);
 });
 
-test('aggregateDashboard: handles empty activity feed', () => {
-  const result = aggregateDashboard([], mockPhaseStats, mockTimeToPaper);
-
-  assert.ok(Array.isArray(result.activity));
-  assert.equal(result.activity.length, 0);
+test('aggregateDashboard: timeToPaper 浮点保留 2 位', () => {
+  const r = aggregateDashboard([], {}, [1, 2]);
+  assert.equal(r.avgDaysToPublish, 1.5);
 });
 
-test('formatDashboardSummary: returns summary string', () => {
-  const agg = aggregateDashboard(mockActivityFeed, mockPhaseStats, mockTimeToPaper);
-  const summary = formatDashboardSummary(agg);
+test('aggregateDashboard: timeToPaper [1,2,3,4,5] → 3', () => {
+  const r = aggregateDashboard([], {}, [1, 2, 3, 4, 5]);
+  assert.equal(r.avgDaysToPublish, 3);
+});
 
-  assert.ok(summary.includes('activities'));
+test('aggregateDashboard: timeToPaper 浮点截断到 2 位小数', () => {
+  const r = aggregateDashboard([], {}, [1, 2, 3]);
+  // 1+2+3=6,平均=2.0
+  assert.equal(r.avgDaysToPublish, 2);
+});
+
+test('aggregateDashboard: phaseStats 浅拷贝(修改不影响输入)', () => {
+  const src = { a: 1 };
+  const r = aggregateDashboard([], src, []);
+  r.phaseDistribution.b = 2;
+  assert.equal(src.b, undefined);
+});
+
+test('aggregateDashboard: 综合场景', () => {
+  const r = aggregateDashboard(
+    [
+      { kind: 'fetch' },
+      { kind: 'fetch' },
+      { kind: 'review' },
+      { kind: 'publish' },
+    ],
+    { intake: 4, review: 4, publish: 1 },
+    [3, 5, 7]
+  );
+  assert.equal(r.activity.length, 3);
+  assert.equal(r.phaseDistribution.intake, 4);
+  assert.equal(r.avgDaysToPublish, 5);
+});
+
+test('formatDashboardSummary: 0 活动 + 0 phase + 0 days', () => {
+  const s = formatDashboardSummary({
+    activity: [],
+    phaseDistribution: {},
+    avgDaysToPublish: 0,
+  });
+  assert.equal(s, '0 activities');
+});
+
+test('formatDashboardSummary: 含 phase 数', () => {
+  const s = formatDashboardSummary({
+    activity: [{ kind: 'a', count: 1 }],
+    phaseDistribution: { p1: 1, p2: 2 },
+    avgDaysToPublish: 0,
+  });
+  assert.equal(s, '1 activities, 2 phases');
+});
+
+test('formatDashboardSummary: 含 days avg', () => {
+  const s = formatDashboardSummary({
+    activity: [{ kind: 'a', count: 2 }, { kind: 'b', count: 3 }],
+    phaseDistribution: { p1: 1 },
+    avgDaysToPublish: 7.456,
+  });
+  assert.ok(s.includes('5 activities'));
+  assert.ok(s.includes('1 phases'));
+  assert.ok(s.includes('7.5 days avg'));
+});
+
+test('formatDashboardSummary: days=0 时不显示 days avg', () => {
+  const s = formatDashboardSummary({
+    activity: [],
+    phaseDistribution: {},
+    avgDaysToPublish: 0,
+  });
+  assert.ok(!s.includes('days avg'));
+});
+
+test('formatDashboardSummary: 综合', () => {
+  const s = formatDashboardSummary({
+    activity: [{ kind: 'fetch', count: 5 }],
+    phaseDistribution: { intake: 5 },
+    avgDaysToPublish: 3.2,
+  });
+  assert.equal(s, '5 activities, 1 phases, 3.2 days avg');
 });
