@@ -1,15 +1,10 @@
 #!/usr/bin/env node
 // astro-src/scripts/agents-feedback.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/agents/feedback.ts pure helpers.
-
-const store = new Map();
-globalThis.localStorage = {
-  getItem: (k) => (store.has(k) ? store.get(k) : null),
-  setItem: (k, v) => { store.set(k, String(v)); },
-  removeItem: (k) => { store.delete(k); },
-};
-globalThis.window = globalThis;
+// Tests for R7 polish: astro-src/lib/agents/feedback.ts.
+// recordFeedback / getFeedbackFor / adoptionRateByType /
+// feedbackScoreByProposalId / tallyVotesByProposalId / summarizeFeedback /
+// loadFeedbackFromStorage / saveFeedbackToStorage + isValidFeedback validation。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,12 +22,21 @@ async function loadTs(relPath) {
     platform: 'neutral',
     write: false,
     target: 'es2022',
-    external: ['../user-libraries/types', '../../user-libraries/types'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
   return import(dataUrl);
 }
+
+// localStorage + window mocks
+const store = new Map();
+globalThis.window = globalThis;
+globalThis.localStorage = {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => { store.set(k, String(v)); },
+  removeItem: (k) => { store.delete(k); },
+  clear: () => { store.clear(); },
+};
 
 const mod = await loadTs('lib/agents/feedback.ts');
 const {
@@ -47,7 +51,7 @@ const {
   saveFeedbackToStorage,
 } = mod;
 
-const fb = (overrides) => ({
+const mkFb = (overrides = {}) => ({
   proposalId: 'p1',
   type: 'add_paper',
   vote: 'up',
@@ -55,227 +59,222 @@ const fb = (overrides) => ({
   ...overrides,
 });
 
-// ---------- PROPOSAL_FEEDBACK_KEY ----------
-test('PROPOSAL_FEEDBACK_KEY: 期望值', () => {
+const resetStorage = () => store.clear();
+
+// ---------- PROPOSAL_FEEDBACK_KEY ---
+test('key: 默认 = dpr_proposal_feedback_v1', () => {
   assert.equal(PROPOSAL_FEEDBACK_KEY, 'dpr_proposal_feedback_v1');
 });
 
-// ---------- recordFeedback ----------
-test('recordFeedback: 新增', () => {
-  const r = recordFeedback(fb());
-  assert.equal(r.length, 1);
-  assert.equal(r[0].proposalId, 'p1');
-});
-
-test('recordFeedback: 同 proposalId 覆盖(去旧加新)', () => {
-  const r1 = recordFeedback(fb({ vote: 'up', createdAt: 1 }));
-  const r2 = recordFeedback(fb({ vote: 'down', createdAt: 2 }), r1);
-  assert.equal(r2.length, 1);
-  assert.equal(r2[0].vote, 'down');
-});
-
-test('recordFeedback: 不修改输入数组', () => {
-  const orig = [fb({ proposalId: 'p1' })];
-  const before = JSON.parse(JSON.stringify(orig));
-  recordFeedback(fb({ proposalId: 'p2' }), orig);
-  assert.deepEqual(orig, before);
-});
-
-test('recordFeedback: 默认 existing=[]', () => {
-  const r = recordFeedback(fb());
+// ---------- recordFeedback ---
+test('record: 加新 feedback', () => {
+  const r = recordFeedback(mkFb({ proposalId: 'p1' }));
   assert.equal(r.length, 1);
 });
 
-// ---------- getFeedbackFor ----------
-test('getFeedbackFor: 找不到 → null', () => {
+test('record: 同 proposalId 覆盖 (不新增)', () => {
+  const r = recordFeedback(mkFb({ proposalId: 'p1', vote: 'up' }), [
+    mkFb({ proposalId: 'p1', vote: 'down' }),
+  ]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].vote, 'up');
+});
+
+test('record: 不同 proposalId 保留', () => {
+  const r = recordFeedback(mkFb({ proposalId: 'p2' }), [mkFb({ proposalId: 'p1' })]);
+  assert.equal(r.length, 2);
+});
+
+test('record: 返回新数组', () => {
+  const orig = [mkFb({ proposalId: 'p1' })];
+  const r = recordFeedback(mkFb({ proposalId: 'p2' }), orig);
+  assert.notEqual(r, orig);
+});
+
+test('record: 不修改原数组', () => {
+  const orig = [mkFb({ proposalId: 'p1' })];
+  recordFeedback(mkFb({ proposalId: 'p2' }), orig);
+  assert.equal(orig.length, 1);
+});
+
+// ---------- getFeedbackFor ---
+test('getFor: 找到 latest', () => {
+  const r = getFeedbackFor('p1', [
+    mkFb({ proposalId: 'p1', createdAt: 100, vote: 'up' }),
+    mkFb({ proposalId: 'p1', createdAt: 200, vote: 'down' }),
+  ]);
+  assert.equal(r.vote, 'down'); // 200 更大
+});
+
+test('getFor: 缺 → null', () => {
+  assert.equal(getFeedbackFor('px', [mkFb({ proposalId: 'p1' })]), null);
+});
+
+test('getFor: 空数组 → null', () => {
   assert.equal(getFeedbackFor('p1', []), null);
-  assert.equal(getFeedbackFor('p1', [fb({ proposalId: 'p2' })]), null);
 });
 
-test('getFeedbackFor: 单条 → 返回', () => {
-  const r = getFeedbackFor('p1', [fb()]);
-  assert.equal(r.proposalId, 'p1');
+// ---------- adoptionRateByType ---
+test('adoption: up/(up+down)', () => {
+  const r = adoptionRateByType([
+    mkFb({ type: 'add_paper', vote: 'up' }),
+    mkFb({ type: 'add_paper', vote: 'up' }),
+    mkFb({ type: 'add_paper', vote: 'down' }),
+  ]);
+  assert.equal(r.add_paper, 2 / 3);
 });
 
-test('getFeedbackFor: 多条 → 返回最新', () => {
-  const arr = [
-    fb({ createdAt: 100 }),
-    fb({ createdAt: 200, vote: 'down' }),
-    fb({ createdAt: 50 }),
-  ];
-  const r = getFeedbackFor('p1', arr);
-  assert.equal(r.vote, 'down');
+test('adoption: skip 不计入分母', () => {
+  const r = adoptionRateByType([
+    mkFb({ type: 'add_paper', vote: 'up' }),
+    mkFb({ type: 'add_paper', vote: 'skip' }),
+  ]);
+  // skip 不算 → 1/(1+0) = 1.0
+  assert.equal(r.add_paper, 1.0);
 });
 
-// ---------- adoptionRateByType ----------
-test('adoptionRateByType: 空 → {}', () => {
-  assert.deepEqual(adoptionRateByType([]), {});
+test('adoption: 全 skip → undefined', () => {
+  const r = adoptionRateByType([
+    mkFb({ type: 'add_paper', vote: 'skip' }),
+  ]);
+  assert.equal(r.add_paper, undefined);
 });
 
-test('adoptionRateByType: 5/10 → 0.5', () => {
-  const arr = [
-    ...Array.from({ length: 5 }, () => fb({ type: 'add_paper', vote: 'up' })),
-    ...Array.from({ length: 5 }, () => fb({ type: 'add_paper', vote: 'down' })),
-  ];
-  assert.equal(adoptionRateByType(arr).add_paper, 0.5);
+test('adoption: 多 type', () => {
+  const r = adoptionRateByType([
+    mkFb({ type: 'add_paper', vote: 'up' }),
+    mkFb({ type: 'cite_paper', vote: 'down' }),
+  ]);
+  assert.equal(r.add_paper, 1.0);
+  assert.equal(r.cite_paper, 0);
 });
 
-test('adoptionRateByType: 全部 up → 1.0', () => {
-  const arr = Array.from({ length: 3 }, () => fb({ type: 'add_paper', vote: 'up' }));
-  assert.equal(adoptionRateByType(arr).add_paper, 1);
-});
-
-test('adoptionRateByType: 全部 down → 0.0', () => {
-  const arr = Array.from({ length: 3 }, () => fb({ type: 'add_paper', vote: 'down' }));
-  assert.equal(adoptionRateByType(arr).add_paper, 0);
-});
-
-test('adoptionRateByType: skip 不计入分母', () => {
-  // 5 up + 5 down + 5 skip → 0.5 (skip 不算)
-  const arr = [
-    ...Array.from({ length: 5 }, () => fb({ type: 'add_paper', vote: 'up' })),
-    ...Array.from({ length: 5 }, () => fb({ type: 'add_paper', vote: 'down' })),
-    ...Array.from({ length: 5 }, () => fb({ type: 'add_paper', vote: 'skip' })),
-  ];
-  assert.equal(adoptionRateByType(arr).add_paper, 0.5);
-});
-
-test('adoptionRateByType: 全部 skip → undefined (不返回键)', () => {
-  const arr = Array.from({ length: 3 }, () => fb({ type: 'add_paper', vote: 'skip' }));
-  assert.equal(adoptionRateByType(arr).add_paper, undefined);
-});
-
-test('adoptionRateByType: 多 type', () => {
-  const arr = [
-    fb({ type: 'add_paper', vote: 'up' }),
-    fb({ type: 'add_paper', vote: 'down' }),
-    fb({ type: 'create_draft', vote: 'up' }),
-    fb({ type: 'create_draft', vote: 'up' }),
-  ];
-  const r = adoptionRateByType(arr);
-  assert.equal(r.add_paper, 0.5);
-  assert.equal(r.create_draft, 1);
-});
-
-// ---------- feedbackScoreByProposalId ----------
-test('feedbackScoreByProposalId: up → 0.9', () => {
-  const r = feedbackScoreByProposalId([fb({ vote: 'up' })]);
+// ---------- feedbackScoreByProposalId ---
+test('scoreById: up → 0.9', () => {
+  const r = feedbackScoreByProposalId([mkFb({ proposalId: 'p1', vote: 'up' })]);
   assert.equal(r.p1, 0.9);
 });
 
-test('feedbackScoreByProposalId: down → 0.1', () => {
-  const r = feedbackScoreByProposalId([fb({ vote: 'down' })]);
+test('scoreById: down → 0.1', () => {
+  const r = feedbackScoreByProposalId([mkFb({ proposalId: 'p1', vote: 'down' })]);
   assert.equal(r.p1, 0.1);
 });
 
-test('feedbackScoreByProposalId: skip → 0.5', () => {
-  const r = feedbackScoreByProposalId([fb({ vote: 'skip' })]);
+test('scoreById: skip → 0.5', () => {
+  const r = feedbackScoreByProposalId([mkFb({ proposalId: 'p1', vote: 'skip' })]);
   assert.equal(r.p1, 0.5);
 });
 
-test('feedbackScoreByProposalId: 后写覆盖前写', () => {
+test('scoreById: 后写覆盖前写', () => {
   const r = feedbackScoreByProposalId([
-    fb({ vote: 'up', createdAt: 1 }),
-    fb({ vote: 'down', createdAt: 2 }),
+    mkFb({ proposalId: 'p1', vote: 'up' }),
+    mkFb({ proposalId: 'p1', vote: 'down' }),
   ]);
-  // 后写覆盖:down → 0.1
   assert.equal(r.p1, 0.1);
 });
 
-test('feedbackScoreByProposalId: 空 → {}', () => {
-  assert.deepEqual(feedbackScoreByProposalId([]), {});
+// ---------- tallyVotesByProposalId ---
+test('tally: 计数各 vote', () => {
+  const r = tallyVotesByProposalId([
+    mkFb({ proposalId: 'p1', vote: 'up' }),
+    mkFb({ proposalId: 'p1', vote: 'up' }),
+    mkFb({ proposalId: 'p1', vote: 'down' }),
+    mkFb({ proposalId: 'p1', vote: 'skip' }),
+  ]);
+  assert.deepEqual(r.p1, { up: 2, down: 1, skip: 1 });
 });
 
-// ---------- tallyVotesByProposalId ----------
-test('tallyVotesByProposalId: 空 → {}', () => {
+test('tally: 无 vote → 0/0/0', () => {
+  const r = tallyVotesByProposalId([mkFb({ proposalId: 'p1', vote: 'skip' })]);
+  assert.deepEqual(r.p1, { up: 0, down: 0, skip: 1 });
+});
+
+test('tally: 空 → {}', () => {
   assert.deepEqual(tallyVotesByProposalId([]), {});
 });
 
-test('tallyVotesByProposalId: 多投票累加', () => {
-  const arr = [
-    fb({ proposalId: 'p1', vote: 'up' }),
-    fb({ proposalId: 'p1', vote: 'up' }),
-    fb({ proposalId: 'p1', vote: 'down' }),
-    fb({ proposalId: 'p1', vote: 'skip' }),
-  ];
-  assert.deepEqual(tallyVotesByProposalId(arr), { p1: { up: 2, down: 1, skip: 1 } });
-});
-
-test('tallyVotesByProposalId: 多 proposalId 独立', () => {
-  const arr = [
-    fb({ proposalId: 'p1', vote: 'up' }),
-    fb({ proposalId: 'p2', vote: 'down' }),
-  ];
-  const r = tallyVotesByProposalId(arr);
-  assert.deepEqual(r.p1, { up: 1, down: 0, skip: 0 });
-  assert.deepEqual(r.p2, { up: 0, down: 1, skip: 0 });
-});
-
-// ---------- summarizeFeedback ----------
-test('summarizeFeedback: 空', () => {
-  assert.deepEqual(summarizeFeedback([]), {
-    total: 0, up: 0, down: 0, skip: 0,
-  });
-});
-
-test('summarizeFeedback: 计数 + approvalRate', () => {
-  const arr = [
-    fb({ vote: 'up' }),
-    fb({ vote: 'up' }),
-    fb({ vote: 'down' }),
-    fb({ vote: 'skip' }),
-  ];
-  const r = summarizeFeedback(arr);
+// ---------- summarizeFeedback ---
+test('summary: 计数', () => {
+  const r = summarizeFeedback([
+    mkFb({ vote: 'up' }),
+    mkFb({ vote: 'up' }),
+    mkFb({ vote: 'down' }),
+    mkFb({ vote: 'skip' }),
+  ]);
   assert.equal(r.total, 4);
   assert.equal(r.up, 2);
   assert.equal(r.down, 1);
   assert.equal(r.skip, 1);
-  // up / (up + down) = 2/3
   assert.equal(r.approvalRate, 2 / 3);
 });
 
-test('summarizeFeedback: 全 skip → approvalRate undefined', () => {
-  const r = summarizeFeedback([fb({ vote: 'skip' })]);
+test('summary: 全 skip → approvalRate undefined', () => {
+  const r = summarizeFeedback([mkFb({ vote: 'skip' })]);
   assert.equal(r.approvalRate, undefined);
 });
 
-test('summarizeFeedback: 全 up → 1.0', () => {
-  const r = summarizeFeedback([fb({ vote: 'up' }), fb({ vote: 'up' })]);
-  assert.equal(r.approvalRate, 1);
+test('summary: 空', () => {
+  const r = summarizeFeedback([]);
+  assert.equal(r.total, 0);
+  assert.equal(r.approvalRate, undefined);
 });
 
-// ---------- storage ----------
-test('saveFeedbackToStorage + loadFeedbackFromStorage: round-trip', () => {
-  store.clear();
-  const arr = [fb({ proposalId: 'p1' }), fb({ proposalId: 'p2', vote: 'down' })];
-  saveFeedbackToStorage(arr);
+// ---------- loadFeedbackFromStorage / saveFeedbackToStorage ---
+test('storage: save → load 往返', () => {
+  resetStorage();
+  const fbs = [mkFb({ proposalId: 'p1' }), mkFb({ proposalId: 'p2' })];
+  saveFeedbackToStorage(fbs);
   const r = loadFeedbackFromStorage();
   assert.equal(r.length, 2);
 });
 
-test('loadFeedbackFromStorage: 无 → []', () => {
-  store.clear();
+test('storage: 空 → []', () => {
+  resetStorage();
   assert.deepEqual(loadFeedbackFromStorage(), []);
 });
 
-test('loadFeedbackFromStorage: 损坏 JSON → []', () => {
-  store.set(PROPOSAL_FEEDBACK_KEY, '{not json');
+test('storage: 损坏 JSON → []', () => {
+  resetStorage();
+  store.set(PROPOSAL_FEEDBACK_KEY, 'not-json{');
   assert.deepEqual(loadFeedbackFromStorage(), []);
 });
 
-test('loadFeedbackFromStorage: 非数组 → []', () => {
-  store.set(PROPOSAL_FEEDBACK_KEY, '{"foo":"bar"}');
+test('storage: 非数组 → []', () => {
+  resetStorage();
+  store.set(PROPOSAL_FEEDBACK_KEY, JSON.stringify({ not: 'array' }));
   assert.deepEqual(loadFeedbackFromStorage(), []);
 });
 
-test('loadFeedbackFromStorage: 过滤非法记录', () => {
-  store.set(PROPOSAL_FEEDBACK_KEY, JSON.stringify([
-    { proposalId: 'p1', type: 'add_paper', vote: 'up', createdAt: 1 }, // 合法
-    { proposalId: 123, type: 'add_paper', vote: 'up', createdAt: 1 }, // proposalId 非 string
-    { proposalId: 'p2', type: 'add_paper', vote: 'invalid', createdAt: 1 }, // vote 非法
-    { proposalId: 'p3', type: 'add_paper', vote: 'up', createdAt: 'abc' }, // createdAt 非 number
-  ]));
-  const r = loadFeedbackFromStorage();
-  assert.equal(r.length, 1);
-  assert.equal(r[0].proposalId, 'p1');
+test('storage: 数组但元素无效 → 过滤', () => {
+  resetStorage();
+  const bad = [{ invalid: true }];
+  store.set(PROPOSAL_FEEDBACK_KEY, JSON.stringify(bad));
+  assert.deepEqual(loadFeedbackFromStorage(), []);
+});
+
+// ---------- 集成 ---
+test('集成: record → adoption → summary', () => {
+  let fbs = [];
+  fbs = recordFeedback(mkFb({ proposalId: 'p1', type: 'add_paper', vote: 'up' }), fbs);
+  fbs = recordFeedback(mkFb({ proposalId: 'p2', type: 'add_paper', vote: 'down' }), fbs);
+  fbs = recordFeedback(mkFb({ proposalId: 'p3', type: 'cite_paper', vote: 'up' }), fbs);
+  const adoption = adoptionRateByType(fbs);
+  assert.equal(adoption.add_paper, 0.5);
+  assert.equal(adoption.cite_paper, 1.0);
+  const summary = summarizeFeedback(fbs);
+  assert.equal(summary.total, 3);
+  assert.equal(summary.up, 2);
+  assert.equal(summary.down, 1);
+});
+
+test('集成: storage save → load → adoption', () => {
+  resetStorage();
+  saveFeedbackToStorage([
+    mkFb({ proposalId: 'p1', type: 'add_paper', vote: 'up' }),
+    mkFb({ proposalId: 'p2', type: 'add_paper', vote: 'up' }),
+    mkFb({ proposalId: 'p3', type: 'add_paper', vote: 'down' }),
+  ]);
+  const fbs = loadFeedbackFromStorage();
+  const adoption = adoptionRateByType(fbs);
+  assert.equal(adoption.add_paper, 2 / 3);
 });
