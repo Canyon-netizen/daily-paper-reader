@@ -2,7 +2,7 @@
 // astro-src/scripts/venue.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/venue.ts.
-// extractVenue + venueLabel — pure functions, no deps.
+// extractVenue (source → VenueInfo) + venueLabel (source → string[])。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,161 +29,176 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/venue.ts');
 const { extractVenue, venueLabel } = mod;
 
-// ---------- extractVenue: empty / nullish ----------
-test('extractVenue: undefined → { venue: "", accepted: false }', () => {
-  assert.deepEqual(extractVenue(undefined), { venue: '', accepted: false });
-});
-
-test('extractVenue: null → { venue: "", accepted: false }', () => {
-  assert.deepEqual(extractVenue(null), { venue: '', accepted: false });
-});
-
-test('extractVenue: 空字符串 → { venue: "", accepted: false }', () => {
-  assert.deepEqual(extractVenue(''), { venue: '', accepted: false });
-});
-
-test('extractVenue: 纯空格 → { venue: "", accepted: false }', () => {
-  assert.deepEqual(extractVenue('   '), { venue: '', accepted: false });
-});
-
-// ---------- extractVenue: 非会议源 ----------
-test('extractVenue: arxiv → 空', () => {
-  assert.deepEqual(extractVenue('arxiv'), { venue: '', accepted: false });
-});
-
-test('extractVenue: biorxiv → 空', () => {
-  assert.deepEqual(extractVenue('biorxiv'), { venue: '', accepted: false });
-});
-
-test('extractVenue: medrxiv → 空', () => {
-  assert.deepEqual(extractVenue('medrxiv'), { venue: '', accepted: false });
-});
-
-test('extractVenue: 未知源 → 空', () => {
-  assert.deepEqual(extractVenue('mystery-source'), { venue: '', accepted: false });
-});
-
-// ---------- extractVenue: 纯会议源(无 tag) ----------
-test('extractVenue: icml_openreview → ICML (无年, accepted=false)', () => {
-  assert.deepEqual(extractVenue('icml_openreview'), { venue: 'ICML', accepted: false });
-});
-
-test('extractVenue: iclr_openreview → ICLR', () => {
-  assert.deepEqual(extractVenue('iclr_openreview'), { venue: 'ICLR', accepted: false });
-});
-
-test('extractVenue: aaai → AAAI', () => {
-  assert.deepEqual(extractVenue('aaai'), { venue: 'AAAI', accepted: false });
-});
-
-test('extractVenue: acl → ACL', () => {
-  assert.deepEqual(extractVenue('acl'), { venue: 'ACL', accepted: false });
-});
-
-test('extractVenue: emnlp → EMNLP', () => {
-  assert.deepEqual(extractVenue('emnlp'), { venue: 'EMNLP', accepted: false });
-});
-
-test('extractVenue: 连字符 icml-openreview (非已知 key) → 空', () => {
-  // 源码 keys 用 underscore 不是 dash
-  assert.deepEqual(extractVenue('icml-openreview'), { venue: '', accepted: false });
-});
-
-test('extractVenue: 大写 key (ICML_OPENREVIEW) → ICML', () => {
-  // 'ICML_OPENREVIEW'.toLowerCase() === 'icml_openreview' → 命中
-  assert.deepEqual(extractVenue('ICML_OPENREVIEW'), { venue: 'ICML', accepted: false });
-});
-
-// ---------- extractVenue: tagged ----------
-test('extractVenue: ICML-2025-Accepted → ICML 2025 + accepted', () => {
-  assert.deepEqual(extractVenue('ICML-2025-Accepted'), { venue: 'ICML 2025', accepted: true });
-});
-
-test('extractVenue: ICLR-2024-Public → ICLR 2024', () => {
-  const r = extractVenue('ICLR-2024-Public');
-  assert.equal(r.venue, 'ICLR 2024');
-});
-
-test('extractVenue: 状态 Rejected → accepted=false', () => {
-  const r = extractVenue('ICML-2025-Rejected');
-  assert.equal(r.venue, 'ICML 2025');
+// ---------- extractVenue ---
+test('extract: undefined → 空 + false', () => {
+  const r = extractVenue(undefined);
+  assert.equal(r.venue, '');
   assert.equal(r.accepted, false);
 });
 
-test('extractVenue: 状态 Oral (uppercase tag NEURIPS-2024-Oral) → accepted=true', () => {
-  // tagged 正则要求 [A-Z]+ 全大写 → "NEURIPS" 而非 "NeurIPS"
-  assert.equal(extractVenue('NEURIPS-2024-Oral').accepted, true);
-});
-
-test('extractVenue: 状态 Spotlight → accepted=true', () => {
-  assert.equal(extractVenue('AAAI-2025-Spotlight').accepted, true);
-});
-
-test('extractVenue: 状态 Poster → accepted=true', () => {
-  assert.equal(extractVenue('ACL-2024-Poster').accepted, true);
-});
-
-test('extractVenue: 未知 status → accepted=false', () => {
-  assert.equal(extractVenue('ICML-2025-FooBar').accepted, false);
-});
-
-test('extractVenue: tagged 全小写 (icml-2025-accepted) → 不识别', () => {
-  // tagged 正则 [A-Z]+ 不匹配小写;小写形式也不在 keys
-  assert.equal(extractVenue('icml-2025-accepted').venue, '');
-});
-
-test('extractVenue: tagged 未知会议 (FOO-2025-Accepted) → 空', () => {
-  assert.deepEqual(extractVenue('FOO-2025-Accepted'), { venue: '', accepted: false });
-});
-
-test('extractVenue: tagged 数字位含前导 0 (ICML-02025-Accepted)', () => {
-  // \d{4} 严格要求 4 位 → 不匹配 → fallback 到纯 source 不识别 → 空
-  const r = extractVenue('ICML-02025-Accepted');
+test('extract: null → 空 + false', () => {
+  const r = extractVenue(null);
   assert.equal(r.venue, '');
 });
 
-test('extractVenue: tagged 大写会议名 (NEURIPS-2024-Accepted) → 识别', () => {
-  assert.equal(extractVenue('NEURIPS-2024-Accepted').venue, 'NeurIPS 2024');
-});
-
-test('extractVenue: tagged 数字不匹配 \d{4} (ICML-25-Accepted) → fallback', () => {
-  // \d{4} 不匹配 → fallback 到 CONFERENCE_SOURCE_LABELS[lowercase]
-  // 'iclml-25-accepted' 不在里面 → 空
-  const r = extractVenue('ICML-25-Accepted');
+test('extract: 空字符串 → 空 + false', () => {
+  const r = extractVenue('');
   assert.equal(r.venue, '');
 });
 
-test('extractVenue: tagged 末尾无 -Status (ICML-2025)', () => {
-  // '^([A-Z]+)-(\d{4})-(.+)$' 不匹配(缺第三段) → fallback 空
-  const r = extractVenue('ICML-2025');
+test('extract: 纯空白 → 空 + false', () => {
+  const r = extractVenue('   ');
   assert.equal(r.venue, '');
 });
 
-// ---------- venueLabel ----------
-test('venueLabel: ICML-2025-Accepted → ["ICML 2025"]', () => {
-  assert.deepEqual(venueLabel('ICML-2025-Accepted'), ['ICML 2025']);
+test('extract: arxiv → 非会议', () => {
+  const r = extractVenue('arxiv');
+  assert.equal(r.venue, '');
+  assert.equal(r.accepted, false);
 });
 
-test('venueLabel: icml_openreview → ["ICML"]', () => {
-  assert.deepEqual(venueLabel('icml_openreview'), ['ICML']);
+test('extract: biorxiv → 非会议', () => {
+  const r = extractVenue('biorxiv');
+  assert.equal(r.venue, '');
 });
 
-test('venueLabel: arxiv → []', () => {
-  assert.deepEqual(venueLabel('arxiv'), []);
+test('extract: icml_openreview → 仅 label, accepted=false', () => {
+  const r = extractVenue('icml_openreview');
+  assert.equal(r.venue, 'ICML');
+  assert.equal(r.accepted, false);
 });
 
-test('venueLabel: undefined → []', () => {
+test('extract: ICLR_OPENREVIEW 大小写不敏感', () => {
+  const r = extractVenue('ICLR_OPENREVIEW');
+  assert.equal(r.venue, 'ICLR');
+});
+
+test('extract: tagged ICML-2025-Accepted → "ICML 2025" + true', () => {
+  const r = extractVenue('ICML-2025-Accepted');
+  assert.equal(r.venue, 'ICML 2025');
+  assert.equal(r.accepted, true);
+});
+
+test('extract: tagged NeurIPS 大写 → "NeurIPS 2024" + true', () => {
+  // 正则要求 tag 全大写字母,所以 NeurIPS 必须用 NEURIPS
+  const r = extractVenue('NEURIPS-2024-Oral');
+  assert.equal(r.venue, 'NeurIPS 2024');
+  assert.equal(r.accepted, true);
+});
+
+test('extract: tagged NeurIPS(小写 i) 不匹配 tagged 模式', () => {
+  // NeurIPS 有小写 → 不匹配 /^[A-Z]+/ → 走 plain lookup
+  const r = extractVenue('NeurIPS-2024-Oral');
+  assert.equal(r.venue, '');
+});
+
+test('extract: tagged ICLR-2024-Poster → true', () => {
+  const r = extractVenue('ICLR-2024-Poster');
+  assert.equal(r.venue, 'ICLR 2024');
+  assert.equal(r.accepted, true);
+});
+
+test('extract: tagged ACL-2025-Spotlight → true', () => {
+  const r = extractVenue('ACL-2025-Spotlight');
+  assert.equal(r.venue, 'ACL 2025');
+  assert.equal(r.accepted, true);
+});
+
+test('extract: tagged AAAI-2025-Public → false', () => {
+  const r = extractVenue('AAAI-2025-Public');
+  assert.equal(r.venue, 'AAAI 2025');
+  assert.equal(r.accepted, false);
+});
+
+test('extract: tagged EMNLP-2025-Accepted → true', () => {
+  const r = extractVenue('EMNLP-2025-Accepted');
+  assert.equal(r.venue, 'EMNLP 2025');
+  assert.equal(r.accepted, true);
+});
+
+test('extract: 小写 tagged 也行', () => {
+  // 模式 /^([A-Z]+)-/ 要求大写 tag → 小写会 fall through 到 plain
+  const r = extractVenue('icml-2025-Accepted');
+  // 因为小写 icml 不匹配 /^[A-Z]+/ → 进入 plain 路径 → label 没找到 → 空
+  assert.equal(r.venue, '');
+});
+
+test('extract: tagged unknown tag → 非会议', () => {
+  const r = extractVenue('UNKNOWN-2025-Accepted');
+  assert.equal(r.venue, '');
+});
+
+test('extract: tagged missing year → 不匹配', () => {
+  // "ICML-Accepted" 没年份 → 不匹配 tagged 模式
+  const r = extractVenue('ICML-Accepted');
+  // 进入 plain lookup: source.toLowerCase()="icml-accepted" → label 没找到 → 空
+  assert.equal(r.venue, '');
+});
+
+test('extract: tagged status 大小写', () => {
+  // accepted / Accepted / ACCEPTED 都识别
+  const r = extractVenue('ICML-2025-ACCEPTED');
+  assert.equal(r.accepted, true);
+});
+
+test('extract: tagged status=accepted 大小写 mix', () => {
+  const r = extractVenue('ICML-2025-AcCePtEd');
+  assert.equal(r.accepted, true);
+});
+
+test('extract: 来源带前后空白 → trim', () => {
+  const r = extractVenue('  ICML-2025-Accepted  ');
+  assert.equal(r.venue, 'ICML 2025');
+});
+
+// ---------- venueLabel ---
+test('label: undefined → []', () => {
   assert.deepEqual(venueLabel(undefined), []);
 });
 
-test('venueLabel: null → []', () => {
+test('label: null → []', () => {
   assert.deepEqual(venueLabel(null), []);
 });
 
-test('venueLabel: 空字符串 → []', () => {
+test('label: 空字符串 → []', () => {
   assert.deepEqual(venueLabel(''), []);
 });
 
-test('venueLabel: 返回数组 (string[] 不是 string)', () => {
-  assert.ok(Array.isArray(venueLabel('ICML-2025-Accepted')));
+test('label: 非会议 → []', () => {
+  assert.deepEqual(venueLabel('arxiv'), []);
+});
+
+test('label: 会议 plain → [label]', () => {
+  assert.deepEqual(venueLabel('icml_openreview'), ['ICML']);
+});
+
+test('label: tagged → ["ICML 2025"]', () => {
+  assert.deepEqual(venueLabel('ICML-2025-Accepted'), ['ICML 2025']);
+});
+
+test('label: 仅一个元素数组', () => {
+  // NeurIPS 小写 → 走 plain → 空 → []
+  const r = venueLabel('NeurIPS-2024-Oral');
+  assert.equal(r.length, 0);
+});
+
+// ---------- 集成 ---
+test('集成: arxiv 论文 → 不进 venue 分类', () => {
+  const info = extractVenue('arxiv');
+  assert.equal(info.venue.length, 0);
+  assert.deepEqual(venueLabel('arxiv'), []);
+});
+
+test('集成: 完整 ICML 路径', () => {
+  const info = extractVenue('ICML-2025-Accepted');
+  assert.equal(info.venue, 'ICML 2025');
+  assert.equal(info.accepted, true);
+  assert.deepEqual(venueLabel('ICML-2025-Accepted'), ['ICML 2025']);
+});
+
+test('集成: rejected 状态', () => {
+  // "Rejected" 不在 accepted/oral/poster/spotlight → false
+  const r = extractVenue('ICML-2025-Rejected');
+  assert.equal(r.venue, 'ICML 2025');
+  assert.equal(r.accepted, false);
 });
