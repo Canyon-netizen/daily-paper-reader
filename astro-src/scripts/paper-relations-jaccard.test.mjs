@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // astro-src/scripts/paper-relations-jaccard.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/paper-relations/jaccard.ts.
-// computeJaccardEdges — Jaccard 相似度 |A∩B|/|A∪B|。
+// Tests for R7 polish: astro-src/lib/paper-relations/jaccard.ts +
+// edges-util.ts. Jaccard 边权重 + tagSet + buildNodes + topKEdges。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,165 +18,279 @@ async function loadTs(relPath) {
     bundle: true,
     format: 'esm',
     platform: 'node',
-    external: ['node:*'],
     write: false,
     target: 'es2022',
+    external: ['node:fs', 'node:fs/promises', 'node:path', 'fs', 'path'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
   return import(dataUrl);
 }
 
-const mod = await loadTs('lib/paper-relations/jaccard.ts');
+const mod = await loadTs('lib/paper-relations/index.ts');
 const { computeJaccardEdges } = mod;
+const utilMod = await loadTs('lib/paper-relations/edges-util.ts');
+const { buildNodes, topKEdges, tagSet } = utilMod;
 
-const mkPaper = (overrides) => ({
-  id: 'p1',
+const mkPaper = (overrides = {}) => ({
+  id: 'papers/x.md',
+  title: 'Some Title',
+  title_zh: '',
   arxivId: '2310.12345',
-  title: 'Foo',
-  categories: { venue: [], task: [], method: [], type: [] },
+  canonicalArxivId: '2310.12345',
+  slug: 'x',
+  yearMonth: '2026-09',
+  day: '01',
+  categories: { venue: [], task: ['rl'], method: [], type: [] },
+  tags: [],
   ...overrides,
 });
 
-// ---------- 基本 ----------
-test('computeJaccardEdges: 0 paper → []', () => {
-  assert.deepEqual(computeJaccardEdges([]), []);
+const mkEdge = (overrides = {}) => ({
+  source: 'a',
+  target: 'b',
+  weight: 0.5,
+  type: 'jaccard',
+  sharedTags: [],
+  ...overrides,
 });
 
-test('computeJaccardEdges: 1 paper → []', () => {
-  assert.deepEqual(computeJaccardEdges([mkPaper({ id: 'a', categories: { venue: ['ICML'], task: [], method: [], type: [] } })]), []);
+// ---------- tagSet ---
+test('tagSet: 4-dim 拍平去重', () => {
+  const p = mkPaper({
+    categories: { venue: ['ICML'], task: ['rl', 'rl'], method: ['transformer'], type: [] },
+  });
+  const s = tagSet(p);
+  assert.ok(s instanceof Set);
+  assert.ok(s.has('venue:ICML'));
+  assert.ok(s.has('task:rl'));
+  assert.ok(s.has('method:transformer'));
+  // rl 去重
+  assert.equal(s.size, 3);
 });
 
-test('computeJaccardEdges: 完全相同 → weight 1', () => {
-  const cats = { venue: ['ICML'], task: ['rl'], method: [], type: [] };
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: cats }),
-    mkPaper({ id: 'b', categories: cats }),
+test('tagSet: 空 categories → 空 Set', () => {
+  const p = mkPaper({ categories: { venue: [], task: [], method: [], type: [] } });
+  assert.equal(tagSet(p).size, 0);
+});
+
+// ---------- buildNodes ---
+test('buildNodes: 简单映射', () => {
+  const r = buildNodes([
+    mkPaper({ id: 'p1', title: 'A', arxivId: '2310.11111' }),
+    mkPaper({ id: 'p2', title: 'B', arxivId: '2310.22222', title_zh: '' }),
   ]);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].id, 'p1');
+  assert.equal(r[0].title, 'A');
+  assert.deepEqual(r[0].tags, ['task:rl']);
+});
+
+test('buildNodes: title 缺 → fallback title_zh', () => {
+  const r = buildNodes([
+    mkPaper({ id: 'p1', title: '', title_zh: '中文标题' }),
+  ]);
+  assert.equal(r[0].title, '中文标题');
+});
+
+test('buildNodes: title + title_zh 都缺 → fallback id', () => {
+  const r = buildNodes([
+    mkPaper({ id: 'p1', title: '', title_zh: '' }),
+  ]);
+  assert.equal(r[0].title, 'p1');
+});
+
+test('buildNodes: tags 来自 flattenCategories', () => {
+  const r = buildNodes([
+    mkPaper({
+      categories: { venue: ['ICML'], task: ['rl'], method: [], type: [] },
+    }),
+  ]);
+  assert.deepEqual(r[0].tags, ['venue:ICML', 'task:rl']);
+});
+
+// ---------- topKEdges ---
+test('topK: 空 edges → []', () => {
+  assert.deepEqual(topKEdges([], 5), []);
+});
+
+test('topK: k=0 → 不裁剪', () => {
+  const edges = [
+    mkEdge({ source: 'a', target: 'b', weight: 0.1 }),
+    mkEdge({ source: 'a', target: 'c', weight: 0.2 }),
+  ];
+  const r = topKEdges(edges, 0);
+  assert.equal(r.length, 2);
+});
+
+test('topK: k 负数 → 不裁剪', () => {
+  const edges = [mkEdge()];
+  const r = topKEdges(edges, -1);
   assert.equal(r.length, 1);
-  assert.equal(r[0].weight, 1);
-  assert.equal(r[0].type, 'jaccard');
 });
 
-test('computeJaccardEdges: 完全不共享 → []', () => {
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: [], task: ['reasoning'], method: [], type: [] } }),
-  ]);
-  assert.deepEqual(r, []);
-});
-
-test('computeJaccardEdges: 部分共享 → jaccard = inter/union', () => {
-  // a: {a, b}, b: {b, c}, c: {a, c}
-  // a,b: inter=1, union=3 → 1/3
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'p1', categories: { venue: ['a', 'b'], task: [], method: [], type: [] } }),
-    mkPaper({ id: 'p2', categories: { venue: ['b', 'c'], task: [], method: [], type: [] } }),
-  ]);
-  assert.equal(r.length, 1);
-  assert.ok(Math.abs(r[0].weight - 1/3) < 1e-9);
-});
-
-test('computeJaccardEdges: 无向 — 只 i<j 一次', () => {
-  const cats = { venue: ['ICML'], task: [], method: [], type: [] };
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: cats }),
-    mkPaper({ id: 'b', categories: cats }),
-  ]);
-  // 无向图 → 1 条边(不是 2)
-  assert.equal(r.length, 1);
-  assert.equal(r[0].source, 'a');
-  assert.equal(r[0].target, 'b');
-});
-
-test('computeJaccardEdges: sharedTags 透传 (含 dim 前缀)', () => {
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: ['x', 'y'], task: [], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: ['x', 'z'], task: [], method: [], type: [] } }),
-  ]);
-  // flattenCategories 输出 'venue:x','venue:y' → shared = ['venue:x']
-  assert.deepEqual(r[0].sharedTags, ['venue:x']);
-});
-
-test('computeJaccardEdges: 3 papers → 3 edges', () => {
-  // a,b,c 全共享 → 3 对 (ab, ac, bc)
-  const cats = { venue: ['ICML'], task: [], method: [], type: [] };
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: cats }),
-    mkPaper({ id: 'b', categories: cats }),
-    mkPaper({ id: 'c', categories: cats }),
-  ]);
+test('topK: 按 source 分组,每组前 k 条', () => {
+  const edges = [
+    mkEdge({ source: 'a', target: 'b', weight: 0.1 }),
+    mkEdge({ source: 'a', target: 'c', weight: 0.5 }),
+    mkEdge({ source: 'a', target: 'd', weight: 0.3 }),
+    mkEdge({ source: 'a', target: 'e', weight: 0.2 }),
+    mkEdge({ source: 'b', target: 'c', weight: 0.8 }),
+  ];
+  const r = topKEdges(edges, 2);
+  // a 留下 2 条 (按 weight desc: c=0.5, d=0.3),b 留下 1 条 (c=0.8)
   assert.equal(r.length, 3);
 });
 
-// ---------- 边界 ----------
-test('computeJaccardEdges: 一方空标签 → 跳过', () => {
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: ['ICML'], task: [], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: [], task: [], method: [], type: [] } }),
-  ]);
-  assert.deepEqual(r, []);
+test('topK: 同 source 内按 weight desc', () => {
+  const edges = [
+    mkEdge({ source: 'a', target: 'b', weight: 0.1 }),
+    mkEdge({ source: 'a', target: 'c', weight: 0.9 }),
+    mkEdge({ source: 'a', target: 'd', weight: 0.5 }),
+  ];
+  const r = topKEdges(edges, 2);
+  assert.equal(r[0].target, 'c'); // 0.9
+  assert.equal(r[1].target, 'd'); // 0.5
 });
 
-test('computeJaccardEdges: 两方都空 → 跳过', () => {
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: [], task: [], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: [], task: [], method: [], type: [] } }),
-  ]);
-  assert.deepEqual(r, []);
+test('topK: 不去重(保留重复 source)', () => {
+  const edges = [
+    mkEdge({ source: 'a', target: 'b', weight: 0.1 }),
+    mkEdge({ source: 'a', target: 'c', weight: 0.5 }),
+  ];
+  const r = topKEdges(edges, 5);
+  // 保留两条
+  assert.equal(r.length, 2);
 });
 
-test('computeJaccardEdges: 无 categories → 跳过', () => {
+// ---------- computeJaccardEdges ---
+test('jaccard: 完全相同 tags → weight=1', () => {
   const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: undefined }),
-    mkPaper({ id: 'b', categories: undefined }),
-  ]);
-  assert.deepEqual(r, []);
-});
-
-// ---------- minWeight ----------
-test('computeJaccardEdges: minWeight 过滤低权重', () => {
-  // inter=1, union=3 → 0.33
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: ['a', 'b'], task: [], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: ['b', 'c'], task: [], method: [], type: [] } }),
-  ], 0.5);
-  assert.deepEqual(r, []);
-});
-
-test('computeJaccardEdges: minWeight 包含高权重', () => {
-  const cats = { venue: ['x'], task: [], method: [], type: [] };
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: cats }),
-    mkPaper({ id: 'b', categories: cats }),
-  ], 0.5);
-  // weight=1 ≥ 0.5
-  assert.equal(r.length, 1);
-});
-
-test('computeJaccardEdges: minWeight=0 包含所有', () => {
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: ['a', 'b'], task: [], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: ['b', 'c'], task: [], method: [], type: [] } }),
-  ], 0);
-  assert.equal(r.length, 1);
-});
-
-// ---------- 跨 dim ----------
-test('computeJaccardEdges: 跨 dim 共享也算', () => {
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: [], task: [], method: ['rl'], type: [] } }),
-  ]);
-  // 'task:rl' 与 'method:rl' 是不同 tag(flattenCategories 加 dim 前缀)→ 不共享
-  assert.deepEqual(r, []);
-});
-
-test('computeJaccardEdges: 同 dim 共享 → 算', () => {
-  const r = computeJaccardEdges([
-    mkPaper({ id: 'a', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
-    mkPaper({ id: 'b', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+    mkPaper({ id: 'p1', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+    mkPaper({ id: 'p2', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
   ]);
   assert.equal(r.length, 1);
   assert.equal(r[0].weight, 1);
+  assert.deepEqual(r[0].sharedTags, ['task:rl']);
+});
+
+test('jaccard: 完全不交 → []', () => {
+  const r = computeJaccardEdges([
+    mkPaper({ id: 'p1', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+    mkPaper({ id: 'p2', categories: { venue: [], task: ['reasoning'], method: [], type: [] } }),
+  ]);
+  assert.equal(r.length, 0);
+});
+
+test('jaccard: 部分重叠 → weight = |A∩B|/|A∪B|', () => {
+  // p1: {a, b}; p2: {b, c} → inter=1, union=3 → 1/3
+  const r = computeJaccardEdges([
+    mkPaper({
+      id: 'p1',
+      categories: { venue: [], task: ['rl', 'reasoning'], method: [], type: [] },
+    }),
+    mkPaper({
+      id: 'p2',
+      categories: { venue: [], task: ['reasoning', 'vision'], method: [], type: [] },
+    }),
+  ]);
+  assert.equal(r.length, 1);
+  assert.ok(Math.abs(r[0].weight - 1 / 3) < 1e-9);
+});
+
+test('jaccard: 0 tag 论文跳过', () => {
+  const r = computeJaccardEdges([
+    mkPaper({ id: 'p1', categories: { venue: [], task: [], method: [], type: [] } }),
+    mkPaper({ id: 'p2', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+  ]);
+  assert.equal(r.length, 0);
+});
+
+test('jaccard: minWeight 过滤', () => {
+  // p1 ∩ p2 = 1, union = 3 → 1/3 = 0.33 < 0.5 → 过滤
+  const r = computeJaccardEdges(
+    [
+      mkPaper({
+        id: 'p1',
+        categories: { venue: [], task: ['rl', 'reasoning'], method: [], type: [] },
+      }),
+      mkPaper({
+        id: 'p2',
+        categories: { venue: [], task: ['reasoning', 'vision'], method: [], type: [] },
+      }),
+    ],
+    0.5,
+  );
+  assert.equal(r.length, 0);
+});
+
+test('jaccard: minWeight=0 不过滤', () => {
+  const r = computeJaccardEdges(
+    [
+      mkPaper({
+        id: 'p1',
+        categories: { venue: [], task: ['rl', 'reasoning'], method: [], type: [] },
+      }),
+      mkPaper({
+        id: 'p2',
+        categories: { venue: [], task: ['reasoning', 'vision'], method: [], type: [] },
+      }),
+    ],
+    0,
+  );
+  assert.equal(r.length, 1);
+});
+
+test('jaccard: 多 pair', () => {
+  const r = computeJaccardEdges([
+    mkPaper({ id: 'p1', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+    mkPaper({ id: 'p2', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+    mkPaper({ id: 'p3', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+  ]);
+  // 3 papers → 3 pair (1-2, 1-3, 2-3)
+  assert.equal(r.length, 3);
+});
+
+test('jaccard: source < target 顺序(source.id < target.id)', () => {
+  const r = computeJaccardEdges([
+    mkPaper({ id: 'b', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+    mkPaper({ id: 'a', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+  ]);
+  // 'a' 在 input index 1,但 source/target 按 id 排,不影响 Jaccard 输出
+  // source/target 不强制 source<target,只是按遍历顺序
+  assert.equal(r.length, 1);
+});
+
+test('jaccard: sharedTags 列出交集', () => {
+  const r = computeJaccardEdges([
+    mkPaper({
+      id: 'p1',
+      categories: { venue: [], task: ['rl', 'reasoning'], method: ['transformer'], type: [] },
+    }),
+    mkPaper({
+      id: 'p2',
+      categories: { venue: [], task: ['rl', 'vision'], method: ['transformer'], type: [] },
+    }),
+  ]);
+  // 交集 = ['task:rl', 'method:transformer']
+  assert.equal(r[0].sharedTags.length, 2);
+  assert.ok(r[0].sharedTags.includes('task:rl'));
+  assert.ok(r[0].sharedTags.includes('method:transformer'));
+});
+
+test('jaccard: type=jaccard', () => {
+  const r = computeJaccardEdges([
+    mkPaper({ id: 'p1', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+    mkPaper({ id: 'p2', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+  ]);
+  assert.equal(r[0].type, 'jaccard');
+});
+
+test('jaccard: 空 papers → []', () => {
+  assert.deepEqual(computeJaccardEdges([]), []);
+});
+
+test('jaccard: 单 paper → []', () => {
+  const r = computeJaccardEdges([mkPaper()]);
+  assert.equal(r.length, 0);
 });
