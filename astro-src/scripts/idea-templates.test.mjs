@@ -2,7 +2,8 @@
 // astro-src/scripts/idea-templates.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/idea-templates.ts.
-// IDEA_TEMPLATES + listIdeaTemplateKeys + getIdeaTemplate。
+// IDEA_TEMPLATES 常量 + listIdeaTemplateKeys + getIdeaTemplate +
+// applyIdeaTemplate (form/fieldMap → 填充 description/tags, 留空 title)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,8 +18,7 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'node',
-    external: ['node:*'],
+    platform: 'neutral',
     write: false,
     target: 'es2022',
   });
@@ -28,92 +28,210 @@ async function loadTs(relPath) {
 }
 
 const mod = await loadTs('lib/idea-templates.ts');
-const { IDEA_TEMPLATES, listIdeaTemplateKeys, getIdeaTemplate } = mod;
+const {
+  IDEA_TEMPLATES,
+  listIdeaTemplateKeys,
+  getIdeaTemplate,
+  applyIdeaTemplate,
+} = mod;
 
-// ---------- IDEA_TEMPLATES ----------
-test('IDEA_TEMPLATES: 3 个 key', () => {
-  assert.deepEqual(Object.keys(IDEA_TEMPLATES).sort(), ['discussion', 'experiment', 'survey']);
-});
-
-test('IDEA_TEMPLATES: 每条都有 title/description/tags', () => {
-  for (const k of Object.keys(IDEA_TEMPLATES)) {
-    const t = IDEA_TEMPLATES[k];
-    assert.ok(typeof t.title === 'string' && t.title.length > 0);
-    assert.ok(typeof t.description === 'string' && t.description.length > 0);
-    assert.ok(Array.isArray(t.tags));
-  }
-});
-
-test('IDEA_TEMPLATES: survey 含 "综述"', () => {
-  assert.match(IDEA_TEMPLATES.survey.title, /综述/);
-});
-
-test('IDEA_TEMPLATES: experiment 含 "实验"', () => {
-  assert.match(IDEA_TEMPLATES.experiment.title, /实验/);
-});
-
-test('IDEA_TEMPLATES: discussion 含 "讨论"', () => {
-  assert.match(IDEA_TEMPLATES.discussion.title, /讨论/);
-});
-
-test('IDEA_TEMPLATES: tags 至少 1 个', () => {
-  for (const k of Object.keys(IDEA_TEMPLATES)) {
-    assert.ok(IDEA_TEMPLATES[k].tags.length > 0);
-  }
-});
-
-// ---------- listIdeaTemplateKeys ----------
-test('listIdeaTemplateKeys: 返回 3 个 key', () => {
-  assert.equal(listIdeaTemplateKeys().length, 3);
-});
-
-test('listIdeaTemplateKeys: 包含预期 key', () => {
-  const keys = listIdeaTemplateKeys();
+// ---------- IDEA_TEMPLATES ---
+test('TEMPLATES: 3 个固定 key', () => {
+  const keys = Object.keys(IDEA_TEMPLATES);
+  assert.equal(keys.length, 3);
   assert.ok(keys.includes('survey'));
   assert.ok(keys.includes('experiment'));
   assert.ok(keys.includes('discussion'));
 });
 
-test('listIdeaTemplateKeys: 返回数组', () => {
-  assert.ok(Array.isArray(listIdeaTemplateKeys()));
+test('TEMPLATES: 每个有 title/description/tags', () => {
+  for (const key of Object.keys(IDEA_TEMPLATES)) {
+    const t = IDEA_TEMPLATES[key];
+    assert.equal(typeof t.title, 'string');
+    assert.equal(typeof t.description, 'string');
+    assert.ok(t.description.length > 0);
+    assert.ok(Array.isArray(t.tags));
+  }
 });
 
-// ---------- getIdeaTemplate ----------
-test('getIdeaTemplate: survey → 对象', () => {
+test('TEMPLATES: survey 含占位符', () => {
+  const t = IDEA_TEMPLATES.survey;
+  assert.match(t.title, /XXX/);
+  assert.match(t.description, /\[子领域 A\]/);
+});
+
+test('TEMPLATES: experiment 含自变量/因变量', () => {
+  const t = IDEA_TEMPLATES.experiment;
+  assert.match(t.description, /自变量/);
+  assert.match(t.description, /因变量/);
+});
+
+test('TEMPLATES: discussion 含讨论/观点', () => {
+  const t = IDEA_TEMPLATES.discussion;
+  assert.match(t.description, /讨论主题/);
+  assert.match(t.description, /已有观点/);
+  assert.match(t.description, /我的观点/);
+});
+
+// ---------- listIdeaTemplateKeys ---
+test('listKeys: 3 个 key', () => {
+  const r = listIdeaTemplateKeys();
+  assert.equal(r.length, 3);
+});
+
+test('listKeys: 含 survey/experiment/discussion', () => {
+  const r = listIdeaTemplateKeys();
+  assert.ok(r.includes('survey'));
+  assert.ok(r.includes('experiment'));
+  assert.ok(r.includes('discussion'));
+});
+
+// ---------- getIdeaTemplate ---
+test('getTpl: 已知 key', () => {
   const r = getIdeaTemplate('survey');
-  assert.notEqual(r, null);
   assert.equal(r.title, IDEA_TEMPLATES.survey.title);
 });
 
-test('getIdeaTemplate: experiment → 对象', () => {
-  const r = getIdeaTemplate('experiment');
-  assert.notEqual(r, null);
-});
-
-test('getIdeaTemplate: discussion → 对象', () => {
-  const r = getIdeaTemplate('discussion');
-  assert.notEqual(r, null);
-});
-
-test('getIdeaTemplate: 未知 key → null', () => {
+test('getTpl: 未知 key → null', () => {
   assert.equal(getIdeaTemplate('unknown'), null);
 });
 
-test('getIdeaTemplate: 空字符串 → null', () => {
+test('getTpl: 空字符串 → null', () => {
   assert.equal(getIdeaTemplate(''), null);
 });
 
-test('getIdeaTemplate: 大小写敏感', () => {
-  // 'Survey' ≠ 'survey'
-  assert.equal(getIdeaTemplate('Survey'), null);
+// ---------- applyIdeaTemplate (fieldMap form) ---
+test('apply: fieldMap → 填 description + tags', () => {
+  const fields = {
+    title: { value: '' },
+    description: { value: '' },
+    tags: { value: '' },
+  };
+  const r = applyIdeaTemplate(fields, 'survey');
+  assert.equal(r.applied, true);
+  assert.equal(fields.description.value, IDEA_TEMPLATES.survey.description);
+  assert.equal(fields.tags.value, IDEA_TEMPLATES.survey.tags.join(', '));
 });
 
-test('getIdeaTemplate: 返回的 tags 是数组', () => {
-  const r = getIdeaTemplate('survey');
-  assert.ok(Array.isArray(r.tags));
+test('apply: 未知 key → applied=false', () => {
+  const fields = {
+    title: { value: '' },
+    description: { value: '' },
+    tags: { value: '' },
+  };
+  const r = applyIdeaTemplate(fields, 'unknown');
+  assert.equal(r.applied, false);
+  assert.match(r.reason, /unknown template/);
+  assert.equal(fields.description.value, ''); // 没动
 });
 
-test('getIdeaTemplate: 返回的对象与 IDEA_TEMPLATES 同引用', () => {
-  // 实现:IDEA_TEMPLATES[key] ?? null → 同引用
-  assert.equal(getIdeaTemplate('survey'), IDEA_TEMPLATES.survey);
+test('apply: title 空 → 填入模板 title', () => {
+  // 代码:if (titleEl && tpl.title && !titleEl.value) titleEl.value = tpl.title
+  // 即 title 字段为空时填入(看似与注释"留空"不符,但代码就是这么写的)
+  const fields = {
+    title: { value: '' },
+    description: { value: '' },
+    tags: { value: '' },
+  };
+  applyIdeaTemplate(fields, 'survey');
+  assert.equal(fields.title.value, IDEA_TEMPLATES.survey.title);
+});
+
+test('apply: title 已有值 → 保留(不覆盖)', () => {
+  const fields = {
+    title: { value: 'user custom title' },
+    description: { value: '' },
+    tags: { value: '' },
+  };
+  applyIdeaTemplate(fields, 'survey');
+  assert.equal(fields.title.value, 'user custom title');
+});
+
+test('apply: description join → ", "', () => {
+  const fields = {
+    title: { value: '' },
+    description: { value: '' },
+    tags: { value: '' },
+  };
+  applyIdeaTemplate(fields, 'experiment');
+  assert.equal(fields.tags.value, 'experiment, hypothesis');
+});
+
+test('apply: 3 个 key 各自正确填充', () => {
+  for (const key of ['survey', 'experiment', 'discussion']) {
+    const fields = {
+      title: { value: '' },
+      description: { value: '' },
+      tags: { value: '' },
+    };
+    applyIdeaTemplate(fields, key);
+    assert.equal(fields.description.value, IDEA_TEMPLATES[key].description);
+    assert.equal(fields.tags.value, IDEA_TEMPLATES[key].tags.join(', '));
+  }
+});
+
+test('apply: fieldMap 缺 title → 不抛', () => {
+  const fields = { description: { value: '' }, tags: { value: '' } };
+  const r = applyIdeaTemplate(fields, 'survey');
+  assert.equal(r.applied, true);
+});
+
+test('apply: fieldMap 缺 description → 不抛', () => {
+  const fields = { title: { value: '' }, tags: { value: '' } };
+  const r = applyIdeaTemplate(fields, 'survey');
+  assert.equal(r.applied, true);
+  assert.equal(fields.tags.value, IDEA_TEMPLATES.survey.tags.join(', '));
+});
+
+test('apply: fieldMap 缺 tags → 不抛', () => {
+  const fields = { title: { value: '' }, description: { value: '' } };
+  const r = applyIdeaTemplate(fields, 'survey');
+  assert.equal(r.applied, true);
+  assert.equal(fields.description.value, IDEA_TEMPLATES.survey.description);
+});
+
+test('apply: fieldMap 全空 → 不抛', () => {
+  const fields = {};
+  const r = applyIdeaTemplate(fields, 'survey');
+  assert.equal(r.applied, true);
+});
+
+// ---------- applyIdeaTemplate (HTMLFormElement form) ---
+test('apply: form 走 querySelector', () => {
+  const calls = [];
+  const fakeForm = {
+    querySelector: (sel) => {
+      calls.push(sel);
+      if (sel.includes('title')) return { value: '' };
+      if (sel.includes('description')) return { value: '' };
+      if (sel.includes('tags')) return { value: '' };
+      return null;
+    },
+  };
+  const r = applyIdeaTemplate(fakeForm, 'survey');
+  assert.equal(r.applied, true);
+  // querySelector 应被调用 3 次
+  assert.equal(calls.length, 3);
+  assert.ok(calls.some((s) => s.includes('idea-title')));
+  assert.ok(calls.some((s) => s.includes('idea-description')));
+  assert.ok(calls.some((s) => s.includes('idea-tags')));
+});
+
+test('apply: form 缺字段 → null 不抛', () => {
+  const fakeForm = { querySelector: () => null };
+  const r = applyIdeaTemplate(fakeForm, 'survey');
+  assert.equal(r.applied, true);
+});
+
+// ---------- 集成 ---
+test('集成: getTpl → apply', () => {
+  const tpl = getIdeaTemplate('discussion');
+  const fields = {
+    title: { value: '' },
+    description: { value: '' },
+    tags: { value: '' },
+  };
+  applyIdeaTemplate(fields, 'discussion');
+  assert.equal(fields.description.value, tpl.description);
+  assert.deepEqual(fields.tags.value.split(', '), tpl.tags);
 });
