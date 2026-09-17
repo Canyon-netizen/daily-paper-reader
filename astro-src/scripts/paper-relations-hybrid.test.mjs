@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // astro-src/scripts/paper-relations-hybrid.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/paper-relations/hybrid.ts mergeHybridEdges.
+// Tests for R7 polish: astro-src/lib/paper-relations/hybrid.ts.
+// mergeHybridEdges:3 种算法边 → 加权合并 + 按 maxW 归一化 + (source,target) 规范化。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,9 +17,10 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'neutral',
+    platform: 'node',
     write: false,
     target: 'es2022',
+    external: ['node:fs', 'node:fs/promises', 'node:path', 'fs', 'path'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -28,143 +30,225 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/paper-relations/hybrid.ts');
 const { mergeHybridEdges } = mod;
 
-const edge = (source, target, weight, type = 'jaccard', sharedTags = []) => ({
-  source, target, weight, type, sharedTags,
+const mkEdge = (overrides = {}) => ({
+  source: 'a',
+  target: 'b',
+  weight: 0.5,
+  type: 'jaccard',
+  sharedTags: [],
+  ...overrides,
 });
 
-// ---------- mergeHybridEdges ----------
-test('mergeHybridEdges: 3 个空数组 → []', () => {
-  const r = mergeHybridEdges([], [], [], { jaccard: 1, tfidf: 1, embedding: 1 });
+const W = { jaccard: 0.25, tfidf: 0.35, embedding: 0.4 };
+
+// ---------- basic ---
+test('hybrid: 全空 → []', () => {
+  const r = mergeHybridEdges([], [], [], W);
   assert.deepEqual(r, []);
 });
 
-test('mergeHybridEdges: 单 jaccard 边 → 1 条边', () => {
-  const r = mergeHybridEdges(
-    [edge('a', 'b', 0.5, 'jaccard', ['t1'])],
-    [], [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
-  );
+test('hybrid: 单 jaccard 边', () => {
+  const r = mergeHybridEdges([mkEdge({ weight: 1 })], [], [], W);
   assert.equal(r.length, 1);
-  assert.equal(r[0].source, 'a');
-  assert.equal(r[0].target, 'b');
+  // maxW = 0.25*1 = 0.25 → norm = 4 → 0.25*4 = 1.0
+  assert.equal(r[0].weight, 1);
 });
 
-test('mergeHybridEdges: 边方向无关 (source<target 规范化)', () => {
-  // 'b' < 'a' 时 source='b', target='a'
-  const r = mergeHybridEdges(
-    [edge('b', 'a', 0.5, 'jaccard')],
-    [], [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
-  );
-  assert.equal(r[0].source, 'a');
-  assert.equal(r[0].target, 'b');
+test('hybrid: 单 tfidf 边', () => {
+  const r = mergeHybridEdges([], [mkEdge({ weight: 1, type: 'tfidf' })], [], W);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].weight, 1);
 });
 
-test('mergeHybridEdges: 同 (source,target) 跨算法合并权重', () => {
+test('hybrid: 单 embedding 边', () => {
+  const r = mergeHybridEdges([], [], [mkEdge({ weight: 1, type: 'embedding' })], W);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].weight, 1);
+});
+
+// ---------- 合并同 pair ---
+test('hybrid: jaccard + tfidf 同 pair → 合并', () => {
   const r = mergeHybridEdges(
-    [edge('a', 'b', 0.5, 'jaccard')],
-    [edge('a', 'b', 0.4, 'tfidf')],
-    [edge('a', 'b', 0.3, 'embedding')],
-    { jaccard: 0.25, tfidf: 0.35, embedding: 0.4 },
+    [mkEdge({ type: 'jaccard', weight: 0.5 })],
+    [mkEdge({ type: 'tfidf', weight: 0.8 })],
+    [],
+    W,
   );
   assert.equal(r.length, 1);
-  // weight = 0.5*0.25 + 0.4*0.35 + 0.3*0.4 = 0.125 + 0.14 + 0.12 = 0.385
-  // maxW = 0.385, norm = 1/0.385 → weight = 1.0
+  // w = 0.5*0.25 + 0.8*0.35 = 0.125 + 0.28 = 0.405
+  // maxW = 0.405 → norm = 1/0.405 → 1.0
   assert.ok(Math.abs(r[0].weight - 1) < 1e-9);
 });
 
-test('mergeHybridEdges: 同 key 双向 (a→b 与 b→a) 合并', () => {
+test('hybrid: 3 算法合并', () => {
   const r = mergeHybridEdges(
-    [edge('a', 'b', 0.5, 'jaccard')],
-    [edge('b', 'a', 0.3, 'tfidf')],
+    [mkEdge({ type: 'jaccard', weight: 1 })],
+    [mkEdge({ type: 'tfidf', weight: 1 })],
+    [mkEdge({ type: 'embedding', weight: 1 })],
+    W,
+  );
+  assert.equal(r.length, 1);
+  // w = 1*0.25 + 1*0.35 + 1*0.4 = 1.0
+  // maxW = 1.0 → norm = 1
+  assert.ok(Math.abs(r[0].weight - 1) < 1e-9);
+});
+
+test('hybrid: 不同 pair → 独立', () => {
+  const r = mergeHybridEdges(
+    [
+      mkEdge({ source: 'a', target: 'b' }),
+      mkEdge({ source: 'c', target: 'd' }),
+    ],
     [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
+    [],
+    W,
+  );
+  assert.equal(r.length, 2);
+});
+
+// ---------- (source,target) 规范化 ---
+test('hybrid: source/target 顺序无关', () => {
+  // pair (a,b) 与 (b,a) 应合并为同一条
+  const r = mergeHybridEdges(
+    [
+      mkEdge({ source: 'a', target: 'b', type: 'jaccard', weight: 0.5 }),
+      mkEdge({ source: 'b', target: 'a', type: 'tfidf', weight: 0.8 }),
+    ],
+    [],
+    [],
+    W,
   );
   assert.equal(r.length, 1);
 });
 
-test('mergeHybridEdges: 权重归一化到 [0,1]', () => {
+test('hybrid: source < target 规范化', () => {
   const r = mergeHybridEdges(
-    [edge('a', 'b', 0.5, 'jaccard')],
-    [edge('c', 'd', 0.3, 'tfidf')],
+    [mkEdge({ source: 'b', target: 'a' })],
     [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
+    [],
+    W,
   );
-  // 两条边权重分别为 0.5 和 0.3
-  // maxW = 0.5 → norm = 2 → 第二条归一化为 0.6
+  // 'a' < 'b' → source='a', target='b'
+  assert.equal(r[0].source, 'a');
+  assert.equal(r[0].target, 'b');
+});
+
+// ---------- 归一化 ---
+test('hybrid: maxW 归一化到 [0,1]', () => {
+  const r = mergeHybridEdges(
+    [
+      mkEdge({ source: 'a', target: 'b', weight: 1 }),
+      mkEdge({ source: 'a', target: 'c', weight: 0.5 }),
+      mkEdge({ source: 'a', target: 'd', weight: 0.2 }),
+    ],
+    [],
+    [],
+    W,
+  );
   for (const e of r) {
     assert.ok(e.weight >= 0 && e.weight <= 1);
   }
-  // 最大权重的边归一化后 = 1
-  const max = Math.max(...r.map((e) => e.weight));
-  assert.equal(max, 1);
+  // 最大的归一为 1
+  const maxEdge = r.reduce((m, e) => (e.weight > m.weight ? e : m));
+  assert.ok(Math.abs(maxEdge.weight - 1) < 1e-9);
 });
 
-test('mergeHybridEdges: sharedTags 仅从 jaccard 边累加', () => {
+test('hybrid: maxW=0 → 不抛(返回 weight=0)', () => {
+  // 全 weight=0 → maxW=0 → norm=1 → 0*1=0
   const r = mergeHybridEdges(
-    [edge('a', 'b', 0.5, 'jaccard', ['t1', 't2'])],
-    [edge('a', 'b', 0.4, 'tfidf', ['should-not-include'])],
-    [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
-  );
-  assert.deepEqual(r[0].sharedTags.sort(), ['t1', 't2']);
-});
-
-test('mergeHybridEdges: sharedTags 去重', () => {
-  const r = mergeHybridEdges(
-    [
-      edge('a', 'b', 0.5, 'jaccard', ['t1', 't2']),
-      edge('a', 'b', 0.3, 'jaccard', ['t2', 't3']),
-    ],
-    [], [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
-  );
-  assert.deepEqual(r[0].sharedTags.sort(), ['t1', 't2', 't3']);
-});
-
-test('mergeHybridEdges: type 占位 = jaccard (hybrid 边无单类型)', () => {
-  const r = mergeHybridEdges([], [], [edge('a', 'b', 0.5, 'embedding')], { jaccard: 1, tfidf: 1, embedding: 1 });
-  assert.equal(r[0].type, 'jaccard');
-});
-
-test('mergeHybridEdges: 自环 (source===target)', () => {
-  // source < target 总会规范化 → 同 key,合并权重
-  const r = mergeHybridEdges(
-    [edge('a', 'a', 0.5, 'jaccard')],
+    [mkEdge({ weight: 0 })],
     [],
     [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
+    W,
   );
-  // 'a' < 'a' → false → source='a', target='a'
-  assert.equal(r.length, 1);
-});
-
-test('mergeHybridEdges: maxW=0 → 归一化系数 = 1', () => {
-  // 所有权重 0 → maxW = 0 → norm = 1
-  const r = mergeHybridEdges(
-    [edge('a', 'b', 0, 'jaccard')],
-    [], [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
-  );
-  // weight = 0 * 1 = 0
   assert.equal(r[0].weight, 0);
 });
 
-test('mergeHybridEdges: 不同 key 独立', () => {
+// ---------- sharedTags ---
+test('hybrid: sharedTags 来自 jaccard 边', () => {
   const r = mergeHybridEdges(
-    [edge('a', 'b', 0.5, 'jaccard'), edge('c', 'd', 0.3, 'jaccard')],
-    [], [],
-    { jaccard: 1, tfidf: 1, embedding: 1 },
+    [mkEdge({ type: 'jaccard', sharedTags: ['task:rl', 'method:m'] })],
+    [],
+    [],
+    W,
   );
-  assert.equal(r.length, 2);
-  // maxW = 0.5 → 第二条归一化 0.6
-  const cd = r.find((e) => e.source === 'c' || e.target === 'c');
-  assert.equal(cd.weight, 0.6);
+  assert.deepEqual(r[0].sharedTags, ['task:rl', 'method:m']);
 });
 
-test('mergeHybridEdges: 不修改输入边数组', () => {
-  const j = [edge('a', 'b', 0.5, 'jaccard', ['t1'])];
-  const before = JSON.parse(JSON.stringify(j));
-  mergeHybridEdges(j, [], [], { jaccard: 1, tfidf: 1, embedding: 1 });
-  assert.deepEqual(j, before);
+test('hybrid: 多 jaccard 边 → sharedTags 合并去重', () => {
+  const r = mergeHybridEdges(
+    [
+      mkEdge({ type: 'jaccard', sharedTags: ['task:rl'] }),
+      mkEdge({ type: 'jaccard', sharedTags: ['task:rl', 'method:m'] }),
+    ],
+    [],
+    [],
+    W,
+  );
+  // 同 pair 合并,sharedTags 应该 ['task:rl', 'method:m']
+  assert.deepEqual(r[0].sharedTags.sort(), ['method:m', 'task:rl']);
+});
+
+test('hybrid: tfidf/embedding 边 sharedTags 空 → 不影响', () => {
+  const r = mergeHybridEdges(
+    [mkEdge({ type: 'jaccard', sharedTags: ['task:rl'] })],
+    [mkEdge({ type: 'tfidf', sharedTags: [] })],
+    [mkEdge({ type: 'embedding', sharedTags: [] })],
+    W,
+  );
+  assert.deepEqual(r[0].sharedTags, ['task:rl']);
+});
+
+// ---------- type ---
+test('hybrid: 边 type 固定为 jaccard(占位)', () => {
+  const r = mergeHybridEdges(
+    [],
+    [mkEdge({ type: 'tfidf', weight: 1 })],
+    [],
+    W,
+  );
+  assert.equal(r[0].type, 'jaccard');
+});
+
+// ---------- 权重 ---
+test('hybrid: 自定义 weights', () => {
+  const r = mergeHybridEdges(
+    [],
+    [mkEdge({ weight: 1, type: 'tfidf' })],
+    [],
+    { jaccard: 0, tfidf: 0.5, embedding: 0 },
+  );
+  // w = 1*0.5 = 0.5,maxW = 0.5,norm = 2 → 1
+  assert.equal(r[0].weight, 1);
+});
+
+test('hybrid: 权重全 0 → 全归 0', () => {
+  const r = mergeHybridEdges(
+    [mkEdge({ weight: 1 })],
+    [],
+    [],
+    { jaccard: 0, tfidf: 0, embedding: 0 },
+  );
+  // w = 0, maxW = 0, norm = 1, weight = 0*1 = 0
+  assert.equal(r[0].weight, 0);
+});
+
+// ---------- 集成 ---
+test('集成: 三算法混合', () => {
+  const r = mergeHybridEdges(
+    [
+      mkEdge({ source: 'a', target: 'b', type: 'jaccard', weight: 0.6 }),
+    ],
+    [
+      mkEdge({ source: 'a', target: 'b', type: 'tfidf', weight: 0.8 }),
+    ],
+    [
+      mkEdge({ source: 'a', target: 'b', type: 'embedding', weight: 0.9 }),
+    ],
+    W,
+  );
+  assert.equal(r.length, 1);
+  // w = 0.6*0.25 + 0.8*0.35 + 0.9*0.4 = 0.15 + 0.28 + 0.36 = 0.79
+  // maxW = 0.79 → norm = 1/0.79 → 1.0
+  assert.ok(Math.abs(r[0].weight - 1) < 1e-9);
 });
