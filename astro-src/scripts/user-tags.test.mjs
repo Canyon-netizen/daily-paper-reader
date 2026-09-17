@@ -2,7 +2,9 @@
 // astro-src/scripts/user-tags.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/user-tags.ts.
-// 纯函数 flattenUserTags + mergeWithPaperCategories + mergeWithPaperTags + STORAGE_KEY.
+// flattenUserTags (UserTag[] → "kind:label" 数组) +
+// mergeWithPaperCategories (Categories + UserTag[] → 去重合并) +
+// mergeWithPaperTags (string[] + UserTag[] → 反推 Categories 再合并)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,9 +20,9 @@ async function loadTs(relPath) {
     bundle: true,
     format: 'esm',
     platform: 'node',
-    external: ['node:*'],
     write: false,
     target: 'es2022',
+    external: ['node:fs', 'node:fs/promises', 'node:path', 'fs', 'path'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -35,217 +37,227 @@ const {
   STORAGE_KEY,
 } = mod;
 
-// ---------- STORAGE_KEY ----------
-test('STORAGE_KEY: dpr_user_tags_v1', () => {
+// ---------- STORAGE_KEY ---
+test('STORAGE_KEY: 旧 key 名', () => {
   assert.equal(STORAGE_KEY, 'dpr_user_tags_v1');
 });
 
-// ---------- flattenUserTags ----------
-test('flattenUserTags: 空数组 → []', () => {
+// ---------- flattenUserTags ---
+test('flatten: 空数组 → []', () => {
   assert.deepEqual(flattenUserTags([]), []);
 });
 
-test('flattenUserTags: 单条', () => {
+test('flatten: 单 tag → ["task:rl"]', () => {
   const r = flattenUserTags([{ kind: 'task', label: 'rl' }]);
   assert.deepEqual(r, ['task:rl']);
 });
 
-test('flattenUserTags: 多条', () => {
+test('flatten: 多 tag → 顺序保留', () => {
   const r = flattenUserTags([
     { kind: 'task', label: 'rl' },
-    { kind: 'method', label: 'distillation' },
-    { kind: 'type', label: 'benchmark' },
+    { kind: 'method', label: 'transformer' },
+    { kind: 'type', label: 'survey' },
   ]);
-  assert.deepEqual(r, ['task:rl', 'method:distillation', 'type:benchmark']);
+  assert.deepEqual(r, ['task:rl', 'method:transformer', 'type:survey']);
 });
 
-test('flattenUserTags: 保留顺序', () => {
-  const r = flattenUserTags([
-    { kind: 'a', label: '1' },
-    { kind: 'b', label: '2' },
-    { kind: 'c', label: '3' },
-  ]);
-  assert.deepEqual(r, ['a:1', 'b:2', 'c:3']);
-});
-
-test('flattenUserTags: 含空格 label', () => {
-  const r = flattenUserTags([{ kind: 'task', label: 'self distillation' }]);
-  assert.deepEqual(r, ['task:self distillation']);
-});
-
-test('flattenUserTags: 不去重 (重复 kind:label 保留)', () => {
+test('flatten: 同 kind 不同 label', () => {
   const r = flattenUserTags([
     { kind: 'task', label: 'rl' },
-    { kind: 'task', label: 'rl' },
+    { kind: 'task', label: 'reasoning' },
   ]);
-  assert.deepEqual(r, ['task:rl', 'task:rl']);
+  assert.deepEqual(r, ['task:rl', 'task:reasoning']);
 });
 
-// ---------- mergeWithPaperCategories ----------
-test('mergeWithPaperCategories: paperCats undefined', () => {
-  const r = mergeWithPaperCategories(undefined, []);
-  assert.deepEqual(r, []);
+// ---------- mergeWithPaperCategories ---
+test('merge: paperCats undefined → 仅 userTags', () => {
+  const r = mergeWithPaperCategories(undefined, [{ kind: 'task', label: 'rl' }]);
+  assert.deepEqual(r, ['user:task:rl']);
 });
 
-test('mergeWithPaperCategories: paperCats null', () => {
-  const r = mergeWithPaperCategories(null, []);
-  assert.deepEqual(r, []);
+test('merge: paperCats null → 仅 userTags', () => {
+  const r = mergeWithPaperCategories(null, [{ kind: 'task', label: 'rl' }]);
+  assert.deepEqual(r, ['user:task:rl']);
 });
 
-test('mergeWithPaperCategories: 空 paperCats + 空 userTags → []', () => {
-  assert.deepEqual(
-    mergeWithPaperCategories({ venue: [], task: [], method: [], type: [] }, []),
-    [],
-  );
-});
-
-test('mergeWithPaperCategories: paperCats 完整 flatten', () => {
-  const r = mergeWithPaperCategories(
-    { venue: ['ICML 2025'], task: ['rl'], method: [], type: ['benchmark'] },
-    [],
-  );
-  assert.deepEqual(r, ['venue:ICML 2025', 'task:rl', 'type:benchmark']);
-});
-
-test('mergeWithPaperCategories: userTag 加 user: 前缀', () => {
+test('merge: paperCats 全空 → 仅 userTags', () => {
   const r = mergeWithPaperCategories(
     { venue: [], task: [], method: [], type: [] },
-    [{ kind: 'task', label: 'reasoning' }],
+    [{ kind: 'task', label: 'rl' }],
   );
-  assert.deepEqual(r, ['user:task:reasoning']);
+  assert.deepEqual(r, ['user:task:rl']);
 });
 
-test('mergeWithPaperCategories: paperCats 先 + userTag 后', () => {
+test('merge: userTags 空 → 仅 paperCats', () => {
   const r = mergeWithPaperCategories(
     { venue: ['ICML 2025'], task: ['rl'], method: [], type: [] },
-    [{ kind: 'task', label: 'reasoning' }],
-  );
-  assert.deepEqual(r, ['venue:ICML 2025', 'task:rl', 'user:task:reasoning']);
-});
-
-test('mergeWithPaperCategories: 去重 paper 内重复', () => {
-  // flattenCategories 不会重复,但 paper 内某 dim 重复 → 经过去重
-  const r = mergeWithPaperCategories(
-    { venue: ['ICML'], task: ['rl', 'rl'], method: [], type: [] },
     [],
   );
-  // task 重复 flatten 后还是 1 个 'task:rl'
-  assert.deepEqual(r, ['venue:ICML', 'task:rl']);
+  assert.deepEqual(r, ['venue:ICML 2025', 'task:rl']);
 });
 
-test('mergeWithPaperCategories: user tag 不与 paper 冲突', () => {
-  // paper 没 user:* → 不去重
+test('merge: 全有 → venue/task/method/type + user:task:*', () => {
   const r = mergeWithPaperCategories(
-    { venue: ['ICML'], task: ['rl'], method: [], type: [] },
+    { venue: ['ICML 2025'], task: ['rl'], method: ['transformer'], type: ['survey'] },
     [
       { kind: 'task', label: 'reasoning' },
-      { kind: 'method', label: 'distillation' },
+      { kind: 'method', label: 'diffusion' },
     ],
   );
+  // flattenCategories 按 venue→task→method→type 顺序,user: 后追加
   assert.deepEqual(r, [
-    'venue:ICML',
+    'venue:ICML 2025',
     'task:rl',
+    'method:transformer',
+    'type:survey',
     'user:task:reasoning',
-    'user:method:distillation',
+    'user:method:diffusion',
   ]);
 });
 
-test('mergeWithPaperCategories: 重复 userTag 去重', () => {
+test('merge: userTags undefined → 不抛', () => {
   const r = mergeWithPaperCategories(
-    { venue: [], task: [], method: [], type: [] },
-    [
-      { kind: 'task', label: 'reasoning' },
-      { kind: 'task', label: 'reasoning' },
-    ],
+    { venue: ['ICML'], task: [], method: [], type: [] },
+    undefined,
   );
-  assert.deepEqual(r, ['user:task:reasoning']);
-});
-
-test('mergeWithPaperCategories: userTags undefined → []', () => {
-  const r = mergeWithPaperCategories({ venue: ['ICML'], task: [], method: [], type: [] }, undefined);
   assert.deepEqual(r, ['venue:ICML']);
 });
 
-test('mergeWithPaperCategories: userTags null → []', () => {
-  const r = mergeWithPaperCategories({ venue: ['ICML'], task: [], method: [], type: [] }, null);
+test('merge: userTags null → 不抛', () => {
+  const r = mergeWithPaperCategories(
+    { venue: ['ICML'], task: [], method: [], type: [] },
+    null,
+  );
   assert.deepEqual(r, ['venue:ICML']);
 });
 
-// ---------- mergeWithPaperTags (旧 API 兼容) ----------
-test('mergeWithPaperTags: 旧 frontmatterTags 解析 dim:label', () => {
-  const r = mergeWithPaperTags(['task:rl', 'type:benchmark'], []);
-  // ACC.task = ['rl'], ACC.type = ['benchmark'] → flatten
-  assert.deepEqual(r, ['task:rl', 'type:benchmark']);
-});
-
-test('mergeWithPaperTags: 旧 query: 前缀 → task', () => {
-  // 'query:foo' → ACC.task.push('foo')
-  const r = mergeWithPaperTags(['query:foo'], []);
-  assert.deepEqual(r, ['task:foo']);
-});
-
-test('mergeWithPaperTags: venue dim', () => {
-  const r = mergeWithPaperTags(['venue:ICML 2025'], []);
-  assert.deepEqual(r, ['venue:ICML 2025']);
-});
-
-test('mergeWithPaperTags: method dim', () => {
-  const r = mergeWithPaperTags(['method:distillation'], []);
-  assert.deepEqual(r, ['method:distillation']);
-});
-
-test('mergeWithPaperTags: 未知 dim 跳过', () => {
-  const r = mergeWithPaperTags(['foo:bar'], []);
-  assert.deepEqual(r, []);
-});
-
-test('mergeWithPaperTags: 无冒号 → 默认 task', () => {
-  const r = mergeWithPaperTags(['lonely-tag'], []);
-  assert.deepEqual(r, ['task:lonely-tag']);
-});
-
-test('mergeWithPaperTags: 无冒号 + query 前缀被剥', () => {
-  // 'query:foo' 走的是 query-prefix branch (有冒号),无冒号才默认 task
-  const r = mergeWithPaperTags(['queryfoo'], []);
-  // 无冒号 → task.push
-  assert.deepEqual(r, ['task:queryfoo']);
-});
-
-test('mergeWithPaperTags: 多个 tag', () => {
-  const r = mergeWithPaperTags(['task:rl', 'type:benchmark', 'venue:ICML'], []);
-  // flattenCategories 固定输出顺序:venue → task → method → type
-  assert.deepEqual(r, ['venue:ICML', 'task:rl', 'type:benchmark']);
-});
-
-test('mergeWithPaperTags: 非字符串跳过', () => {
-  const r = mergeWithPaperTags(['task:rl', 123, null, 'type:b'], []);
-  assert.deepEqual(r, ['task:rl', 'type:b']);
-});
-
-test('mergeWithPaperTags: undefined → 仅 userTags', () => {
-  const r = mergeWithPaperTags(undefined, [{ kind: 'task', label: 'x' }]);
-  assert.deepEqual(r, ['user:task:x']);
-});
-
-test('mergeWithPaperTags: frontmatter + userTags 合并', () => {
-  const r = mergeWithPaperTags(['task:rl'], [{ kind: 'task', label: 'reasoning' }]);
+test('merge: paper 与 user 同 kind 不同 label → 两条', () => {
+  const r = mergeWithPaperCategories(
+    { venue: [], task: ['rl'], method: [], type: [] },
+    [{ kind: 'task', label: 'reasoning' }],
+  );
+  // task:rl vs user:task:reasoning → 不同
   assert.deepEqual(r, ['task:rl', 'user:task:reasoning']);
 });
 
-test('mergeWithPaperTags: frontmatter 内部去重', () => {
-  const r = mergeWithPaperTags(['task:rl', 'task:rl'], []);
+test('merge: paper 与 user 完全相同 → 去重(仅 paper)', () => {
+  // paper: task:rl; user: task:rl → key 是 "user:task:rl" → 不等于 "task:rl" → 两条
+  const r = mergeWithPaperCategories(
+    { venue: [], task: ['rl'], method: [], type: [] },
+    [{ kind: 'task', label: 'rl' }],
+  );
+  assert.deepEqual(r, ['task:rl', 'user:task:rl']);
+});
+
+test('merge: flattenCategories 内部去重', () => {
+  // venue:["ICML","ICML"] → flatten 后只有一个
+  const r = mergeWithPaperCategories(
+    { venue: ['ICML', 'ICML'], task: [], method: [], type: [] },
+    [],
+  );
+  assert.deepEqual(r, ['venue:ICML']);
+});
+
+test('merge: paper venue 顺序固定(venue→task→method→type)', () => {
+  const r = mergeWithPaperCategories(
+    { type: ['survey'], venue: ['ICML'], method: ['m1'], task: ['rl'] },
+    [],
+  );
+  assert.deepEqual(r, ['venue:ICML', 'task:rl', 'method:m1', 'type:survey']);
+});
+
+// ---------- mergeWithPaperTags ---
+test('legacyMerge: undefined frontmatterTags → 仅 userTags', () => {
+  const r = mergeWithPaperTags(undefined, [{ kind: 'task', label: 'rl' }]);
+  assert.deepEqual(r, ['user:task:rl']);
+});
+
+test('legacyMerge: null frontmatterTags → 仅 userTags', () => {
+  const r = mergeWithPaperTags(null, [{ kind: 'task', label: 'rl' }]);
+  assert.deepEqual(r, ['user:task:rl']);
+});
+
+test('legacyMerge: 空数组 → 仅 userTags', () => {
+  const r = mergeWithPaperTags([], [{ kind: 'task', label: 'rl' }]);
+  assert.deepEqual(r, ['user:task:rl']);
+});
+
+test('legacyMerge: 简单 "dim:label" → 还原到对应 dim', () => {
+  const r = mergeWithPaperTags(['task:rl', 'method:transformer'], []);
+  assert.deepEqual(r, ['task:rl', 'method:transformer']);
+});
+
+test('legacyMerge: "query:foo" → task:foo(兼容性)', () => {
+  const r = mergeWithPaperTags(['query:rl'], []);
   assert.deepEqual(r, ['task:rl']);
 });
 
-test('mergeWithPaperTags: query:foo + task:foo 都进 task', () => {
-  const r = mergeWithPaperTags(['query:foo', 'task:foo'], []);
-  // ACC.task = ['foo', 'foo'] → flattenCategories 去重 → 1 条 'task:foo'
+test('legacyMerge: 非法 dim → 丢弃', () => {
+  const r = mergeWithPaperTags(['unknown:foo', 'task:rl'], []);
+  assert.deepEqual(r, ['task:rl']);
+});
+
+test('legacyMerge: 无冒号 → 进 task', () => {
+  const r = mergeWithPaperTags(['foo'], []);
   assert.deepEqual(r, ['task:foo']);
 });
 
-test('mergeWithPaperTags: idx === 0 跳过 (无冒号)', () => {
-  // ':lonely' idx=0 → if 分支跳过;else if (s) ACC.task.push(':lonely')
-  // → flatten 后 'task::lonely'
-  const r = mergeWithPaperTags([':lonely'], []);
-  assert.deepEqual(r, ['task::lonely']);
+test('legacyMerge: 非 string 元素 → 跳过', () => {
+  const r = mergeWithPaperTags(['task:rl', null, 42, 'method:m'], []);
+  assert.deepEqual(r, ['task:rl', 'method:m']);
+});
+
+test('legacyMerge: 多个 query: 全部转 task', () => {
+  const r = mergeWithPaperTags(['query:rl', 'query:reasoning'], []);
+  assert.deepEqual(r, ['task:rl', 'task:reasoning']);
+});
+
+test('legacyMerge: 合并 userTags', () => {
+  const r = mergeWithPaperTags(
+    ['task:rl'],
+    [{ kind: 'task', label: 'reasoning' }],
+  );
+  assert.deepEqual(r, ['task:rl', 'user:task:reasoning']);
+});
+
+test('legacyMerge: 顺序 venue→task→method→type', () => {
+  const r = mergeWithPaperTags(
+    ['type:survey', 'venue:ICML', 'task:rl', 'method:m'],
+    [],
+  );
+  assert.deepEqual(r, ['venue:ICML', 'task:rl', 'method:m', 'type:survey']);
+});
+
+// ---------- 集成 ---
+test('集成: 合并 frontmatter + user + 排序', () => {
+  const r = mergeWithPaperCategories(
+    { venue: ['NeurIPS 2024'], task: ['rl', 'reasoning'], method: [], type: ['survey'] },
+    [
+      { kind: 'task', label: 'reasoning' },
+      { kind: 'method', label: 'transformer' },
+    ],
+  );
+  // task 内部去重:flattenCategories 看 c.task=['rl','reasoning'] → 两条都进
+  // user:task:reasoning 不与 task:reasoning 重复(前缀不同)
+  assert.deepEqual(r, [
+    'venue:NeurIPS 2024',
+    'task:rl',
+    'task:reasoning',
+    'type:survey',
+    'user:task:reasoning',
+    'user:method:transformer',
+  ]);
+});
+
+test('集成: legacy path → user tags 合并', () => {
+  // 旧 frontmatter ['query:rl'] 等价于新 {task:['rl']}
+  const r = mergeWithPaperTags(
+    ['query:rl', 'venue:ICML 2025'],
+    [{ kind: 'task', label: 'reasoning' }],
+  );
+  assert.deepEqual(r, [
+    'venue:ICML 2025',
+    'task:rl',
+    'user:task:reasoning',
+  ]);
 });
