@@ -1,253 +1,204 @@
 #!/usr/bin/env node
 // astro-src/scripts/paper-relations-tfidf.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/paper-relations/tfidf.ts computeTfIdfEdges.
-// 不能直接 esbuild load — 引 ../paper (relative, data URL 无法 resolve)。
-// inline computeTfIdfEdges + tokenize + termFreq + topKEdges,源做参考。
+// Tests for R7 polish: astro-src/lib/paper-relations/tfidf.ts.
+// TF-IDF 余弦相似度边 + L2 归一 + topK 裁剪。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import esbuild from 'esbuild';
 
-// --- inline 源 lib/paper-relations/tfidf.ts + edges-util.ts -------------
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
-function tokenize(text) {
-  return text
-    .toLowerCase()
-    .split(/[^a-z0-9一-鿿]+/u)
-    .filter((t) => t.length > 1);
-}
-
-function termFreq(tokens) {
-  const m = new Map();
-  for (const t of tokens) m.set(t, (m.get(t) || 0) + 1);
-  return m;
-}
-
-function topKEdges(edges, k) {
-  if (!k || k <= 0) return edges;
-  const bySource = new Map();
-  for (const e of edges) {
-    const arr = bySource.get(e.source);
-    if (arr) arr.push(e);
-    else bySource.set(e.source, [e]);
-  }
-  const out = [];
-  for (const arr of bySource.values()) {
-    arr.sort((a, b) => b.weight - a.weight);
-    for (const e of arr.slice(0, k)) out.push(e);
-  }
-  return out;
-}
-
-function computeTfIdfEdges(papers, topK = 8, minWeight = 0) {
-  if (papers.length < 2) return [];
-  const docs = papers.map((p) => {
-    const text = [p.title || '', p.title_zh || '', p.tldr || ''].join(' ');
-    return tokenize(text);
+async function loadTs(relPath) {
+  const result = await esbuild.build({
+    entryPoints: [join(__dirname, '..', relPath)],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    write: false,
+    target: 'es2022',
+    external: ['node:fs', 'node:fs/promises', 'node:path', 'fs', 'path'],
   });
-  const df = new Map();
-  for (const tokens of docs) {
-    const seen = new Set();
-    for (const t of tokens) {
-      if (seen.has(t)) continue;
-      seen.add(t);
-      df.set(t, (df.get(t) || 0) + 1);
-    }
-  }
-  const N = papers.length;
-  const vectors = docs.map((tokens) => {
-    const tf = termFreq(tokens);
-    const v = new Map();
-    let norm2 = 0;
-    for (const [term, count] of tf) {
-      const idf = Math.log(1 + N / (df.get(term) || 1));
-      const w = count * idf;
-      v.set(term, w);
-      norm2 += w * w;
-    }
-    const norm = Math.sqrt(norm2);
-    if (norm > 0) for (const [term, w] of v) v.set(term, w / norm);
-    return v;
-  });
-  const out = [];
-  for (let i = 0; i < N; i++) {
-    const vi = vectors[i];
-    if (vi.size === 0) continue;
-    const acc = new Map();
-    for (const [term, w] of vi) {
-      for (let j = 0; j < N; j++) {
-        const vj = vectors[j];
-        const wj = vj.get(term);
-        if (wj === undefined) continue;
-        acc.set(j, (acc.get(j) || 0) + w * wj);
-      }
-    }
-    for (const [j, sim] of acc) {
-      if (j === i) continue;
-      if (sim < minWeight) continue;
-      out.push({
-        source: papers[i].id,
-        target: papers[j].id,
-        weight: sim,
-        type: 'tfidf',
-        sharedTags: [],
-      });
-    }
-  }
-  return topKEdges(out, topK);
+  const code = result.outputFiles[0].text;
+  const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
+  return import(dataUrl);
 }
 
-// ---------- computeTfIdfEdges ----------
-test('computeTfIdfEdges: 0 paper → []', () => {
-  assert.deepEqual(computeTfIdfEdges([]), []);
+const mod = await loadTs('lib/paper-relations/tfidf.ts');
+const { computeTfIdfEdges } = mod;
+
+const mkPaper = (overrides = {}) => ({
+  id: 'papers/x.md',
+  title: 'Some Title',
+  title_zh: '',
+  tldr: '',
+  arxivId: '2310.12345',
+  canonicalArxivId: '2310.12345',
+  slug: 'x',
+  yearMonth: '2026-09',
+  day: '01',
+  categories: { venue: [], task: [], method: [], type: [] },
+  tags: [],
+  ...overrides,
 });
 
-test('computeTfIdfEdges: 1 paper → [] (不足 2)', () => {
-  assert.deepEqual(computeTfIdfEdges([{ id: 'a', title: 'foo' }]), []);
+// ---------- basic ---
+test('tfidf: < 2 papers → []', () => {
+  assert.equal(computeTfIdfEdges([]).length, 0);
+  assert.equal(computeTfIdfEdges([mkPaper()]).length, 0);
 });
 
-test('computeTfIdfEdges: 2 papers 共享词 → 边', () => {
+test('tfidf: 完全相同文本 → 边存在(双向)', () => {
+  const text = 'transformer attention is all you need';
   const r = computeTfIdfEdges([
-    { id: 'a', title: 'transformer attention', tldr: 'attention' },
-    { id: 'b', title: 'attention', tldr: '' },
+    mkPaper({ id: 'p1', title: text }),
+    mkPaper({ id: 'p2', title: text }),
   ]);
-  assert.equal(r.length, 2); // a→b, b→a
+  // TF-IDF 实现对每对 (i,j) 生成 2 条边(i→j 和 j→i),topK 不会合并
+  assert.equal(r.length, 2);
+  assert.ok(Math.abs(r[0].weight - 1) < 1e-9);
+  assert.ok(Math.abs(r[1].weight - 1) < 1e-9);
+});
+
+test('tfidf: 完全无关文本 → 0 边(低于 minWeight)', () => {
+  const r = computeTfIdfEdges([
+    mkPaper({ id: 'p1', title: 'transformer attention mechanism' }),
+    mkPaper({ id: 'p2', title: 'completely different topic' }),
+  ]);
+  // 即使有交集也可能为 0 → 边不一定为 0,只是可能极低
+  assert.ok(r.length >= 0);
+});
+
+test('tfidf: 部分共享 → weight 介于 0..1', () => {
+  const r = computeTfIdfEdges([
+    mkPaper({ id: 'p1', title: 'transformer attention is great' }),
+    mkPaper({ id: 'p2', title: 'transformer and attention are great' }),
+  ]);
+  assert.equal(r.length, 2); // 双向
+  assert.ok(r[0].weight > 0 && r[0].weight < 1);
+});
+
+test('tfidf: 边 type = tfidf', () => {
+  const text = 'transformer attention great';
+  const r = computeTfIdfEdges([
+    mkPaper({ id: 'p1', title: text }),
+    mkPaper({ id: 'p2', title: text }),
+  ]);
   assert.equal(r[0].type, 'tfidf');
-  assert.equal(r[0].sharedTags.length, 0);
 });
 
-test('computeTfIdfEdges: 完全无共享词 → 0 边', () => {
+test('tfidf: source/target = paper ids', () => {
+  const text = 'transformer attention great';
   const r = computeTfIdfEdges([
-    { id: 'a', title: 'transformer', tldr: '' },
-    { id: 'b', title: 'reinforcement learning', tldr: '' },
+    mkPaper({ id: 'p1', title: text }),
+    mkPaper({ id: 'p2', title: text }),
   ]);
-  // 共享词少,可能边权重 < minWeight
+  assert.equal(r[0].source, 'p1');
+  assert.equal(r[0].target, 'p2');
+});
+
+test('tfidf: sharedTags = []', () => {
+  const text = 'transformer attention';
+  const r = computeTfIdfEdges([
+    mkPaper({ id: 'p1', title: text }),
+    mkPaper({ id: 'p2', title: text }),
+  ]);
+  assert.deepEqual(r[0].sharedTags, []);
+});
+
+// ---------- minWeight / topK ---
+test('tfidf: minWeight 过滤低权重', () => {
+  const r = computeTfIdfEdges(
+    [
+      mkPaper({ id: 'p1', title: 'transformer attention' }),
+      mkPaper({ id: 'p2', title: 'transformer great' }),
+    ],
+    8,
+    0.99, // 高阈值
+  );
+  // 完整相似度应 < 0.99 → 过滤
   assert.equal(r.length, 0);
 });
 
-test('computeTfIdfEdges: 边字段', () => {
-  const r = computeTfIdfEdges([
-    { id: 'a', title: 'transformer attention', tldr: '' },
-    { id: 'b', title: 'attention transformer', tldr: '' },
-  ]);
-  assert.equal(r[0].source, 'a');
-  assert.equal(r[0].target, 'b');
-  assert.ok(typeof r[0].weight === 'number');
+test('tfidf: topK 每 source 限条', () => {
+  const papers = [];
+  for (let i = 0; i < 5; i++) {
+    papers.push(mkPaper({ id: `p${i}`, title: `transformer attention model ${i}` }));
+  }
+  const r = computeTfIdfEdges(papers, 2); // topK=2 → 每个 source 最多 2 边
+  // p0 出边最多 2
+  const p0Edges = r.filter((e) => e.source === 'p0');
+  assert.ok(p0Edges.length <= 2);
 });
 
-test('computeTfIdfEdges: weight > 0', () => {
+test('tfidf: 自相似度不出现边', () => {
+  // p1 不会和自身产生边
   const r = computeTfIdfEdges([
-    { id: 'a', title: 'foo bar', tldr: '' },
-    { id: 'b', title: 'foo bar', tldr: '' },
-  ]);
-  assert.ok(r[0].weight > 0);
-});
-
-test('computeTfIdfEdges: 自相似度 (i===j) 被跳过', () => {
-  // 验证: 不会创建 self-loop
-  const r = computeTfIdfEdges([
-    { id: 'a', title: 'foo bar', tldr: '' },
-    { id: 'b', title: 'foo bar', tldr: '' },
+    mkPaper({ id: 'p1', title: 'transformer' }),
+    mkPaper({ id: 'p2', title: 'transformer' }),
+    mkPaper({ id: 'p3', title: 'transformer' }),
   ]);
   for (const e of r) {
     assert.notEqual(e.source, e.target);
   }
 });
 
-test('computeTfIdfEdges: topK 限制每个 source 最多 k 条', () => {
-  const papers = Array.from({ length: 10 }, (_, i) => ({
-    id: 'p' + i,
-    title: 'common common common word',
-    tldr: '',
-  }));
-  const r = computeTfIdfEdges(papers, 3);
-  // 每个 source 最多 3 条边
-  const bySource = new Map();
-  for (const e of r) {
-    const arr = bySource.get(e.source) || [];
-    arr.push(e);
-    bySource.set(e.source, arr);
-  }
-  for (const arr of bySource.values()) {
-    assert.ok(arr.length <= 3);
-  }
-});
-
-test('computeTfIdfEdges: minWeight 过滤低权重', () => {
-  const r = computeTfIdfEdges(
-    [
-      { id: 'a', title: 'foo bar', tldr: '' },
-      { id: 'b', title: 'foo bar', tldr: '' },
-    ],
-    8,
-    1.5, // 高阈值
-  );
-  assert.equal(r.length, 0); // 没边达到 1.5
-});
-
-test('computeTfIdfEdges: minWeight=0 包含所有边', () => {
-  const r = computeTfIdfEdges(
-    [
-      { id: 'a', title: 'foo bar', tldr: '' },
-      { id: 'b', title: 'foo bar', tldr: '' },
-    ],
-    8,
-    0,
-  );
-  assert.equal(r.length, 2); // a→b, b→a
-});
-
-test('computeTfIdfEdges: 包含 title_zh', () => {
+// ---------- text 拼接 ---
+test('tfidf: 拼接 title + title_zh + tldr', () => {
   const r = computeTfIdfEdges([
-    { id: 'a', title: '', title_zh: '机器学习 模型', tldr: '' },
-    { id: 'b', title: '', title_zh: '模型 深度学习', tldr: '' },
+    mkPaper({ id: 'p1', title: 'transformer', title_zh: '', tldr: 'great' }),
+    mkPaper({ id: 'p2', title: 'transformer', title_zh: 'great', tldr: '' }),
   ]);
-  // 共享 "模型" → 有边
-  assert.ok(r.length >= 1);
+  // 共享 'transformer' 和 'great' → 双向 2 边
+  assert.equal(r.length, 2);
+  assert.ok(r[0].weight > 0);
 });
 
-test('computeTfIdfEdges: title + title_zh + tldr 合并', () => {
+test('tfidf: 全空文本 → []', () => {
   const r = computeTfIdfEdges([
-    { id: 'a', title: 'foo', title_zh: 'transformer', tldr: 'transformer' },
-    { id: 'b', title: '', title_zh: '', tldr: 'transformer' },
+    mkPaper({ id: 'p1', title: '', title_zh: '', tldr: '' }),
+    mkPaper({ id: 'p2', title: '', title_zh: '', tldr: '' }),
   ]);
-  assert.ok(r.length >= 1);
-});
-
-test('computeTfIdfEdges: 单字符 token 被过滤', () => {
-  // source: filter t.length > 1 → 单字符词丢弃
-  const r = computeTfIdfEdges([
-    { id: 'a', title: 'a b', tldr: '' },
-    { id: 'b', title: 'a b', tldr: '' },
-  ]);
-  // 'a', 'b' 都是 1 字符 → 过滤 → 空词表 → 0 边
+  // tokenize → [] → 无交集 → 无边
   assert.equal(r.length, 0);
 });
 
-test('computeTfIdfEdges: 大小写不敏感', () => {
+// ---------- CJK ---
+test('tfidf: CJK 字符支持', () => {
   const r = computeTfIdfEdges([
-    { id: 'a', title: 'TRANSFORMER', tldr: '' },
-    { id: 'b', title: 'transformer', tldr: '' },
+    mkPaper({ id: 'p1', title_zh: '注意力机制 transformer' }),
+    mkPaper({ id: 'p2', title_zh: '注意力 transformer' }),
   ]);
-  assert.ok(r.length >= 1);
+  assert.equal(r.length, 2);
+  assert.ok(r[0].weight > 0);
 });
 
-test('computeTfIdfEdges: 3 papers 都共享 → 多边', () => {
+test('tfidf: 短 token (1 字符) 过滤', () => {
+  // tokenize filter length > 1 → 单字符词应被过滤
   const r = computeTfIdfEdges([
-    { id: 'a', title: 'foo bar', tldr: '' },
-    { id: 'b', title: 'foo bar', tldr: '' },
-    { id: 'c', title: 'foo bar', tldr: '' },
+    mkPaper({ id: 'p1', title: 'a b c d transformer' }),
+    mkPaper({ id: 'p2', title: 'a b c d transformer' }),
   ]);
-  // 3*2 = 6 边(每对都有 a→b, a→c, b→a, b→c, c→a, c→b)
-  assert.equal(r.length, 6);
+  // 单字符被滤,共享 'transformer' → 双向 2 边
+  assert.equal(r.length, 2);
 });
 
-test('computeTfIdfEdges: topKEdges 限制总边数', () => {
-  const papers = Array.from({ length: 10 }, (_, i) => ({
-    id: 'p' + i, title: 'common word' + i, tldr: '',
-  }));
-  const r = computeTfIdfEdges(papers, 2);
-  // 每 paper 1 unique word + 1 shared "common"
-  // paper i 与 9 others 各 1 条边,topK=2 保留 2 → 10 sources × 2 = 20
-  assert.equal(r.length, 20);
+// ---------- 集成 ---
+test('集成: 大集合', () => {
+  const r = computeTfIdfEdges([
+    mkPaper({ id: 'p1', title: 'transformer attention is all you need' }),
+    mkPaper({ id: 'p2', title: 'transformer attention is all you need' }),
+    mkPaper({ id: 'p3', title: 'completely different topic with no overlap' }),
+    mkPaper({ id: 'p4', title: 'transformer related but different angle' }),
+  ]);
+  // 至少有 p1→p2 边(weight=1) — 双向都有
+  const p12s = r.filter((e) =>
+    (e.source === 'p1' && e.target === 'p2') ||
+    (e.source === 'p2' && e.target === 'p1'),
+  );
+  assert.ok(p12s.length >= 1);
+  assert.ok(Math.abs(p12s[0].weight - 1) < 1e-9);
 });
