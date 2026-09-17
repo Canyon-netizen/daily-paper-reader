@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // astro-src/scripts/projects-highlights.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/projects/highlights.ts project highlights aggregator.
+// Tests for R7 polish: astro-src/lib/projects/highlights.ts.
+// filterHighlights + computeHighlightsStats (纯函数)。
+// aggregateProjectHighlights 用 IDB,跳过。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,101 +30,140 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/projects/highlights.ts');
 const { filterHighlights, computeHighlightsStats } = mod;
 
-function highlight(over) {
-  return {
-    id: 'h-1',
-    canonicalId: '2501.00001',
-    text: 'sample text',
-    note: '',
-    createdAt: 1000,
-    ...over,
-  };
-}
-
-test('filterHighlights: 空 query → 返回拷贝', () => {
-  const list = [highlight({ id: '1' })];
-  const out = filterHighlights(list, '');
-  assert.notEqual(out, list);
-  assert.equal(out.length, 1);
+const mkHL = (overrides) => ({
+  id: 'h',
+  canonicalId: 'paper1',
+  text: 'sample text',
+  createdAt: 1000,
+  ...overrides,
 });
 
-test('filterHighlights: 命中 text', () => {
-  const list = [highlight({ text: 'Deep learning is great' })];
-  assert.equal(filterHighlights(list, 'deep').length, 1);
+// ---------- filterHighlights ----------
+test('filterHighlights: 空 query → 返回浅拷贝', () => {
+  const list = [mkHL()];
+  const r = filterHighlights(list, '');
+  assert.deepEqual(r, list);
+  assert.notEqual(r, list); // 浅拷贝(新数组)
 });
 
-test('filterHighlights: 命中 note', () => {
-  const list = [highlight({ text: 'x', note: 'has reasoning' })];
-  assert.equal(filterHighlights(list, 'reasoning').length, 1);
+test('filterHighlights: query 空白 → 全部返回', () => {
+  const list = [mkHL(), mkHL({ id: 'h2' })];
+  const r = filterHighlights(list, '   ');
+  assert.equal(r.length, 2);
 });
 
 test('filterHighlights: 大小写不敏感', () => {
-  const list = [highlight({ text: 'DEEP' })];
-  assert.equal(filterHighlights(list, 'deep').length, 1);
+  const list = [mkHL({ text: 'Hello World' })];
+  assert.equal(filterHighlights(list, 'hello').length, 1);
+  assert.equal(filterHighlights(list, 'WORLD').length, 1);
 });
 
-test('filterHighlights: trim query', () => {
-  const list = [highlight({ text: 'foo bar' })];
-  assert.equal(filterHighlights(list, '  bar  ').length, 1);
-});
-
-test('filterHighlights: 都不命中 → []', () => {
-  const list = [highlight({ text: 'foo' })];
-  assert.equal(filterHighlights(list, 'zzz').length, 0);
-});
-
-test('filterHighlights: 多条部分命中', () => {
+test('filterHighlights: 匹配 text', () => {
   const list = [
-    highlight({ id: '1', text: 'foo' }),
-    highlight({ id: '2', text: 'bar' }),
-    highlight({ id: '3', text: 'baz' }),
+    mkHL({ id: '1', text: 'apple' }),
+    mkHL({ id: '2', text: 'banana' }),
   ];
-  const out = filterHighlights(list, 'bar');
-  assert.equal(out.length, 1);
-  assert.equal(out[0].id, '2');
+  const r = filterHighlights(list, 'apple');
+  assert.equal(r.length, 1);
+  assert.equal(r[0].id, '1');
 });
 
-test('computeHighlightsStats: 空列表 → 0', () => {
-  const stats = computeHighlightsStats([]);
-  assert.equal(stats.total, 0);
-  assert.equal(stats.byPaper, 0);
-  assert.equal(stats.withNotes, 0);
-});
-
-test('computeHighlightsStats: 同 paper 多高亮 byPaper=1', () => {
+test('filterHighlights: 匹配 note', () => {
   const list = [
-    highlight({ id: '1', canonicalId: 'A', createdAt: 1 }),
-    highlight({ id: '2', canonicalId: 'A', createdAt: 2 }),
+    mkHL({ id: '1', text: 'foo', note: 'bar' }),
+    mkHL({ id: '2', text: 'baz' }),
   ];
-  const stats = computeHighlightsStats(list);
+  const r = filterHighlights(list, 'bar');
+  assert.equal(r.length, 1);
+  assert.equal(r[0].id, '1');
+});
+
+test('filterHighlights: 任一字段匹配即返回', () => {
+  const list = [
+    mkHL({ id: '1', text: 'alpha' }),
+    mkHL({ id: '2', text: 'beta', note: 'alpha' }),
+    mkHL({ id: '3', text: 'gamma' }),
+  ];
+  const r = filterHighlights(list, 'alpha');
+  assert.equal(r.length, 2);
+});
+
+test('filterHighlights: 空 list → 空', () => {
+  assert.deepEqual(filterHighlights([], 'query'), []);
+});
+
+test('filterHighlights: 不修改原数组', () => {
+  const list = [mkHL({ text: 'a' })];
+  filterHighlights(list, 'b');
+  assert.equal(list.length, 1);
+});
+
+test('filterHighlights: 不匹配 → []', () => {
+  const r = filterHighlights([mkHL({ text: 'foo' })], 'xyz');
+  assert.deepEqual(r, []);
+});
+
+// ---------- computeHighlightsStats ----------
+test('computeHighlightsStats: 空 → 0', () => {
+  const r = computeHighlightsStats([]);
+  assert.equal(r.total, 0);
+  assert.equal(r.byPaper, 0);
+  assert.equal(r.withNotes, 0);
+});
+
+test('computeHighlightsStats: total = list.length', () => {
+  const r = computeHighlightsStats([
+    mkHL(), mkHL({ id: '2' }), mkHL({ id: '3' }),
+  ]);
+  assert.equal(r.total, 3);
+});
+
+test('computeHighlightsStats: byPaper 去重', () => {
+  const r = computeHighlightsStats([
+    mkHL({ canonicalId: 'p1' }),
+    mkHL({ canonicalId: 'p1' }),
+    mkHL({ canonicalId: 'p2' }),
+  ]);
+  assert.equal(r.byPaper, 2);
+});
+
+test('computeHighlightsStats: withNotes 计非空', () => {
+  const r = computeHighlightsStats([
+    mkHL({ note: 'a' }),
+    mkHL({ note: '' }),
+    mkHL({ note: '   ' }), // 空白 → 不计
+    mkHL(), // 缺 note
+    mkHL({ note: 'b' }),
+  ]);
+  assert.equal(r.withNotes, 2);
+});
+
+test('computeHighlightsStats: 仅空白 note 不计', () => {
+  const r = computeHighlightsStats([
+    mkHL({ note: '   ' }),
+  ]);
+  assert.equal(r.withNotes, 0);
+});
+
+test('computeHighlightsStats: 含 paperIdx 不影响', () => {
+  const r = computeHighlightsStats([
+    mkHL({ paperIdx: 0 }),
+    mkHL({ paperIdx: 1 }),
+  ]);
+  assert.equal(r.total, 2);
+  assert.equal(r.byPaper, 1);
+});
+
+// ---------- 集成 ---
+test('集成: filter + stats', () => {
+  const list = [
+    mkHL({ id: '1', text: 'apple', note: 'fruit', canonicalId: 'p1' }),
+    mkHL({ id: '2', text: 'banana', canonicalId: 'p1' }),
+    mkHL({ id: '3', text: 'apple pie', canonicalId: 'p2' }),
+  ];
+  const filtered = filterHighlights(list, 'apple');
+  const stats = computeHighlightsStats(filtered);
   assert.equal(stats.total, 2);
-  assert.equal(stats.byPaper, 1);
-});
-
-test('computeHighlightsStats: 不同 paper byPaper=N', () => {
-  const list = [
-    highlight({ id: '1', canonicalId: 'A' }),
-    highlight({ id: '2', canonicalId: 'B' }),
-    highlight({ id: '3', canonicalId: 'C' }),
-  ];
-  const stats = computeHighlightsStats(list);
-  assert.equal(stats.byPaper, 3);
-});
-
-test('computeHighlightsStats: 计数带 note 的条目', () => {
-  const list = [
-    highlight({ id: '1', note: 'first note' }),
-    highlight({ id: '2', note: '' }),
-    highlight({ id: '3', note: '   ' }), // 空白 trim 后算空
-    highlight({ id: '4', note: 'second' }),
-  ];
-  const stats = computeHighlightsStats(list);
-  assert.equal(stats.total, 4);
-  assert.equal(stats.withNotes, 2);
-});
-
-test('computeHighlightsStats: note=null 时不计入 withNotes', () => {
-  const list = [highlight({ note: null })];
-  const stats = computeHighlightsStats(list);
-  assert.equal(stats.withNotes, 0);
+  assert.equal(stats.byPaper, 2);
+  assert.equal(stats.withNotes, 1);
 });
