@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // astro-src/scripts/idea-lifecycle.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/idea-lifecycle.ts.
+// Tests for R7 polish: astro-src/lib/idea-lifecycle.mjs.
 // IDEA_DEPTH_ORDER + GATE_THRESHOLDS + evaluatePromotion + applyPromotion。
 
 import { test } from 'node:test';
@@ -12,13 +12,12 @@ import esbuild from 'esbuild';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-async function loadTs(relPath) {
+async function loadMjs(relPath) {
   const result = await esbuild.build({
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'node',
-    external: ['node:*'],
+    platform: 'neutral',
     write: false,
     target: 'es2022',
   });
@@ -27,7 +26,7 @@ async function loadTs(relPath) {
   return import(dataUrl);
 }
 
-const mod = await loadTs('lib/idea-lifecycle.ts');
+const mod = await loadMjs('lib/idea-lifecycle.mjs');
 const {
   IDEA_DEPTH_ORDER,
   GATE_THRESHOLDS,
