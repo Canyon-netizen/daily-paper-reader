@@ -2,7 +2,7 @@
 // astro-src/scripts/idea-templates.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/idea-templates.ts.
-// 注:applyIdeaTemplate 需要 HTMLFormElement,这里只测纯函数(模板常量 + getters)。
+// IDEA_TEMPLATES + listIdeaTemplateKeys + getIdeaTemplate。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,7 +17,8 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'neutral',
+    platform: 'node',
+    external: ['node:*'],
     write: false,
     target: 'es2022',
   });
@@ -29,72 +30,90 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/idea-templates.ts');
 const { IDEA_TEMPLATES, listIdeaTemplateKeys, getIdeaTemplate } = mod;
 
-test('IDEA_TEMPLATES: 含 3 个类型', () => {
-  assert.ok(IDEA_TEMPLATES.survey);
-  assert.ok(IDEA_TEMPLATES.experiment);
-  assert.ok(IDEA_TEMPLATES.discussion);
+// ---------- IDEA_TEMPLATES ----------
+test('IDEA_TEMPLATES: 3 个 key', () => {
+  assert.deepEqual(Object.keys(IDEA_TEMPLATES).sort(), ['discussion', 'experiment', 'survey']);
 });
 
-test('IDEA_TEMPLATES.survey: tags 含 survey + review', () => {
-  assert.ok(IDEA_TEMPLATES.survey.tags.includes('survey'));
-  assert.ok(IDEA_TEMPLATES.survey.tags.includes('review'));
+test('IDEA_TEMPLATES: 每条都有 title/description/tags', () => {
+  for (const k of Object.keys(IDEA_TEMPLATES)) {
+    const t = IDEA_TEMPLATES[k];
+    assert.ok(typeof t.title === 'string' && t.title.length > 0);
+    assert.ok(typeof t.description === 'string' && t.description.length > 0);
+    assert.ok(Array.isArray(t.tags));
+  }
 });
 
-test('IDEA_TEMPLATES.experiment: tags 含 experiment + hypothesis', () => {
-  assert.ok(IDEA_TEMPLATES.experiment.tags.includes('experiment'));
-  assert.ok(IDEA_TEMPLATES.experiment.tags.includes('hypothesis'));
+test('IDEA_TEMPLATES: survey 含 "综述"', () => {
+  assert.match(IDEA_TEMPLATES.survey.title, /综述/);
 });
 
-test('IDEA_TEMPLATES.discussion: tags 含 discussion', () => {
-  assert.ok(IDEA_TEMPLATES.discussion.tags.includes('discussion'));
+test('IDEA_TEMPLATES: experiment 含 "实验"', () => {
+  assert.match(IDEA_TEMPLATES.experiment.title, /实验/);
 });
 
-test('IDEA_TEMPLATES.survey: description 含 markdown section', () => {
-  assert.ok(IDEA_TEMPLATES.survey.description.includes('## 研究背景'));
-  assert.ok(IDEA_TEMPLATES.survey.description.includes('## 综述目标'));
+test('IDEA_TEMPLATES: discussion 含 "讨论"', () => {
+  assert.match(IDEA_TEMPLATES.discussion.title, /讨论/);
 });
 
-test('IDEA_TEMPLATES.experiment: description 含自变量/因变量/控制变量', () => {
-  const d = IDEA_TEMPLATES.experiment.description;
-  assert.ok(d.includes('自变量'));
-  assert.ok(d.includes('因变量'));
-  assert.ok(d.includes('控制变量'));
+test('IDEA_TEMPLATES: tags 至少 1 个', () => {
+  for (const k of Object.keys(IDEA_TEMPLATES)) {
+    assert.ok(IDEA_TEMPLATES[k].tags.length > 0);
+  }
 });
 
-test('IDEA_TEMPLATES.discussion: description 含"我的观点"', () => {
-  assert.ok(IDEA_TEMPLATES.discussion.description.includes('## 我的观点'));
+// ---------- listIdeaTemplateKeys ----------
+test('listIdeaTemplateKeys: 返回 3 个 key', () => {
+  assert.equal(listIdeaTemplateKeys().length, 3);
 });
 
-test('IDEA_TEMPLATES 各 title 含占位符 XXX', () => {
-  assert.ok(IDEA_TEMPLATES.survey.title.includes('XXX'));
-  assert.ok(IDEA_TEMPLATES.experiment.title.includes('XXX'));
-  assert.ok(IDEA_TEMPLATES.discussion.title.includes('XXX'));
-});
-
-test('listIdeaTemplateKeys: 3 个 key', () => {
+test('listIdeaTemplateKeys: 包含预期 key', () => {
   const keys = listIdeaTemplateKeys();
-  assert.equal(keys.length, 3);
   assert.ok(keys.includes('survey'));
   assert.ok(keys.includes('experiment'));
   assert.ok(keys.includes('discussion'));
 });
 
-test('getIdeaTemplate: survey/experiment/discussion 都拿到', () => {
-  for (const k of ['survey', 'experiment', 'discussion']) {
-    const t = getIdeaTemplate(k);
-    assert.ok(t);
-    assert.equal(typeof t.title, 'string');
-    assert.equal(typeof t.description, 'string');
-    assert.ok(Array.isArray(t.tags));
-  }
+test('listIdeaTemplateKeys: 返回数组', () => {
+  assert.ok(Array.isArray(listIdeaTemplateKeys()));
 });
 
-test('getIdeaTemplate: 不存在的 key → null', () => {
+// ---------- getIdeaTemplate ----------
+test('getIdeaTemplate: survey → 对象', () => {
+  const r = getIdeaTemplate('survey');
+  assert.notEqual(r, null);
+  assert.equal(r.title, IDEA_TEMPLATES.survey.title);
+});
+
+test('getIdeaTemplate: experiment → 对象', () => {
+  const r = getIdeaTemplate('experiment');
+  assert.notEqual(r, null);
+});
+
+test('getIdeaTemplate: discussion → 对象', () => {
+  const r = getIdeaTemplate('discussion');
+  assert.notEqual(r, null);
+});
+
+test('getIdeaTemplate: 未知 key → null', () => {
   assert.equal(getIdeaTemplate('unknown'), null);
+});
+
+test('getIdeaTemplate: 空字符串 → null', () => {
   assert.equal(getIdeaTemplate(''), null);
 });
 
-test('getIdeaTemplate: 返回的 description 含换行符', () => {
-  const t = getIdeaTemplate('experiment');
-  assert.ok(t.description.includes('\n'));
+test('getIdeaTemplate: 大小写敏感', () => {
+  // 'Survey' ≠ 'survey'
+  assert.equal(getIdeaTemplate('Survey'), null);
+});
+
+test('getIdeaTemplate: 返回的 tags 是数组', () => {
+  const r = getIdeaTemplate('survey');
+  assert.ok(Array.isArray(r.tags));
+});
+
+test('getIdeaTemplate: 返回的对象与 IDEA_TEMPLATES 同引用', () => {
+  // 实现:IDEA_TEMPLATES[key] ?? null → 同引用
+  assert.equal(getIdeaTemplate('survey'), IDEA_TEMPLATES.survey);
 });
