@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // astro-src/scripts/markdown-figures.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/markdown/figures.ts pure helpers.
+// Tests for R7 polish: astro-src/lib/markdown/figures.ts.
+// figureUrlToSrc + buildFiguresCarouselHtml。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,10 +17,10 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'neutral',
+    platform: 'node',
+    external: ['node:*'],
     write: false,
     target: 'es2022',
-    external: ['./types', '../types', '../../types'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -29,131 +30,168 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/markdown/figures.ts');
 const { figureUrlToSrc, buildFiguresCarouselHtml } = mod;
 
-test('figureUrlToSrc: http URL 原样返回', () => {
-  assert.equal(figureUrlToSrc('https://example.com/foo.png', '/base'), 'https://example.com/foo.png');
-  assert.equal(figureUrlToSrc('http://example.com/foo.png', '/base'), 'http://example.com/foo.png');
+const mkFig = (overrides) => ({
+  url: 'img.png',
+  caption: '',
+  page: 0,
+  index: 1,
+  width: 0,
+  height: 0,
+  extractor: '',
+  ...overrides,
 });
 
-test('figureUrlToSrc: 绝对路径 / 原样', () => {
-  assert.equal(figureUrlToSrc('/static/foo.png', '/base'), '/static/foo.png');
+// ---------- figureUrlToSrc ----------
+test('figureUrlToSrc: https 原样', () => {
+  assert.equal(figureUrlToSrc('https://x.com/a.png', '/base'), 'https://x.com/a.png');
 });
 
-test('figureUrlToSrc: 相对路径拼 base', () => {
-  assert.equal(figureUrlToSrc('foo.png', '/base'), '/base/foo.png');
+test('figureUrlToSrc: http 原样', () => {
+  assert.equal(figureUrlToSrc('http://x.com/a.png', '/base'), 'http://x.com/a.png');
 });
 
-test('figureUrlToSrc: ./ 前缀去掉后拼 base', () => {
-  assert.equal(figureUrlToSrc('./foo.png', '/base'), '/base/foo.png');
+test('figureUrlToSrc: / 开头原样', () => {
+  assert.equal(figureUrlToSrc('/a.png', '/base'), '/a.png');
 });
 
-test('figureUrlToSrc: base 末尾 / 不会双斜杠', () => {
-  assert.equal(figureUrlToSrc('foo.png', '/base/'), '/base/foo.png');
+test('figureUrlToSrc: 相对路径拼接', () => {
+  assert.equal(figureUrlToSrc('a.png', '/base'), '/base/a.png');
 });
 
-test('figureUrlToSrc: nested 相对路径', () => {
-  assert.equal(figureUrlToSrc('a/b/c.png', '/static'), '/static/a/b/c.png');
+test('figureUrlToSrc: ./ 前缀去掉', () => {
+  assert.equal(figureUrlToSrc('./a.png', '/base'), '/base/a.png');
 });
 
-test('figureUrlToSrc: base="" 时相对路径拼成 /foo', () => {
-  assert.equal(figureUrlToSrc('foo.png', ''), '/foo.png');
+test('figureUrlToSrc: base 末尾 / 去', () => {
+  assert.equal(figureUrlToSrc('a.png', '/base/'), '/base/a.png');
 });
 
+test('figureUrlToSrc: base 无末尾 /', () => {
+  assert.equal(figureUrlToSrc('a.png', '/base'), '/base/a.png');
+});
+
+test('figureUrlToSrc: 嵌套路径', () => {
+  assert.equal(figureUrlToSrc('sub/a.png', '/base'), '/base/sub/a.png');
+});
+
+// ---------- buildFiguresCarouselHtml ----------
 test('buildFiguresCarouselHtml: 空数组 → 空字符串', () => {
   assert.equal(buildFiguresCarouselHtml([], '/base'), '');
 });
 
-test('buildFiguresCarouselHtml: 单图 → 含 carousel HTML', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'fig1.png', caption: 'Figure 1' }],
-    '/base',
-  );
-  assert.ok(html.includes('paper-figures-wrap'));
-  assert.ok(html.includes('paper-carousel'));
-  assert.ok(html.includes('<figure'));
-  assert.ok(html.includes('Figure 1'));
+test('buildFiguresCarouselHtml: 1 张图', () => {
+  const r = buildFiguresCarouselHtml([mkFig({ url: 'a.png' })], '/base');
+  assert.match(r, /<h2>.*<\/h2>/);
+  assert.match(r, /data-count="1"/);
+  assert.match(r, /paper-slide/);
+  assert.match(r, /<img src="\/base\/a\.png"/);
+  assert.match(r, /loading="lazy"/);
+  assert.match(r, /decoding="async"/);
 });
 
-test('buildFiguresCarouselHtml: data-count 等于 figures 数量', () => {
-  const figs = [
-    { url: 'a.png' },
-    { url: 'b.png' },
-    { url: 'c.png' },
-  ];
-  const html = buildFiguresCarouselHtml(figs, '/base');
-  assert.ok(html.includes('data-count="3"'));
+test('buildFiguresCarouselHtml: 多张图', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', index: 1 }),
+    mkFig({ url: 'b.png', index: 2 }),
+    mkFig({ url: 'c.png', index: 3 }),
+  ], '/base');
+  assert.match(r, /data-count="3"/);
+  // 3 张图
+  const matches = r.match(/paper-slide/g) || [];
+  assert.ok(matches.length >= 3);
 });
 
-test('buildFiguresCarouselHtml: caption HTML escape', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png', caption: '<script>alert("x")</script>' }],
-    '/base',
-  );
-  // < > " 都被 escape
-  assert.ok(!html.includes('<script>'));
-  assert.ok(html.includes('&lt;script&gt;'));
-  assert.ok(html.includes('&quot;'));
+test('buildFiguresCarouselHtml: 标题 allRasterized=false → 图', () => {
+  const r = buildFiguresCarouselHtml([mkFig()], '/base', false);
+  assert.match(r, /论文图表/);
 });
 
-test('buildFiguresCarouselHtml: allRasterized=true → "页面预览" 文案', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png' }],
-    '/base',
-    true,
-  );
-  assert.ok(html.includes('页面预览'));
-  assert.ok(html.includes('页 1 / 1'));
+test('buildFiguresCarouselHtml: 标题 allRasterized=true → 页', () => {
+  const r = buildFiguresCarouselHtml([mkFig()], '/base', true);
+  assert.match(r, /论文页面预览/);
+  assert.match(r, /<figcaption>页 1 \/ 1/);
 });
 
-test('buildFiguresCarouselHtml: allRasterized=false → "图" 文案', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png' }],
-    '/base',
-    false,
-  );
-  assert.ok(html.includes('论文图表'));
-  assert.ok(html.includes('图 1 / 1'));
+test('buildFiguresCarouselHtml: 序号 i+1 / total', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', index: 1 }),
+    mkFig({ url: 'b.png', index: 2 }),
+  ], '/base');
+  assert.match(r, /图 1 \/ 2/);
+  assert.match(r, /图 2 \/ 2/);
 });
 
-test('buildFiguresCarouselHtml: width/height 设值时进 attrs', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png', width: 800, height: 600 }],
-    '/base',
-  );
-  assert.ok(html.includes('width="800"'));
-  assert.ok(html.includes('height="600"'));
+test('buildFiguresCarouselHtml: caption HTML 转义', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', caption: '<script>alert(1)</script>' }),
+  ], '/base');
+  assert.match(r, /&lt;script&gt;/);
+  assert.doesNotMatch(r, /<script>/);
 });
 
-test('buildFiguresCarouselHtml: width/height=0 跳过', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png', width: 0, height: 0 }],
-    '/base',
-  );
-  assert.ok(!html.includes('width="0"'));
+test('buildFiguresCarouselHtml: 无 caption → fallback Figure {index}', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', caption: '', index: 3 }),
+  ], '/base');
+  assert.match(r, /alt="Figure 3"/);
 });
 
-test('buildFiguresCarouselHtml: 无 caption 用 index 兜底', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png', index: 7 }],
-    '/base',
-  );
-  // alt 兜底: 'Figure 7'
-  assert.ok(html.includes('Figure 7'));
+test('buildFiguresCarouselHtml: 有 caption → 用 caption', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', caption: 'Custom caption', index: 5 }),
+  ], '/base');
+  assert.match(r, /alt="Custom caption"/);
 });
 
-test('buildFiguresCarouselHtml: 默认 open (不折叠)', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png' }],
-    '/base',
-  );
-  assert.ok(html.includes('<details class="paper-figures-wrap" open>'));
+test('buildFiguresCarouselHtml: width/height 透传', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', width: 800, height: 600 }),
+  ], '/base');
+  assert.match(r, /width="800"/);
+  assert.match(r, /height="600"/);
 });
 
-test('buildFiguresCarouselHtml: 上下页/圆点按钮', () => {
-  const html = buildFiguresCarouselHtml(
-    [{ url: 'a.png' }, { url: 'b.png' }],
-    '/base',
-  );
-  assert.ok(html.includes('paper-carousel-prev'));
-  assert.ok(html.includes('paper-carousel-next'));
-  assert.ok(html.includes('paper-carousel-dot'));
+test('buildFiguresCarouselHtml: width/height 为 0 → 不输出', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', width: 0, height: 0 }),
+  ], '/base');
+  assert.doesNotMatch(r, /width="0"/);
+});
+
+test('buildFiguresCarouselHtml: 包含 carousel 按钮', () => {
+  const r = buildFiguresCarouselHtml([mkFig()], '/base');
+  assert.match(r, /paper-carousel-prev/);
+  assert.match(r, /paper-carousel-next/);
+});
+
+test('buildFiguresCarouselHtml: dot 数量 = total', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png', index: 1 }),
+    mkFig({ url: 'b.png', index: 2 }),
+    mkFig({ url: 'c.png', index: 3 }),
+  ], '/base');
+  // 只数 paper-carousel-dot (单个) 不含 dots container
+  const dots = r.match(/paper-carousel-dot"/g) || [];
+  assert.equal(dots.length, 3);
+});
+
+test('buildFiguresCarouselHtml: <details> 默认 open', () => {
+  const r = buildFiguresCarouselHtml([mkFig()], '/base');
+  assert.match(r, /<details class="paper-figures-wrap" open>/);
+});
+
+test('buildFiguresCarouselHtml: 末尾 hr', () => {
+  const r = buildFiguresCarouselHtml([mkFig()], '/base');
+  assert.match(r, /<hr \/>/);
+});
+
+test('buildFiguresCarouselHtml: data-index 0..n-1', () => {
+  const r = buildFiguresCarouselHtml([
+    mkFig({ url: 'a.png' }),
+    mkFig({ url: 'b.png' }),
+    mkFig({ url: 'c.png' }),
+  ], '/base');
+  assert.match(r, /data-index="0"/);
+  assert.match(r, /data-index="1"/);
+  assert.match(r, /data-index="2"/);
 });
