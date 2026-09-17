@@ -1,15 +1,9 @@
 #!/usr/bin/env node
 // astro-src/scripts/agents-health.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/agents/health.ts checkAgentHealth + updateAgentHealth.
-// 在 import 前注入 globalThis.localStorage mock。
-
-const store = new Map();
-globalThis.localStorage = {
-  getItem: (k) => (store.has(k) ? store.get(k) : null),
-  setItem: (k, v) => { store.set(k, String(v)); },
-  removeItem: (k) => { store.delete(k); },
-};
+// Tests for R7 polish: astro-src/lib/agents/health.ts.
+// checkAgentHealth (maxErrorRate + staleMs 检查) +
+// updateAgentHealth (localStorage 写入/合并)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,122 +27,167 @@ async function loadTs(relPath) {
   return import(dataUrl);
 }
 
+// localStorage mock
+const store = new Map();
+globalThis.localStorage = {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => { store.set(k, String(v)); },
+  removeItem: (k) => { store.delete(k); },
+  clear: () => { store.clear(); },
+};
+
 const mod = await loadTs('lib/agents/health.ts');
 const { checkAgentHealth, updateAgentHealth } = mod;
 
-// ---------- checkAgentHealth ----------
-test('checkAgentHealth: 无 health 数据 → 默认 available=true', () => {
-  store.clear();
-  const r = checkAgentHealth('unknown-agent');
+const resetStorage = () => store.clear();
+
+// ---------- checkAgentHealth: 默认 ---
+test('check: 无 localStorage 数据 → 默认 available', () => {
+  resetStorage();
+  const r = checkAgentHealth('agent1');
   assert.equal(r.available, true);
   assert.equal(r.lastRun, 0);
   assert.equal(r.errorRate, 0);
 });
 
-test('checkAgentHealth: 已知 agent + low errorRate → available', () => {
-  store.clear();
+test('check: 读取写入的数据', () => {
+  resetStorage();
   updateAgentHealth('a1', { available: true, lastRun: Date.now(), errorRate: 0.1 });
   const r = checkAgentHealth('a1');
   assert.equal(r.available, true);
   assert.equal(r.errorRate, 0.1);
 });
 
-test('checkAgentHealth: 高 errorRate → unavailable', () => {
-  store.clear();
-  updateAgentHealth('a2', { available: true, lastRun: Date.now(), errorRate: 0.9 });
-  const r = checkAgentHealth('a2');
+// ---------- 错误率检查 ---
+test('check: errorRate > maxErrorRate → unavailable', () => {
+  resetStorage();
+  updateAgentHealth('a1', { available: true, lastRun: Date.now(), errorRate: 0.6 });
+  const r = checkAgentHealth('a1', { maxErrorRate: 0.5 });
   assert.equal(r.available, false);
 });
 
-test('checkAgentHealth: 自定义 maxErrorRate', () => {
-  store.clear();
-  updateAgentHealth('a3', { lastRun: Date.now(), errorRate: 0.4 });
-  // maxErrorRate = 0.3 → 0.4 > 0.3 → unavailable
-  const r = checkAgentHealth('a3', { maxErrorRate: 0.3 });
-  assert.equal(r.available, false);
-});
-
-test('checkAgentHealth: 边界 maxErrorRate = 0.4 → 0.4 不严格大于 → available', () => {
-  store.clear();
-  updateAgentHealth('a3b', { lastRun: Date.now(), errorRate: 0.4 });
-  const r = checkAgentHealth('a3b', { maxErrorRate: 0.4 });
+test('check: errorRate = maxErrorRate → available', () => {
+  resetStorage();
+  updateAgentHealth('a1', { available: true, lastRun: Date.now(), errorRate: 0.5 });
+  const r = checkAgentHealth('a1', { maxErrorRate: 0.5 });
   assert.equal(r.available, true);
 });
 
-test('checkAgentHealth: stale (lastRun 很久以前) → unavailable', () => {
-  store.clear();
-  updateAgentHealth('a4', { available: true, lastRun: 1, errorRate: 0 });
-  const r = checkAgentHealth('a4');
-  assert.equal(r.available, false);
-});
-
-test('checkAgentHealth: 自定义 staleMs', () => {
-  store.clear();
-  updateAgentHealth('a5', { available: true, lastRun: Date.now() - 100, errorRate: 0 });
-  // staleMs = 50 → 100ms 之前算 stale
-  const r = checkAgentHealth('a5', { staleMs: 50 });
-  assert.equal(r.available, false);
-});
-
-test('checkAgentHealth: lastRun=0 → 不会 stale', () => {
-  store.clear();
-  updateAgentHealth('a6', { available: true, lastRun: 0, errorRate: 0 });
-  const r = checkAgentHealth('a6');
+test('check: errorRate < maxErrorRate → available', () => {
+  resetStorage();
+  updateAgentHealth('a1', { available: true, lastRun: Date.now(), errorRate: 0.3 });
+  const r = checkAgentHealth('a1', { maxErrorRate: 0.5 });
   assert.equal(r.available, true);
 });
 
-test('checkAgentHealth: available=false 透传', () => {
-  store.clear();
-  updateAgentHealth('a7', { available: false, lastRun: Date.now(), errorRate: 0 });
-  const r = checkAgentHealth('a7');
+// ---------- stale 检查 ---
+test('check: lastRun 太久 → unavailable', () => {
+  resetStorage();
+  const oldTime = Date.now() - 48 * 60 * 60 * 1000; // 2 天前
+  updateAgentHealth('a1', { available: true, lastRun: oldTime, errorRate: 0 });
+  const r = checkAgentHealth('a1', { staleMs: 24 * 60 * 60 * 1000 });
   assert.equal(r.available, false);
 });
 
-test('checkAgentHealth: lastRun 字段返回', () => {
-  store.clear();
-  updateAgentHealth('a8', { lastRun: 12345, errorRate: 0 });
-  const r = checkAgentHealth('a8');
-  assert.equal(r.lastRun, 12345);
-});
-
-test('checkAgentHealth: 损坏 JSON → 走默认', () => {
-  store.set('dpr_agent_health_v1', '{not json');
-  const r = checkAgentHealth('any');
-  // JSON.parse 抛错被 catch → 用默认 { available: true, lastRun: 0 }
+test('check: lastRun 在 stale 范围内 → available', () => {
+  resetStorage();
+  const recentTime = Date.now() - 1 * 60 * 60 * 1000; // 1 小时前
+  updateAgentHealth('a1', { available: true, lastRun: recentTime, errorRate: 0 });
+  const r = checkAgentHealth('a1', { staleMs: 24 * 60 * 60 * 1000 });
   assert.equal(r.available, true);
 });
 
-// ---------- updateAgentHealth ----------
-test('updateAgentHealth: 写入 + checkAgentHealth 读出', () => {
-  store.clear();
-  updateAgentHealth('b1', { available: false });
-  const r = checkAgentHealth('b1');
+test('check: lastRun=0 (default) → 不算 stale', () => {
+  resetStorage();
+  // 默认 lastRun=0,即使过去很久也不算
+  const r = checkAgentHealth('a1');
+  assert.equal(r.available, true);
+});
+
+// ---------- available 字段 ---
+test('check: stored available=false → unavailable (即使 errorRate OK)', () => {
+  resetStorage();
+  updateAgentHealth('a1', { available: false, lastRun: Date.now(), errorRate: 0 });
+  const r = checkAgentHealth('a1');
   assert.equal(r.available, false);
 });
 
-test('updateAgentHealth: 合并已存在数据', () => {
-  store.clear();
-  updateAgentHealth('b2', { lastRun: 100, errorRate: 0.2 });
-  updateAgentHealth('b2', { available: false });
-  const r = checkAgentHealth('b2');
-  // 第二次只覆盖 available;lastRun/errorRate 保留
-  assert.equal(r.lastRun, 100);
-  assert.equal(r.errorRate, 0.2);
-  assert.equal(r.available, false);
+// ---------- 多个 agents ---
+test('check: 不同 agent 独立', () => {
+  resetStorage();
+  updateAgentHealth('a1', { available: true, lastRun: Date.now(), errorRate: 0.1 });
+  updateAgentHealth('a2', { available: false, lastRun: Date.now(), errorRate: 0 });
+  assert.equal(checkAgentHealth('a1').available, true);
+  assert.equal(checkAgentHealth('a2').available, false);
 });
 
-test('updateAgentHealth: 新 agent → 默认 lastRun=0/errorRate=0', () => {
-  store.clear();
-  updateAgentHealth('b3', { available: false });
-  const r = checkAgentHealth('b3');
+// ---------- updateAgentHealth: 合并 ---
+test('update: 部分字段合并', () => {
+  resetStorage();
+  updateAgentHealth('a1', { available: true, lastRun: Date.now(), errorRate: 0.1 });
+  updateAgentHealth('a1', { lastRun: Date.now() + 100 }); // 只更新 lastRun
+  const r = checkAgentHealth('a1');
+  assert.equal(r.available, true); // 保留旧值
+  assert.equal(r.errorRate, 0.1); // 保留旧值
+});
+
+test('update: 缺字段使用 default', () => {
+  resetStorage();
+  updateAgentHealth('a1', { lastRun: Date.now() }); // 缺 available + errorRate
+  const r = checkAgentHealth('a1');
+  assert.equal(r.available, true); // default
+  assert.equal(r.errorRate, 0); // default
+});
+
+test('update: 全字段覆盖', () => {
+  resetStorage();
+  updateAgentHealth('a1', { available: true, lastRun: Date.now(), errorRate: 0.1 });
+  updateAgentHealth('a1', { available: false, lastRun: Date.now() + 1, errorRate: 0.9 });
+  const r = checkAgentHealth('a1');
+  assert.equal(r.available, false);
+  assert.equal(r.errorRate, 0.9);
+});
+
+// ---------- 错误处理 ---
+test('check: 损坏 JSON → 默认值', () => {
+  resetStorage();
+  store.set('dpr_agent_health_v1', 'not-json{');
+  const r = checkAgentHealth('a1');
+  assert.equal(r.available, true);
   assert.equal(r.lastRun, 0);
-  assert.equal(r.errorRate, 0);
 });
 
-test('updateAgentHealth: 不同 agent → 独立存储', () => {
-  store.clear();
-  updateAgentHealth('b4', { errorRate: 0.1 });
-  updateAgentHealth('b5', { errorRate: 0.9 });
-  assert.equal(checkAgentHealth('b4').errorRate, 0.1);
-  assert.equal(checkAgentHealth('b5').errorRate, 0.9);
+test('check: 无 opts 用默认', () => {
+  resetStorage();
+  const r = checkAgentHealth('a1');
+  assert.equal(r.lastRun, 0);
+});
+
+test('storage key = "dpr_agent_health_v1"', () => {
+  resetStorage();
+  updateAgentHealth('a1', { lastRun: 100 });
+  assert.ok(store.has('dpr_agent_health_v1'));
+});
+
+// ---------- 集成 ---
+test('集成: write → read 流程', () => {
+  resetStorage();
+  updateAgentHealth('designer', {
+    available: true,
+    lastRun: Date.now(),
+    errorRate: 0.05,
+  });
+  const h = checkAgentHealth('designer');
+  assert.equal(h.available, true);
+  assert.equal(h.errorRate, 0.05);
+});
+
+test('集成: 高错误率 → unavailable', () => {
+  resetStorage();
+  for (let i = 0; i < 5; i++) {
+    updateAgentHealth('flaky', { errorRate: 0.1 });
+  }
+  updateAgentHealth('flaky', { errorRate: 0.8 });
+  const h = checkAgentHealth('flaky');
+  assert.equal(h.available, false);
 });
