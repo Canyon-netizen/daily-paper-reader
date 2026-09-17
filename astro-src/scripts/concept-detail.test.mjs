@@ -53,7 +53,8 @@ test('getAllConceptSlugs returns a Promise', async () => {
   const mod = await loadTs('lib/concept-detail.ts');
   const result = mod.getAllConceptSlugs();
   assert.ok(result instanceof Promise, 'getAllConceptSlugs should return a Promise');
-  // Don't await - would trigger IO
+  // Attach a no-op catch so the leaked IO error doesn't trigger unhandledRejection.
+  result.catch(() => {});
 });
 
 test('getConceptDetail accepts a slug string and returns a Promise', async () => {
