@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // astro-src/scripts/paper-filter.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/paper-filter.ts paper filtering/sorting pipeline.
+// Tests for R7 polish: astro-src/lib/paper-filter.ts.
+// filterByTag / filterBySearch / filterBySinceDays / sortAndLimit +
+// applyPaperFilters (tag + search + sinceDays + dedup + sortBy + limit + rankedIds) +
+// applyRankedOrder + applyLibraryFilters (author/venue/yearRange/starred/readingStatus/hasNote/userTag)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +22,7 @@ async function loadTs(relPath) {
     platform: 'node',
     write: false,
     target: 'es2022',
-    external: ['node:*', './paper-disk.mjs', '../paper-disk.mjs', './taxonomies-disk.mjs', '../taxonomies-disk.mjs'],
+    external: ['node:fs', 'node:fs/promises', 'node:path', 'fs', 'path'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -32,6 +35,7 @@ const {
   filterBySearch,
   filterBySinceDays,
   sortAndLimit,
+  applyPaperFilters,
   applyRankedOrder,
   filterByAuthor,
   filterByVenue,
@@ -41,295 +45,517 @@ const {
   filterByHasNote,
   filterByUserTag,
   applyLibraryFilters,
-  applyPaperFilters,
 } = mod;
 
-function paper(over) {
-  return {
-    id: 'papers/x.md',
-    slug: 'x',
-    title: 'Sample paper',
-    title_zh: '示例论文',
-    tldr: 'A summary',
-    date: '2025-01-01',
-    yearMonth: '2025-01',
-    day: '01',
-    authors: 'Alice, Bob',
-    score: 5,
-    categories: { task: ['rl'], method: ['rl'], type: ['paper'], venue: ['ICML 2025'] },
-    canonicalArxivId: '2501.00001',
-    arxivId: '2501.00001v1',
-    wikiContent: null,
-    ...over,
-  };
-}
-
-test('filterByTag: 空 tag → 原样', () => {
-  const items = [paper()];
-  assert.equal(filterByTag(items, '').length, 1);
+const mkPaper = (overrides = {}) => ({
+  id: 'papers/x.md',
+  title: 'Some Title',
+  title_zh: '一些标题',
+  tldr: 'short summary',
+  date: '2026-09-01',
+  score: 0.5,
+  authors: 'Alice, Bob',
+  arxivId: '2310.12345v1',
+  canonicalArxivId: '2310.12345',
+  slug: 'x',
+  yearMonth: '2026-09',
+  day: '01',
+  categories: { venue: [], task: ['rl'], method: [], type: [] },
+  tags: [],
+  ...overrides,
 });
 
-test('filterByTag: "task:rl" 命中', () => {
-  const items = [paper({ categories: { task: ['rl'], method: [], type: [], venue: [] } })];
-  assert.equal(filterByTag(items, 'task:rl').length, 1);
+// ---------- filterByTag ---
+test('tag: 空 tag → 返回原数组', () => {
+  const items = [mkPaper()];
+  const r = filterByTag(items, '');
+  assert.equal(r, items);
 });
 
-test('filterByTag: "rl" 也命中(兼容短写法)', () => {
-  const items = [paper({ categories: { task: ['rl'], method: [], type: [], venue: [] } })];
-  assert.equal(filterByTag(items, 'rl').length, 1);
+test('tag: "task:rl" 完整匹配', () => {
+  const r = filterByTag([mkPaper()], 'task:rl');
+  assert.equal(r.length, 1);
 });
 
-test('filterByTag: 不匹配的 tag 排除', () => {
-  const items = [paper({ categories: { task: ['cv'], method: [], type: [], venue: [] } })];
-  assert.equal(filterByTag(items, 'rl').length, 0);
+test('tag: "rl" 后缀匹配(去 dim 前缀)', () => {
+  const r = filterByTag([mkPaper()], 'rl');
+  assert.equal(r.length, 1);
 });
 
-test('filterBySearch: 命中 title', () => {
-  const items = [paper({ title: 'Deep Learning is great' })];
-  assert.equal(filterBySearch(items, 'deep').length, 1);
+test('tag: 不命中 → []', () => {
+  const r = filterByTag(
+    [mkPaper({ categories: { venue: [], task: [], method: [], type: [] } })],
+    'rl',
+  );
+  assert.equal(r.length, 0);
 });
 
-test('filterBySearch: 命中 title_zh', () => {
-  const items = [paper({ title_zh: '深度学习综述' })];
-  assert.equal(filterBySearch(items, '深度').length, 1);
+test('tag: 不修改原数组', () => {
+  const items = [mkPaper()];
+  const r = filterByTag(items, 'rl');
+  assert.notEqual(r, items);
 });
 
-test('filterBySearch: 命中 tldr', () => {
-  const items = [paper({ tldr: 'this is about reasoning' })];
-  assert.equal(filterBySearch(items, 'reasoning').length, 1);
+// ---------- filterBySearch ---
+test('search: 空 → 返回原数组', () => {
+  const items = [mkPaper()];
+  const r = filterBySearch(items, '');
+  assert.equal(r, items);
 });
 
-test('filterBySearch: 大小写不敏感', () => {
-  const items = [paper({ title: 'Deep Learning' })];
-  assert.equal(filterBySearch(items, 'DEEP').length, 1);
+test('search: 命中 title', () => {
+  const r = filterBySearch([mkPaper({ title: 'Attention Is All You Need' })], 'attention');
+  assert.equal(r.length, 1);
 });
 
-test('filterBySearch: 空 search → 不过滤', () => {
-  const items = [paper()];
-  assert.equal(filterBySearch(items, '').length, 1);
+test('search: 命中 title_zh', () => {
+  const r = filterBySearch([mkPaper({ title_zh: '注意力机制' })], '注意力');
+  assert.equal(r.length, 1);
 });
 
-test('filterBySinceDays: 0 或负 → 不过滤', () => {
-  const items = [paper()];
-  assert.equal(filterBySinceDays(items, 0).length, 1);
-  assert.equal(filterBySinceDays(items, -1).length, 1);
+test('search: 命中 tldr', () => {
+  const r = filterBySearch([mkPaper({ tldr: 'some summary here' })], 'summary');
+  assert.equal(r.length, 1);
 });
 
-test('filterBySinceDays: 1 天内 → 命中', () => {
-  const today = new Date().toISOString().slice(0, 10);
-  const items = [paper({ date: today })];
-  assert.equal(filterBySinceDays(items, 7).length, 1);
+test('search: 大小写不敏感', () => {
+  const r = filterBySearch([mkPaper({ title: 'ATTENTION' })], 'attention');
+  assert.equal(r.length, 1);
 });
 
-test('filterBySinceDays: 老论文 → 排除', () => {
-  const items = [paper({ date: '2020-01-01' })];
-  assert.equal(filterBySinceDays(items, 7).length, 0);
+test('search: 不命中 → []', () => {
+  const r = filterBySearch([mkPaper()], 'nonexistent');
+  assert.equal(r.length, 0);
 });
 
-test('filterBySinceDays: 无 date → 排除', () => {
-  const items = [paper({ date: '' })];
-  assert.equal(filterBySinceDays(items, 7).length, 0);
+// ---------- filterBySinceDays ---
+test('since: sinceDays <= 0 → 返回原数组', () => {
+  const items = [mkPaper()];
+  assert.equal(filterBySinceDays(items, 0), items);
+  assert.equal(filterBySinceDays(items, -1), items);
 });
 
-test('sortAndLimit: date desc 默认', () => {
-  const items = [
-    paper({ id: 'a.md', date: '2025-01-01' }),
-    paper({ id: 'b.md', date: '2025-03-01' }),
-    paper({ id: 'c.md', date: '2025-02-01' }),
-  ];
-  const sorted = sortAndLimit(items, 'date');
-  assert.equal(sorted[0].id, 'b.md');
-  assert.equal(sorted[1].id, 'c.md');
-  assert.equal(sorted[2].id, 'a.md');
+test('since: sinceDays 非 number → 返回原数组', () => {
+  const items = [mkPaper()];
+  assert.equal(filterBySinceDays(items, '30'), items);
 });
 
-test('sortAndLimit: date asc', () => {
-  const items = [
-    paper({ id: 'a.md', date: '2025-01-01' }),
-    paper({ id: 'b.md', date: '2025-03-01' }),
-  ];
-  const sorted = sortAndLimit(items, 'date', 'asc');
-  assert.equal(sorted[0].id, 'a.md');
+test('since: 30 天内 → 命中', () => {
+  // today
+  const d = new Date().toISOString().slice(0, 10);
+  const r = filterBySinceDays([mkPaper({ date: d })], 30);
+  assert.equal(r.length, 1);
 });
 
-test('sortAndLimit: score desc', () => {
-  const items = [
-    paper({ id: 'a.md', score: 5 }),
-    paper({ id: 'b.md', score: 10 }),
-  ];
-  const sorted = sortAndLimit(items, 'score');
-  assert.equal(sorted[0].id, 'b.md');
+test('since: date 缺 → 淘汰', () => {
+  const r = filterBySinceDays([mkPaper({ date: '' })], 30);
+  assert.equal(r.length, 0);
 });
 
-test('sortAndLimit: limit 截断', () => {
-  const items = [paper({ id: 'a.md' }), paper({ id: 'b.md' }), paper({ id: 'c.md' })];
-  const sorted = sortAndLimit(items, 'date', 'desc', 2);
-  assert.equal(sorted.length, 2);
+test('since: date 非法 → 淘汰', () => {
+  const r = filterBySinceDays([mkPaper({ date: 'invalid' })], 30);
+  assert.equal(r.length, 0);
 });
 
-test('sortAndLimit: limit<=0 不截断', () => {
-  const items = [paper({ id: 'a.md' }), paper({ id: 'b.md' })];
-  assert.equal(sortAndLimit(items, 'date', 'desc', 0).length, 2);
+// ---------- sortAndLimit ---
+test('sort: date desc 默认', () => {
+  const r = sortAndLimit([
+    mkPaper({ id: 'p1', date: '2026-08-01' }),
+    mkPaper({ id: 'p2', date: '2026-09-15' }),
+    mkPaper({ id: 'p3', date: '2026-09-01' }),
+  ], 'date');
+  assert.equal(r[0].id, 'p2');
+  assert.equal(r[2].id, 'p1');
 });
 
-test('applyRankedOrder: 命中项按 rankedIds 顺序', () => {
-  const items = [
-    paper({ id: 'a.md', canonicalArxivId: 'A' }),
-    paper({ id: 'b.md', canonicalArxivId: 'B' }),
-    paper({ id: 'c.md', canonicalArxivId: 'C' }),
-  ];
-  const ordered = applyRankedOrder(items, ['C', 'A', 'B']);
-  assert.equal(ordered[0].id, 'c.md');
-  assert.equal(ordered[1].id, 'a.md');
-  assert.equal(ordered[2].id, 'b.md');
+test('sort: date asc', () => {
+  const r = sortAndLimit([
+    mkPaper({ id: 'p1', date: '2026-08-01' }),
+    mkPaper({ id: 'p2', date: '2026-09-15' }),
+  ], 'date', 'asc');
+  assert.equal(r[0].id, 'p1');
 });
 
-test('applyRankedOrder: 未命中项追加末尾', () => {
-  const items = [
-    paper({ id: 'a.md', canonicalArxivId: 'A' }),
-    paper({ id: 'b.md', canonicalArxivId: 'B' }),
-  ];
-  const ordered = applyRankedOrder(items, ['B']);
-  assert.equal(ordered[0].id, 'b.md');
-  assert.equal(ordered[1].id, 'a.md'); // fallback
+test('sort: score desc', () => {
+  const r = sortAndLimit([
+    mkPaper({ id: 'p1', score: 0.3 }),
+    mkPaper({ id: 'p2', score: 0.9 }),
+    mkPaper({ id: 'p3', score: 0.6 }),
+  ], 'score');
+  assert.equal(r[0].id, 'p2');
 });
 
-test('applyRankedOrder: 空 rankedIds → 原序', () => {
-  const items = [paper({ id: 'a.md' }), paper({ id: 'b.md' })];
-  const ordered = applyRankedOrder(items, []);
-  assert.equal(ordered[0].id, 'a.md');
-  assert.equal(ordered[1].id, 'b.md');
+test('sort: limit 截断', () => {
+  const r = sortAndLimit(
+    [mkPaper({ id: 'p1' }), mkPaper({ id: 'p2' }), mkPaper({ id: 'p3' })],
+    'date', 'desc', 2,
+  );
+  assert.equal(r.length, 2);
 });
 
-test('filterByAuthor: 子串命中', () => {
-  const items = [paper({ authors: 'Alice Wonderland' })];
-  assert.equal(filterByAuthor(items, 'alice').length, 1);
+test('sort: limit=0 → 不截断', () => {
+  const r = sortAndLimit(
+    [mkPaper({ id: 'p1' }), mkPaper({ id: 'p2' })],
+    'date', 'desc', 0,
+  );
+  assert.equal(r.length, 2);
 });
 
-test('filterByAuthor: 空 name → 不过滤', () => {
-  const items = [paper()];
-  assert.equal(filterByAuthor(items, '').length, 1);
+test('sort: date 缺 → 0 兜底', () => {
+  const r = sortAndLimit([
+    mkPaper({ id: 'p1', date: '' }),
+    mkPaper({ id: 'p2', date: '2026-09-01' }),
+  ], 'date', 'desc');
+  assert.equal(r[0].id, 'p2'); // 0 < 实际日期
 });
 
-test('filterByVenue: 精确匹配', () => {
-  const items = [paper({ categories: { task: [], method: [], type: [], venue: ['ICML 2025'] } })];
-  assert.equal(filterByVenue(items, 'ICML 2025').length, 1);
+// ---------- applyPaperFilters ---
+test('pipeline: tag + dedup + sortBy date', () => {
+  const r = applyPaperFilters(
+    [
+      mkPaper({ id: 'p1', date: '2026-08-01', arxivId: '2310.11111v1', canonicalArxivId: '2310.11111' }),
+      mkPaper({ id: 'p2', date: '2026-09-15', arxivId: '2310.11111v2', canonicalArxivId: '2310.11111' }),
+    ],
+    { tag: 'rl' },
+  );
+  // 同 canonical 留 v2(日期新)
+  assert.equal(r.length, 1);
+  assert.equal(r[0].id, 'p2');
 });
 
-test('filterByVenue: 不匹配 → 排除', () => {
-  const items = [paper({ categories: { task: [], method: [], type: [], venue: ['NeurIPS'] } })];
-  assert.equal(filterByVenue(items, 'ICML 2025').length, 0);
+test('pipeline: dedup=false 不去重', () => {
+  const r = applyPaperFilters(
+    [
+      mkPaper({ id: 'p1', arxivId: '2310.11111v1', canonicalArxivId: '2310.11111' }),
+      mkPaper({ id: 'p2', arxivId: '2310.11111v2', canonicalArxivId: '2310.11111' }),
+    ],
+    { dedup: false },
+  );
+  assert.equal(r.length, 2);
 });
 
-test('filterByYearRange: [2024, 2026] 命中', () => {
-  const items = [paper({ date: '2025-06-01' })];
-  assert.equal(filterByYearRange(items, { from: 2024, to: 2026 }).length, 1);
+test('pipeline: tag 过滤优先', () => {
+  const r = applyPaperFilters(
+    [
+      mkPaper({ id: 'p1', categories: { venue: [], task: ['rl'], method: [], type: [] } }),
+      mkPaper({ id: 'p2', categories: { venue: [], task: ['reasoning'], method: [], type: [] } }),
+    ],
+    { tag: 'rl' },
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].id, 'p1');
 });
 
-test('filterByYearRange: 无 date → 排除', () => {
-  const items = [paper({ date: '' })];
-  assert.equal(filterByYearRange(items, { from: 2020 }).length, 0);
+test('pipeline: search 过滤', () => {
+  const r = applyPaperFilters(
+    [
+      mkPaper({ id: 'p1', title: 'attention' }),
+      mkPaper({ id: 'p2', title: 'other' }),
+    ],
+    { search: 'attention' },
+  );
+  assert.equal(r.length, 1);
+  assert.equal(r[0].id, 'p1');
 });
 
-test('filterByStarred: snapshot.starred 命中', () => {
-  const snapshot = {
-    hidden: new Set(),
-    starred: new Set(['2501.00001']),
-    status: new Map(),
-    notes: new Map(),
-    userTags: new Map(),
-  };
-  const items = [paper()];
-  assert.equal(filterByStarred(items, snapshot).length, 1);
+test('pipeline: rankedIds 优先 sortBy', () => {
+  const r = applyPaperFilters(
+    [
+      mkPaper({ id: 'p1', arxivId: '2310.11111', canonicalArxivId: 'a', date: '2026-09-01' }),
+      mkPaper({ id: 'p2', arxivId: '2310.22222', canonicalArxivId: 'b', date: '2026-08-01' }),
+    ],
+    { rankedIds: ['b', 'a'] },
+  );
+  // b 排名在前
+  assert.equal(r[0].canonicalArxivId, 'b');
 });
 
-test('filterByStarred: 空 starred 不过滤', () => {
-  const snapshot = {
-    hidden: new Set(),
-    starred: new Set(),
-    status: new Map(),
-    notes: new Map(),
-    userTags: new Map(),
-  };
-  const items = [paper()];
-  assert.equal(filterByStarred(items, snapshot).length, 1);
+test('pipeline: rankedIds 未命中 → 末尾 + date desc 兜底', () => {
+  const r = applyPaperFilters(
+    [
+      mkPaper({ id: 'p1', arxivId: '2310.11111', canonicalArxivId: 'x', date: '2026-08-01' }),
+      mkPaper({ id: 'p2', arxivId: '2310.22222', canonicalArxivId: 'a', date: '2026-09-01' }),
+      mkPaper({ id: 'p3', arxivId: '2310.33333', canonicalArxivId: 'b', date: '2026-09-15' }),
+    ],
+    { rankedIds: ['b', 'a'] },
+  );
+  // b, a 命中(按 rank), x 兜底到末尾(date desc)
+  assert.equal(r[0].id, 'p3');
+  assert.equal(r[1].id, 'p2');
+  assert.equal(r[2].id, 'p1');
 });
 
-test('filterByReadingStatus: "read" 命中', () => {
-  const snapshot = {
-    hidden: new Set(),
-    starred: new Set(),
-    status: new Map([['2501.00001', 'read']]),
-    notes: new Map(),
-    userTags: new Map(),
-  };
-  const items = [paper()];
-  const out = filterByReadingStatus(items, 'read', snapshot);
-  assert.equal(out.length, 1);
+test('pipeline: sinceDays 严过滤不足 → 兜底补齐', () => {
+  const d_old = '2026-01-01';
+  const d_new = '2026-09-15';
+  const r = applyPaperFilters(
+    [
+      mkPaper({ id: 'p1', arxivId: '2310.11111', canonicalArxivId: 'a', date: d_old }),
+      mkPaper({ id: 'p2', arxivId: '2310.22222', canonicalArxivId: 'b', date: d_new }),
+    ],
+    { sinceDays: 30, limit: 3 }, // 30 天内只有 p2 命中
+  );
+  // 兜底:不强制 sinceDays → 用原池排序
+  assert.equal(r.length, 2);
 });
 
-test('filterByReadingStatus: 默认 unread + 空 snapshot 不过滤', () => {
-  const snapshot = {
-    hidden: new Set(),
-    starred: new Set(),
-    status: new Map(),
-    notes: new Map(),
-    userTags: new Map(),
-  };
-  const items = [paper()];
-  const out = filterByReadingStatus(items, 'unread', snapshot);
-  assert.equal(out.length, 1);
+// ---------- applyRankedOrder ---
+test('rank: 空 rankedIds → 返回原数组', () => {
+  const items = [mkPaper()];
+  const r = applyRankedOrder(items, []);
+  assert.equal(r, items);
 });
 
-test('filterByHasNote: snapshot.notes 命中', () => {
-  const snapshot = {
-    hidden: new Set(),
-    starred: new Set(),
-    status: new Map(),
-    notes: new Map([['2501.00001', 'note text']]),
-    userTags: new Map(),
-  };
-  const items = [paper()];
-  assert.equal(filterByHasNote(items, snapshot).length, 1);
+test('rank: 命中 rankedIds 排前', () => {
+  const r = applyRankedOrder(
+    [
+      mkPaper({ id: 'p1', canonicalArxivId: 'a' }),
+      mkPaper({ id: 'p2', canonicalArxivId: 'b' }),
+    ],
+    ['b', 'a'],
+  );
+  assert.equal(r[0].id, 'p2');
 });
 
-test('filterByUserTag: kind+label 命中', () => {
-  const snapshot = {
-    hidden: new Set(),
-    starred: new Set(),
-    status: new Map(),
-    notes: new Map(),
-    userTags: new Map([['2501.00001', [{ kind: 'topic', label: 'rl' }]]]),
-  };
-  const items = [paper()];
-  const out = filterByUserTag(items, 'topic', 'rl', snapshot);
-  assert.equal(out.length, 1);
+test('rank: 未命中 fallback', () => {
+  const r = applyRankedOrder(
+    [
+      mkPaper({ id: 'p1', canonicalArxivId: 'x', date: '2026-08-01' }),
+      mkPaper({ id: 'p2', canonicalArxivId: 'a', date: '2026-09-01' }),
+    ],
+    ['a'],
+  );
+  // a 命中在前,x 兜底(默认 date desc)
+  assert.equal(r[0].id, 'p2');
+  assert.equal(r[1].id, 'p1');
 });
 
-test('applyPaperFilters: search + limit 组合', () => {
-  const items = [
-    paper({ id: 'a.md', title: 'Deep RL' }),
-    paper({ id: 'b.md', title: 'Other' }),
-  ];
-  const out = applyPaperFilters(items, { search: 'deep', limit: 10 });
-  assert.equal(out.length, 1);
-  assert.equal(out[0].id, 'a.md');
+test('rank: 自定义 fallback', () => {
+  const r = applyRankedOrder(
+    [
+      mkPaper({ id: 'p1', canonicalArxivId: 'x' }),
+      mkPaper({ id: 'p2', canonicalArxivId: 'a' }),
+    ],
+    ['a'],
+    () => 0, // 保留原序
+  );
+  assert.equal(r[0].id, 'p2'); // a 命中在前
+  assert.equal(r[1].id, 'p1');
 });
 
-test('applyLibraryFilters: 多维组合', () => {
-  const snapshot = {
-    hidden: new Set(),
-    starred: new Set(['2501.00001']),
-    status: new Map(),
-    notes: new Map(),
-    userTags: new Map(),
-  };
-  const items = [
-    paper({ id: 'a.md', canonicalArxivId: '2501.00001' }),
-    paper({ id: 'b.md', canonicalArxivId: '2501.00002', authors: 'No match' }),
-  ];
-  const out = applyLibraryFilters(items, snapshot, { author: 'alice', starred: true });
-  // starred 命中 a.md → a.md 通过 starred,然后 author 'alice' 命中 a.md
-  assert.equal(out.length, 1);
-  assert.equal(out[0].id, 'a.md');
+// ---------- filterByAuthor ---
+test('author: 空 name → 返回原数组', () => {
+  const items = [mkPaper()];
+  assert.equal(filterByAuthor(items, ''), items);
+});
+
+test('author: 子串匹配大小写不敏感', () => {
+  const r = filterByAuthor([mkPaper({ authors: 'Alice Smith' })], 'alice');
+  assert.equal(r.length, 1);
+});
+
+test('author: 不命中 → []', () => {
+  const r = filterByAuthor([mkPaper({ authors: 'Alice' })], 'bob');
+  assert.equal(r.length, 0);
+});
+
+test('author: 缺 authors 字段 → 不抛', () => {
+  const r = filterByAuthor([mkPaper({ authors: undefined })], 'alice');
+  assert.equal(r.length, 0);
+});
+
+// ---------- filterByVenue ---
+test('venue: 空 venue → 返回原数组', () => {
+  const items = [mkPaper()];
+  assert.equal(filterByVenue(items, ''), items);
+});
+
+test('venue: 精确匹配', () => {
+  const r = filterByVenue(
+    [mkPaper({ categories: { venue: ['ICML 2025'], task: [], method: [], type: [] } })],
+    'ICML 2025',
+  );
+  assert.equal(r.length, 1);
+});
+
+test('venue: "ICML" 不命中 "ICML 2025"', () => {
+  const r = filterByVenue(
+    [mkPaper({ categories: { venue: ['ICML 2025'], task: [], method: [], type: [] } })],
+    'ICML',
+  );
+  assert.equal(r.length, 0);
+});
+
+test('venue: 不命中 → []', () => {
+  const r = filterByVenue(
+    [mkPaper({ categories: { venue: ['NeurIPS'], task: [], method: [], type: [] } })],
+    'ICML',
+  );
+  assert.equal(r.length, 0);
+});
+
+// ---------- filterByYearRange ---
+test('year: 无 range → 返回原数组', () => {
+  const items = [mkPaper()];
+  const r = filterByYearRange(items, {});
+  assert.equal(r, items);
+});
+
+test('year: from + to 区间内', () => {
+  const r = filterByYearRange(
+    [mkPaper({ date: '2026-01-01' })],
+    { from: 2025, to: 2027 },
+  );
+  assert.equal(r.length, 1);
+});
+
+test('year: 早于 from → 淘汰', () => {
+  const r = filterByYearRange(
+    [mkPaper({ date: '2024-01-01' })],
+    { from: 2025 },
+  );
+  assert.equal(r.length, 0);
+});
+
+test('year: 晚于 to → 淘汰', () => {
+  const r = filterByYearRange(
+    [mkPaper({ date: '2028-01-01' })],
+    { to: 2027 },
+  );
+  assert.equal(r.length, 0);
+});
+
+test('year: date 缺 → 淘汰', () => {
+  const r = filterByYearRange(
+    [mkPaper({ date: '' })],
+    { from: 2025 },
+  );
+  assert.equal(r.length, 0);
+});
+
+test('year: date 非法 → 淘汰', () => {
+  const r = filterByYearRange(
+    [mkPaper({ date: 'invalid' })],
+    { from: 2025 },
+  );
+  assert.equal(r.length, 0);
+});
+
+test('year: from 缺 → to 单边', () => {
+  const r = filterByYearRange(
+    [mkPaper({ date: '2026-01-01' })],
+    { to: 2030 },
+  );
+  assert.equal(r.length, 1);
+});
+
+test('year: to 缺 → from 单边', () => {
+  const r = filterByYearRange(
+    [mkPaper({ date: '2020-01-01' })],
+    { from: 2019 },
+  );
+  assert.equal(r.length, 1);
+});
+
+// ---------- applyLibraryFilters (snapshot) ---
+const mkSnap = (overrides = {}) => ({
+  hidden: new Set(),
+  starred: new Set(),
+  status: new Map(),
+  notes: new Map(),
+  userTags: new Map(),
+  ...overrides,
+});
+
+test('libF: 空 opts → 返回原数组', () => {
+  const items = [mkPaper()];
+  const r = applyLibraryFilters(items, mkSnap(), {});
+  assert.equal(r, items);
+});
+
+test('libF: author + venue 组合', () => {
+  const r = applyLibraryFilters(
+    [
+      mkPaper({ authors: 'Alice', categories: { venue: ['ICML'], task: [], method: [], type: [] } }),
+      mkPaper({ authors: 'Bob', categories: { venue: ['NeurIPS'], task: [], method: [], type: [] } }),
+    ],
+    mkSnap(),
+    { author: 'Alice', venue: 'ICML' },
+  );
+  assert.equal(r.length, 1);
+});
+
+test('libF: starred 命中', () => {
+  const snap = mkSnap({ starred: new Set(['2310.12345']) });
+  const r = applyLibraryFilters(
+    [mkPaper(), mkPaper({ canonicalArxivId: 'other' })],
+    snap,
+    { starred: true },
+  );
+  assert.equal(r.length, 1);
+});
+
+test('libF: starred 空 → 不过滤', () => {
+  const r = applyLibraryFilters(
+    [mkPaper(), mkPaper({ id: 'p2' })],
+    mkSnap({ starred: new Set() }),
+    { starred: true },
+  );
+  // starred.size === 0 → 不过滤
+  assert.equal(r.length, 2);
+});
+
+test('libF: readingStatus unread + 空 snapshot → 不过滤', () => {
+  const r = applyLibraryFilters([mkPaper()], mkSnap(), { readingStatus: 'unread' });
+  assert.equal(r.length, 1);
+});
+
+test('libF: readingStatus read', () => {
+  const snap = mkSnap({ status: new Map([['2310.12345', 'read']]) });
+  const r = applyLibraryFilters([mkPaper()], snap, { readingStatus: 'read' });
+  assert.equal(r.length, 1);
+});
+
+test('libF: hasNote 命中', () => {
+  const snap = mkSnap({ notes: new Map([['2310.12345', 'note text']]) });
+  const r = applyLibraryFilters([mkPaper()], snap, { hasNote: true });
+  assert.equal(r.length, 1);
+});
+
+test('libF: hasNote 空 → 不过滤', () => {
+  const r = applyLibraryFilters([mkPaper()], mkSnap(), { hasNote: true });
+  assert.equal(r.length, 1);
+});
+
+test('libF: userTag 命中', () => {
+  const snap = mkSnap({
+    userTags: new Map([['2310.12345', [{ kind: 'task', label: 'reasoning' }]]]),
+  });
+  const r = applyLibraryFilters(
+    [mkPaper()],
+    snap,
+    { userTag: { kind: 'task', label: 'reasoning' } },
+  );
+  assert.equal(r.length, 1);
+});
+
+test('libF: userTag 不匹配 kind', () => {
+  const snap = mkSnap({
+    userTags: new Map([['2310.12345', [{ kind: 'task', label: 'reasoning' }]]]),
+  });
+  const r = applyLibraryFilters(
+    [mkPaper()],
+    snap,
+    { userTag: { kind: 'method', label: 'reasoning' } },
+  );
+  assert.equal(r.length, 0);
+});
+
+test('libF: userTag 空 kind/label → 不过滤', () => {
+  const r = applyLibraryFilters(
+    [mkPaper()],
+    mkSnap(),
+    { userTag: { kind: '', label: '' } },
+  );
+  assert.equal(r.length, 1);
 });
