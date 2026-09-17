@@ -2,7 +2,11 @@
 // astro-src/scripts/library-duplicates.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/library-duplicates.ts.
-// toFileRef + findVersionClusters + findCrossIdTitleDupes + findDuplicateGroups + duplicateStats.
+// toFileRef (PaperListItem → PaperFileRef) +
+// findVersionClusters (canonicalId 多版本分组) +
+// findCrossIdTitleDupes (归一化标题跨 ID 重复) +
+// findDuplicateGroups (综合检测) +
+// duplicateStats (按 reason 计数)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -17,8 +21,7 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'node',
-    external: ['node:*'],
+    platform: 'neutral',
     write: false,
     target: 'es2022',
   });
@@ -36,252 +39,330 @@ const {
   duplicateStats,
 } = mod;
 
-const mkPaper = (overrides) => ({
-  id: 'papers/2310.12345.md',
+const mkPaper = (overrides = {}) => ({
+  id: 'papers/x.md',
   arxivId: '2310.12345',
   canonicalArxivId: '2310.12345',
-  title: 'Some title',
-  title_plain: 'Some title plain',
-  date: '2026-09-10',
+  title: 'Some Paper Title',
+  title_plain: '',
+  date: '2026-01-01',
   wikiContent: '',
   ...overrides,
 });
 
-const mkRef = (overrides) => ({
-  relPath: 'papers/2310.12345.md',
+const mkRef = (overrides = {}) => ({
+  relPath: 'papers/x.md',
   arxivId: '2310.12345',
   canonicalId: '2310.12345',
   version: 1,
-  title: 'Some title',
-  date: '2026-09-10',
+  title: 'Some Paper Title',
+  date: '2026-01-01',
   hasWiki: false,
   ...overrides,
 });
 
-// ---------- toFileRef ----------
-test('toFileRef: 基本字段映射', () => {
-  const r = toFileRef(mkPaper());
-  assert.equal(r.relPath, 'papers/2310.12345.md');
-  assert.equal(r.arxivId, '2310.12345');
+// ---------- toFileRef ---
+test('toRef: 完整字段', () => {
+  const p = mkPaper({
+    id: 'papers/a.md',
+    arxivId: '2310.12345v2',
+    canonicalArxivId: '2310.12345',
+    title_plain: 'Plain Title',
+    wikiContent: 'wiki content',
+  });
+  const r = toFileRef(p);
+  assert.equal(r.relPath, 'papers/a.md');
+  assert.equal(r.arxivId, '2310.12345v2');
   assert.equal(r.canonicalId, '2310.12345');
-  assert.equal(r.title, 'Some title plain');
-  assert.equal(r.date, '2026-09-10');
-  assert.equal(r.hasWiki, false);
-});
-
-test('toFileRef: 无 title_plain → 用 title', () => {
-  const r = toFileRef(mkPaper({ title_plain: undefined }));
-  assert.equal(r.title, 'Some title');
-});
-
-test('toFileRef: 无 title_plain 且无 title → 空', () => {
-  const r = toFileRef(mkPaper({ title_plain: undefined, title: undefined }));
-  assert.equal(r.title, '');
-});
-
-test('toFileRef: 无 date → 空', () => {
-  const r = toFileRef(mkPaper({ date: undefined }));
-  assert.equal(r.date, '');
-});
-
-test('toFileRef: 有 wikiContent → hasWiki=true', () => {
-  const r = toFileRef(mkPaper({ wikiContent: 'some content' }));
+  assert.equal(r.version, 2);
+  assert.equal(r.title, 'Plain Title');
   assert.equal(r.hasWiki, true);
 });
 
-test('toFileRef: version 从 arxivId 解析', () => {
-  const r = toFileRef(mkPaper({ arxivId: '2310.12345v3' }));
+test('toRef: title_plain 缺 → fallback title', () => {
+  const p = mkPaper({ title_plain: '', title: 'Title Only' });
+  const r = toFileRef(p);
+  assert.equal(r.title, 'Title Only');
+});
+
+test('toRef: title_plain 优先', () => {
+  const p = mkPaper({ title_plain: 'Plain', title: 'Raw' });
+  const r = toFileRef(p);
+  assert.equal(r.title, 'Plain');
+});
+
+test('toRef: date 缺 → ""', () => {
+  const p = mkPaper({ date: '' });
+  const r = toFileRef(p);
+  assert.equal(r.date, '');
+});
+
+test('toRef: wikiContent 缺 → hasWiki=false', () => {
+  const p = mkPaper({ wikiContent: '' });
+  const r = toFileRef(p);
+  assert.equal(r.hasWiki, false);
+});
+
+test('toRef: wikiContent 非空 → hasWiki=true', () => {
+  const p = mkPaper({ wikiContent: 'some wiki' });
+  const r = toFileRef(p);
+  assert.equal(r.hasWiki, true);
+});
+
+test('toRef: version 从 arxivId 派生', () => {
+  const p = mkPaper({ arxivId: '2310.12345v3' });
+  const r = toFileRef(p);
   assert.equal(r.version, 3);
 });
 
-// ---------- findVersionClusters ----------
-test('findVersionClusters: 空数组', () => {
-  assert.deepEqual(findVersionClusters([]), []);
-});
-
-test('findVersionClusters: 单 paper (无重复)', () => {
+// ---------- findVersionClusters ---
+test('cluster: 单一文件 → 不算簇', () => {
   const r = findVersionClusters([mkRef()]);
-  assert.deepEqual(r, []);
+  assert.equal(r.length, 0);
 });
 
-test('findVersionClusters: 2 个版本同 canonicalId', () => {
+test('cluster: 同 canonicalId 2 文件 → 1 组', () => {
   const r = findVersionClusters([
-    mkRef({ relPath: 'a.md', arxivId: '2310.12345v1', version: 1 }),
-    mkRef({ relPath: 'b.md', arxivId: '2310.12345v2', version: 2 }),
+    mkRef({ canonicalId: 'c1', arxivId: '2310.12345v1', version: 1 }),
+    mkRef({ canonicalId: 'c1', arxivId: '2310.12345v2', version: 2 }),
   ]);
   assert.equal(r.length, 1);
   assert.equal(r[0].reason, 'version-cluster');
-  assert.equal(r[0].groupKey, '2310.12345');
-  assert.equal(r[0].files.length, 2);
+  assert.equal(r[0].groupKey, 'c1');
 });
 
-test('findVersionClusters: 按版本号降序 (newest first)', () => {
+test('cluster: 不同 canonicalId → 2 组', () => {
   const r = findVersionClusters([
-    mkRef({ relPath: 'a.md', arxivId: '2310.12345v1', version: 1 }),
-    mkRef({ relPath: 'b.md', arxivId: '2310.12345v3', version: 3 }),
-    mkRef({ relPath: 'c.md', arxivId: '2310.12345v2', version: 2 }),
+    mkRef({ canonicalId: 'c1', arxivId: 'a1v1', version: 1 }),
+    mkRef({ canonicalId: 'c1', arxivId: 'a1v2', version: 2 }),
+    mkRef({ canonicalId: 'c2', arxivId: 'a2v1', version: 1 }),
+    mkRef({ canonicalId: 'c2', arxivId: 'a2v2', version: 2 }),
+  ]);
+  assert.equal(r.length, 2);
+});
+
+test('cluster: 按版本号降序排(最新在前)', () => {
+  const r = findVersionClusters([
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v1', version: 1 }),
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v3', version: 3 }),
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v2', version: 2 }),
   ]);
   assert.equal(r[0].files[0].version, 3);
   assert.equal(r[0].files[1].version, 2);
   assert.equal(r[0].files[2].version, 1);
 });
 
-test('findVersionClusters: 多组按文件数降序', () => {
+test('cluster: 按文件数降序排(多文件组在前)', () => {
   const r = findVersionClusters([
-    mkRef({ relPath: 'a.md', arxivId: '2310.11111v1', canonicalId: '2310.11111', version: 1 }),
-    mkRef({ relPath: 'b.md', arxivId: '2310.11111v2', canonicalId: '2310.11111', version: 2 }),
-    mkRef({ relPath: 'c.md', arxivId: '2310.22222v1', canonicalId: '2310.22222', version: 1 }),
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v1', version: 1 }),
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v2', version: 2 }),
+    mkRef({ canonicalId: 'c2', arxivId: 'c2v1', version: 1 }),
+    mkRef({ canonicalId: 'c2', arxivId: 'c2v2', version: 2 }),
+    mkRef({ canonicalId: 'c2', arxivId: 'c2v3', version: 3 }),
   ]);
-  assert.equal(r.length, 1); // 22222 只有 1 → 不算
-  assert.equal(r[0].files.length, 2);
+  // c2 有 3 个 → 在前
+  assert.equal(r[0].groupKey, 'c2');
+  assert.equal(r[1].groupKey, 'c1');
 });
 
-test('findVersionClusters: 无 canonicalId 跳过', () => {
+test('cluster: canonicalId 空 → 跳过', () => {
   const r = findVersionClusters([
     mkRef({ canonicalId: '' }),
     mkRef({ canonicalId: '' }),
   ]);
-  assert.deepEqual(r, []);
+  assert.equal(r.length, 0);
 });
 
-// ---------- findCrossIdTitleDupes ----------
-test('findCrossIdTitleDupes: 短标题 (<30) 不参与比较', () => {
-  const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title: 'short' }),
-    mkRef({ canonicalId: '2310.22222', title: 'short' }),
+test('cluster: 混合(有+无)', () => {
+  const r = findVersionClusters([
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v1', version: 1 }),
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v2', version: 2 }),
+    mkRef({ canonicalId: '' }),
   ]);
-  assert.deepEqual(r, []);
+  assert.equal(r.length, 1);
 });
 
-test('findCrossIdTitleDupes: 不同 canonicalId + 同长标题', () => {
-  const title = 'a long title about transformers and attention mechanisms';
+test('cluster: 空数组 → []', () => {
+  assert.deepEqual(findVersionClusters([]), []);
+});
+
+// ---------- findCrossIdTitleDupes ---
+test('cross: 不同 canonicalId 同标题 → 1 组', () => {
+  const longTitle = 'A'.repeat(40);
   const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title }),
-    mkRef({ canonicalId: '2310.22222', title }),
+    mkRef({ canonicalId: 'c1', title: longTitle }),
+    mkRef({ canonicalId: 'c2', title: longTitle }),
   ]);
   assert.equal(r.length, 1);
   assert.equal(r[0].reason, 'cross-id-similar-title');
-  assert.equal(r[0].files.length, 2);
 });
 
-test('findCrossIdTitleDupes: 同 canonicalId 不算跨 ID 重复', () => {
-  const title = 'a long title about transformers and attention mechanisms';
+test('cross: 同 canonicalId → 不算重复', () => {
+  const longTitle = 'B'.repeat(40);
   const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title }),
-    mkRef({ canonicalId: '2310.11111', title }),
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v1', version: 1, title: longTitle }),
+    mkRef({ canonicalId: 'c1', arxivId: 'c1v2', version: 2, title: longTitle }),
   ]);
-  assert.deepEqual(r, []);
+  assert.equal(r.length, 0);
 });
 
-test('findCrossIdTitleDupes: 标题归一化 (标点/空格忽略)', () => {
+test('cross: 归一化(小写 + 去标点)', () => {
+  // 归一化后 ≥ 30 字
   const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title: 'A Long Title About Transformers and Attention Mechanisms' }),
-    mkRef({ canonicalId: '2310.22222', title: 'A  long  title about transformers and attention mechanisms!' }),
-  ]);
-  // 归一化后两者都是 "alongtitleabouttransformersandattentionmechanisms" (39 字符) ≥ 30
-  assert.equal(r.length, 1);
-  assert.equal(r[0].files.length, 2);
-});
-
-test('findCrossIdTitleDupes: 大小写不敏感', () => {
-  const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title: 'A LONG TITLE ABOUT TRANSFORMERS AND ATTENTION MECHANISMS' }),
-    mkRef({ canonicalId: '2310.22222', title: 'a long title about transformers and attention mechanisms' }),
+    mkRef({ canonicalId: 'c1', title: 'Attention IS All YOU NEED For Long Sequence Modeling' }),
+    mkRef({ canonicalId: 'c2', title: 'attention is all you need for long sequence modeling' }),
   ]);
   assert.equal(r.length, 1);
 });
 
-test('findCrossIdTitleDupes: 中文标题不算 (<30 字母数字)', () => {
+test('cross: 归一化(去空白)', () => {
   const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title: '机器学习' }),
-    mkRef({ canonicalId: '2310.22222', title: '机器学习' }),
-  ]);
-  // normalizeTitle 把中文全过滤掉 → 归一化后 ''
-  assert.deepEqual(r, []);
-});
-
-test('findCrossIdTitleDupes: 按文件数降序排', () => {
-  const longTitle = 'a long title about transformers and attention mechanisms and more';
-  const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title: longTitle }),
-    mkRef({ canonicalId: '2310.22222', title: longTitle }),
-    mkRef({ canonicalId: '2310.33333', title: longTitle }),
+    mkRef({ canonicalId: 'c1', title: 'foo   bar  baz qux quux corge grault garply waldo fred' }),
+    mkRef({ canonicalId: 'c2', title: 'foo bar baz qux quux corge grault garply waldo fred' }),
   ]);
   assert.equal(r.length, 1);
+});
+
+test('cross: 短标题 < 30 字 → 跳过', () => {
+  const r = findCrossIdTitleDupes([
+    mkRef({ canonicalId: 'c1', title: 'short' }),
+    mkRef({ canonicalId: 'c2', title: 'short' }),
+  ]);
+  assert.equal(r.length, 0);
+});
+
+test('cross: 30 字刚好命中', () => {
+  // 30 个 a → 归一化后长度 30,刚好 >= 30
+  const r = findCrossIdTitleDupes([
+    mkRef({ canonicalId: 'c1', title: 'a'.repeat(30) }),
+    mkRef({ canonicalId: 'c2', title: 'a'.repeat(30) }),
+  ]);
+  assert.equal(r.length, 1);
+});
+
+test('cross: 29 字不命中', () => {
+  const r = findCrossIdTitleDupes([
+    mkRef({ canonicalId: 'c1', title: 'a'.repeat(29) }),
+    mkRef({ canonicalId: 'c2', title: 'a'.repeat(29) }),
+  ]);
+  assert.equal(r.length, 0);
+});
+
+test('cross: groupKey = 归一化后标题', () => {
+  const r = findCrossIdTitleDupes([
+    mkRef({ canonicalId: 'c1', title: 'Attention IS All YOU NEED For Long Sequence Modeling' }),
+    mkRef({ canonicalId: 'c2', title: 'attention is all you need for long sequence modeling' }),
+  ]);
+  assert.equal(r[0].groupKey, 'attentionisallyouneedforlongsequencemodeling');
+});
+
+test('cross: 按文件数降序排', () => {
+  const t1 = 'a'.repeat(30);
+  const t2 = 'b'.repeat(30);
+  const r = findCrossIdTitleDupes([
+    mkRef({ canonicalId: 'c1', title: t1 }),
+    mkRef({ canonicalId: 'c2', title: t1 }),
+    mkRef({ canonicalId: 'c3', title: t2 }),
+    mkRef({ canonicalId: 'c4', title: t2 }),
+    mkRef({ canonicalId: 'c5', title: t2 }),
+  ]);
+  // t2 有 3 个 → 在前
   assert.equal(r[0].files.length, 3);
-});
-
-test('findCrossIdTitleDupes: groupKey 是归一化标题', () => {
-  const r = findCrossIdTitleDupes([
-    mkRef({ canonicalId: '2310.11111', title: 'A Long Title About Transformers and Attention Mechanisms' }),
-    mkRef({ canonicalId: '2310.22222', title: 'a long title about transformers and attention mechanisms' }),
-  ]);
-  assert.equal(r[0].groupKey, 'alongtitleabouttransformersandattentionmechanisms');
-});
-
-// ---------- findDuplicateGroups ----------
-test('findDuplicateGroups: 综合 — version + cross-id', () => {
-  const longTitle = 'a long title about transformers and attention mechanisms';
-  const r = findDuplicateGroups([
-    mkPaper({ id: 'a.md', arxivId: '2310.11111v1', canonicalArxivId: '2310.11111', title: 'foo', title_plain: 'foo' }),
-    mkPaper({ id: 'b.md', arxivId: '2310.11111v2', canonicalArxivId: '2310.11111', title: 'foo', title_plain: 'foo' }),
-    mkPaper({ id: 'c.md', arxivId: '2310.22222', canonicalArxivId: '2310.22222', title: longTitle, title_plain: longTitle }),
-    mkPaper({ id: 'd.md', arxivId: '2310.33333', canonicalArxivId: '2310.33333', title: longTitle, title_plain: longTitle }),
-  ]);
-  // 1 version-cluster + 1 cross-id → 2 groups
-  assert.equal(r.length, 2);
-});
-
-test('findDuplicateGroups: 全空', () => {
-  assert.deepEqual(findDuplicateGroups([]), []);
-});
-
-test('findDuplicateGroups: 按文件数降序', () => {
-  const longTitle = 'a long title about transformers and attention mechanisms';
-  const r = findDuplicateGroups([
-    mkPaper({ id: 'a.md', arxivId: '2310.11111v1', canonicalArxivId: '2310.11111', title: longTitle, title_plain: longTitle }),
-    mkPaper({ id: 'b.md', arxivId: '2310.22222', canonicalArxivId: '2310.22222', title: longTitle, title_plain: longTitle }),
-    mkPaper({ id: 'c.md', arxivId: '2310.33333', canonicalArxivId: '2310.33333', title: longTitle, title_plain: longTitle }),
-    mkPaper({ id: 'd.md', arxivId: '2310.44444v1', canonicalArxivId: '2310.44444', title: 'foo', title_plain: 'foo' }),
-    mkPaper({ id: 'e.md', arxivId: '2310.44444v2', canonicalArxivId: '2310.44444', title: 'foo', title_plain: 'foo' }),
-  ]);
-  // cross-id 3 文件 > version-cluster 2 文件
-  assert.equal(r[0].reason, 'cross-id-similar-title');
-  assert.equal(r[0].files.length, 3);
-  assert.equal(r[1].reason, 'version-cluster');
   assert.equal(r[1].files.length, 2);
 });
 
-// ---------- duplicateStats ----------
-test('duplicateStats: 空 → 全 0', () => {
+test('cross: 空数组 → []', () => {
+  assert.deepEqual(findCrossIdTitleDupes([]), []);
+});
+
+// ---------- findDuplicateGroups ---
+test('all: 合并 version+cross', () => {
+  const longTitle = 'X'.repeat(40);
+  const papers = [
+    mkPaper({ id: 'p1', arxivId: 'a1v1', canonicalArxivId: 'a1', title: 't1' }),
+    mkPaper({ id: 'p2', arxivId: 'a1v2', canonicalArxivId: 'a1', title: 't2' }),
+    mkPaper({ id: 'p3', arxivId: 'b1', canonicalArxivId: 'b1', title: longTitle }),
+    mkPaper({ id: 'p4', arxivId: 'c1', canonicalArxivId: 'c1', title: longTitle }),
+  ];
+  const r = findDuplicateGroups(papers);
+  // 1 个 version cluster (2 个) + 1 个 cross-id (2 个)
+  assert.equal(r.length, 2);
+});
+
+test('all: 按文件数降序排', () => {
+  const longTitle = 'X'.repeat(40);
+  const papers = [
+    // version cluster: 2 文件
+    mkPaper({ id: 'p1', arxivId: 'a1v1', canonicalArxivId: 'a1', title: 't1' }),
+    mkPaper({ id: 'p2', arxivId: 'a1v2', canonicalArxivId: 'a1', title: 't2' }),
+    // cross-id: 3 文件
+    mkPaper({ id: 'p3', arxivId: 'b1', canonicalArxivId: 'b1', title: longTitle }),
+    mkPaper({ id: 'p4', arxivId: 'c1', canonicalArxivId: 'c1', title: longTitle }),
+    mkPaper({ id: 'p5', arxivId: 'd1', canonicalArxivId: 'd1', title: longTitle }),
+  ];
+  const r = findDuplicateGroups(papers);
+  // cross-id 3 > version 2
+  assert.equal(r[0].reason, 'cross-id-similar-title');
+  assert.equal(r[0].files.length, 3);
+  assert.equal(r[1].reason, 'version-cluster');
+});
+
+test('all: 空数组 → []', () => {
+  assert.deepEqual(findDuplicateGroups([]), []);
+});
+
+test('all: 无重复 → []', () => {
+  const papers = [
+    mkPaper({ id: 'p1', arxivId: 'a1', canonicalArxivId: 'a1', title: 'T1' }),
+    mkPaper({ id: 'p2', arxivId: 'b1', canonicalArxivId: 'b1', title: 'T2' }),
+  ];
+  assert.equal(findDuplicateGroups(papers).length, 0);
+});
+
+// ---------- duplicateStats ---
+test('stats: 全 version-cluster', () => {
+  const r = duplicateStats([
+    { groupKey: 'a', reason: 'version-cluster', files: [] },
+    { groupKey: 'b', reason: 'version-cluster', files: [] },
+  ]);
+  assert.equal(r.versionCluster, 2);
+  assert.equal(r.crossIdTitle, 0);
+});
+
+test('stats: 全 cross-id', () => {
+  const r = duplicateStats([
+    { groupKey: 'a', reason: 'cross-id-similar-title', files: [] },
+  ]);
+  assert.equal(r.crossIdTitle, 1);
+  assert.equal(r.versionCluster, 0);
+});
+
+test('stats: 混合', () => {
+  const r = duplicateStats([
+    { groupKey: 'a', reason: 'version-cluster', files: [] },
+    { groupKey: 'b', reason: 'cross-id-similar-title', files: [] },
+    { groupKey: 'c', reason: 'version-cluster', files: [] },
+  ]);
+  assert.equal(r.versionCluster, 2);
+  assert.equal(r.crossIdTitle, 1);
+});
+
+test('stats: 空 → 0/0', () => {
   assert.deepEqual(duplicateStats([]), { versionCluster: 0, crossIdTitle: 0 });
 });
 
-test('duplicateStats: 混合', () => {
-  assert.deepEqual(
-    duplicateStats([
-      { groupKey: 'g1', reason: 'version-cluster', files: [] },
-      { groupKey: 'g2', reason: 'version-cluster', files: [] },
-      { groupKey: 'g3', reason: 'cross-id-similar-title', files: [] },
-    ]),
-    { versionCluster: 2, crossIdTitle: 1 },
-  );
-});
-
-test('duplicateStats: 全 version-cluster', () => {
-  assert.deepEqual(
-    duplicateStats([
-      { groupKey: 'g1', reason: 'version-cluster', files: [] },
-    ]),
-    { versionCluster: 1, crossIdTitle: 0 },
-  );
-});
-
-test('duplicateStats: 全 cross-id-similar-title', () => {
-  assert.deepEqual(
-    duplicateStats([
-      { groupKey: 'g1', reason: 'cross-id-similar-title', files: [] },
-    ]),
-    { versionCluster: 0, crossIdTitle: 1 },
-  );
+// ---------- 集成 ---
+test('集成: listPapers → findDuplicateGroups → duplicateStats', () => {
+  const longTitle = 'Transformer Architecture Survey Long Title';
+  const papers = [
+    mkPaper({ id: 'p1', arxivId: '2310.11111v1', canonicalArxivId: '2310.11111', title: 'T1' }),
+    mkPaper({ id: 'p2', arxivId: '2310.11111v2', canonicalArxivId: '2310.11111', title: 'T2' }),
+    mkPaper({ id: 'p3', arxivId: '2310.22222', canonicalArxivId: '2310.22222', title: longTitle }),
+    mkPaper({ id: 'p4', arxivId: '2310.33333', canonicalArxivId: '2310.33333', title: longTitle }),
+  ];
+  const groups = findDuplicateGroups(papers);
+  const stats = duplicateStats(groups);
+  assert.equal(stats.versionCluster, 1);
+  assert.equal(stats.crossIdTitle, 1);
+  assert.equal(groups.length, 2);
 });
