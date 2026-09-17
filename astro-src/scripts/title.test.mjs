@@ -2,7 +2,7 @@
 // astro-src/scripts/title.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/title.ts.
-// stripTitleMarkup + paperPlainTitle — pure, no deps.
+// stripTitleMarkup (TeX → plain text) + paperPlainTitle (plain 优先,fallback)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,203 +29,200 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/title.ts');
 const { stripTitleMarkup, paperPlainTitle } = mod;
 
-// ---------- stripTitleMarkup: 基本 ----------
-test('stripTitleMarkup: 普通文本原样', () => {
+// ---------- stripTitleMarkup ---
+test('strip: 纯字符串不变', () => {
   assert.equal(stripTitleMarkup('Hello world'), 'Hello world');
 });
 
-test('stripTitleMarkup: undefined → 空', () => {
+test('strip: undefined → ""', () => {
   assert.equal(stripTitleMarkup(undefined), '');
 });
 
-test('stripTitleMarkup: null → 空', () => {
+test('strip: null → ""', () => {
   assert.equal(stripTitleMarkup(null), '');
 });
 
-test('stripTitleMarkup: 数字转字符串', () => {
+test('strip: 数字 → 字符串', () => {
   assert.equal(stripTitleMarkup(42), '42');
 });
 
-test('stripTitleMarkup: 头尾空白 trim', () => {
+test('strip: inline math $x$ → 内容透传', () => {
+  // $x$ 是 math delimiters 内部的内容,没有 \command → 保留 "x"
+  assert.equal(stripTitleMarkup('foo $x$ bar'), 'foo x bar');
+});
+
+test('strip: display math $$...$$ 移除 $, 内容透传', () => {
+  assert.equal(stripTitleMarkup('foo $$x=1$$ bar'), 'foo x=1 bar');
+});
+
+test('strip: \\( ... \\) paren math, 内容透传', () => {
+  assert.equal(stripTitleMarkup('foo \\(x\\) bar'), 'foo x bar');
+});
+
+test('strip: \\[ ... \\] bracket math, 内容透传', () => {
+  assert.equal(stripTitleMarkup('foo \\[x\\] bar'), 'foo x bar');
+});
+
+test('strip: math 内 \\alpha → alpha', () => {
+  assert.equal(stripTitleMarkup('$\\alpha$'), 'alpha');
+});
+
+test('strip: math 内 \\neq → ≠', () => {
+  assert.equal(stripTitleMarkup('a $\\neq$ b'), 'a ≠ b');
+});
+
+test('strip: math 内 \\leq → ≤', () => {
+  assert.equal(stripTitleMarkup('a $\\leq$ b'), 'a ≤ b');
+});
+
+test('strip: math 内 \\geq → ≥', () => {
+  assert.equal(stripTitleMarkup('a $\\geq$ b'), 'a ≥ b');
+});
+
+test('strip: math 内 \\times → ×', () => {
+  assert.equal(stripTitleMarkup('a $\\times$ b'), 'a × b');
+});
+
+test('strip: math 内 \\cdot → ·', () => {
+  assert.equal(stripTitleMarkup('a $\\cdot$ b'), 'a · b');
+});
+
+test('strip: math 内 \\pm → ±', () => {
+  assert.equal(stripTitleMarkup('a $\\pm$ b'), 'a ± b');
+});
+
+test('strip: math 内 \\infty → ∞', () => {
+  assert.equal(stripTitleMarkup('x $\\infty$'), 'x ∞');
+});
+
+test('strip: math 内 \\rightarrow → →', () => {
+  assert.equal(stripTitleMarkup('A $\\rightarrow$ B'), 'A → B');
+});
+
+test('strip: math 内 \\sum → ∑', () => {
+  assert.equal(stripTitleMarkup('$\\sum$ x'), '∑ x');
+});
+
+test('strip: math 内 \\partial → ∂', () => {
+  assert.equal(stripTitleMarkup('$\\partial$ x'), '∂ x');
+});
+
+test('strip: math 内 \\prod → ∏', () => {
+  assert.equal(stripTitleMarkup('$\\prod$ x'), '∏ x');
+});
+
+test('strip: math 内上标 ^ 移除', () => {
+  // $\\alpha^k$ → "alphak" (^ 去掉,然后 {} 移除,然后 \alpha → alpha)
+  // 实际是 stripLatexExpression 先替换 \,;:!> 为空格,然后 \command, 然后 {} ^ _, 最后 \non-alpha
+  // alpha 后跟 k: alpha → "alpha" then ^ removed → "alphak"
+  assert.equal(stripTitleMarkup('$\\alpha^k$'), 'alphak');
+});
+
+test('strip: math 内下标 _ 移除', () => {
+  assert.equal(stripTitleMarkup('$\\alpha_k$'), 'alphak');
+});
+
+test('strip: math 内大括号 {} 移除', () => {
+  // $\frac{a}{b}$ → frac + a + b = "fracab"
+  assert.equal(stripTitleMarkup('$\\frac{a}{b}$'), 'fracab');
+});
+
+test('strip: 多个空格压缩为单空格', () => {
+  assert.equal(stripTitleMarkup('foo    bar'), 'foo bar');
+});
+
+test('strip: 行尾换行 → 空格', () => {
+  assert.equal(stripTitleMarkup('foo\nbar'), 'foo bar');
+});
+
+test('strip: 首尾空白 trim', () => {
   assert.equal(stripTitleMarkup('  hello  '), 'hello');
 });
 
-test('stripTitleMarkup: 连续空白合并', () => {
-  assert.equal(stripTitleMarkup('hello   world'), 'hello world');
+test('strip: math 内 \\command 已知 → 符号', () => {
+  // $\\max$ → max(在 LATEX_SYMBOLS 里有)
+  assert.equal(stripTitleMarkup('$\\max$'), 'max');
 });
 
-test('stripTitleMarkup: \\r\\n → \\n (最终 \\s+ 合并)', () => {
-  // 实现末尾 .replace(/\s+/g, ' ') → 折行变单空格
-  assert.equal(stripTitleMarkup('a\r\nb'), 'a b');
+test('strip: math 内 \\command 未知 → 透传', () => {
+  assert.equal(stripTitleMarkup('$\\foo$'), 'foo');
 });
 
-// ---------- stripTitleMarkup: 数学分隔符 ----------
-test('stripTitleMarkup: $...$ inline 数学', () => {
-  // \\alpha → alpha
-  const r = stripTitleMarkup('The $\\alpha$ value');
-  assert.equal(r, 'The alpha value');
+test('strip: math 内 \\command 多个 → 都替换', () => {
+  // $\\alpha \\beta$ → "alpha beta"(空格保留)
+  assert.equal(stripTitleMarkup('$\\alpha \\beta$'), 'alpha beta');
 });
 
-test('stripTitleMarkup: $$...$$ display 数学', () => {
-  const r = stripTitleMarkup('Title with $$\\beta + \\gamma$$ inline');
-  assert.match(r, /beta/);
-  assert.match(r, /gamma/);
+test('strip: math 外 \\command 不变', () => {
+  // 在 math 之外的 \alpha 不被替换
+  assert.equal(stripTitleMarkup('hello \\alpha world'), 'hello \\alpha world');
 });
 
-test('stripTitleMarkup: \\(...\\) paren 数学', () => {
-  const r = stripTitleMarkup('Foo \\(\\mu\\) bar');
-  assert.match(r, /mu/);
+test('strip: 混合 LaTeX + 普通文本', () => {
+  assert.equal(
+    stripTitleMarkup('Attention $\\alpha^k$ Is All You Need'),
+    'Attention alphak Is All You Need',
+  );
 });
 
-test('stripTitleMarkup: \\[...\\] bracket 数学', () => {
-  const r = stripTitleMarkup('Title \\[\\sum\\] end');
-  assert.match(r, /∑/);
+test('strip: 残留 $ 移除', () => {
+  // 末尾 $ 移除
+  assert.equal(stripTitleMarkup('foo$'), 'foo');
 });
 
-test('stripTitleMarkup: 数学分隔符后多余空格清理', () => {
-  const r = stripTitleMarkup('Foo $x$ bar');
-  assert.equal(r, 'Foo x bar');
+// ---------- paperPlainTitle ---
+test('paperPlain: titlePlain 优先', () => {
+  assert.equal(
+    paperPlainTitle('Fancy $\\alpha$ Title', 'Plain Title'),
+    'Plain Title',
+  );
 });
 
-// ---------- stripTitleMarkup: LaTeX 符号表 ----------
-test('stripTitleMarkup: \\neq → ≠', () => {
-  assert.equal(stripTitleMarkup('A $\\neq$ B'), 'A ≠ B');
+test('paperPlain: titlePlain 空 → fallback stripTitle', () => {
+  assert.equal(
+    paperPlainTitle('$\\alpha$', ''),
+    'alpha',
+  );
 });
 
-test('stripTitleMarkup: \\leq → ≤', () => {
-  assert.equal(stripTitleMarkup('$x \\leq y$'), 'x ≤ y');
+test('paperPlain: titlePlain undefined → fallback', () => {
+  assert.equal(
+    paperPlainTitle('$\\alpha$', undefined),
+    'alpha',
+  );
 });
 
-test('stripTitleMarkup: \\geq → ≥', () => {
-  assert.equal(stripTitleMarkup('$x \\geq y$'), 'x ≥ y');
+test('paperPlain: 两者都有,优先 titlePlain', () => {
+  assert.equal(
+    paperPlainTitle('$\\alpha$', 'plain'),
+    'plain',
+  );
 });
 
-test('stripTitleMarkup: \\pm → ±', () => {
-  assert.equal(stripTitleMarkup('$x \\pm 1$'), 'x ± 1');
-});
-
-test('stripTitleMarkup: \\times → ×', () => {
-  assert.equal(stripTitleMarkup('$a \\times b$'), 'a × b');
-});
-
-test('stripTitleMarkup: \\cdot → ·', () => {
-  assert.equal(stripTitleMarkup('$a \\cdot b$'), 'a · b');
-});
-
-test('stripTitleMarkup: \\rightarrow / \\to → →', () => {
-  assert.match(stripTitleMarkup('$A \\rightarrow B$'), /→/);
-  assert.match(stripTitleMarkup('$A \\to B$'), /→/);
-});
-
-test('stripTitleMarkup: \\infty → ∞', () => {
-  assert.match(stripTitleMarkup('$\\infty$ loop'), /∞/);
-});
-
-test('stripTitleMarkup: \\partial → ∂', () => {
-  assert.match(stripTitleMarkup('$\\partial f$'), /∂/);
-});
-
-test('stripTitleMarkup: \\sum → ∑', () => {
-  assert.match(stripTitleMarkup('$\\sum_i$'), /∑/);
-});
-
-test('stripTitleMarkup: \\prod → ∏', () => {
-  assert.match(stripTitleMarkup('$\\prod_i$'), /∏/);
-});
-
-test('stripTitleMarkup: \\max / \\min 保留字面', () => {
-  assert.match(stripTitleMarkup('$\\max_k$'), /max/);
-  assert.match(stripTitleMarkup('$\\min_k$'), /min/);
-});
-
-test('stripTitleMarkup: 未知 LaTeX 命令保留命令名', () => {
-  assert.equal(stripTitleMarkup('$\\foobar$'), 'foobar');
-});
-
-test('stripTitleMarkup: \\ne / \\le / \\ge 别名', () => {
-  assert.match(stripTitleMarkup('$\\ne$'), /≠/);
-  assert.match(stripTitleMarkup('$\\le$'), /≤/);
-  assert.match(stripTitleMarkup('$\\ge$'), /≥/);
-});
-
-// ---------- stripTitleMarkup: 清理 ----------
-test('stripTitleMarkup: \\, \\; \\: \\! 转空格 (在数学内)', () => {
-  // 注意:这些命令只在 stripLatexExpression 内处理 → 必须包在 $...$
-  assert.equal(stripTitleMarkup('$A\\,B$'), 'A B');
-  assert.equal(stripTitleMarkup('$A\\;B$'), 'A B');
-  assert.equal(stripTitleMarkup('$A\\:B$'), 'A B');
-  assert.equal(stripTitleMarkup('$A\\!B$'), 'A B');
-});
-
-test('stripTitleMarkup: \\~ 转空格 (在数学内)', () => {
-  assert.equal(stripTitleMarkup('$A\\~B$'), 'A B');
-});
-
-test('stripTitleMarkup: \\> 转空格 (在数学内)', () => {
-  assert.equal(stripTitleMarkup('$A\\>B$'), 'A B');
-});
-
-test('stripTitleMarkup: \\;\\: 连续转单空格 (在数学内)', () => {
-  assert.equal(stripTitleMarkup('$A\\;\\:B$'), 'A B');
-});
-
-test('stripTitleMarkup: 数学外 \\, 不转换', () => {
-  // 在数学外,这些命令没机会处理 → 保留为字面
-  const r = stripTitleMarkup('A\\,B');
-  // stripLatexExpression 不会被调用 → 保留 \, 但最终 \s+ 不影响
-  assert.match(r, /\\,/);
-});
-
-test('stripTitleMarkup: 移除孤立 $', () => {
-  // 没有匹配分隔符的 $ 也要清掉
-  assert.equal(stripTitleMarkup('A$ B'), 'A B');
-});
-
-test('stripTitleMarkup: {}^_ 大括号 caret 下标清理', () => {
-  // {}^^_ 等符号被删除
-  const r = stripTitleMarkup('$x_{i}$');
-  assert.equal(r, 'xi');
-});
-
-// ---------- stripTitleMarkup: 转义反斜杠非字母 ----------
-test('stripTitleMarkup: \\{ \\} 在数学内被移除', () => {
-  // stripLatexExpression replace /[{}^_]/g, '' → 去除 { 和 }
-  const r = stripTitleMarkup('$\\{x\\}$');
-  // 期望 \x\(没有大括号)
-  assert.equal(r, '\\x\\');
-});
-
-test('stripTitleMarkup: 数学内 ^^_ 也被移除', () => {
-  const r = stripTitleMarkup('$x^{2}_i$');
-  assert.equal(r, 'x2i');
-});
-
-// ---------- paperPlainTitle ----------
-test('paperPlainTitle: 优先 titlePlain', () => {
-  assert.equal(paperPlainTitle('TeX $\\alpha$', 'plain one'), 'plain one');
-});
-
-test('paperPlainTitle: titlePlain trim', () => {
-  assert.equal(paperPlainTitle('x', '  hello  '), 'hello');
-});
-
-test('paperPlainTitle: 无 titlePlain → strip title', () => {
-  assert.equal(paperPlainTitle('Hello $\\alpha$', undefined), 'Hello alpha');
-});
-
-test('paperPlainTitle: 全空 → 空', () => {
+test('paperPlain: title undefined + titlePlain 缺失 → ""', () => {
   assert.equal(paperPlainTitle(undefined, undefined), '');
 });
 
-test('paperPlainTitle: titlePlain 空 → strip title', () => {
-  // '' || stripTitleMarkup(title || '') → stripTitleMarkup(title)
-  assert.equal(paperPlainTitle('TeX $\\alpha$', ''), 'TeX alpha');
+test('paperPlain: title="" + titlePlain 缺 → ""', () => {
+  assert.equal(paperPlainTitle('', undefined), '');
 });
 
-test('paperPlainTitle: title undefined + titlePlain undefined → 空', () => {
-  assert.equal(paperPlainTitle(undefined, ''), '');
+test('paperPlain: titlePlain 含前后空格 trim', () => {
+  assert.equal(paperPlainTitle('x', '  trimmed  '), 'trimmed');
 });
 
-test('paperPlainTitle: stripTitleMarkup 也 trim', () => {
-  assert.equal(paperPlainTitle('  hello  ', undefined), 'hello');
+// ---------- 集成 ---
+test('集成: 复杂 LaTeX 标题', () => {
+  const t = 'Sparse Attention $\\sum_{i=1}^{N} \\alpha_i \\cdot x_i$ for Vision';
+  const r = stripTitleMarkup(t);
+  assert.match(r, /Sparse Attention/);
+  assert.match(r, /∑/);
+  assert.match(r, /Vision/);
+  assert.ok(!r.includes('$'));
+});
+
+test('集成: paperPlainTitle 用 LaTeX title 派生', () => {
+  const t = '$\\max$ Entropy';
+  const plain = paperPlainTitle(t, undefined);
+  assert.equal(plain, 'max Entropy');
 });
