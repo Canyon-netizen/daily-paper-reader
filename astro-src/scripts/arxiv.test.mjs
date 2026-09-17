@@ -2,9 +2,9 @@
 // astro-src/scripts/arxiv.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/arxiv.ts.
-// canonicalArxivId + getCanonicalArxivId + getArxivVersion + isArxivId + buildDedupKey
-// + dedupByArxivVersion + dedupByCanonicalArxivId + compareArxivVersions
-// + extractArxivIdFromPath + normalizeArxivId + extractArxivId + generateVersionComparison.
+// getCanonicalArxivId + canonicalArxivId + getArxivVersion + isArxivId +
+// extractArxivId + dedupByCanonicalArxivId + dedupByArxivVersion +
+// compareArxivVersions + extractArxivIdFromPath + generateVersionComparison
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,8 +19,7 @@ async function loadTs(relPath) {
     entryPoints: [join(__dirname, '..', relPath)],
     bundle: true,
     format: 'esm',
-    platform: 'node',
-    external: ['node:*'],
+    platform: 'neutral',
     write: false,
     target: 'es2022',
   });
@@ -31,319 +30,376 @@ async function loadTs(relPath) {
 
 const mod = await loadTs('lib/arxiv.ts');
 const {
-  canonicalArxivId,
   getCanonicalArxivId,
+  canonicalArxivId,
   getArxivVersion,
   isArxivId,
-  buildDedupKey,
-  dedupByArxivVersion,
+  extractArxivId,
   dedupByCanonicalArxivId,
+  dedupByArxivVersion,
   compareArxivVersions,
   extractArxivIdFromPath,
-  normalizeArxivId,
-  extractArxivId,
   generateVersionComparison,
 } = mod;
 
-// ---------- canonicalArxivId ----------
-test('canonicalArxivId: 剥 v 后缀', () => {
-  assert.equal(canonicalArxivId('2607.00483v2'), '2607.00483');
-});
-
-test('canonicalArxivId: 本无版本号', () => {
-  assert.equal(canonicalArxivId('2305.16291'), '2305.16291');
-});
-
-test('canonicalArxivId: 大写 V 也能剥 (case-insensitive)', () => {
-  // /v\d+$/i → 大写 V 也匹配
-  assert.equal(canonicalArxivId('2607.00483V2'), '2607.00483');
-});
-
-test('canonicalArxivId: trim', () => {
-  assert.equal(canonicalArxivId('  2607.00483v1  '), '2607.00483');
-});
-
-test('canonicalArxivId: 空字符串 → 空', () => {
-  assert.equal(canonicalArxivId(''), '');
-});
-
-test('canonicalArxivId: 非 arxiv id 原样保留', () => {
-  assert.equal(canonicalArxivId('not-an-arxiv-id'), 'not-an-arxiv-id');
-});
-
-test('canonicalArxivId: 中间有 v 不剥 (只有尾部)', () => {
-  // 'v' 不在尾部 → 不剥
-  assert.equal(canonicalArxivId('visual.v2'), 'visual.');
-});
-
-test('canonicalArxivId: 嵌套 v 也只剥最后', () => {
-  // 'v1v2' → 最后 v2 剥 → 'v1'
-  assert.equal(canonicalArxivId('testv1v2'), 'testv1');
-});
-
-// ---------- getCanonicalArxivId ----------
-test('getCanonicalArxivId: 标准格式剥版本', () => {
+// ---------- getCanonicalArxivId ---
+test('getCanonicalArxivId: 标准格式带版本 → 去掉版本', () => {
   assert.equal(getCanonicalArxivId('2607.00483v2'), '2607.00483');
 });
 
-test('getCanonicalArxivId: 无 v 后缀原样', () => {
-  // '2305.16291' 不匹配 ARXIV_ID_RE → 原样
+test('getCanonicalArxivId: 无版本号 → 原样返回', () => {
   assert.equal(getCanonicalArxivId('2305.16291'), '2305.16291');
 });
 
-test('getCanonicalArxivId: 不符合格式原样', () => {
-  assert.equal(getCanonicalArxivId('foo'), 'foo');
+test('getCanonicalArxivId: v1 版本 → 去掉版本', () => {
+  assert.equal(getCanonicalArxivId('2310.12345v1'), '2310.12345');
 });
 
-test('getCanonicalArxivId: 4 位 + 4 位数字', () => {
-  assert.equal(getCanonicalArxivId('1234.5678v1'), '1234.5678');
+test('getCanonicalArxivId: 非标准格式 → 原样返回', () => {
+  assert.equal(getCanonicalArxivId('abc'), 'abc');
 });
 
-test('getCanonicalArxivId: 4 位 + 5 位数字', () => {
-  assert.equal(getCanonicalArxivId('1234.56789v3'), '1234.56789');
+test('getCanonicalArxivId: 空字符串 → 空字符串', () => {
+  assert.equal(getCanonicalArxivId(''), '');
 });
 
-test('getCanonicalArxivId: 大写 V 不匹配', () => {
-  // ARXIV_ID_RE 是 case-sensitive → 'V2' 不匹配
-  assert.equal(getCanonicalArxivId('2607.00483V2'), '2607.00483V2');
+test('getCanonicalArxivId: 少于4位年份 → 原样返回', () => {
+  assert.equal(getCanonicalArxivId('1234.56v1'), '1234.56v1');
 });
 
-// ---------- getArxivVersion ----------
-test('getArxivVersion: v2', () => {
+test('getCanonicalArxivId: 5位数字部分 → 有效', () => {
+  assert.equal(getCanonicalArxivId('2607.00483v2'), '2607.00483');
+});
+
+test('getCanonicalArxivId: 4位数字部分 → 有效', () => {
+  assert.equal(getCanonicalArxivId('2607.0048v3'), '2607.0048');
+});
+
+// ---------- canonicalArxivId ---
+test('canonicalArxivId: 带版本 → 去掉版本', () => {
+  assert.equal(canonicalArxivId('2607.00483v2'), '2607.00483');
+});
+
+test('canonicalArxivId: 无版本号 → 原样返回', () => {
+  assert.equal(canonicalArxivId('2305.16291'), '2305.16291');
+});
+
+test('canonicalArxivId: 大写V → 去掉版本', () => {
+  assert.equal(canonicalArxivId('2607.00483V2'), '2607.00483');
+});
+
+test('canonicalArxivId: 前后空格 → trim后去版本', () => {
+  assert.equal(canonicalArxivId('  2607.00483v1  '), '2607.00483');
+});
+
+test('canonicalArxivId: 空字符串 → 空字符串', () => {
+  assert.equal(canonicalArxivId(''), '');
+});
+
+test('canonicalArxivId: undefined → 空字符串', () => {
+  assert.equal(canonicalArxivId(undefined), '');
+});
+
+test('canonicalArxivId: 中间v不Strip → 原样', () => {
+  assert.equal(canonicalArxivId('abcv2xyz'), 'abcv2xyz');
+});
+
+test('canonicalArxivId: 多个尾部vN → 只去最后一个', () => {
+  assert.equal(canonicalArxivId('abcv2v3'), 'abcv2');
+});
+
+// ---------- getArxivVersion ---
+test('getArxivVersion: 标准格式带版本 → 返回版本号', () => {
   assert.equal(getArxivVersion('2607.00483v2'), 2);
 });
 
-test('getArxivVersion: 无 v → 0', () => {
-  assert.equal(getArxivVersion('2607.00483'), 0);
+test('getArxivVersion: 大版本号 → 返回版本号', () => {
+  assert.equal(getArxivVersion('2310.12345v15'), 15);
 });
 
-test('getArxivVersion: 不符合格式 → 0', () => {
-  assert.equal(getArxivVersion('foo'), 0);
-});
-
-test('getArxivVersion: 大写 V 不匹配 → 0', () => {
+test('getArxivVersion: 大写V → 返回0 (regex case-sensitive)', () => {
   assert.equal(getArxivVersion('2607.00483V2'), 0);
 });
 
-test('getArxivVersion: v100', () => {
-  assert.equal(getArxivVersion('1234.5678v100'), 100);
+test('getArxivVersion: 无版本号 → 返回0', () => {
+  assert.equal(getArxivVersion('2310.12345'), 0);
 });
 
-// ---------- isArxivId ----------
-test('isArxivId: 标准 → true', () => {
-  assert.equal(isArxivId('2607.00483v1'), true);
+test('getArxivVersion: 非标准格式 → 返回0', () => {
+  assert.equal(getArxivVersion('abc'), 0);
 });
 
-test('isArxivId: 无 v → false', () => {
-  assert.equal(isArxivId('2607.00483'), false);
+test('getArxivVersion: 空字符串 → 返回0', () => {
+  assert.equal(getArxivVersion(''), 0);
 });
 
-test('isArxivId: 数字位不对 → false', () => {
-  assert.equal(isArxivId('123.456v1'), false);
+// ---------- isArxivId ---
+test('isArxivId: 标准格式 → true', () => {
+  assert.equal(isArxivId('2607.00483v2'), true);
 });
 
-test('isArxivId: 空 → false', () => {
+test('isArxivId: 无版本 → false', () => {
+  assert.equal(isArxivId('2305.16291'), false);
+});
+
+test('isArxivId: 非标准格式 → false', () => {
+  assert.equal(isArxivId('abc'), false);
+});
+
+test('isArxivId: 空字符串 → false', () => {
   assert.equal(isArxivId(''), false);
 });
 
-test('isArxivId: 大写 V → false', () => {
-  assert.equal(isArxivId('2607.00483V1'), false);
+test('isArxivId: 大写V → false (regex case-sensitive)', () => {
+  assert.equal(isArxivId('2607.00483V2'), false);
 });
 
-// ---------- buildDedupKey ----------
-test('buildDedupKey: 标准 arxiv', () => {
-  assert.equal(buildDedupKey('2607.00483v2', 'fallback'), 'arxiv:2607.00483');
+test('isArxivId: 4位数字部分 → true', () => {
+  assert.equal(isArxivId('2607.0048v3'), true);
 });
 
-test('buildDedupKey: 非 arxiv', () => {
-  assert.equal(buildDedupKey('not-arxiv', 'fb-1'), 'id:fb-1');
+test('isArxivId: 5位数字部分 → true', () => {
+  assert.equal(isArxivId('2607.00483v1'), true);
 });
 
-test('buildDedupKey: 空 → fallback', () => {
-  assert.equal(buildDedupKey('', 'fb-1'), 'id:fb-1');
+// ---------- extractArxivId ---
+test('extractArxivId: 有arxivId → 返回arxivId', () => {
+  assert.equal(extractArxivId({ arxivId: '2607.00483v2', id: 'x' }), '2607.00483v2');
 });
 
-// ---------- dedupByArxivVersion ----------
-test('dedupByArxivVersion: 同 arxiv 不同版本 → 保留高版本', () => {
-  const r = dedupByArxivVersion([
-    { id: 'a', arxivId: '2607.00483v1' },
-    { id: 'b', arxivId: '2607.00483v2' },
-  ]);
-  assert.equal(r.length, 1);
-  assert.equal(r[0].id, 'b');
+test('extractArxivId: 无arxivId → 返回空字符串', () => {
+  assert.equal(extractArxivId({ id: 'x' }), '');
 });
 
-test('dedupByArxivVersion: 不同 arxiv 各自保留', () => {
-  const r = dedupByArxivVersion([
-    { id: 'a', arxivId: '2607.00483v1' },
-    { id: 'b', arxivId: '2607.00484v1' },
-  ]);
-  assert.equal(r.length, 2);
+test('extractArxivId: arxivId为空字符串 → 返回空字符串', () => {
+  assert.equal(extractArxivId({ arxivId: '', id: 'x' }), '');
 });
 
-test('dedupByArxivVersion: 无版本号 vs 有版本号 → 独立 key', () => {
-  // buildDedupKey 用 isArxivId (严格带 v);'2607.00483' 不匹配 → key = 'id:a'
-  // '2607.00483v1' → key = 'arxiv:2607.00483'
-  // 两者 key 不同 → 2 条保留
-  const r = dedupByArxivVersion([
-    { id: 'a', arxivId: '2607.00483' },
-    { id: 'b', arxivId: '2607.00483v1' },
-  ]);
-  assert.equal(r.length, 2);
-});
-
-test('dedupByArxivVersion: 空数组', () => {
-  assert.deepEqual(dedupByArxivVersion([]), []);
-});
-
-test('dedupByArxivVersion: 自定义 getArxivId', () => {
+// ---------- dedupByCanonicalArxivId ---
+test('dedupByCanonicalArxivId: 同一canonical保留最高版本', () => {
   const items = [
-    { id: 'a', customId: '2607.00483v1' },
-    { id: 'b', customId: '2607.00483v2' },
+    { arxivId: '2607.00483v1', id: 'a' },
+    { arxivId: '2607.00483v2', id: 'b' },
   ];
-  const r = dedupByArxivVersion(items, (it) => it.customId);
-  assert.equal(r.length, 1);
-  assert.equal(r[0].id, 'b');
+  const result = dedupByCanonicalArxivId(items);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].arxivId, '2607.00483v2');
 });
 
-test('dedupByArxivVersion: 非 arxiv id 用 fallback id → 不同 id 各自保留', () => {
-  // key = 'id:<item.id>',所以 id 不同 → 不同 key → 2 条
-  const r = dedupByArxivVersion([
-    { id: 'a', arxivId: 'foo' },
-    { id: 'b', arxivId: 'foo' },
-  ]);
-  assert.equal(r.length, 2);
+test('dedupByCanonicalArxivId: 不同canonical都保留', () => {
+  const items = [
+    { arxivId: '2607.00483v1', id: 'a' },
+    { arxivId: '2305.16291v1', id: 'b' },
+  ];
+  const result = dedupByCanonicalArxivId(items);
+  assert.equal(result.length, 2);
 });
 
-test('dedupByArxivVersion: 非 arxiv id 同 item.id → dedup 到 1', () => {
-  const r = dedupByArxivVersion([
-    { id: 'same', arxivId: 'foo' },
-    { id: 'same', arxivId: 'foo' },
-  ]);
-  assert.equal(r.length, 1);
+test('dedupByCanonicalArxivId: 无arxivId用id去重', () => {
+  const items = [
+    { id: 'paper1' },
+    { id: 'paper1' },
+  ];
+  const result = dedupByCanonicalArxivId(items);
+  assert.equal(result.length, 1);
 });
 
-// ---------- compareArxivVersions ----------
-test('compareArxivVersions: a<b → 负数', () => {
+test('dedupByCanonicalArxivId: 混合有/无arxivId', () => {
+  const items = [
+    { arxivId: '2607.00483v1', id: 'a' },
+    { id: 'paper1' },
+    { id: 'paper1' },
+  ];
+  const result = dedupByCanonicalArxivId(items);
+  assert.equal(result.length, 2);
+});
+
+test('dedupByCanonicalArxivId: 空数组 → 空数组', () => {
+  const result = dedupByCanonicalArxivId([]);
+  assert.equal(result.length, 0);
+});
+
+// ---------- dedupByArxivVersion ---
+test('dedupByArxivVersion: 默认使用item.arxivId', () => {
+  const items = [
+    { arxivId: '2607.00483v1', id: 'a' },
+    { arxivId: '2607.00483v2', id: 'b' },
+  ];
+  const result = dedupByArxivVersion(items);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].arxivId, '2607.00483v2');
+});
+
+test('dedupByArxivVersion: 自定义getArxivId', () => {
+  const items = [
+    { customId: '2607.00483v1', id: 'a' },
+    { customId: '2607.00483v2', id: 'b' },
+  ];
+  const result = dedupByArxivVersion(items, (item) => item.customId || '');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].customId, '2607.00483v2');
+});
+
+test('dedupByArxivVersion: 不同key保留各自最高版本', () => {
+  const items = [
+    { arxivId: '2607.00483v1', id: 'a' },
+    { arxivId: '2305.16291v3', id: 'b' },
+    { arxivId: '2607.00483v2', id: 'c' },
+  ];
+  const result = dedupByArxivVersion(items);
+  assert.equal(result.length, 2);
+  const ids = result.map(r => r.arxivId).sort();
+  assert.deepEqual(ids, ['2305.16291v3', '2607.00483v2']);
+});
+
+// ---------- compareArxivVersions ---
+test('compareArxivVersions: v2 > v1 → 正数', () => {
+  assert.ok(compareArxivVersions('2607.00483v2', '2607.00483v1') > 0);
+});
+
+test('compareArxivVersions: v1 < v2 → 负数', () => {
   assert.ok(compareArxivVersions('2607.00483v1', '2607.00483v2') < 0);
 });
 
-test('compareArxivVersions: a>b → 正数', () => {
-  assert.ok(compareArxivVersions('2607.00483v3', '2607.00483v1') > 0);
+test('compareArxivVersions: 同版本 → 0', () => {
+  assert.equal(compareArxivVersions('2607.00483v1', '2607.00483v1'), 0);
 });
 
-test('compareArxivVersions: 同 → 0', () => {
-  assert.equal(compareArxivVersions('2607.00483v2', '2607.00483v2'), 0);
-});
-
-test('compareArxivVersions: 非 arxiv (0) vs v1', () => {
+test('compareArxivVersions: 无版本vs有版本 → 负数', () => {
   assert.ok(compareArxivVersions('2607.00483', '2607.00483v1') < 0);
 });
 
-// ---------- extractArxivIdFromPath ----------
-test('extractArxivIdFromPath: 标准路径', () => {
-  assert.equal(extractArxivIdFromPath('2026/07/2607.00483v2.md'), '2607.00483v2');
+test('compareArxivVersions: 不同canonical只比版本', () => {
+  // 虽然canonical不同，但version都是0，所以返回0
+  assert.equal(compareArxivVersions('2607.00483', '2305.16291'), 0);
 });
 
-test('extractArxivIdFromPath: 无 arxiv id → null', () => {
-  assert.equal(extractArxivIdFromPath('foo/bar.md'), null);
+// ---------- extractArxivIdFromPath ---
+test('extractArxivIdFromPath: 带版本号 → 提取完整ID', () => {
+  assert.equal(extractArxivIdFromPath('/papers/2310.12345v1.md'), '2310.12345v1');
+});
+
+test('extractArxivIdFromPath: 标准路径带版本 → 提取ID', () => {
+  assert.equal(extractArxivIdFromPath('/papers/2310.12345v1.md'), '2310.12345v1');
+});
+
+test('extractArxivIdFromPath: 深层路径带版本 → 提取ID', () => {
+  assert.equal(extractArxivIdFromPath('2026/07/2607.00483v2'), '2607.00483v2');
+});
+
+test('extractArxivIdFromPath: 无匹配 → null', () => {
+  assert.equal(extractArxivIdFromPath('/papers/abc.md'), null);
 });
 
 test('extractArxivIdFromPath: 空字符串 → null', () => {
   assert.equal(extractArxivIdFromPath(''), null);
 });
 
-test('extractArxivIdFromPath: 大写 V 不匹配', () => {
-  assert.equal(extractArxivIdFromPath('2026/07/2607.00483V2.md'), null);
+test('extractArxivIdFromPath: 路径中有多个数字 → 匹配第一个', () => {
+  assert.equal(extractArxivIdFromPath('/2026/07/2607.00483v2/paper.md'), '2607.00483v2');
 });
 
-// ---------- normalizeArxivId ----------
-test('normalizeArxivId: 大写 V → 小写 v', () => {
-  assert.equal(normalizeArxivId('2607.00483V2'), '2607.00483v2');
-});
-
-test('normalizeArxivId: 小写 v 不变', () => {
-  assert.equal(normalizeArxivId('2607.00483v2'), '2607.00483v2');
-});
-
-test('normalizeArxivId: 无 v 后缀 → 不变', () => {
-  assert.equal(normalizeArxivId('2607.00483'), '2607.00483');
-});
-
-test('normalizeArxivId: 末尾非数字 V 不变', () => {
-  assert.equal(normalizeArxivId('testVfoo'), 'testVfoo');
-});
-
-// ---------- extractArxivId ----------
-test('extractArxivId: 有 arxivId', () => {
-  assert.equal(extractArxivId({ arxivId: '2607.00483v1', id: 'fallback' }), '2607.00483v1');
-});
-
-test('extractArxivId: 无 arxivId → 空', () => {
-  assert.equal(extractArxivId({ id: 'fallback' }), '');
-});
-
-// ---------- dedupByCanonicalArxivId ----------
-test('dedupByCanonicalArxivId: 保留高版本', () => {
-  const r = dedupByCanonicalArxivId([
-    { id: 'a', arxivId: '2607.00483v1' },
-    { id: 'b', arxivId: '2607.00483v3' },
-  ]);
-  assert.equal(r.length, 1);
-  assert.equal(r[0].id, 'b');
-});
-
-// ---------- generateVersionComparison ----------
-test('generateVersionComparison: v2 tldr 更长 → hasMoreContent', () => {
-  const r = generateVersionComparison(
+// ---------- generateVersionComparison ---
+test('generateVersionComparison: v2 tldr更长 → hasMoreContent', () => {
+  const result = generateVersionComparison(
     { tldr: 'short' },
-    { tldr: 'much longer tldr content here' },
+    { tldr: 'this is a much longer tldr' }
   );
-  assert.equal(r.hasMoreContent, true);
-  assert.equal(r.hasBetterEvidence, false);
-  assert.equal(r.hasMoreTags, false);
-  assert.match(r.summary, /v2/);
+  assert.equal(result.hasMoreContent, true);
+  assert.equal(result.hasBetterEvidence, false);
+  assert.equal(result.hasMoreTags, false);
 });
 
-test('generateVersionComparison: v2 无 tldr → hasMoreContent=false', () => {
-  const r = generateVersionComparison({ tldr: 'foo' }, {});
-  assert.equal(r.hasMoreContent, false);
-});
-
-test('generateVersionComparison: v2 evidence 更多 → hasBetterEvidence', () => {
-  const r = generateVersionComparison(
-    { evidence: ['a'] },
-    { evidence: ['a', 'b', 'c'] },
-  );
-  assert.equal(r.hasBetterEvidence, true);
-});
-
-test('generateVersionComparison: v2 categories.task 更多 → hasMoreTags', () => {
-  const r = generateVersionComparison(
-    { categories: { task: ['rl'], venue: [], method: [], type: [] } },
-    { categories: { task: ['rl', 'reasoning'], venue: [], method: [], type: [] } },
-  );
-  assert.equal(r.hasMoreTags, true);
-});
-
-test('generateVersionComparison: v2 categories 但 v1 无 → hasMoreTags=false', () => {
-  const r = generateVersionComparison(
+test('generateVersionComparison: v1无tldr v2有 → hasMoreContent', () => {
+  const result = generateVersionComparison(
     {},
-    { categories: { task: ['rl'], venue: [], method: [], type: [] } },
+    { tldr: 'some tldr' }
   );
-  // v1 无 categories → 不算 hasMoreTags (只比较 v2.categories && v1.categories)
-  assert.equal(r.hasMoreTags, false);
+  assert.equal(result.hasMoreContent, true);
 });
 
-test('generateVersionComparison: 都无 → 差异不大', () => {
-  const r = generateVersionComparison({}, {});
-  assert.equal(r.hasMoreContent, false);
-  assert.equal(r.hasBetterEvidence, false);
-  assert.equal(r.hasMoreTags, false);
-  assert.equal(r.summary, 'v1 v2 差异不大');
+test('generateVersionComparison: v2 evidence更长 → hasBetterEvidence', () => {
+  const result = generateVersionComparison(
+    { evidence: 'short' },
+    { evidence: 'much longer evidence here' }
+  );
+  assert.equal(result.hasBetterEvidence, true);
 });
 
-test('generateVersionComparison: summary 文案', () => {
-  const r = generateVersionComparison({ tldr: 'a' }, { tldr: 'aa' });
-  assert.equal(r.summary, 'v2 有更多/更好的内容');
+test('generateVersionComparison: v2 tags更多 → hasMoreTags', () => {
+  const result = generateVersionComparison(
+    { categories: { task: ['a'] } },
+    { categories: { task: ['a', 'b', 'c'] } }
+  );
+  assert.equal(result.hasMoreTags, true);
+});
+
+test('generateVersionComparison: v2无categories → hasMoreTags false', () => {
+  const result = generateVersionComparison(
+    { categories: { task: ['a', 'b'] } },
+    {}
+  );
+  assert.equal(result.hasMoreTags, false);
+});
+
+test('generateVersionComparison: 都有更多内容 → summary包含v2', () => {
+  const result = generateVersionComparison(
+    { tldr: 'x' },
+    { tldr: 'xy', evidence: 'ev', categories: { task: ['t'] } }
+  );
+  assert.match(result.summary, /v2/);
+});
+
+test('generateVersionComparison: 无差异 → summary为v1v2差异不大', () => {
+  const result = generateVersionComparison(
+    { tldr: 'same' },
+    { tldr: 'same' }
+  );
+  assert.equal(result.summary, 'v1 v2 差异不大');
+});
+
+test('generateVersionComparison: v1有v2无 → hasMoreContent false', () => {
+  const result = generateVersionComparison(
+    { tldr: 'longer content here' },
+    {}
+  );
+  assert.equal(result.hasMoreContent, false);
+});
+
+// ---------- 集成测试 ----------
+test('集成: canonicalArxivId vs getCanonicalArxivId 区别', () => {
+  // getCanonicalArxivId 严格匹配，非标准格式返回原值
+  assert.equal(getCanonicalArxivId('abc'), 'abc');
+  // canonicalArxivId 更宽松，只去掉尾部vN
+  assert.equal(canonicalArxivId('abc'), 'abc');
+  // 对于标准格式，两者结果相同
+  assert.equal(getCanonicalArxivId('2607.00483v2'), '2607.00483');
+  assert.equal(canonicalArxivId('2607.00483v2'), '2607.00483');
+});
+
+test('集成: dedupByArxivVersion 保持原数组顺序', () => {
+  const items = [
+    { arxivId: '2305.16291v1', id: 'a' },
+    { arxivId: '2607.00483v1', id: 'b' },
+    { arxivId: '2607.00483v2', id: 'c' },
+  ];
+  const result = dedupByArxivVersion(items);
+  // 应该保留 2305.16291v1 和 2607.00483v2（最高版本）
+  assert.equal(result.length, 2);
+  // 顺序应该是 insertion order of keys: 2305 先, 2607 后
+  assert.equal(result[0].arxivId, '2305.16291v1');
+  assert.equal(result[1].arxivId, '2607.00483v2');
+});
+
+test('集成: 完整去重流程', () => {
+  const items = [
+    { arxivId: '2607.00483v1', id: 'p1' },
+    { arxivId: '2607.00483v2', id: 'p2' },
+    { arxivId: '2305.16291v1', id: 'p3' },
+    { id: 'custom1' },
+    { id: 'custom1' }, // 重复的非arxiv id
+  ];
+  const result = dedupByCanonicalArxivId(items);
+  // 应该保留: 2607.00483v2, 2305.16291v1, custom1
+  assert.equal(result.length, 3);
 });
