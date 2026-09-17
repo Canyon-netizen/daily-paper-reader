@@ -2,6 +2,8 @@
 // astro-src/scripts/agents-few-shot.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/agents/few-shot.ts.
+// selectFewShotExamples (同 projectId +3 / 同 type +2 / feedback*10 加权排序) +
+// renderFewShotBlock (LLM prompt 块渲染)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,7 +21,6 @@ async function loadTs(relPath) {
     platform: 'neutral',
     write: false,
     target: 'es2022',
-    external: ['../user-libraries/types', '../../user-libraries/types'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -29,201 +30,225 @@ async function loadTs(relPath) {
 const mod = await loadTs('lib/agents/few-shot.ts');
 const { selectFewShotExamples, renderFewShotBlock } = mod;
 
-// ---------- selectFewShotExamples ----------
-test('selectFewShotExamples: 空 history → []', () => {
+const mkP = (id, overrides = {}) => ({
+  id,
+  round: 1,
+  type: 'add_paper',
+  title: `T-${id}`,
+  rationale: `R-${id}`,
+  evidence: { paperIds: [], quotes: [] },
+  target: {},
+  estimated_effort: 'low',
+  risk: 'r',
+  created_at: 0,
+  ...overrides,
+});
+
+// ---------- selectFewShotExamples: 基本 ---
+test('selectFewShot: 空 history → []', () => {
   assert.deepEqual(selectFewShotExamples([]), []);
 });
 
-test('selectFewShotExamples: k=0 → []', () => {
-  const history = [{ id: '1', type: 'add_paper', title: 't', rationale: 'r', estimated_effort: 'low', risk: 'r', target: {}, created_at: 1 }];
-  assert.deepEqual(selectFewShotExamples(history, { k: 0 }), []);
-});
-
-test('selectFewShotExamples: 默认 k=3', () => {
-  const history = Array.from({ length: 10 }, (_, i) => ({
-    id: 'p' + i,
-    type: 'add_paper',
-    title: 't' + i,
-    rationale: 'r',
-    estimated_effort: 'low',
-    risk: '',
-    target: {},
-    created_at: i,
-  }));
-  const r = selectFewShotExamples(history);
+test('selectFewShot: 默认 k=3', () => {
+  const r = selectFewShotExamples([mkP('a'), mkP('b'), mkP('c'), mkP('d')]);
   assert.equal(r.length, 3);
 });
 
-test('selectFewShotExamples: 同 projectId 优先', () => {
-  const history = [
-    { id: '1', type: 'add_paper', title: 'a', rationale: 'r', estimated_effort: 'low', risk: '', target: { projectId: 'X' }, created_at: 1 },
-    { id: '2', type: 'add_paper', title: 'b', rationale: 'r', estimated_effort: 'low', risk: '', target: { projectId: 'Y' }, created_at: 1 },
-    { id: '3', type: 'add_paper', title: 'c', rationale: 'r', estimated_effort: 'low', risk: '', target: { projectId: 'X' }, created_at: 1 },
-  ];
-  const r = selectFewShotExamples(history, { projectId: 'X' });
-  // 1,3 同 project 优先 (+3),2 不优先
-  assert.equal(r.length, 3);
-  assert.equal(r[0].sourceId, '1');
-  assert.equal(r[1].sourceId, '3');
-  assert.equal(r[2].sourceId, '2');
+test('selectFewShot: k=0 → []', () => {
+  const r = selectFewShotExamples([mkP('a')], { k: 0 });
+  assert.deepEqual(r, []);
 });
 
-test('selectFewShotExamples: 同 type 次之', () => {
-  const history = [
-    { id: '1', type: 'add_paper', title: 'a', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-    { id: '2', type: 'create_draft', title: 'b', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-    { id: '3', type: 'add_paper', title: 'c', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-  ];
-  const r = selectFewShotExamples(history, { type: 'add_paper' });
-  // 1,3 同 type 优先 (+2)
-  assert.equal(r[0].sourceId, '1');
-  assert.equal(r[1].sourceId, '3');
-  assert.equal(r[2].sourceId, '2');
+test('selectFewShot: k 负数 → []', () => {
+  const r = selectFewShotExamples([mkP('a')], { k: -1 });
+  assert.deepEqual(r, []);
 });
 
-test('selectFewShotExamples: feedbackScore 越高越好', () => {
-  const history = [
-    { id: '1', type: 'add_paper', title: 'a', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-    { id: '2', type: 'add_paper', title: 'b', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-  ];
-  const r = selectFewShotExamples(history, {
-    feedbackScoreByProposalId: { 1: 0.9, 2: 0.1 },
-  });
-  assert.equal(r[0].sourceId, '1');
-  assert.equal(r[1].sourceId, '2');
+test('selectFewShot: 返回 FewShotExample 投影', () => {
+  const r = selectFewShotExamples([mkP('p1', { title: 'My Title' })]);
+  assert.equal(r[0].title, 'My Title');
+  assert.equal(r[0].sourceId, 'p1');
+  assert.equal(r[0].type, 'add_paper');
 });
 
-test('selectFewShotExamples: feedbackScore 默认 0.5', () => {
-  const history = [
-    { id: '1', type: 'add_paper', title: 'a', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-  ];
-  const r = selectFewShotExamples(history);
+// ---------- 同 projectId 优先 ---
+test('selectFewShot: 同 projectId +3 优先', () => {
+  const r = selectFewShotExamples([
+    mkP('a', { target: { projectId: 'P' } }),
+    mkP('b', { target: {} }),
+  ], { projectId: 'P' });
+  // a 同 project 加 +3,优先
+  assert.equal(r[0].sourceId, 'a');
+});
+
+test('selectFewShot: 同 type +2 优先', () => {
+  const r = selectFewShotExamples([
+    mkP('a', { type: 'create_draft' }),
+    mkP('b', { type: 'add_paper' }),
+  ], { type: 'create_draft' });
+  assert.equal(r[0].sourceId, 'a');
+});
+
+test('selectFewShot: 同 project + 同 type 都优先', () => {
+  const r = selectFewShotExamples([
+    mkP('a', { type: 'add_paper', target: { projectId: 'P' } }),
+    mkP('b', { type: 'add_paper', target: {} }),
+  ], { projectId: 'P', type: 'add_paper' });
+  assert.equal(r[0].sourceId, 'a');
+});
+
+// ---------- feedback score ---
+test('selectFewShot: 默认 feedbackScore=0.5', () => {
+  const r = selectFewShotExamples([mkP('a')]);
   assert.equal(r[0].score, 0.5);
 });
 
-test('selectFewShotExamples: minScore 过滤', () => {
-  const history = [
-    { id: '1', type: 'add_paper', title: 'a', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-    { id: '2', type: 'add_paper', title: 'b', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-  ];
-  const r = selectFewShotExamples(history, {
-    feedbackScoreByProposalId: { 1: 0.9, 2: 0.1 },
-    minScore: 0.5,
+test('selectFewShot: feedbackScore 高分优先', () => {
+  const r = selectFewShotExamples([
+    mkP('low'),
+    mkP('high'),
+  ], {
+    feedbackScoreByProposalId: { low: 0.2, high: 0.9 },
   });
+  assert.equal(r[0].sourceId, 'high');
+});
+
+test('selectFewShot: minScore 过滤', () => {
+  const r = selectFewShotExamples([
+    mkP('low'),
+    mkP('high'),
+  ], {
+    minScore: 0.5,
+    feedbackScoreByProposalId: { low: 0.2, high: 0.9 },
+  });
+  // low 被过滤
   assert.equal(r.length, 1);
-  assert.equal(r[0].sourceId, '1');
+  assert.equal(r[0].sourceId, 'high');
 });
 
-test('selectFewShotExamples: 同分时 created_at 大的优先', () => {
-  const history = [
-    { id: '1', type: 'add_paper', title: 'a', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 1 },
-    { id: '2', type: 'add_paper', title: 'b', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 100 },
+// ---------- tie-breaker (created_at) ---
+test('selectFewShot: 同分时 created_at 大的优先', () => {
+  const r = selectFewShotExamples([
+    mkP('old', { created_at: 100 }),
+    mkP('new', { created_at: 200 }),
+  ]);
+  assert.equal(r[0].sourceId, 'new');
+});
+
+// ---------- minScore 边界 ---
+test('selectFewShot: minScore=0.5, 缺 feedbackScore → 0.5 兜底通过', () => {
+  const r = selectFewShotExamples([mkP('a')], { minScore: 0.5 });
+  // feedbackScore 缺 → 0.5 兜底,刚好满足 minScore=0.5
+  assert.equal(r.length, 1);
+});
+
+test('selectFewShot: minScore=0.6, feedbackScore 缺 → 兜底 0.5 不过滤', () => {
+  const r = selectFewShotExamples([mkP('a')], { minScore: 0.6 });
+  // 0.5 < 0.6 → 被过滤
+  assert.equal(r.length, 0);
+});
+
+// ---------- k 限制 ---
+test('selectFewShot: k=1 只取最高分', () => {
+  const r = selectFewShotExamples([
+    mkP('a', { type: 'create_draft', target: { projectId: 'P' } }),
+    mkP('b'),
+    mkP('c'),
+  ], { projectId: 'P', type: 'create_draft', k: 1 });
+  assert.equal(r.length, 1);
+  assert.equal(r[0].sourceId, 'a');
+});
+
+test('selectFewShot: history < k → 全部返回', () => {
+  const r = selectFewShotExamples([mkP('a'), mkP('b')], { k: 5 });
+  assert.equal(r.length, 2);
+});
+
+// ---------- 输出稳定性 ---
+test('selectFewShot: 同输入 → 同输出', () => {
+  const hist = [
+    mkP('a', { type: 'create_draft', target: { projectId: 'P' }, created_at: 100 }),
+    mkP('b', { created_at: 200 }),
   ];
-  const r = selectFewShotExamples(history);
-  // 同分 → tie-breaker:2 较新
-  assert.equal(r[0].sourceId, '2');
+  const opts = { projectId: 'P', type: 'create_draft' };
+  const r1 = selectFewShotExamples(hist, opts);
+  const r2 = selectFewShotExamples(hist, opts);
+  assert.deepEqual(r1, r2);
 });
 
-test('selectFewShotExamples: 输出顺序稳定 (同输入 → 同输出)', () => {
-  const history = [
-    { id: '1', type: 'add_paper', title: 'a', rationale: 'r', estimated_effort: 'low', risk: '', target: { projectId: 'X' }, created_at: 1 },
-    { id: '2', type: 'add_paper', title: 'b', rationale: 'r', estimated_effort: 'low', risk: '', target: {}, created_at: 2 },
-  ];
-  const r1 = selectFewShotExamples(history, { projectId: 'X' });
-  const r2 = selectFewShotExamples(history, { projectId: 'X' });
-  assert.deepEqual(r1.map((e) => e.sourceId), r2.map((e) => e.sourceId));
-});
-
-test('selectFewShotExamples: 输出上限 k', () => {
-  const history = Array.from({ length: 20 }, (_, i) => ({
-    id: 'p' + i,
-    type: 'add_paper',
-    title: 't' + i,
-    rationale: 'r',
-    estimated_effort: 'low',
-    risk: '',
-    target: {},
-    created_at: i,
-  }));
-  const r = selectFewShotExamples(history, { k: 5 });
-  assert.equal(r.length, 5);
-});
-
-test('selectFewShotExamples: FewShotExample 字段完整', () => {
-  const history = [{
-    id: '1',
-    type: 'add_paper',
-    title: 'My Title',
-    rationale: 'why',
-    estimated_effort: 'high',
-    risk: 'some risk',
-    target: {},
-    created_at: 1,
-  }];
-  const r = selectFewShotExamples(history);
-  assert.equal(r[0].type, 'add_paper');
-  assert.equal(r[0].title, 'My Title');
-  assert.equal(r[0].rationale, 'why');
-  assert.equal(r[0].estimated_effort, 'high');
-  assert.equal(r[0].risk, 'some risk');
-  assert.equal(r[0].sourceId, '1');
-});
-
-// ---------- renderFewShotBlock ----------
-test('renderFewShotBlock: 空 → 空串', () => {
+// ---------- renderFewShotBlock ---
+test('renderFewShotBlock: 空 → ""', () => {
   assert.equal(renderFewShotBlock([]), '');
 });
 
-test('renderFewShotBlock: 含 # 示例 header', () => {
-  const r = renderFewShotBlock([{
+test('renderFewShotBlock: 单 example 含 json block', () => {
+  const ex = [{
     type: 'add_paper',
-    title: 't',
-    rationale: 'r',
+    title: 'T',
+    rationale: 'R',
     estimated_effort: 'low',
-    risk: '',
+    risk: 'r',
     score: 0.5,
-    sourceId: '1',
+    sourceId: 'p1',
+  }];
+  const r = renderFewShotBlock(ex);
+  assert.match(r, /# 示例/);
+  assert.match(r, /## Example 1/);
+  assert.match(r, /```json/);
+  assert.match(r, /```/);
+});
+
+test('renderFewShotBlock: 含 type/title/rationale/effort/risk', () => {
+  const r = renderFewShotBlock([{
+    type: 'create_draft',
+    title: 'Draft Title',
+    rationale: 'Why this draft',
+    estimated_effort: 'medium',
+    risk: 'main risk',
+    score: 0.8,
+    sourceId: 'p1',
   }]);
-  assert.ok(r.includes('# 示例'));
+  assert.match(r, /"type": "create_draft"/);
+  assert.match(r, /"title": "Draft Title"/);
+  assert.match(r, /"rationale": "Why this draft"/);
+  assert.match(r, /"estimated_effort": "medium"/);
+  assert.match(r, /"risk": "main risk"/);
 });
 
-test('renderFewShotBlock: ## Example N 编号', () => {
-  const ex = {
-    type: 'add_paper', title: 't', rationale: 'r',
-    estimated_effort: 'low', risk: '', score: 0.5, sourceId: '1',
-  };
-  const r = renderFewShotBlock([ex, ex, ex]);
-  assert.ok(r.includes('## Example 1'));
-  assert.ok(r.includes('## Example 2'));
-  assert.ok(r.includes('## Example 3'));
-});
-
-test('renderFewShotBlock: JSON code 块', () => {
+test('renderFewShotBlock: 不含 score/sourceId', () => {
   const r = renderFewShotBlock([{
     type: 'add_paper',
-    title: 't',
-    rationale: 'r',
+    title: 'T',
+    rationale: 'R',
     estimated_effort: 'low',
-    risk: '',
-    score: 0.5,
-    sourceId: '1',
+    risk: 'r',
+    score: 0.9,
+    sourceId: 'should_not_appear',
   }]);
-  assert.ok(r.includes('```json'));
-  assert.ok(r.includes('```'));
-  assert.ok(r.includes('"type": "add_paper"'));
+  // score/sourceId 不在 render 字段
+  assert.ok(!r.includes('score'));
+  assert.ok(!r.includes('sourceId'));
+  assert.ok(!r.includes('should_not_appear'));
 });
 
-test('renderFewShotBlock: score / sourceId 不出现在 JSON 内', () => {
-  const r = renderFewShotBlock([{
-    type: 'add_paper',
-    title: 't',
-    rationale: 'r',
-    estimated_effort: 'low',
-    risk: '',
-    score: 0.99,
-    sourceId: 'abc',
-  }]);
-  // JSON.stringify 只含 5 个字段,不暴露 score/sourceId
-  assert.ok(!r.includes('"score"'));
-  assert.ok(!r.includes('"sourceId"'));
+test('renderFewShotBlock: 多 example → "## Example N"', () => {
+  const ex1 = { type: 'add_paper', title: 'A', rationale: 'r1', estimated_effort: 'low', risk: 'x', score: 0.5, sourceId: 'p1' };
+  const ex2 = { type: 'cite_paper', title: 'B', rationale: 'r2', estimated_effort: 'high', risk: 'y', score: 0.7, sourceId: 'p2' };
+  const r = renderFewShotBlock([ex1, ex2]);
+  assert.match(r, /## Example 1/);
+  assert.match(r, /## Example 2/);
+  assert.match(r, /"type": "cite_paper"/);
+});
+
+// ---------- 集成 ---
+test('集成: selectFewShot + renderFewShotBlock end-to-end', () => {
+  const hist = [
+    mkP('a', { type: 'create_draft', target: { projectId: 'P' } }),
+    mkP('b'),
+  ];
+  const examples = selectFewShotExamples(hist, { projectId: 'P', k: 1 });
+  assert.equal(examples.length, 1);
+  const r = renderFewShotBlock(examples);
+  assert.match(r, /# 示例/);
+  assert.match(r, /create_draft/);
 });
