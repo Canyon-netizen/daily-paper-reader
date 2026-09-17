@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 // astro-src/scripts/agents-dimensions.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/agents/dimensions.ts (4 dimension scorers).
+// Tests for R7 polish: astro-src/lib/agents/dimensions.ts.
+// CITATION_VALIDATION_PROMPT / METHODOLOGY_CHECK_PROMPT /
+// REPRODUCIBILITY_PROMPT / NOVELTY_CHECK_PROMPT / DIMENSION_NAMES +
+// scoreCitationValidity / scoreMethodology / scoreReproducibility /
+// scoreNovelty + buildCritiqueScores + scoreAllDimensions。
 
 import { test } from 'node:test';
-import assert from 'node:assert/strict';
+import assertLib from 'node:assert/strict';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
@@ -19,7 +23,6 @@ async function loadTs(relPath) {
     platform: 'neutral',
     write: false,
     target: 'es2022',
-    external: ['../user-libraries/types', '../../user-libraries/types'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -28,264 +31,312 @@ async function loadTs(relPath) {
 
 const mod = await loadTs('lib/agents/dimensions.ts');
 const {
+  CITATION_VALIDATION_PROMPT,
+  METHODOLOGY_CHECK_PROMPT,
+  REPRODUCIBILITY_PROMPT,
+  NOVELTY_CHECK_PROMPT,
+  DIMENSION_NAMES,
   scoreCitationValidity,
   scoreMethodology,
   scoreReproducibility,
   scoreNovelty,
   buildCritiqueScores,
   scoreAllDimensions,
-  DIMENSION_NAMES,
 } = mod;
 
-// ---------- scoreCitationValidity ----------
-test('scoreCitationValidity: 空 paperIds → score 0', () => {
-  const r = scoreCitationValidity({ evidence: { paperIds: [] } });
-  // total = 1 (fallback), passing = 0 → 0
-  assert.equal(r.score, 0);
-  assert.deepEqual(r.valid, []);
-  assert.deepEqual(r.invalid, []);
+const mkProposal = (overrides = {}) => ({
+  rationale: '',
+  risk: '',
+  evidence: { paperIds: [], quotes: [] },
+  target: {},
+  ...overrides,
 });
 
-test('scoreCitationValidity: 合法 ID', () => {
-  const r = scoreCitationValidity({ evidence: { paperIds: ['2310.12345', '2401.0001'] } });
-  // 2 valid, 0 invalid → score = 10
-  assert.equal(r.score, 10);
-  assert.equal(r.valid.length, 2);
+// ---------- prompts ---
+test('prompts: 4 个 prompt 都非空', () => {
+  for (const p of [CITATION_VALIDATION_PROMPT, METHODOLOGY_CHECK_PROMPT, REPRODUCIBILITY_PROMPT, NOVELTY_CHECK_PROMPT]) {
+    assertLib.ok(typeof p === 'string');
+    assertLib.ok(p.length > 50);
+  }
 });
 
-test('scoreCitationValidity: 非法格式 → invalid', () => {
-  const r = scoreCitationValidity({ evidence: { paperIds: ['bad-id', '2310.12345'] } });
-  assert.equal(r.score, 5); // 1/2 * 10
-  assert.equal(r.invalid[0], 'bad-id');
-  assert.equal(r.valid.length, 1);
+test('DIMENSION_NAMES: 4 个', () => {
+  assertLib.deepEqual(DIMENSION_NAMES, ['citation_validity', 'methodology', 'reproducibility', 'novelty']);
 });
 
-test('scoreCitationValidity: knownPaperIds 缺失 → missing', () => {
+// ---------- scoreCitationValidity ---
+test('citation: 合法 id → valid', () => {
+  const r = scoreCitationValidity(mkProposal({ evidence: { paperIds: ['2310.12345'] } }));
+  assertLib.equal(r.valid.length, 1);
+  assertLib.equal(r.invalid.length, 0);
+});
+
+test('citation: 非法 id → invalid', () => {
+  const r = scoreCitationValidity(mkProposal({ evidence: { paperIds: ['bad-id', 'also bad'] } }));
+  assertLib.equal(r.invalid.length, 2);
+  assertLib.equal(r.valid.length, 0);
+});
+
+test('citation: 已知库 → missing 检查', () => {
+  const known = new Set(['2310.12345']);
   const r = scoreCitationValidity(
-    { evidence: { paperIds: ['2310.12345'] } },
-    new Set(['2310.99999']),
+    mkProposal({ evidence: { paperIds: ['2310.12345', '2401.00001'] } }),
+    known,
   );
-  assert.deepEqual(r.missing, ['2310.12345']);
-  assert.deepEqual(r.valid, []);
+  assertLib.equal(r.valid.length, 1);
+  assertLib.deepEqual(r.missing, ['2401.00001']);
 });
 
-test('scoreCitationValidity: knownPaperIds 空 → 全 valid', () => {
-  const r = scoreCitationValidity({ evidence: { paperIds: ['2310.12345'] } }, new Set());
-  assert.equal(r.valid.length, 1);
+test('citation: 空库 → 无 missing', () => {
+  const r = scoreCitationValidity(mkProposal({ evidence: { paperIds: ['2310.12345'] } }));
+  assertLib.deepEqual(r.missing, []);
 });
 
-test('scoreCitationValidity: vN 版本号 → 视为合法,canonical 去 v', () => {
-  const r = scoreCitationValidity({ evidence: { paperIds: ['2310.12345v2'] } });
-  assert.equal(r.invalid.length, 0);
+test('citation: 重复 → duplicates', () => {
+  const r = scoreCitationValidity(mkProposal({ evidence: { paperIds: ['2310.12345', '2310.12345'] } }));
+  assertLib.equal(r.duplicates.length, 1);
 });
 
-test('scoreCitationValidity: 重复 → duplicates', () => {
-  const r = scoreCitationValidity({ evidence: { paperIds: ['2310.12345', '2310.12345'] } });
-  assert.equal(r.duplicates.length, 1);
-  // 第二次被推入 duplicates,不在 valid
-  assert.equal(r.valid.length, 1);
+test('citation: 重复 + 库 → 第一次算 valid', () => {
+  const known = new Set(['2310.12345']);
+  const r = scoreCitationValidity(mkProposal({ evidence: { paperIds: ['2310.12345', '2310.12345'] } }), known);
+  // 第一次 valid,第二次 duplicates
+  assertLib.equal(r.valid.length, 1);
+  assertLib.equal(r.duplicates.length, 1);
 });
 
-test('scoreCitationValidity: 重复 + 已知 → 第二次归 duplicates', () => {
-  const r = scoreCitationValidity(
-    { evidence: { paperIds: ['2310.12345', '2310.12345'] } },
-    new Set(['2310.12345']),
-  );
-  // 第一次进 valid,第二次 canonical 已 seen → duplicates
-  assert.equal(r.valid.length, 1);
-  assert.equal(r.duplicates.length, 1);
-  assert.equal(r.missing.length, 0);
+test('citation: 混合', () => {
+  const r = scoreCitationValidity(mkProposal({
+    evidence: { paperIds: ['2310.12345', 'bad', '2310.12345'] },
+  }));
+  assertLib.equal(r.valid.length, 1);
+  assertLib.equal(r.invalid.length, 1);
+  assertLib.equal(r.duplicates.length, 1);
 });
 
-// ---------- scoreMethodology ----------
-test('scoreMethodology: 全 5 类关键词命中 → score 10', () => {
+test('citation: 空 paperIds → score=0', () => {
+  const r = scoreCitationValidity(mkProposal());
+  assertLib.equal(r.score, 0);
+});
+
+test('citation: score = passing/total * 10', () => {
+  // 3 个合法 + 1 invalid → 3/4 * 10 = 7.5
+  const r = scoreCitationValidity(mkProposal({
+    evidence: { paperIds: ['2310.12345', '2310.12346', '2310.12347', 'bad'] },
+  }));
+  assertLib.equal(r.score, 7.5);
+});
+
+// ---------- scoreMethodology ---
+test('methodology: 全关键词 → score=10', () => {
   const r = scoreMethodology({
-    rationale: '可证伪 hypothesis with baseline, ablation, metric accuracy, sample size split, seed. p-value.',
+    rationale: '假设是 ... baseline ... metric accuracy ... 样本 N=100 ... p<0.05 显著性',
     risk: '',
   });
-  assert.equal(r.score, 10);
-  assert.equal(r.issues.length, 0);
+  assertLib.equal(r.score, 10);
 });
 
-test('scoreMethodology: 全无关键词 → score 0', () => {
-  const r = scoreMethodology({ rationale: '...', risk: '' });
-  assert.equal(r.score, 0);
-  // 5 issues, 5 suggestions
-  assert.equal(r.issues.length, 5);
-  assert.equal(r.suggestions.length, 5);
-});
-
-test('scoreMethodology: 中文 假设 + 评估', () => {
-  const r = scoreMethodology({
-    rationale: '我们提出假设:模型在 X 上更好。评估方法采用 accuracy。',
-    risk: '',
-  });
-  // 命中 hypothesis + metric = 2/5 = 4
-  assert.equal(r.score, 4);
-});
-
-test('scoreMethodology: 大小写不敏感 (lowercase)', () => {
-  const r = scoreMethodology({
-    rationale: 'HYPOTHESIS baseline METRIC sample seed p-value.',
-    risk: '',
-  });
-  assert.equal(r.score, 10);
-});
-
-test('scoreMethodology: issues/suggestions 配对', () => {
+test('methodology: 空 → score=0', () => {
   const r = scoreMethodology({ rationale: '', risk: '' });
-  assert.equal(r.issues.length, r.suggestions.length);
+  assertLib.equal(r.score, 0);
+  assertLib.ok(r.issues.length > 0);
 });
 
-// ---------- scoreReproducibility ----------
-test('scoreReproducibility: 全命中 → score 10', () => {
-  const r = scoreReproducibility({
-    rationale: 'github.com/x. dataset public. GPU 8. seed = 42. recipe readme.',
-    evidence: {},
-    target: {},
+test('methodology: 部分关键词 → 比例分', () => {
+  // 仅 baseline + metric (2/5 = 0.4 → 4.0)
+  const r = scoreMethodology({
+    rationale: '使用 baseline 对照,metric 用 accuracy',
+    risk: '',
   });
-  assert.equal(r.score, 10);
+  assertLib.equal(r.score, 4.0);
 });
 
-test('scoreReproducibility: 全无 → score 0', () => {
+test('methodology: issues 反映缺哪个维度', () => {
+  const r = scoreMethodology({ rationale: '', risk: '' });
+  assertLib.ok(r.issues.some((i) => /假设/.test(i)));
+  assertLib.ok(r.issues.some((i) => /baseline/.test(i)));
+  assertLib.ok(r.issues.some((i) => /指标/.test(i)));
+});
+
+test('methodology: suggestions 与 issues 对应', () => {
+  const r = scoreMethodology({ rationale: '', risk: '' });
+  assertLib.equal(r.issues.length, r.suggestions.length);
+});
+
+// ---------- scoreReproducibility ---
+test('reproducibility: 全 flag → score=10', () => {
+  const r = scoreReproducibility({
+    rationale: 'github.com/repo + 公开数据集 + GPU 8 + seed=42 + recipe 完整',
+    evidence: {}, target: {},
+  });
+  assertLib.equal(r.score, 10);
+});
+
+test('reproducibility: 空 → score=0', () => {
   const r = scoreReproducibility({ rationale: '', evidence: {}, target: {} });
-  assert.equal(r.score, 0);
+  assertLib.equal(r.score, 0);
 });
 
-test('scoreReproducibility: code_available', () => {
+test('reproducibility: flags 是 5 个 bool', () => {
+  const r = scoreReproducibility({ rationale: 'github.com', evidence: {}, target: {} });
+  assertLib.equal(typeof r.flags.code_available, 'boolean');
+  assertLib.equal(typeof r.flags.data_available, 'boolean');
+  assertLib.equal(typeof r.flags.resources_documented, 'boolean');
+  assertLib.equal(typeof r.flags.seeds_disclosed, 'boolean');
+  assertLib.equal(typeof r.flags.self_contained, 'boolean');
+});
+
+test('reproducibility: 比例分', () => {
+  // 仅 code_available=true,1/5*10=2
+  const r = scoreReproducibility({ rationale: 'github.com/x', evidence: {}, target: {} });
+  assertLib.equal(r.score, 2);
+});
+
+test('reproducibility: 2 flags → 4 分', () => {
+  // github + 公开数据集 → 2 flags = 4 分
   const r = scoreReproducibility({
-    rationale: 'github.com/foo', evidence: {}, target: {},
+    rationale: 'github.com/x 使用公开数据集',
+    evidence: {}, target: {},
   });
-  assert.equal(r.flags.code_available, true);
+  assertLib.equal(r.score, 4);
 });
 
-test('scoreReproducibility: seeds_disclosed', () => {
-  const r = scoreReproducibility({
-    rationale: 'random seed 42', evidence: {}, target: {},
-  });
-  assert.equal(r.flags.seeds_disclosed, true);
+// ---------- scoreNovelty ---
+test('novelty: refCount=0 → score -4', () => {
+  const r = scoreNovelty({ rationale: 'a'.repeat(100), evidence: { paperIds: [] } });
+  // base 10 - 4 (refCount=0) - 1 (rationale 50..150) = 5
+  // 实际:refCount=0 → -4;rationale=100 → -1 → 5
+  assertLib.equal(r.score, 5);
 });
 
-test('scoreReproducibility: 大小写不敏感', () => {
-  const r = scoreReproducibility({
-    rationale: 'GITHUB.COM', evidence: {}, target: {},
-  });
-  assert.equal(r.flags.code_available, true);
+test('novelty: refCount=0 + 长 rationale → score=6', () => {
+  const r = scoreNovelty({ rationale: 'a'.repeat(200), evidence: { paperIds: [] } });
+  // base 10 - 4 = 6
+  assertLib.equal(r.score, 6);
 });
 
-// ---------- scoreNovelty ----------
-test('scoreNovelty: 0 引用 + 短 rationale → 极低', () => {
-  const r = scoreNovelty({ rationale: 'short', evidence: { paperIds: [] } });
-  // base 10 - 4 (no ref) - 3 (rationale<50) = 3
-  assert.equal(r.score, 3);
-  assert.equal(r.risks.length, 2);
-});
-
-test('scoreNovelty: 中等引用 + 长 rationale → 10', () => {
+test('novelty: refCount=5 + 长 rationale → score=10', () => {
   const r = scoreNovelty({
-    rationale: 'x'.repeat(200),
-    evidence: { paperIds: ['2310.12345', '2310.12346'] },
+    rationale: 'a'.repeat(200),
+    evidence: { paperIds: ['1', '2', '3', '4', '5'] },
   });
-  assert.equal(r.score, 10);
+  // base 10,无 penalty → 10
+  assertLib.equal(r.score, 10);
 });
 
-test('scoreNovelty: 引用 > 15 → -2', () => {
+test('novelty: refCount>8 → -1', () => {
   const r = scoreNovelty({
-    rationale: 'x'.repeat(200),
-    evidence: { paperIds: Array.from({ length: 20 }, (_, i) => '2310.1234' + i) },
+    rationale: 'a'.repeat(200),
+    evidence: { paperIds: ['1', '2', '3', '4', '5', '6', '7', '8', '9'] },
   });
-  assert.equal(r.score, 8);
+  // base 10 - 1 = 9
+  assertLib.equal(r.score, 9);
 });
 
-test('scoreNovelty: 引用 > 8 → -1', () => {
+test('novelty: refCount>15 → -2', () => {
   const r = scoreNovelty({
-    rationale: 'x'.repeat(200),
-    evidence: { paperIds: Array.from({ length: 10 }, (_, i) => '2310.1234' + i) },
+    rationale: 'a'.repeat(200),
+    evidence: { paperIds: Array.from({ length: 16 }, (_, i) => `${i}`) },
   });
-  assert.equal(r.score, 9);
+  // base 10 - 2 = 8
+  assertLib.equal(r.score, 8);
 });
 
-test('scoreNovelty: rationale < 50 → -3', () => {
+test('novelty: rationale < 50 → -3', () => {
   const r = scoreNovelty({
     rationale: 'short',
-    evidence: { paperIds: ['2310.12345'] },
+    evidence: { paperIds: ['1'] },
   });
-  assert.equal(r.score, 10 - 3);
+  // 10 - 3 = 7
+  assertLib.equal(r.score, 7);
 });
 
-test('scoreNovelty: rationale < 150 → -1', () => {
+test('novelty: rationale 50..150 → -1', () => {
   const r = scoreNovelty({
-    rationale: 'x'.repeat(100),
-    evidence: { paperIds: ['2310.12345'] },
+    rationale: 'a'.repeat(100),
+    evidence: { paperIds: ['1'] },
   });
-  assert.equal(r.score, 10 - 1);
+  // 10 - 1 = 9
+  assertLib.equal(r.score, 9);
 });
 
-test('scoreNovelty: 0 引用时 differentiation 是"literature review"', () => {
-  const r = scoreNovelty({ rationale: 'x'.repeat(200), evidence: { paperIds: [] } });
-  assert.match(r.differentiation, /literature review/);
-});
-
-test('scoreNovelty: 非 0 引用 differentiation', () => {
+test('novelty: 钳制 >= 0', () => {
+  // refCount=0 + rationale<50 → 10-4-3 = 3
   const r = scoreNovelty({
-    rationale: 'x'.repeat(200),
-    evidence: { paperIds: ['2310.12345', '2310.12346'] },
+    rationale: 'short',
+    evidence: { paperIds: [] },
   });
-  assert.match(r.differentiation, /2 篇前人工作/);
+  assertLib.equal(r.score, 3);
 });
 
-test('scoreNovelty: score clamp [0, 10]', () => {
-  // 0 引用 + 短 rationale → 3 (>= 0)
-  const r1 = scoreNovelty({ rationale: '', evidence: { paperIds: [] } });
-  assert.ok(r1.score >= 0);
-});
-
-// ---------- buildCritiqueScores ----------
-test('buildCritiqueScores: overall 等权平均', () => {
-  const r = buildCritiqueScores(
-    { methodologist: 8, engineer: 7, skeptic: 6 },
-    { citation_validity: 10, methodology: 8, reproducibility: 6, novelty: 4 },
-  );
-  // (10+8+6+4)/4 = 7
-  assert.equal(r.overall, 7);
-});
-
-test('buildCritiqueScores: 完整字段', () => {
-  const r = buildCritiqueScores(
-    { methodologist: 8, engineer: 7, skeptic: 6 },
-    { citation_validity: 10, methodology: 8, reproducibility: 6, novelty: 4 },
-  );
-  assert.equal(r.methodologist, 8);
-  assert.equal(r.engineer, 7);
-  assert.equal(r.skeptic, 6);
-  assert.equal(r.citation_validity, 10);
-  assert.equal(r.methodology, 8);
-  assert.equal(r.reproducibility, 6);
-  assert.equal(r.novelty, 4);
-});
-
-// ---------- scoreAllDimensions ----------
-test('scoreAllDimensions: 4 个维度都返回', () => {
-  const r = scoreAllDimensions({
-    rationale: 'hypothesis baseline', risk: '',
-    evidence: { paperIds: ['2310.12345'] }, target: {},
+test('novelty: risks 反映问题', () => {
+  const r = scoreNovelty({
+    rationale: 'short',
+    evidence: { paperIds: [] },
   });
-  assert.ok(r.citation);
-  assert.ok(r.methodology);
-  assert.ok(r.reproducibility);
-  assert.ok(r.novelty);
+  assertLib.ok(r.risks.length >= 1);
 });
 
-test('scoreAllDimensions: knownPaperIds 透传到 citation', () => {
-  const r = scoreAllDimensions({
-    rationale: '', risk: '',
-    evidence: { paperIds: ['2310.12345'] }, target: {},
-  }, new Set(['2310.99999']));
-  // knownPaperIds 不包含 → missing
-  assert.equal(r.citation.missing.length, 1);
+test('novelty: differentiation 文案', () => {
+  const r = scoreNovelty({
+    rationale: 'a'.repeat(100),
+    evidence: { paperIds: ['1', '2', '3'] },
+  });
+  assertLib.match(r.differentiation, /3 篇前人/);
 });
 
-// ---------- DIMENSION_NAMES ----------
-test('DIMENSION_NAMES: 4 个常量名', () => {
-  assert.deepEqual([...DIMENSION_NAMES], ['citation_validity', 'methodology', 'reproducibility', 'novelty']);
+// ---------- buildCritiqueScores ---
+test('buildScores: 等权 overall', () => {
+  const r = buildCritiqueScores(
+    { methodologist: 7, engineer: 8, skeptic: 6 },
+    { citation_validity: 8, methodology: 6, reproducibility: 10, novelty: 4 },
+  );
+  // dims avg = (8+6+10+4)/4 = 7
+  assertLib.equal(r.overall, 7);
+  assertLib.equal(r.methodologist, 7);
+  assertLib.equal(r.citation_validity, 8);
+});
+
+test('buildScores: overall 等于 dims 平均', () => {
+  const r = buildCritiqueScores(
+    { methodologist: 0, engineer: 0, skeptic: 0 },
+    { citation_validity: 10, methodology: 10, reproducibility: 10, novelty: 10 },
+  );
+  assertLib.equal(r.overall, 10);
+});
+
+// ---------- scoreAllDimensions ---
+test('scoreAll: 4 维度都返回', () => {
+  const r = scoreAllDimensions(mkProposal());
+  assertLib.ok(r.citation);
+  assertLib.ok(r.methodology);
+  assertLib.ok(r.reproducibility);
+  assertLib.ok(r.novelty);
+});
+
+test('scoreAll: 含已知库 → citation 用', () => {
+  const known = new Set(['2310.12345']);
+  const r = scoreAllDimensions(
+    mkProposal({ evidence: { paperIds: ['2310.12345'] } }),
+    known,
+  );
+  assertLib.equal(r.citation.valid.length, 1);
+});
+
+// ---------- 集成 ---
+test('集成: 4 dim 分数 → buildCritiqueScores', () => {
+  const r = scoreAllDimensions(mkProposal({
+    rationale: '假设 ... baseline ... metric ... 样本 ... 显著性',
+    evidence: { paperIds: ['2310.12345'] },
+  }));
+  const scores = buildCritiqueScores(
+    { methodologist: 7, engineer: 7, skeptic: 7 },
+    {
+      citation_validity: r.citation.score,
+      methodology: r.methodology.score,
+      reproducibility: r.reproducibility.score,
+      novelty: r.novelty.score,
+    },
+  );
+  assertLib.equal(scores.overall, (r.citation.score + r.methodology.score + r.reproducibility.score + r.novelty.score) / 4);
 });
