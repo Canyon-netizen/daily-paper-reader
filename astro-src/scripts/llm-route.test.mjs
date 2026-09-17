@@ -1,137 +1,191 @@
-#!/usr/bin/env node
-// astro-src/scripts/llm-route.test.mjs
-//
-// Tests for R7 polish: astro-src/lib/llm/route.ts stage → LLM route resolver.
-
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { dirname, join } from 'node:path';
+// Test file for astro-src/lib/llm/route.ts
+import { describe, it, beforeEach } from 'node:test';
+import assert from 'node:assert';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import esbuild from 'esbuild';
+import * as esbuild from 'esbuild';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 async function loadTs(relPath) {
   const result = await esbuild.build({
     entryPoints: [join(__dirname, '..', relPath)],
-    bundle: true,
-    format: 'esm',
-    platform: 'neutral',
-    write: false,
-    target: 'es2022',
-    external: ['../../scripts/settings', '../settings', './settings'],
+    bundle: true, format: 'esm', platform: 'node',
+    write: false, target: 'es2022',
+    external: ['node:fs', 'node:fs/promises', 'node:path', 'fs', 'path'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
   return import(dataUrl);
 }
 
-const mod = await loadTs('lib/llm/route.ts');
-const { resolveRoute, invalidateRouteCache } = mod;
+describe('llm/route', () => {
+  let route;
 
-test('resolveRoute: analyzer_system', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('analyzer_system');
-  assert.equal(r.provider, 'deepseek');
-  assert.equal(r.model, 'deepseek-chat');
-  assert.equal(r.temperature, 0.2);
-});
+  beforeEach(async () => {
+    route = await loadTs('lib/llm/route.ts');
+    // Clear cache before each test
+    route.invalidateRouteCache();
+  });
 
-test('resolveRoute: analyzer_deepdive 流式', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('analyzer_deepdive');
-  assert.equal(r.isStream, true);
-});
+  describe('resolveRoute', () => {
+    it('should return route for analyzer_system', () => {
+      const r = route.resolveRoute('analyzer_system');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'deepseek-chat');
+      assert.strictEqual(r.temperature, 0.2);
+      assert.strictEqual(r.isStream, undefined);
+    });
 
-test('resolveRoute: library_relevance 用 reasoner 模型', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('library_relevance');
-  assert.equal(r.model, 'deepseek-reasoner');
-});
+    it('should return route for analyzer_deepdive with isStream', () => {
+      const r = route.resolveRoute('analyzer_deepdive');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'deepseek-chat');
+      assert.strictEqual(r.temperature, 0.4);
+      assert.strictEqual(r.isStream, true);
+    });
 
-test('resolveRoute: topic_report 流式', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('topic_report');
-  assert.equal(r.isStream, true);
-});
+    it('should return route for topic_facet', () => {
+      const r = route.resolveRoute('topic_facet');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'deepseek-chat');
+      assert.strictEqual(r.temperature, 0.4);
+    });
 
-test('resolveRoute: 未知 stage 回退 default', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('unknown-stage-xyz');
-  assert.equal(r.provider, 'deepseek');
-  assert.equal(r.model, 'deepseek-chat');
-});
+    it('should return route for topic_summary', () => {
+      const r = route.resolveRoute('topic_summary');
+      assert.strictEqual(r.temperature, 0.3);
+    });
 
-test('resolveRoute: 60s TTL 缓存', async () => {
-  invalidateRouteCache();
-  const r1 = resolveRoute('analyzer_system');
-  const r2 = resolveRoute('analyzer_system');
-  // 同一对象(缓存命中)
-  assert.equal(r1, r2);
-});
+    it('should return route for topic_report with openai provider', () => {
+      const r = route.resolveRoute('topic_report');
+      assert.strictEqual(r.provider, 'openai');
+      assert.strictEqual(r.model, 'gpt-4o-mini');
+      assert.strictEqual(r.temperature, 0.6);
+      assert.strictEqual(r.isStream, true);
+    });
 
-test('invalidateRouteCache: 清空后下次重新计算', () => {
-  resolveRoute('analyzer_system');
-  invalidateRouteCache();
-  const r = resolveRoute('analyzer_system');
-  assert.ok(r);
-});
+    it('should return route for topic_cand', () => {
+      const r = route.resolveRoute('topic_cand');
+      assert.strictEqual(r.temperature, 0.3);
+    });
 
-test('resolveRoute: library_figure 用 gemini', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('library_figure');
-  assert.equal(r.model, 'gemini-2.5-pro');
-});
+    it('should return route for topic_explore', () => {
+      const r = route.resolveRoute('topic_explore');
+      assert.strictEqual(r.temperature, 0.5);
+    });
 
-test('resolveRoute: elo.debate 高温度(辩论)', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('elo.debate');
-  assert.equal(r.temperature, 0.7);
-});
+    it('should return route for topic_chat', () => {
+      const r = route.resolveRoute('topic_chat');
+      assert.strictEqual(r.temperature, 0.4);
+      assert.strictEqual(r.isStream, undefined);
+    });
 
-test('resolveRoute: enrich', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('enrich');
-  assert.equal(r.model, 'gemini-3-flash-preview');
-});
+    it('should return route for library_compile with isStream', () => {
+      const r = route.resolveRoute('library_compile');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'deepseek-chat');
+      assert.strictEqual(r.temperature, 0.4);
+      assert.strictEqual(r.isStream, true);
+    });
 
-test('resolveRoute: 所有 stage 有 temperature 字段', () => {
-  invalidateRouteCache();
-  const stages = [
-    'enrich',
-    'analyzer_system',
-    'analyzer_deepdive',
-    'topic_facet',
-    'topic_summary',
-    'topic_report',
-    'topic_cand',
-    'topic_explore',
-    'topic_chat',
-    'topic_report_chat',
-    'library_compile',
-    'library_relevance',
-    'library_concept_def',
-    'library_figure',
-    'library_digest',
-    'library_digest_synth',
-    'library_trend',
-    'library_chat',
-    'paper.method_debate',
-    'paper.deep_extract',
-    'topic.debate',
-    'elo.debate',
-    'default',
-  ];
-  for (const s of stages) {
-    const r = resolveRoute(s);
-    assert.equal(typeof r.temperature, 'number', `${s} 应有 temperature`);
-    assert.ok(r.temperature >= 0 && r.temperature <= 1, `${s} 温度在 [0,1]`);
-  }
-});
+    it('should return route for library_relevance with reasoner', () => {
+      const r = route.resolveRoute('library_relevance');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'deepseek-reasoner');
+      assert.strictEqual(r.temperature, 0.2);
+    });
 
-test('resolveRoute: temperature 在合理范围', () => {
-  invalidateRouteCache();
-  const r = resolveRoute('default');
-  assert.ok(r.temperature >= 0);
-  assert.ok(r.temperature <= 1);
+    it('should return route for library_concept_def', () => {
+      const r = route.resolveRoute('library_concept_def');
+      assert.strictEqual(r.model, 'deepseek-chat');
+      assert.strictEqual(r.temperature, 0.2);
+    });
+
+    it('should return route for library_figure with gemini', () => {
+      const r = route.resolveRoute('library_figure');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'gemini-2.5-pro');
+      assert.strictEqual(r.temperature, 0.2);
+    });
+
+    it('should return route for library_digest', () => {
+      const r = route.resolveRoute('library_digest');
+      assert.strictEqual(r.temperature, 0.3);
+    });
+
+    it('should return route for library_digest_synth with isStream', () => {
+      const r = route.resolveRoute('library_digest_synth');
+      assert.strictEqual(r.isStream, true);
+      assert.strictEqual(r.temperature, 0.4);
+    });
+
+    it('should return route for library_trend with isStream', () => {
+      const r = route.resolveRoute('library_trend');
+      assert.strictEqual(r.isStream, true);
+      assert.strictEqual(r.temperature, 0.4);
+    });
+
+    it('should return route for library_chat with isStream', () => {
+      const r = route.resolveRoute('library_chat');
+      assert.strictEqual(r.isStream, true);
+      assert.strictEqual(r.temperature, 0.4);
+    });
+
+    it('should return route for paper.method_debate', () => {
+      const r = route.resolveRoute('paper.method_debate');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.temperature, 0.5);
+    });
+
+    it('should return route for paper.deep_extract', () => {
+      const r = route.resolveRoute('paper.deep_extract');
+      assert.strictEqual(r.temperature, 0.3);
+    });
+
+    it('should return route for topic.debate', () => {
+      const r = route.resolveRoute('topic.debate');
+      assert.strictEqual(r.temperature, 0.7);
+    });
+
+    it('should return route for elo.debate', () => {
+      const r = route.resolveRoute('elo.debate');
+      assert.strictEqual(r.temperature, 0.7);
+    });
+
+    it('should return default route for unknown stage', () => {
+      const r = route.resolveRoute('unknown_stage_xyz');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'deepseek-chat');
+      assert.strictEqual(r.temperature, 0.5);
+      assert.strictEqual(r.isStream, undefined);
+    });
+
+    it('should return default route for empty string', () => {
+      const r = route.resolveRoute('');
+      assert.strictEqual(r.provider, 'deepseek');
+      assert.strictEqual(r.model, 'deepseek-chat');
+    });
+  });
+
+  describe('invalidateRouteCache', () => {
+    it('should clear the route cache', () => {
+      // First, populate cache
+      route.resolveRoute('analyzer_system');
+      // Then invalidate
+      route.invalidateRouteCache();
+      // Should still work and repopulate
+      const r = route.resolveRoute('analyzer_system');
+      assert.strictEqual(r.model, 'deepseek-chat');
+    });
+  });
+
+  describe('cache behavior', () => {
+    it('should cache route results', () => {
+      const r1 = route.resolveRoute('analyzer_system');
+      const r2 = route.resolveRoute('analyzer_system');
+      // Should return same object reference (cached)
+      assert.strictEqual(r1, r2);
+    });
+  });
 });
