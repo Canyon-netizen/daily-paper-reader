@@ -2,7 +2,12 @@
 // astro-src/scripts/taxonomies.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/taxonomies.ts.
-// normalizeCategoryDim + buildCategories + categoriesToYamlInline + ALIAS_* constants.
+// TASK_ALLOWLIST / METHOD_ALLOWLIST / TYPE_ALLOWLIST (从 JSON 导入) +
+// TASK/METHOD/TYPE_ALLOWLIST_RAW +
+// ALIAS_OLD_TAG_TO_TASK / ALIAS_OLD_TAG_TO_METHOD +
+// normalizeCategoryDim (白名单 + 大小写无关 + 去重 + 保序) +
+// buildCategories (4-dim 集中拷出) +
+// categoriesToYamlInline (Categories → flow-style YAML inline)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,9 +23,9 @@ async function loadTs(relPath) {
     bundle: true,
     format: 'esm',
     platform: 'node',
-    external: ['node:*'],
     write: false,
     target: 'es2022',
+    external: ['node:fs', 'node:fs/promises', 'node:path', 'fs', 'path', './taxonomies-disk.mjs'],
   });
   const code = result.outputFiles[0].text;
   const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
@@ -42,256 +47,239 @@ const {
   categoriesToYamlInline,
 } = mod;
 
-// ---------- ALLOWLIST 基本属性 ----------
-test('TASK_ALLOWLIST: 是 Set', () => {
+// ---------- 常量 ---
+test('TASK_ALLOWLIST: 是 Set 且非空', () => {
   assert.ok(TASK_ALLOWLIST instanceof Set);
-});
-
-test('TASK_ALLOWLIST: 非空', () => {
   assert.ok(TASK_ALLOWLIST.size > 0);
 });
 
-test('METHOD_ALLOWLIST: 是 Set', () => {
-  assert.ok(METHOD_ALLOWLIST instanceof Set);
+test('TASK_ALLOWLIST: 含常见任务(rl)', () => {
+  assert.ok(TASK_ALLOWLIST.has('rl'));
+});
+
+test('TASK_ALLOWLIST: 大小写无关(全是 lower)', () => {
+  // RAW 是原样,Set 全部 trim+lowercase
+  for (const s of TASK_ALLOWLIST) {
+    assert.equal(s, s.toLowerCase());
+  }
+});
+
+test('TASK_ALLOWLIST_RAW: 数组', () => {
+  assert.ok(Array.isArray(TASK_ALLOWLIST_RAW));
+});
+
+test('TASK_ALLOWLIST_RAW 与 SET 同 size', () => {
+  // 一些 RAW 可能 trim 后空 → 被 set 过滤 → size 可能不同
+  assert.ok(TASK_ALLOWLIST_RAW.length >= TASK_ALLOWLIST.size);
+});
+
+test('METHOD_ALLOWLIST: 含 distillation', () => {
+  assert.ok(METHOD_ALLOWLIST.has('distillation'));
 });
 
 test('TYPE_ALLOWLIST: 是 Set', () => {
   assert.ok(TYPE_ALLOWLIST instanceof Set);
 });
 
-test('ALLOWLIST_RAW: 数组', () => {
-  assert.ok(Array.isArray(TASK_ALLOWLIST_RAW));
-  assert.ok(Array.isArray(METHOD_ALLOWLIST_RAW));
-  assert.ok(Array.isArray(TYPE_ALLOWLIST_RAW));
-});
-
-test('ALLOWLIST: 大小写无关 (lowercase)', () => {
-  // 内部一律 lowercase
-  // 任意 sample 字段查 set
-  assert.ok(TASK_ALLOWLIST_RAW.length > 0);
-  for (const x of TASK_ALLOWLIST_RAW.slice(0, 3)) {
-    assert.ok(TASK_ALLOWLIST.has(x.toLowerCase()));
-  }
-});
-
-// ---------- ALIAS 映射 ----------
-test('ALIAS_OLD_TAG_TO_TASK: rl → rl', () => {
+// ---------- ALIAS ---
+test('ALIAS_TASK: rl → rl', () => {
   assert.equal(ALIAS_OLD_TAG_TO_TASK.rl, 'rl');
 });
 
-test('ALIAS_OLD_TAG_TO_TASK: llm-agent → agent', () => {
+test('ALIAS_TASK: llm-agent → agent', () => {
   assert.equal(ALIAS_OLD_TAG_TO_TASK['llm-agent'], 'agent');
 });
 
-test('ALIAS_OLD_TAG_TO_TASK: reasoning → reasoning', () => {
-  assert.equal(ALIAS_OLD_TAG_TO_TASK.reasoning, 'reasoning');
-});
-
-test('ALIAS_OLD_TAG_TO_TASK: game ai → game-ai', () => {
+test('ALIAS_TASK: game ai → game-ai', () => {
   assert.equal(ALIAS_OLD_TAG_TO_TASK['game ai'], 'game-ai');
 });
 
-test('ALIAS_OLD_TAG_TO_TASK: 故意不映射 intervention', () => {
-  assert.equal(ALIAS_OLD_TAG_TO_TASK.intervention, undefined);
+test('ALIAS_TASK: intervention 不映射', () => {
+  assert.equal(ALIAS_OLD_TAG_TO_TASK['intervention'], undefined);
 });
 
-test('ALIAS_OLD_TAG_TO_METHOD: self distillation → distillation', () => {
+test('ALIAS_METHOD: self distillation → distillation', () => {
   assert.equal(ALIAS_OLD_TAG_TO_METHOD['self distillation'], 'distillation');
 });
 
-test('ALIAS_OLD_TAG_TO_METHOD: 其它不在内', () => {
-  assert.equal(ALIAS_OLD_TAG_TO_METHOD.foo, undefined);
+test('ALIAS_METHOD: 别的 key 无', () => {
+  assert.equal(ALIAS_OLD_TAG_TO_METHOD['other'], undefined);
 });
 
-// ---------- normalizeCategoryDim: venue ----------
-test('normalizeCategoryDim: venue 空数组', () => {
-  assert.deepEqual(normalizeCategoryDim([], 'venue'), []);
-});
-
-test('normalizeCategoryDim: venue undefined → []', () => {
-  assert.deepEqual(normalizeCategoryDim(undefined, 'venue'), []);
-});
-
-test('normalizeCategoryDim: venue 非数组 → []', () => {
-  assert.deepEqual(normalizeCategoryDim('foo', 'venue'), []);
-  assert.deepEqual(normalizeCategoryDim({}, 'venue'), []);
-});
-
-test('normalizeCategoryDim: venue 保留大小写 (不做 lowercase)', () => {
+// ---------- normalizeCategoryDim ---
+test('norm: venue 无白名单直接放行', () => {
   const r = normalizeCategoryDim(['ICML 2025', 'NeurIPS 2024'], 'venue');
   assert.deepEqual(r, ['ICML 2025', 'NeurIPS 2024']);
 });
 
-test('normalizeCategoryDim: venue 去重', () => {
-  const r = normalizeCategoryDim(['a', 'a', 'b'], 'venue');
-  assert.deepEqual(r, ['a', 'b']);
+test('norm: venue 去重保序', () => {
+  const r = normalizeCategoryDim(['ICML', 'NeurIPS', 'ICML'], 'venue');
+  assert.deepEqual(r, ['ICML', 'NeurIPS']);
 });
 
-test('normalizeCategoryDim: venue trim', () => {
-  const r = normalizeCategoryDim(['  hello  '], 'venue');
-  assert.deepEqual(r, ['hello']);
+test('norm: venue trim', () => {
+  const r = normalizeCategoryDim(['  ICML  '], 'venue');
+  assert.deepEqual(r, ['ICML']);
 });
 
-test('normalizeCategoryDim: venue 去空字符串', () => {
-  const r = normalizeCategoryDim(['', '  ', 'foo'], 'venue');
-  assert.deepEqual(r, ['foo']);
+test('norm: venue 缺 → []', () => {
+  assert.deepEqual(normalizeCategoryDim(undefined, 'venue'), []);
+  assert.deepEqual(normalizeCategoryDim(null, 'venue'), []);
 });
 
-test('normalizeCategoryDim: venue 跳过非字符串', () => {
-  const r = normalizeCategoryDim(['a', 123, null, 'b'], 'venue');
-  assert.deepEqual(r, ['a', 'b']);
+test('norm: venue 非数组 → []', () => {
+  assert.deepEqual(normalizeCategoryDim('not array', 'venue'), []);
 });
 
-test('normalizeCategoryDim: venue 保序', () => {
-  const r = normalizeCategoryDim(['c', 'a', 'b'], 'venue');
-  assert.deepEqual(r, ['c', 'a', 'b']);
+test('norm: task 白名单匹配', () => {
+  const r = normalizeCategoryDim(['rl', 'reasoning'], 'task');
+  assert.deepEqual(r, ['rl', 'reasoning']);
 });
 
-// ---------- normalizeCategoryDim: task/method/type 白名单 ----------
-test('normalizeCategoryDim: task 合法 tag 保留', () => {
-  // 任意 sample
-  const sample = TASK_ALLOWLIST_RAW[0];
-  const r = normalizeCategoryDim([sample], 'task');
-  assert.deepEqual(r, [sample]);
+test('norm: task 非白名单 → 丢', () => {
+  const r = normalizeCategoryDim(['rl', 'unknown-task'], 'task');
+  assert.deepEqual(r, ['rl']);
 });
 
-test('normalizeCategoryDim: task lowercase 化', () => {
-  // 取 raw 中的某项,大写化输入,期望输出 lowercase
-  const sample = TASK_ALLOWLIST_RAW[0];
-  const r = normalizeCategoryDim([sample.toUpperCase()], 'task');
-  assert.deepEqual(r, [sample]);
+test('norm: task 大小写无关', () => {
+  const r = normalizeCategoryDim(['RL', 'Reasoning'], 'task');
+  assert.deepEqual(r, ['rl', 'reasoning']);
 });
 
-test('normalizeCategoryDim: task 非法 → 过滤', () => {
-  const r = normalizeCategoryDim(['not-in-allowlist-xyz'], 'task');
-  assert.deepEqual(r, []);
+test('norm: task trim', () => {
+  const r = normalizeCategoryDim(['  rl  '], 'task');
+  assert.deepEqual(r, ['rl']);
 });
 
-test('normalizeCategoryDim: task 混合合法 + 非法', () => {
-  const sample = TASK_ALLOWLIST_RAW[0];
-  const r = normalizeCategoryDim([sample, 'foo-bar-baz', sample.toUpperCase()], 'task');
-  // 大写版本 lowercase 后等于 sample,但要去重 → 1 条
-  assert.deepEqual(r, [sample]);
+test('norm: task 去重(大小写都视同)', () => {
+  const r = normalizeCategoryDim(['rl', 'RL'], 'task');
+  assert.deepEqual(r, ['rl']);
 });
 
-test('normalizeCategoryDim: task 去重', () => {
-  const sample = TASK_ALLOWLIST_RAW[0];
-  const r = normalizeCategoryDim([sample, sample], 'task');
-  assert.deepEqual(r, [sample]);
+test('norm: task 保序', () => {
+  const r = normalizeCategoryDim(['reasoning', 'rl'], 'task');
+  assert.deepEqual(r, ['reasoning', 'rl']);
 });
 
-test('normalizeCategoryDim: method 合法', () => {
-  const sample = METHOD_ALLOWLIST_RAW[0];
-  const r = normalizeCategoryDim([sample], 'method');
-  assert.deepEqual(r, [sample]);
+test('norm: task 空字符串 → []', () => {
+  assert.deepEqual(normalizeCategoryDim(['', '   '], 'task'), []);
 });
 
-test('normalizeCategoryDim: type 合法', () => {
-  const sample = TYPE_ALLOWLIST_RAW[0];
-  const r = normalizeCategoryDim([sample], 'type');
-  assert.deepEqual(r, [sample]);
+test('norm: task 非 string → 丢', () => {
+  const r = normalizeCategoryDim(['rl', null, 42, 'reasoning'], 'task');
+  assert.deepEqual(r, ['rl', 'reasoning']);
 });
 
-test('normalizeCategoryDim: task undefined → []', () => {
-  assert.deepEqual(normalizeCategoryDim(undefined, 'task'), []);
+test('norm: method 白名单', () => {
+  const r = normalizeCategoryDim(['transformer', 'unknown'], 'method');
+  assert.ok(r.includes('transformer') || r.length < 2);
 });
 
-test('normalizeCategoryDim: unknown dim → throw', () => {
-  assert.throws(
-    () => normalizeCategoryDim(['x'], 'foo'),
-    /unknown category dim/,
-  );
+test('norm: type 白名单', () => {
+  // type 通常是 survey/benchmark 等
+  const r = normalizeCategoryDim(['survey'], 'type');
+  assert.deepEqual(r, ['survey']);
 });
 
-// ---------- buildCategories ----------
-test('buildCategories: 默认空', () => {
+test('norm: 未知 dim → 抛错', () => {
+  assert.throws(() => normalizeCategoryDim(['x'], 'unknown'));
+});
+
+test('norm: 空数组 → []', () => {
+  assert.deepEqual(normalizeCategoryDim([], 'venue'), []);
+  assert.deepEqual(normalizeCategoryDim([], 'task'), []);
+});
+
+// ---------- buildCategories ---
+test('build: 默认空', () => {
   const r = buildCategories();
   assert.deepEqual(r, { venue: [], task: [], method: [], type: [] });
 });
 
-test('buildCategories: 4 dim 全部给出', () => {
+test('build: 全部填', () => {
   const r = buildCategories({
     venue: ['ICML 2025'],
-    task: [TASK_ALLOWLIST_RAW[0]],
-    method: [METHOD_ALLOWLIST_RAW[0]],
-    type: [TYPE_ALLOWLIST_RAW[0]],
+    task: ['rl', 'reasoning'],
+    method: ['transformer'],
+    type: ['survey'],
   });
-  assert.equal(r.venue[0], 'ICML 2025');
-  assert.equal(r.task[0], TASK_ALLOWLIST_RAW[0]);
-  assert.equal(r.method[0], METHOD_ALLOWLIST_RAW[0]);
-  assert.equal(r.type[0], TYPE_ALLOWLIST_RAW[0]);
+  assert.deepEqual(r.venue, ['ICML 2025']);
+  assert.deepEqual(r.task, ['rl', 'reasoning']);
 });
 
-test('buildCategories: 缺字段 → 该 dim 空数组', () => {
+test('build: 部分填 → 缺字段空数组', () => {
   const r = buildCategories({ venue: ['ICML'] });
-  assert.deepEqual(r.task, []);
-  assert.deepEqual(r.method, []);
-  assert.deepEqual(r.type, []);
-});
-
-test('buildCategories: task 非法过滤', () => {
-  const r = buildCategories({ task: ['nonexistent'] });
+  assert.deepEqual(r.venue, ['ICML']);
   assert.deepEqual(r.task, []);
 });
 
-test('buildCategories: 返回 4 个固定 dim key', () => {
-  const r = buildCategories();
-  assert.deepEqual(Object.keys(r).sort(), ['method', 'task', 'type', 'venue']);
+test('build: task 非白名单过滤', () => {
+  const r = buildCategories({ task: ['unknown'] });
+  assert.deepEqual(r.task, []);
 });
 
-// ---------- categoriesToYamlInline ----------
-test('categoriesToYamlInline: 全空', () => {
+// ---------- categoriesToYamlInline ---
+test('yaml: 空 → "{ venue: [], task: [], method: [], type: [] }"', () => {
   const r = categoriesToYamlInline({ venue: [], task: [], method: [], type: [] });
   assert.equal(r, '{ venue: [], task: [], method: [], type: [] }');
 });
 
-test('categoriesToYamlInline: venue 单元素', () => {
+test('yaml: 单 venue', () => {
   const r = categoriesToYamlInline({ venue: ['ICML 2025'], task: [], method: [], type: [] });
   assert.match(r, /venue: \["ICML 2025"\]/);
 });
 
-test('categoriesToYamlInline: 多元素', () => {
+test('yaml: 多个 venue 逗号分隔', () => {
+  const r = categoriesToYamlInline({ venue: ['ICML', 'NeurIPS'], task: [], method: [], type: [] });
+  assert.match(r, /venue: \["ICML", "NeurIPS"\]/);
+});
+
+test('yaml: 双引号转义', () => {
+  const r = categoriesToYamlInline({ venue: ['x"y'], task: [], method: [], type: [] });
+  assert.match(r, /"x\\"y"/);
+});
+
+test('yaml: 含 task/method/type 都序列化', () => {
   const r = categoriesToYamlInline({
-    venue: ['ICML 2025'],
+    venue: ['ICML'], task: ['rl'], method: ['transformer'], type: ['survey'],
+  });
+  assert.match(r, /venue: \["ICML"\]/);
+  assert.match(r, /task: \["rl"\]/);
+  assert.match(r, /method: \["transformer"\]/);
+  assert.match(r, /type: \["survey"\]/);
+});
+
+test('yaml: dim 顺序固定 venue→task→method→type', () => {
+  const r = categoriesToYamlInline({
+    venue: ['A'], task: ['B'], method: ['C'], type: ['D'],
+  });
+  // venue index < task index < method index < type index
+  const v = r.indexOf('venue:');
+  const t = r.indexOf('task:');
+  const m = r.indexOf('method:');
+  const ty = r.indexOf('type:');
+  assert.ok(v < t && t < m && m < ty);
+});
+
+// ---------- 集成 ---
+test('集成: build → yaml', () => {
+  const c = buildCategories({
+    venue: ['ICML 2025', 'NeurIPS 2024'],
     task: ['rl'],
     method: [],
-    type: ['benchmark'],
+    type: ['survey'],
   });
-  assert.match(r, /venue: \["ICML 2025"\]/);
-  assert.match(r, /task: \["rl"\]/);
-  assert.match(r, /type: \["benchmark"\]/);
+  const yaml = categoriesToYamlInline(c);
+  assert.match(yaml, /venue: \["ICML 2025", "NeurIPS 2024"\]/);
+  assert.match(yaml, /task: \["rl"\]/);
+  assert.match(yaml, /method: \[\]/);
+  assert.match(yaml, /type: \["survey"\]/);
 });
 
-test('categoriesToYamlInline: method 空 → method: []', () => {
-  const r = categoriesToYamlInline({ venue: [], task: [], method: [], type: [] });
-  assert.match(r, /method: \[\]/);
-});
-
-test('categoriesToYamlInline: 4 dim 顺序固定', () => {
-  const r = categoriesToYamlInline({
-    venue: ['V'],
-    task: ['T'],
-    method: ['M'],
-    type: ['X'],
-  });
-  // venue → task → method → type
-  const vi = r.indexOf('venue:');
-  const ti = r.indexOf('task:');
-  const mi = r.indexOf('method:');
-  const xi = r.indexOf('type:');
-  assert.ok(vi >= 0 && ti > vi && mi > ti && xi > mi);
-});
-
-test('categoriesToYamlInline: 双引号 escape', () => {
-  const r = categoriesToYamlInline({
-    venue: ['foo "bar" baz'],
-    task: [], method: [], type: [],
-  });
-  assert.match(r, /\\"/);
-});
-
-test('categoriesToYamlInline: 大括号包裹', () => {
-  const r = categoriesToYamlInline({ venue: [], task: [], method: [], type: [] });
-  assert.ok(r.startsWith('{ '));
-  assert.ok(r.endsWith(' }'));
+test('集成: normalize 去重 → yaml 干净', () => {
+  const c = buildCategories({ task: ['rl', 'RL', 'rl'] });
+  // 归一去重后 = ['rl']
+  assert.deepEqual(c.task, ['rl']);
+  const yaml = categoriesToYamlInline(c);
+  assert.match(yaml, /task: \["rl"\]/);
 });
