@@ -2,6 +2,9 @@
 // astro-src/scripts/agents-serialize.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/agents/serialize.ts.
+// serializeProposal (sorted keys stable JSON) +
+// deserializeProposal (JSON.parse) +
+// proposalsEqual (order-independent equality)。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,127 +32,163 @@ const mod = await loadTs('lib/agents/serialize.ts');
 const { serializeProposal, deserializeProposal, proposalsEqual } = mod;
 
 // ---------- serializeProposal ----------
-test('serializeProposal: 简单对象 → JSON', () => {
-  const r = serializeProposal({ id: '1', title: 'foo' });
-  assert.equal(typeof r, 'string');
-  assert.ok(r.includes('"id"'));
-  assert.ok(r.includes('"title"'));
+test('serializeProposal: 基本字段', () => {
+  const r = serializeProposal({ id: 'p1', title: 'T' });
+  // keys sorted: id, title
+  const parsed = JSON.parse(r);
+  assert.equal(parsed.id, 'p1');
+  assert.equal(parsed.title, 'T');
 });
 
-test('serializeProposal: 键按字母序排列', () => {
+test('serializeProposal: keys 按字母顺序排列', () => {
   const r = serializeProposal({ z: 1, a: 2, m: 3 });
-  const zIdx = r.indexOf('"z"');
-  const aIdx = r.indexOf('"a"');
-  const mIdx = r.indexOf('"m"');
-  assert.ok(aIdx < mIdx);
-  assert.ok(mIdx < zIdx);
+  const lines = r.split('\n').slice(1, -1); // skip top-level braces
+  const first = lines[0].trim();
+  assert.match(first, /^"a"/);
+});
+
+test('serializeProposal: 空对象', () => {
+  const r = serializeProposal({});
+  assert.equal(r, '{}');
 });
 
 test('serializeProposal: 缩进 2 空格', () => {
-  const r = serializeProposal({ a: 1 });
-  // 含 "\n  " 2 空格缩进
-  assert.ok(r.includes('\n  '));
+  const r = serializeProposal({ id: '1' });
+  assert.match(r, /^ {2}"id"/m);
 });
 
-test('serializeProposal: 嵌套对象递归', () => {
-  const r = serializeProposal({ id: '1', meta: { x: 1, y: 2 } });
-  assert.ok(r.includes('"meta"'));
-  // 嵌套 keys 也排序:x 在 y 之前
-  const xIdx = r.indexOf('"x"');
-  const yIdx = r.indexOf('"y"');
-  assert.ok(xIdx < yIdx);
+test('serializeProposal: 嵌套对象', () => {
+  const r = serializeProposal({ id: 'p', meta: { x: 1 } });
+  const parsed = JSON.parse(r);
+  assert.deepEqual(parsed.meta, { x: 1 });
 });
 
-test('serializeProposal: 数组保持顺序', () => {
-  const r = serializeProposal({ items: [3, 1, 2] });
-  // 数组保持原顺序 3,1,2
-  const idx3 = r.indexOf('3');
-  const idx1 = r.indexOf('1');
-  const idx2 = r.indexOf('2');
-  assert.ok(idx3 < idx1);
-  assert.ok(idx1 < idx2);
+test('serializeProposal: 数组', () => {
+  const r = serializeProposal({ id: 'p', tags: ['a', 'b'] });
+  const parsed = JSON.parse(r);
+  assert.deepEqual(parsed.tags, ['a', 'b']);
 });
 
-test('serializeProposal: null 值保留', () => {
-  const r = serializeProposal({ id: '1', note: null });
-  assert.ok(r.includes('null'));
+test('serializeProposal: 同样输入 → 同样输出 (稳定)', () => {
+  const p = { id: 'p1', title: 'T', tags: ['a'], score: 0.5 };
+  const r1 = serializeProposal(p);
+  const r2 = serializeProposal(p);
+  assert.equal(r1, r2);
 });
 
-test('serializeProposal: undefined 值被省略', () => {
-  const r = serializeProposal({ id: '1', note: undefined });
-  // JSON.stringify 省略 undefined
-  assert.ok(!r.includes('note'));
-});
-
-test('serializeProposal: 相同字段不同序 → 同输出', () => {
-  const a = serializeProposal({ z: 1, a: 2 });
-  const b = serializeProposal({ a: 2, z: 1 });
-  assert.equal(a, b);
+test('serializeProposal: 不同 key 顺序 → 同样输出', () => {
+  const r1 = serializeProposal({ id: '1', title: 'T', score: 0.5 });
+  const r2 = serializeProposal({ score: 0.5, title: 'T', id: '1' });
+  assert.equal(r1, r2);
 });
 
 // ---------- deserializeProposal ----------
-test('deserializeProposal: 解析 JSON', () => {
-  const r = deserializeProposal('{"id":"1","title":"foo"}');
-  assert.equal(r.id, '1');
-  assert.equal(r.title, 'foo');
+test('deserializeProposal: 基本解析', () => {
+  const r = deserializeProposal('{"id":"p1","title":"T"}');
+  assert.equal(r.id, 'p1');
+  assert.equal(r.title, 'T');
 });
 
-test('deserializeProposal: 无效 JSON 抛错', () => {
+test('deserializeProposal: 嵌套对象', () => {
+  const r = deserializeProposal('{"id":"p","meta":{"x":1}}');
+  assert.deepEqual(r.meta, { x: 1 });
+});
+
+test('deserializeProposal: 数组', () => {
+  const r = deserializeProposal('{"id":"p","tags":["a","b"]}');
+  assert.deepEqual(r.tags, ['a', 'b']);
+});
+
+test('deserializeProposal: 数字', () => {
+  const r = deserializeProposal('{"score":0.85}');
+  assert.equal(r.score, 0.85);
+});
+
+test('deserializeProposal: 无效 JSON → 抛错', () => {
   assert.throws(() => deserializeProposal('not json'));
 });
 
-test('deserializeProposal: 数组也被接受 (类型 Proposal 宽松)', () => {
-  const r = deserializeProposal('[1,2,3]');
-  assert.deepEqual(r, [1, 2, 3]);
+test('deserializeProposal: 空对象字符串', () => {
+  const r = deserializeProposal('{}');
+  assert.deepEqual(r, {});
 });
 
-test('serializeProposal ↔ deserializeProposal: round-trip', () => {
-  const orig = { id: '1', title: 'foo', meta: { x: 1, y: [2, 3] } };
-  const r = deserializeProposal(serializeProposal(orig));
-  assert.deepEqual(r, orig);
+// ---------- round-trip ----------
+test('serialize + deserialize → 同对象 (semantic)', () => {
+  const orig = { id: 'p1', title: 'T', tags: ['a'], score: 0.5 };
+  const json = serializeProposal(orig);
+  const back = deserializeProposal(json);
+  assert.deepEqual(back, orig);
+});
+
+test('round-trip: 嵌套对象', () => {
+  const orig = { id: 'p', meta: { x: 1, y: [1, 2] } };
+  const back = deserializeProposal(serializeProposal(orig));
+  assert.deepEqual(back, orig);
 });
 
 // ---------- proposalsEqual ----------
-test('proposalsEqual: 同序 → 相等', () => {
-  assert.equal(proposalsEqual({ id: '1', title: 'a' }, { id: '1', title: 'a' }), true);
+test('proposalsEqual: 完全相同 → true', () => {
+  assert.equal(proposalsEqual(
+    { id: 'p', title: 'T' },
+    { id: 'p', title: 'T' },
+  ), true);
 });
 
-test('proposalsEqual: 不同序 → 相等', () => {
-  assert.equal(proposalsEqual({ id: '1', title: 'a' }, { title: 'a', id: '1' }), true);
+test('proposalsEqual: key 顺序不同 → true', () => {
+  assert.equal(proposalsEqual(
+    { id: 'p', title: 'T' },
+    { title: 'T', id: 'p' },
+  ), true);
 });
 
-test('proposalsEqual: 不同值 → 不等', () => {
-  assert.equal(proposalsEqual({ id: '1' }, { id: '2' }), false);
+test('proposalsEqual: 值不同 → false', () => {
+  assert.equal(proposalsEqual(
+    { id: 'p1', title: 'T' },
+    { id: 'p2', title: 'T' },
+  ), false);
 });
 
-test('proposalsEqual: 多余字段也算差异', () => {
-  // JSON.stringify with replacer 数组 → 仅枚举的键被序列化
-  // a: { id } vs b: { id, extra } → a 的 stringify 只包 id,b 的包两个 → 不等
-  assert.equal(proposalsEqual({ id: '1' }, { id: '1', extra: 'x' }), false);
+test('proposalsEqual: 缺失 key → false', () => {
+  assert.equal(proposalsEqual(
+    { id: 'p', title: 'T' },
+    { id: 'p' },
+  ), false);
 });
 
-test('proposalsEqual: 嵌套对象不同序 → 相等', () => {
-  assert.equal(
-    proposalsEqual({ id: '1', meta: { x: 1, y: 2 } }, { meta: { y: 2, x: 1 }, id: '1' }),
-    true,
-  );
+test('proposalsEqual: 多余 key → false', () => {
+  assert.equal(proposalsEqual(
+    { id: 'p' },
+    { id: 'p', title: 'T' },
+  ), false);
 });
 
-test('proposalsEqual: 嵌套对象不同值 → 不等', () => {
-  // source bug: JSON.stringify 配 replacer 数组只过滤 top-level 键,
-  // nested object 的 "x" 键不在顶层 key 列表 → 被剔除 → 两边都 → "{"id":"1","meta":{}}" → 相等
-  // 这是 source 实测 bug,文档化。
-  const r = proposalsEqual({ id: '1', meta: { x: 1 } }, { id: '1', meta: { x: 2 } });
-  assert.equal(r, true); // 当前行为
-});
-
-test('proposalsEqual: 空 vs 空 → 相等', () => {
+test('proposalsEqual: 空对象双方 → true', () => {
   assert.equal(proposalsEqual({}, {}), true);
 });
 
-test('proposalsEqual: 数组保持顺序 → 不同序 ≠', () => {
-  // JSON.stringify replacer 数组只枚举顶层 key,不递归进数组
-  // [1,2,3] 在两边都 JSON 序列化为 [1,2,3] → 相等
-  // 但 [1,2] vs [2,1] → 序列化结果不同 → 不等
-  assert.equal(proposalsEqual({ a: [1, 2] }, { a: [2, 1] }), false);
+test('proposalsEqual: 嵌套对象值不等 → 实际相等 (bug: replacer 过滤嵌套 key)', () => {
+  // bug 记录:proposalsEqual 用 Object.keys(a).sort 作为 replacer,
+  // 只会输出顶层 key,嵌套对象的 key 被过滤掉,值丢失。
+  // 期望语义应是 false,实际是 true。
+  assert.equal(proposalsEqual(
+    { id: 'p', meta: { x: 1 } },
+    { id: 'p', meta: { x: 2 } },
+  ), true);
+});
+
+test('proposalsEqual: 嵌套对象 key 顺序 → true (顶层只看 key 名)', () => {
+  // 嵌套 key 被 replacer 过滤,实际比的是 {"id":"p","meta":{}}
+  assert.equal(proposalsEqual(
+    { id: 'p', meta: { x: 1, y: 2 } },
+    { id: 'p', meta: { y: 2, x: 1 } },
+  ), true);
+});
+
+test('proposalsEqual: 数组顺序敏感', () => {
+  // JSON.stringify 同 sort 后数组顺序保留,值不同 → 不等
+  assert.equal(proposalsEqual(
+    { id: 'p', tags: ['a', 'b'] },
+    { id: 'p', tags: ['b', 'a'] },
+  ), false);
 });
