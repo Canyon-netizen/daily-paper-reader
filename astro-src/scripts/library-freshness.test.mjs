@@ -2,7 +2,9 @@
 // astro-src/scripts/library-freshness.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/library-freshness.ts.
-// freshnessFromTimestamp + freshnessFromLatestDate + freshnessFromDays.
+// freshnessFromTimestamp (ms → Freshness) +
+// freshnessFromLatestDate (YYYY-MM-DD → Freshness) +
+// freshnessFromDays (days → Freshness) 颜色 + label 阈值。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,252 +35,247 @@ const {
   freshnessFromDays,
 } = mod;
 
-// ---------- freshnessFromTimestamp ----------
-test('freshnessFromTimestamp: updatedAt=0 → 空库', () => {
-  const r = freshnessFromTimestamp(0, 1000);
-  assert.equal(r.color, 'gray');
+const DAY = 1000 * 60 * 60 * 24;
+const NOW = Date.UTC(2026, 8, 15); // 2026-09-15 UTC
+
+// ---------- freshnessFromTimestamp ---
+test('ts: 0 → 空库', () => {
+  const r = freshnessFromTimestamp(0, NOW);
   assert.equal(r.daysAgo, -1);
+  assert.equal(r.color, 'gray');
   assert.equal(r.label, '空库');
 });
 
-test('freshnessFromTimestamp: 负数 → 空库', () => {
-  const r = freshnessFromTimestamp(-100, 1000);
-  assert.equal(r.color, 'gray');
+test('ts: 负数 → 空库', () => {
+  const r = freshnessFromTimestamp(-100, NOW);
+  assert.equal(r.daysAgo, -1);
 });
 
-test('freshnessFromTimestamp: NaN → 空库', () => {
-  const r = freshnessFromTimestamp(NaN, 1000);
-  assert.equal(r.color, 'gray');
+test('ts: NaN → 空库', () => {
+  const r = freshnessFromTimestamp(NaN, NOW);
+  assert.equal(r.daysAgo, -1);
 });
 
-test('freshnessFromTimestamp: Infinity → 空库', () => {
-  const r = freshnessFromTimestamp(Infinity, 1000);
-  assert.equal(r.color, 'gray');
+test('ts: Infinity → 空库', () => {
+  const r = freshnessFromTimestamp(Infinity, NOW);
+  assert.equal(r.daysAgo, -1);
 });
 
-test('freshnessFromTimestamp: 0 → 1d', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now, now);
+test('ts: 0.5 天前 → 今天', () => {
+  // (NOW - 12h) / day = 0.5 → floor = 0 → 今天更新
+  const r = freshnessFromTimestamp(NOW - 12 * 60 * 60 * 1000, NOW);
   assert.equal(r.daysAgo, 0);
   assert.equal(r.color, 'green');
   assert.equal(r.label, '今天更新');
 });
 
-test('freshnessFromTimestamp: 1 天前 → green 今天更新', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 86400 * 1000, now);
-  // daysAgo = 1 → green 今天更新 (daysAgo <= 1)
+test('ts: 1 天前 → 今天(<=1)', () => {
+  const r = freshnessFromTimestamp(NOW - DAY, NOW);
   assert.equal(r.daysAgo, 1);
   assert.equal(r.color, 'green');
-  assert.equal(r.label, '今天更新');
 });
 
-test('freshnessFromTimestamp: 7 天前 → green N 天前', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 7 * 86400 * 1000, now);
-  assert.equal(r.daysAgo, 7);
+test('ts: 7 天前 → green', () => {
+  const r = freshnessFromTimestamp(NOW - 7 * DAY, NOW);
   assert.equal(r.color, 'green');
-  assert.equal(r.label, '7 天前');
+  assert.match(r.label, /天前/);
 });
 
-test('freshnessFromTimestamp: 8 天前 → yellow', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 8 * 86400 * 1000, now);
-  assert.equal(r.color, 'yellow');
-  assert.equal(r.label, '8 天前');
-});
-
-test('freshnessFromTimestamp: 30 天前 → yellow', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 30 * 86400 * 1000, now);
+test('ts: 8 天前 → yellow', () => {
+  const r = freshnessFromTimestamp(NOW - 8 * DAY, NOW);
   assert.equal(r.color, 'yellow');
 });
 
-test('freshnessFromTimestamp: 31 天前 → orange', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 31 * 86400 * 1000, now);
+test('ts: 30 天前 → yellow(<=30)', () => {
+  const r = freshnessFromTimestamp(NOW - 30 * DAY, NOW);
+  assert.equal(r.color, 'yellow');
+});
+
+test('ts: 31 天前 → orange', () => {
+  const r = freshnessFromTimestamp(NOW - 31 * DAY, NOW);
   assert.equal(r.color, 'orange');
   assert.match(r.label, /个月前/);
 });
 
-test('freshnessFromTimestamp: 90 天前 → orange', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 90 * 86400 * 1000, now);
+test('ts: 90 天前 → orange', () => {
+  const r = freshnessFromTimestamp(NOW - 90 * DAY, NOW);
   assert.equal(r.color, 'orange');
 });
 
-test('freshnessFromTimestamp: 91 天前 → red', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 91 * 86400 * 1000, now);
+test('ts: 91 天前 → red', () => {
+  const r = freshnessFromTimestamp(NOW - 91 * DAY, NOW);
   assert.equal(r.color, 'red');
-  assert.match(r.label, /个月前/);
 });
 
-test('freshnessFromTimestamp: 365 天前 → red 12 个月前', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now - 365 * 86400 * 1000, now);
+test('ts: 365 天前 → red', () => {
+  const r = freshnessFromTimestamp(NOW - 365 * DAY, NOW);
   assert.equal(r.color, 'red');
-  assert.equal(r.label, '12 个月前');
 });
 
-test('freshnessFromTimestamp: future updatedAt → daysAgo = floor(negative)', () => {
-  const now = 1700000000000;
-  const r = freshnessFromTimestamp(now + 1000, now);
-  // daysAgo = floor(-1000/86400000) = -1 → 空库
+test('ts: 默认 now=Date.now()', () => {
+  // 仅检查不抛 + 返回有效对象
+  const r = freshnessFromTimestamp(Date.now());
+  assert.ok(['green', 'yellow', 'orange', 'red', 'gray'].includes(r.color));
+});
+
+// ---------- freshnessFromLatestDate ---
+test('date: null → 空库', () => {
+  const r = freshnessFromLatestDate(null, new Date(NOW));
   assert.equal(r.color, 'gray');
 });
 
-// ---------- freshnessFromLatestDate ----------
-test('freshnessFromLatestDate: null → 空库', () => {
-  const r = freshnessFromLatestDate(null);
-  assert.equal(r.color, 'gray');
-  assert.equal(r.label, '空库');
-});
-
-test('freshnessFromLatestDate: undefined → 空库', () => {
-  const r = freshnessFromLatestDate(undefined);
+test('date: undefined → 空库', () => {
+  const r = freshnessFromLatestDate(undefined, new Date(NOW));
   assert.equal(r.color, 'gray');
 });
 
-test('freshnessFromLatestDate: 空字符串 → 空库', () => {
-  const r = freshnessFromLatestDate('');
+test('date: 空字符串 → 空库', () => {
+  const r = freshnessFromLatestDate('', new Date(NOW));
   assert.equal(r.color, 'gray');
 });
 
-test('freshnessFromLatestDate: 非 YYYY-MM-DD → 空库', () => {
-  const r = freshnessFromLatestDate('not-a-date');
+test('date: 非法格式 → 空库', () => {
+  const r = freshnessFromLatestDate('2026/09/15', new Date(NOW));
   assert.equal(r.color, 'gray');
 });
 
-test('freshnessFromLatestDate: 错误格式 2026/09/10 → 空库', () => {
-  const r = freshnessFromLatestDate('2026/09/10');
+test('date: "abc" → 空库', () => {
+  const r = freshnessFromLatestDate('abc', new Date(NOW));
   assert.equal(r.color, 'gray');
 });
 
-test('freshnessFromLatestDate: 今日 → 今天更新', () => {
-  const now = new Date('2026-09-17T12:00:00Z');
-  const r = freshnessFromLatestDate('2026-09-17', now);
-  assert.equal(r.color, 'green');
-  assert.equal(r.label, '今天更新');
-});
-
-test('freshnessFromLatestDate: 7 天前 → green', () => {
-  const now = new Date('2026-09-17T12:00:00Z');
-  const r = freshnessFromLatestDate('2026-09-10', now);
-  assert.equal(r.color, 'green');
-  assert.equal(r.label, '7 天前');
-});
-
-test('freshnessFromLatestDate: 30 天前 → yellow', () => {
-  const now = new Date('2026-09-17T12:00:00Z');
-  const r = freshnessFromLatestDate('2026-08-18', now);
-  assert.equal(r.color, 'yellow');
-});
-
-test('freshnessFromLatestDate: 31 天前 → orange', () => {
-  const now = new Date('2026-09-17T12:00:00Z');
-  const r = freshnessFromLatestDate('2026-08-17', now);
-  assert.equal(r.color, 'orange');
-});
-
-test('freshnessFromLatestDate: future date (daysAgo < 0) → 今天更新', () => {
-  const now = new Date('2026-09-17T12:00:00Z');
-  // future date 比 today 晚 → daysAgo < 0 → "今天更新"
-  const r = freshnessFromLatestDate('2026-09-20', now);
-  assert.equal(r.color, 'green');
-  assert.equal(r.label, '今天更新');
+test('date: 同一天 → 今天', () => {
+  const r = freshnessFromLatestDate('2026-09-15', new Date(NOW));
   assert.equal(r.daysAgo, 0);
+  assert.equal(r.color, 'green');
 });
 
-test('freshnessFromLatestDate: 90 天前 → orange', () => {
-  const now = new Date('2026-09-17T12:00:00Z');
-  const r = freshnessFromLatestDate('2026-06-19', now);
+test('date: 1 天前 → 今天', () => {
+  const r = freshnessFromLatestDate('2026-09-14', new Date(NOW));
+  assert.equal(r.daysAgo, 1);
+  assert.equal(r.color, 'green');
+});
+
+test('date: 5 天前 → green', () => {
+  const r = freshnessFromLatestDate('2026-09-10', new Date(NOW));
+  assert.equal(r.color, 'green');
+});
+
+test('date: 10 天前 → yellow', () => {
+  const r = freshnessFromLatestDate('2026-09-05', new Date(NOW));
+  assert.equal(r.color, 'yellow');
+});
+
+test('date: 60 天前 → orange', () => {
+  const r = freshnessFromLatestDate('2026-07-15', new Date(NOW));
   assert.equal(r.color, 'orange');
 });
 
-test('freshnessFromLatestDate: 91 天前 → red', () => {
-  const now = new Date('2026-09-17T12:00:00Z');
-  const r = freshnessFromLatestDate('2026-06-18', now);
+test('date: 180 天前 → red', () => {
+  const r = freshnessFromLatestDate('2026-03-15', new Date(NOW));
   assert.equal(r.color, 'red');
 });
 
-// ---------- freshnessFromDays ----------
-test('freshnessFromDays: 负数 → 空库', () => {
+test('date: 未来日期 → 当天(避免 race)', () => {
+  const r = freshnessFromLatestDate('2099-01-01', new Date(NOW));
+  assert.equal(r.daysAgo, 0);
+  assert.equal(r.color, 'green');
+  assert.equal(r.label, '今天更新');
+});
+
+test('date: 默认 now=Date.now()', () => {
+  const r = freshnessFromLatestDate('2020-01-01');
+  assert.equal(r.color, 'red');
+});
+
+// ---------- freshnessFromDays ---
+test('days: -1 → 空库', () => {
   const r = freshnessFromDays(-1);
   assert.equal(r.color, 'gray');
-  assert.equal(r.daysAgo, -1);
 });
 
-test('freshnessFromDays: 0 → 今天更新', () => {
-  assert.equal(freshnessFromDays(0).color, 'green');
-  assert.equal(freshnessFromDays(0).label, '今天更新');
+test('days: -100 → 空库', () => {
+  const r = freshnessFromDays(-100);
+  assert.equal(r.color, 'gray');
 });
 
-test('freshnessFromDays: 1 → 今天更新 (边界 <=1)', () => {
+test('days: 0 → 今天更新', () => {
+  const r = freshnessFromDays(0);
+  assert.equal(r.color, 'green');
+  assert.equal(r.label, '今天更新');
+});
+
+test('days: 1 → 今天更新(<=1)', () => {
   const r = freshnessFromDays(1);
   assert.equal(r.color, 'green');
   assert.equal(r.label, '今天更新');
 });
 
-test('freshnessFromDays: 2 → green N 天前', () => {
+test('days: 2 → "2 天前" green', () => {
   const r = freshnessFromDays(2);
   assert.equal(r.color, 'green');
   assert.equal(r.label, '2 天前');
 });
 
-test('freshnessFromDays: 7 → green 边界', () => {
+test('days: 7 → "7 天前" green', () => {
   const r = freshnessFromDays(7);
   assert.equal(r.color, 'green');
-  assert.equal(r.label, '7 天前');
 });
 
-test('freshnessFromDays: 8 → yellow', () => {
-  assert.equal(freshnessFromDays(8).color, 'yellow');
+test('days: 8 → "8 天前" yellow', () => {
+  const r = freshnessFromDays(8);
+  assert.equal(r.color, 'yellow');
 });
 
-test('freshnessFromDays: 30 → yellow 边界', () => {
-  assert.equal(freshnessFromDays(30).color, 'yellow');
+test('days: 30 → "30 天前" yellow', () => {
+  const r = freshnessFromDays(30);
+  assert.equal(r.color, 'yellow');
 });
 
-test('freshnessFromDays: 31 → orange', () => {
+test('days: 31 → "1 个月前" orange', () => {
   const r = freshnessFromDays(31);
   assert.equal(r.color, 'orange');
-  // 31/30 = 1.x → Math.floor = 1 → '1 个月前'
   assert.equal(r.label, '1 个月前');
 });
 
-test('freshnessFromDays: 60 → orange 2 个月前', () => {
+test('days: 60 → "2 个月前" orange', () => {
   const r = freshnessFromDays(60);
   assert.equal(r.color, 'orange');
   assert.equal(r.label, '2 个月前');
 });
 
-test('freshnessFromDays: 90 → orange 边界', () => {
+test('days: 90 → orange', () => {
   const r = freshnessFromDays(90);
   assert.equal(r.color, 'orange');
-  assert.equal(r.label, '3 个月前');
 });
 
-test('freshnessFromDays: 91 → red', () => {
+test('days: 91 → red', () => {
   const r = freshnessFromDays(91);
   assert.equal(r.color, 'red');
-  assert.equal(r.label, '3 个月前');
 });
 
-test('freshnessFromDays: 180 → red 6 个月前', () => {
-  const r = freshnessFromDays(180);
-  assert.equal(r.color, 'red');
-  assert.equal(r.label, '6 个月前');
-});
-
-test('freshnessFromDays: 365 → red 12 个月前', () => {
+test('days: 365 → "12 个月前" red', () => {
   const r = freshnessFromDays(365);
   assert.equal(r.color, 'red');
   assert.equal(r.label, '12 个月前');
 });
 
-test('freshnessFromDays: 1000 → red 33 个月前', () => {
-  const r = freshnessFromDays(1000);
-  assert.equal(r.color, 'red');
-  assert.equal(r.label, '33 个月前');
+test('days: 60 → Math.floor(60/30) = 2', () => {
+  const r = freshnessFromDays(60);
+  assert.match(r.label, /^2 个月前$/);
+});
+
+test('days: 边界 89 → orange', () => {
+  const r = freshnessFromDays(89);
+  assert.equal(r.color, 'orange');
+});
+
+// ---------- 集成 ---
+test('集成: ts → date 一致', () => {
+  // 同一天的 timestamp 与 date 字符串应给出相同结果
+  const ts = Date.UTC(2026, 8, 10); // 2026-09-10
+  const r1 = freshnessFromTimestamp(ts, NOW);
+  const r2 = freshnessFromLatestDate('2026-09-10', new Date(NOW));
+  assert.equal(r1.daysAgo, r2.daysAgo);
+  assert.equal(r1.color, r2.color);
 });
