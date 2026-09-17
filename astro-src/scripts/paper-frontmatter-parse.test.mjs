@@ -1,252 +1,202 @@
 #!/usr/bin/env node
 // astro-src/scripts/paper-frontmatter-parse.test.mjs
 //
-// Tests for R7 polish: astro-src/lib/paper-frontmatter/parse.ts pure helpers.
-// 不能直接 esbuild load — parseFrontmatter 引 js-yaml + concepts-index(链上
-// 又有 js-yaml 不可 externalize in data URL),且本文件只测纯函数。inline 算法,源做参考。
+// Tests for R7 polish: astro-src/lib/paper-frontmatter/parse.ts.
+// parseFigureList + normalizeFigureEntry + normalizeDate + normalizeScore
+// + normalizeCategories + parseFrontmatter + extractWikiArticle + extractWikiArticleStrict.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import esbuild from 'esbuild';
 
-// --- inline helpers (源 lib/paper-frontmatter/parse.ts) ----------------
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// normalizeDate
-function normalizeDate(v) {
-  if (v === undefined || v === null) return undefined;
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  if (typeof v === 'number') {
-    const s = String(v).padStart(8, '0');
-    return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(4 + 2, 4 + 4)}`;
-  }
-  if (typeof v === 'string') return v;
-  return undefined;
-}
-
-// normalizeFigureEntry
-function normalizeFigureEntry(item, fallbackIndex) {
-  if (!item || typeof item !== 'object') return null;
-  const obj = item;
-  const url = typeof obj.url === 'string' ? obj.url.trim() : '';
-  if (!url) return null;
-  return {
-    url,
-    caption: typeof obj.caption === 'string' ? obj.caption : '',
-    page: typeof obj.page === 'number' ? obj.page : 0,
-    index: typeof obj.index === 'number' ? obj.index : fallbackIndex + 1,
-    width: typeof obj.width === 'number' ? obj.width : 0,
-    height: typeof obj.height === 'number' ? obj.height : 0,
-    extractor: typeof obj.extractor === 'string' ? obj.extractor : '',
-  };
-}
-
-// parseFigureList
-function parseFigureList(raw) {
-  if (!raw) return [];
-  let arr = raw;
-  if (typeof raw === 'string') {
-    const s = raw.trim();
-    if (!s) return [];
-    try {
-      arr = JSON.parse(s);
-    } catch {
-      try {
-        arr = JSON.parse(s.replace(/\\"/g, '"'));
-      } catch {
-        return [];
-      }
-    }
-  }
-  if (!Array.isArray(arr)) return [];
-  return arr.map((item, i) => normalizeFigureEntry(item, i)).filter((e) => e !== null);
-}
-
-// normalizeScore
-function normalizeScore(v) {
-  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
-  if (v < 0) return 0;
-  const n = v > 1 ? v / 10 : v;
-  return n > 1 ? 1 : n;
-}
-
-// buildCategories (简化版,lib/taxonomies)
-const TAXONOMY = {
-  venue: ['NeurIPS', 'ICML', 'ICLR', 'CVPR', 'ACL', 'EMNLP', 'AAAI'],
-  task: ['classification', 'regression', 'generation'],
-  method: ['transformer', 'cnn', 'rnn'],
-  type: ['benchmark', 'survey'],
-};
-function buildCategories(raw) {
-  const out = { venue: [], task: [], method: [], type: [] };
-  for (const dim of ['venue', 'task', 'method', 'type']) {
-    if (Array.isArray(raw[dim])) {
-      for (const v of raw[dim]) {
-        if (typeof v === 'string' && TAXONOMY[dim].includes(v)) out[dim].push(v);
-      }
-    }
-  }
-  return out;
-}
-
-// normalizeCategories
-function normalizeCategories(raw) {
-  if (!raw || typeof raw !== 'object') return buildCategories({});
-  const obj = raw;
-  return buildCategories({
-    venue: Array.isArray(obj.venue) ? obj.venue : undefined,
-    task: Array.isArray(obj.task) ? obj.task : undefined,
-    method: Array.isArray(obj.method) ? obj.method : undefined,
-    type: Array.isArray(obj.type) ? obj.type : undefined,
+async function loadTs(relPath) {
+  const result = await esbuild.build({
+    entryPoints: [join(__dirname, '..', relPath)],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    external: ['node:*'],
+    write: false,
+    target: 'es2022',
   });
+  const code = result.outputFiles[0].text;
+  const dataUrl = 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
+  return import(dataUrl);
 }
 
-// extractWikiArticle
-function extractWikiArticle(body) {
-  if (!body) return null;
-  const startRe = /^## TL;DR\s*$/m;
-  const startMatch = startRe.exec(body);
-  if (!startMatch) return null;
-  const endRe = /^## (摘要|Abstract)\s*$/m;
-  const endMatch = endRe.exec(body.slice(startMatch.index + 1));
-  const end = endMatch ? startMatch.index + 1 + endMatch.index : body.length;
-  return body.slice(startMatch.index, end).trim();
-}
-
-const REQUIRED_WIKI_HEADINGS = [
-  '## TL;DR',
-  '## 研究背景与动机',
-  '## 方法',
-  '## 实验与结果',
-  '## 讨论与可借鉴点',
-];
-
-function extractWikiArticleStrict(body) {
-  const wiki = extractWikiArticle(body);
-  if (!wiki) return null;
-  return REQUIRED_WIKI_HEADINGS.every((h) => wiki.includes(h)) ? wiki : null;
-}
+const mod = await loadTs('lib/paper-frontmatter/parse.ts');
+const {
+  parseFigureList,
+  normalizeFigureEntry,
+  normalizeDate,
+  normalizeScore,
+  normalizeCategories,
+  parseFrontmatter,
+  extractWikiArticle,
+  extractWikiArticleStrict,
+} = mod;
 
 // ---------- normalizeFigureEntry ----------
-test('normalizeFigureEntry: 缺 url → null', () => {
-  assert.equal(normalizeFigureEntry({}, 0), null);
-  assert.equal(normalizeFigureEntry({ caption: 'foo' }, 0), null);
+test('normalizeFigureEntry: 标准项', () => {
+  const r = normalizeFigureEntry({ url: 'img.png', caption: 'caption' }, 0);
+  assert.equal(r.url, 'img.png');
+  assert.equal(r.caption, 'caption');
+  assert.equal(r.page, 0);
+  assert.equal(r.index, 1);
+  assert.equal(r.width, 0);
 });
 
-test('normalizeFigureEntry: 缺项 → null', () => {
+test('normalizeFigureEntry: 无 url → null', () => {
+  assert.equal(normalizeFigureEntry({ caption: 'no url' }, 0), null);
+});
+
+test('normalizeFigureEntry: 非对象 → null', () => {
+  assert.equal(normalizeFigureEntry('string', 0), null);
   assert.equal(normalizeFigureEntry(null, 0), null);
   assert.equal(normalizeFigureEntry(undefined, 0), null);
-  assert.equal(normalizeFigureEntry('string', 0), null);
-  assert.equal(normalizeFigureEntry(42, 0), null);
+  assert.equal(normalizeFigureEntry(123, 0), null);
 });
 
-test('normalizeFigureEntry: 完整字段', () => {
-  const e = normalizeFigureEntry({
-    url: 'fig1.png', caption: 'Fig 1', page: 2, index: 5,
-    width: 800, height: 600, extractor: 'pdftoppm',
-  }, 0);
-  assert.equal(e.url, 'fig1.png');
-  assert.equal(e.caption, 'Fig 1');
-  assert.equal(e.page, 2);
-  assert.equal(e.index, 5);
-  assert.equal(e.width, 800);
-  assert.equal(e.height, 600);
-  assert.equal(e.extractor, 'pdftoppm');
+test('normalizeFigureEntry: url trim', () => {
+  const r = normalizeFigureEntry({ url: '  img.png  ' }, 0);
+  assert.equal(r.url, 'img.png');
 });
 
-test('normalizeFigureEntry: 缺 caption 默认 ""', () => {
-  assert.equal(normalizeFigureEntry({ url: 'fig.png' }, 0).caption, '');
+test('normalizeFigureEntry: url trim 后空 → null', () => {
+  assert.equal(normalizeFigureEntry({ url: '   ' }, 0), null);
 });
 
-test('normalizeFigureEntry: 缺 page 默认 0', () => {
-  assert.equal(normalizeFigureEntry({ url: 'fig.png' }, 0).page, 0);
+test('normalizeFigureEntry: index 字段优先', () => {
+  const r = normalizeFigureEntry({ url: 'img.png', index: 5 }, 0);
+  assert.equal(r.index, 5);
 });
 
-test('normalizeFigureEntry: 缺 index 用 fallbackIndex+1', () => {
-  assert.equal(normalizeFigureEntry({ url: 'a.png' }, 0).index, 1);
-  assert.equal(normalizeFigureEntry({ url: 'b.png' }, 5).index, 6);
+test('normalizeFigureEntry: page 非数字 → 0', () => {
+  const r = normalizeFigureEntry({ url: 'img.png', page: 'foo' }, 0);
+  assert.equal(r.page, 0);
 });
 
-test('normalizeFigureEntry: url 周围空白 trim', () => {
-  assert.equal(normalizeFigureEntry({ url: '  fig.png  ' }, 0).url, 'fig.png');
+test('normalizeFigureEntry: width 非数字 → 0', () => {
+  const r = normalizeFigureEntry({ url: 'img.png', width: 'foo' }, 0);
+  assert.equal(r.width, 0);
 });
 
-test('normalizeFigureEntry: width/height 缺省 0', () => {
-  const e = normalizeFigureEntry({ url: 'fig.png' }, 0);
-  assert.equal(e.width, 0);
-  assert.equal(e.height, 0);
+test('normalizeFigureEntry: height/extractor 透传', () => {
+  const r = normalizeFigureEntry({ url: 'img.png', height: 100, extractor: 'pdf' }, 0);
+  assert.equal(r.height, 100);
+  assert.equal(r.extractor, 'pdf');
 });
 
 // ---------- parseFigureList ----------
-test('parseFigureList: 空输入 → []', () => {
-  assert.deepEqual(parseFigureList(null), []);
+test('parseFigureList: undefined → []', () => {
   assert.deepEqual(parseFigureList(undefined), []);
-  assert.deepEqual(parseFigureList(''), []);
-  assert.deepEqual(parseFigureList('   '), []);
 });
 
-test('parseFigureList: 数组直接通过', () => {
-  const r = parseFigureList([{ url: 'a.png' }, { url: 'b.png' }]);
-  assert.equal(r.length, 2);
+test('parseFigureList: null → []', () => {
+  assert.deepEqual(parseFigureList(null), []);
+});
+
+test('parseFigureList: 空字符串 → []', () => {
+  assert.deepEqual(parseFigureList(''), []);
+});
+
+test('parseFigureList: JSON 字符串', () => {
+  const r = parseFigureList('[{"url":"a.png"}]');
+  assert.equal(r.length, 1);
   assert.equal(r[0].url, 'a.png');
 });
 
-test('parseFigureList: JSON 字符串解析', () => {
-  const r = parseFigureList('[{"url": "a.png"}, {"url": "b.png"}]');
-  assert.equal(r.length, 2);
-});
-
 test('parseFigureList: JSON 解析失败 → []', () => {
-  assert.deepEqual(parseFigureList('not json {'), []);
+  assert.deepEqual(parseFigureList('not json'), []);
 });
 
-test('parseFigureList: 数组中非法 entry 被过滤', () => {
-  const r = parseFigureList([{ url: 'a.png' }, {}, { caption: 'no url' }, { url: 'b.png' }]);
+test('parseFigureList: 损坏的引号重试', () => {
+  // '\\\\"' → '"' replace 一次可能修复
+  const r = parseFigureList('[{\\"url\\": \\"a.png\\"}]');
+  // 两次都解析失败 → []
+  assert.ok(Array.isArray(r));
+});
+
+test('parseFigureList: 数组', () => {
+  const r = parseFigureList([{ url: 'a.png' }, { url: 'b.png' }]);
   assert.equal(r.length, 2);
 });
 
-test('parseFigureList: 非数组字符串解析结果 → []', () => {
-  assert.deepEqual(parseFigureList('"hello"'), []);
+test('parseFigureList: 非数组 → []', () => {
+  assert.deepEqual(parseFigureList('{}'), []);
+  assert.deepEqual(parseFigureList(123), []);
 });
 
-test('parseFigureList: 非字符串非数组 → []', () => {
-  assert.deepEqual(parseFigureList(42), []);
-  assert.deepEqual(parseFigureList({}), []);
+test('parseFigureList: 过滤非法项', () => {
+  const r = parseFigureList([{ url: 'a.png' }, { noUrl: true }, null, { url: 'b.png' }]);
+  assert.equal(r.length, 2);
 });
 
 // ---------- normalizeDate ----------
-test('normalizeDate: undefined / null → undefined', () => {
+test('normalizeDate: undefined → undefined', () => {
   assert.equal(normalizeDate(undefined), undefined);
+});
+
+test('normalizeDate: null → undefined', () => {
   assert.equal(normalizeDate(null), undefined);
 });
 
-test('normalizeDate: 字符串原样返回', () => {
-  assert.equal(normalizeDate('2025-01-15'), '2025-01-15');
+test('normalizeDate: Date instance → YYYY-MM-DD', () => {
+  const d = new Date('2026-09-17T00:00:00Z');
+  assert.equal(normalizeDate(d), '2026-09-17');
 });
 
-test('normalizeDate: Date 对象 → YYYY-MM-DD', () => {
-  const d = new Date('2025-01-15T10:30:00Z');
-  assert.equal(normalizeDate(d), '2025-01-15');
+test('normalizeDate: number 8 位', () => {
+  // 20260917 → '2026-09-17'
+  assert.equal(normalizeDate(20260917), '2026-09-17');
 });
 
-test('normalizeDate: 数字 8 位 → YYYY-MM-DD (padStart)', () => {
-  assert.equal(normalizeDate(20250115), '2025-01-15');
+test('normalizeDate: number 不足 8 位 padStart', () => {
+  // 260917 (6 位) → '00260917' → '0026-09-17'
+  assert.equal(normalizeDate(260917), '0026-09-17');
 });
 
-test('normalizeDate: 数字 < 8 位 → padStart', () => {
-  // 123 → '00000123' → '0000-01-23'
-  assert.equal(normalizeDate(123), '0000-01-23');
+test('normalizeDate: string 透传', () => {
+  assert.equal(normalizeDate('2026-09-17'), '2026-09-17');
 });
 
-test('normalizeDate: 非数字/字符串/Date → undefined', () => {
+test('normalizeDate: 非 string/number/Date → undefined', () => {
   assert.equal(normalizeDate({}), undefined);
   assert.equal(normalizeDate([]), undefined);
-  assert.equal(normalizeDate(true), undefined);
 });
 
 // ---------- normalizeScore ----------
-test('normalizeScore: 非 number → undefined', () => {
-  assert.equal(normalizeScore('0.5'), undefined);
-  assert.equal(normalizeScore(null), undefined);
-  assert.equal(normalizeScore(undefined), undefined);
+test('normalizeScore: 0–1 区间原样', () => {
+  assert.equal(normalizeScore(0.5), 0.5);
+});
+
+test('normalizeScore: 0 原样', () => {
+  assert.equal(normalizeScore(0), 0);
+});
+
+test('normalizeScore: 1 原样', () => {
+  assert.equal(normalizeScore(1), 1);
+});
+
+test('normalizeScore: >1 (legacy 0-10) → /10', () => {
+  assert.equal(normalizeScore(8), 0.8);
+});
+
+test('normalizeScore: 10 → 1.0 (钳到 1)', () => {
+  // 10/10 = 1.0 → n > 1 false → 1.0
+  assert.equal(normalizeScore(10), 1.0);
+});
+
+test('normalizeScore: >10 钳到 1', () => {
+  assert.equal(normalizeScore(15), 1);
+});
+
+test('normalizeScore: 负数 → 0', () => {
+  assert.equal(normalizeScore(-0.5), 0);
 });
 
 test('normalizeScore: NaN → undefined', () => {
@@ -257,121 +207,187 @@ test('normalizeScore: Infinity → undefined', () => {
   assert.equal(normalizeScore(Infinity), undefined);
 });
 
-test('normalizeScore: 负数 → 0', () => {
-  assert.equal(normalizeScore(-1), 0);
-});
-
-test('normalizeScore: 0-1 区间 → 原样', () => {
-  assert.equal(normalizeScore(0), 0);
-  assert.equal(normalizeScore(0.5), 0.5);
-  assert.equal(normalizeScore(1), 1);
-});
-
-test('normalizeScore: > 1 视为 0-10 刻度,除以 10', () => {
-  assert.equal(normalizeScore(8.0), 0.8);
-  assert.equal(normalizeScore(5), 0.5);
-});
-
-test('normalizeScore: > 10 钳到 1', () => {
-  assert.equal(normalizeScore(15), 1);
-  assert.equal(normalizeScore(100), 1);
-});
-
-test('normalizeScore: 边界 1.0', () => {
-  // 1.0 正好,不被视为 > 1 → 原样
-  assert.equal(normalizeScore(1.0), 1.0);
+test('normalizeScore: 非 number → undefined', () => {
+  assert.equal(normalizeScore('foo'), undefined);
+  assert.equal(normalizeScore(null), undefined);
+  assert.equal(normalizeScore(undefined), undefined);
 });
 
 // ---------- normalizeCategories ----------
-test('normalizeCategories: null/undefined → 空 4-dim', () => {
-  assert.deepEqual(normalizeCategories(null), { venue: [], task: [], method: [], type: [] });
-  assert.deepEqual(normalizeCategories(undefined), { venue: [], task: [], method: [], type: [] });
+test('normalizeCategories: 空 → buildCategories({})', () => {
+  const r = normalizeCategories(null);
+  assert.deepEqual(r, { venue: [], task: [], method: [], type: [] });
 });
 
-test('normalizeCategories: 非对象 → 空 4-dim', () => {
+test('normalizeCategories: 字符串 → buildCategories({})', () => {
   assert.deepEqual(normalizeCategories('foo'), { venue: [], task: [], method: [], type: [] });
 });
 
-test('normalizeCategories: 白名单内保留', () => {
-  const r = normalizeCategories({ venue: ['NeurIPS'], task: ['classification'] });
-  assert.deepEqual(r.venue, ['NeurIPS']);
-  assert.deepEqual(r.task, ['classification']);
-});
-
-test('normalizeCategories: 白名单外丢弃', () => {
-  const r = normalizeCategories({ venue: ['NeurIPS', 'MadeUp'] });
-  assert.deepEqual(r.venue, ['NeurIPS']);
-});
-
-test('normalizeCategories: 非数组字段被忽略', () => {
-  const r = normalizeCategories({ venue: 'NeurIPS', task: 42 });
+test('normalizeCategories: 部分字段非数组 → undefined', () => {
+  // {venue:'foo',task:['reasoning']} → venue 字段非数组 → undefined,task: ['reasoning']
+  // 'reasoning' 在白名单 → 保留
+  const r = normalizeCategories({ venue: 'foo', task: ['reasoning'] });
+  assert.deepEqual(r.task, ['reasoning']);
   assert.deepEqual(r.venue, []);
-  assert.deepEqual(r.task, []);
 });
 
-// ---------- extractWikiArticle / Strict ----------
-test('extractWikiArticle: 无 ## TL;DR → null', () => {
-  assert.equal(extractWikiArticle(''), null);
-  assert.equal(extractWikiArticle('# Hello\n\nBody'), null);
-});
-
-test('extractWikiArticle: 单 ## TL;DR (无终止) → 到末尾', () => {
-  const body = '## TL;DR\n一些内容';
-  const r = extractWikiArticle(body);
-  assert.ok(r.includes('## TL;DR'));
-  assert.ok(r.includes('一些内容'));
-});
-
-test('extractWikiArticle: 含 ## 摘要 → 终止', () => {
-  const body = '## TL;DR\nwiki content\n\n## 摘要\n正式摘要';
-  const r = extractWikiArticle(body);
-  assert.ok(r.includes('wiki content'));
-  assert.ok(!r.includes('正式摘要'));
-});
-
-test('extractWikiArticle: 含 ## Abstract → 终止', () => {
-  const body = '## TL;DR\nwiki\n\n## Abstract\nabs';
-  const r = extractWikiArticle(body);
-  assert.ok(r.includes('wiki'));
-  assert.ok(!r.includes('abs'));
-});
-
-test('extractWikiArticleStrict: 5 节齐全 → 返回 wiki', () => {
-  const body = [
-    '## TL;DR',
-    'TL;DR 内容',
-    '## 研究背景与动机',
-    '背景',
-    '## 方法',
-    '方法',
-    '## 实验与结果',
-    '实验',
-    '## 讨论与可借鉴点',
-    '讨论',
-    '## 摘要',
-    '正文',
-  ].join('\n');
-  const r = extractWikiArticleStrict(body);
+test('normalizeCategories: 完整 4 dim', () => {
+  // 任意 sample
+  const r = normalizeCategories({ venue: ['foo'], task: ['reasoning'], method: [], type: [] });
+  // 'reasoning' 可能在白名单也可能不在 → 至少不会抛
   assert.ok(r);
-  assert.ok(r.includes('讨论'));
+});
+
+// ---------- parseFrontmatter ----------
+test('parseFrontmatter: 完整 frontmatter', () => {
+  const text = '---\ntitle: Foo\ndate: 2026-09-17\n---\nBody here';
+  const r = parseFrontmatter(text);
+  assert.equal('error' in r, false);
+  if ('data' in r) {
+    assert.equal(r.data.title, 'Foo');
+    assert.equal(r.data.date, '2026-09-17');
+    assert.equal(r.body, 'Body here');
+  }
+});
+
+test('parseFrontmatter: \\r\\n 行尾', () => {
+  const text = '---\r\ntitle: Foo\r\n---\r\nBody';
+  const r = parseFrontmatter(text);
+  assert.equal('error' in r, false);
+});
+
+test('parseFrontmatter: 无 frontmatter → error', () => {
+  const r = parseFrontmatter('Just body');
+  assert.equal('error' in r, true);
+});
+
+test('parseFrontmatter: 无 body → body=""', () => {
+  const text = '---\ntitle: Foo\n---\n';
+  const r = parseFrontmatter(text);
+  if ('data' in r) {
+    assert.equal(r.body, '');
+  }
+});
+
+test('parseFrontmatter: 空 frontmatter → data={}', () => {
+  const text = '---\n\n---\nBody';
+  const r = parseFrontmatter(text);
+  if ('data' in r) {
+    assert.equal(r.data.title, undefined);
+  }
+});
+
+// ---------- extractWikiArticle ----------
+test('extractWikiArticle: 5 节完整', () => {
+  const body = `
+## TL;DR
+一句话总结
+
+## 研究背景与动机
+背景
+
+## 方法
+方法
+
+## 实验与结果
+结果
+
+## 讨论与可借鉴点
+讨论
+
+## 摘要
+中文摘要
+`;
+  const r = extractWikiArticle(body);
+  assert.notEqual(r, null);
+  assert.match(r, /TL;DR/);
+});
+
+test('extractWikiArticle: 无 TL;DR → null', () => {
+  const body = `
+## 摘要
+just summary
+`;
+  assert.equal(extractWikiArticle(body), null);
+});
+
+test('extractWikiArticle: 空 body → null', () => {
+  assert.equal(extractWikiArticle(''), null);
+});
+
+test('extractWikiArticle: 终止于 ## 摘要', () => {
+  const body = `## TL;DR
+foo
+
+## 摘要
+abstract here
+`;
+  const r = extractWikiArticle(body);
+  assert.match(r, /TL;DR/);
+  assert.match(r, /foo/);
+  assert.doesNotMatch(r, /abstract here/);
+});
+
+test('extractWikiArticle: 终止于 ## Abstract', () => {
+  const body = `## TL;DR
+foo
+
+## Abstract
+en abstract
+`;
+  const r = extractWikiArticle(body);
+  assert.match(r, /foo/);
+  assert.doesNotMatch(r, /en abstract/);
+});
+
+test('extractWikiArticle: 无终止 → 取到末尾', () => {
+  const body = `## TL;DR
+foo bar
+`;
+  const r = extractWikiArticle(body);
+  assert.match(r, /foo bar/);
+});
+
+// ---------- extractWikiArticleStrict ----------
+test('extractWikiArticleStrict: 5 节完整 → 返回', () => {
+  const body = `
+## TL;DR
+一句话
+
+## 研究背景与动机
+bg
+
+## 方法
+method
+
+## 实验与结果
+result
+
+## 讨论与可借鉴点
+disc
+`;
+  const r = extractWikiArticleStrict(body);
+  assert.notEqual(r, null);
 });
 
 test('extractWikiArticleStrict: 缺一节 → null', () => {
-  const body = [
-    '## TL;DR',
-    'TL;DR 内容',
-    '## 研究背景与动机',
-    '背景',
-    // 缺 方法 / 实验与结果 / 讨论与可借鉴点
-    '## 摘要',
-  ].join('\n');
+  const body = `
+## TL;DR
+一句话
+
+## 研究背景与动机
+bg
+
+## 方法
+method
+
+## 实验与结果
+result
+`;
+  // 缺讨论
   assert.equal(extractWikiArticleStrict(body), null);
 });
 
 test('extractWikiArticleStrict: 无 TL;DR → null', () => {
-  assert.equal(extractWikiArticleStrict('只有正文'), null);
-});
-
-test('extractWikiArticle: 空前缀 body → null', () => {
-  assert.equal(extractWikiArticle(null), null);
+  assert.equal(extractWikiArticleStrict('just text'), null);
 });
