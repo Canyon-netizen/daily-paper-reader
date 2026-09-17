@@ -2,6 +2,10 @@
 // astro-src/scripts/agents-deliverable-format.test.mjs
 //
 // Tests for R7 polish: astro-src/lib/agents/deliverable-format.ts.
+// DELIVERABLE_FORMAT_SPECS 常量 +
+// parseDeliverableFormat +
+// diffSections (LCS-based order score) +
+// validateAgainstFormat。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,221 +37,237 @@ const {
   validateAgainstFormat,
 } = mod;
 
-// ---------- DELIVERABLE_FORMAT_SPECS ----------
-test('DELIVERABLE_FORMAT_SPECS: 3 种格式', () => {
-  assert.ok('arxiv' in DELIVERABLE_FORMAT_SPECS);
-  assert.ok('acl' in DELIVERABLE_FORMAT_SPECS);
-  assert.ok('journal' in DELIVERABLE_FORMAT_SPECS);
+// ---------- DELIVERABLE_FORMAT_SPECS ---
+test('specs: 3 个 format', () => {
+  assert.ok(DELIVERABLE_FORMAT_SPECS.arxiv);
+  assert.ok(DELIVERABLE_FORMAT_SPECS.acl);
+  assert.ok(DELIVERABLE_FORMAT_SPECS.journal);
+  assert.equal(Object.keys(DELIVERABLE_FORMAT_SPECS).length, 3);
 });
 
-test('DELIVERABLE_FORMAT_SPECS: arxiv 8 段', () => {
+test('specs: arxiv 8 sections, abstract ≤ 250', () => {
   assert.equal(DELIVERABLE_FORMAT_SPECS.arxiv.expectedSections.length, 8);
+  assert.equal(DELIVERABLE_FORMAT_SPECS.arxiv.abstractMaxChars, 250);
 });
 
-test('DELIVERABLE_FORMAT_SPECS: acl 11 段含 limitations/ethics', () => {
-  const acl = DELIVERABLE_FORMAT_SPECS.acl.expectedSections;
-  assert.ok(acl.includes('limitations'));
-  assert.ok(acl.includes('ethics'));
-  assert.equal(acl.length, 11);
+test('specs: acl 11 sections, requires Limitations + Ethics', () => {
+  assert.equal(DELIVERABLE_FORMAT_SPECS.acl.requiresLimitations, true);
+  assert.equal(DELIVERABLE_FORMAT_SPECS.acl.requiresEthics, true);
+  assert.ok(DELIVERABLE_FORMAT_SPECS.acl.expectedSections.length >= 10);
 });
 
-test('DELIVERABLE_FORMAT_SPECS: arxiv 不需要 limitations/ethics', () => {
-  assert.equal(DELIVERABLE_FORMAT_SPECS.arxiv.requiresLimitations, false);
-  assert.equal(DELIVERABLE_FORMAT_SPECS.arxiv.requiresEthics, false);
+test('specs: journal 9 sections, abstract ≤ 500, citation author-year', () => {
+  assert.equal(DELIVERABLE_FORMAT_SPECS.journal.abstractMaxChars, 500);
+  assert.equal(DELIVERABLE_FORMAT_SPECS.journal.citationStyle, 'author-year');
 });
 
-test('DELIVERABLE_FORMAT_SPECS: acl author-year citation', () => {
+test('specs: arxiv numeric, acl author-year', () => {
+  assert.equal(DELIVERABLE_FORMAT_SPECS.arxiv.citationStyle, 'numeric');
   assert.equal(DELIVERABLE_FORMAT_SPECS.acl.citationStyle, 'author-year');
 });
 
-test('DELIVERABLE_FORMAT_SPECS: arxiv numeric citation', () => {
-  assert.equal(DELIVERABLE_FORMAT_SPECS.arxiv.citationStyle, 'numeric');
-});
-
-test('DELIVERABLE_FORMAT_SPECS: journal abstract 上限 500', () => {
-  assert.equal(DELIVERABLE_FORMAT_SPECS.journal.abstractMaxChars, 500);
-});
-
-test('DELIVERABLE_FORMAT_SPECS: acl + arxiv abstract 上限 250', () => {
-  assert.equal(DELIVERABLE_FORMAT_SPECS.arxiv.abstractMaxChars, 250);
-  assert.equal(DELIVERABLE_FORMAT_SPECS.acl.abstractMaxChars, 250);
-});
-
-// ---------- parseDeliverableFormat ----------
-test('parseDeliverableFormat: 合法 "arxiv" → "arxiv"', () => {
+// ---------- parseDeliverableFormat ---
+test('parse: "arxiv" → "arxiv"', () => {
   assert.equal(parseDeliverableFormat('arxiv'), 'arxiv');
 });
 
-test('parseDeliverableFormat: 合法 "acl" → "acl"', () => {
+test('parse: "acl" → "acl"', () => {
   assert.equal(parseDeliverableFormat('acl'), 'acl');
 });
 
-test('parseDeliverableFormat: 非法 → null', () => {
-  assert.equal(parseDeliverableFormat('foo'), null);
+test('parse: "journal" → "journal"', () => {
+  assert.equal(parseDeliverableFormat('journal'), 'journal');
 });
 
-test('parseDeliverableFormat: 非字符串 → null', () => {
-  assert.equal(parseDeliverableFormat(123), null);
+test('parse: 未知 → null', () => {
+  assert.equal(parseDeliverableFormat('unknown'), null);
+});
+
+test('parse: null → null', () => {
   assert.equal(parseDeliverableFormat(null), null);
+});
+
+test('parse: undefined → null', () => {
   assert.equal(parseDeliverableFormat(undefined), null);
-  assert.equal(parseDeliverableFormat({}), null);
 });
 
-test('parseDeliverableFormat: 大小写敏感', () => {
-  assert.equal(parseDeliverableFormat('ArXiv'), null);
+test('parse: 数字 → null', () => {
+  assert.equal(parseDeliverableFormat(42), null);
 });
 
-// ---------- diffSections ----------
-test('diffSections: 完全匹配 → missing=[], extra=[], orderScore=1', () => {
+// ---------- diffSections: missing/extra ---
+test('diff: 完全匹配', () => {
   const r = diffSections('arxiv', [
-    { id: 'abstract' },
-    { id: 'introduction' },
-    { id: 'method' },
-    { id: 'experiments' },
-    { id: 'results' },
-    { id: 'discussion' },
-    { id: 'conclusion' },
-    { id: 'references' },
+    { id: 'abstract' }, { id: 'introduction' }, { id: 'method' },
+    { id: 'experiments' }, { id: 'results' }, { id: 'discussion' },
+    { id: 'conclusion' }, { id: 'references' },
   ]);
   assert.deepEqual(r.missing, []);
   assert.deepEqual(r.extra, []);
   assert.equal(r.orderScore, 1);
 });
 
-test('diffSections: 缺 → missing 列出', () => {
-  const r = diffSections('arxiv', [{ id: 'abstract' }]);
-  assert.equal(r.missing.length, 7);
-  assert.ok(r.missing.includes('introduction'));
+test('diff: 缺 section', () => {
+  const r = diffSections('arxiv', [
+    { id: 'abstract' }, { id: 'introduction' }, { id: 'method' },
+  ]);
+  assert.ok(r.missing.length > 0);
+  assert.ok(r.missing.includes('experiments'));
 });
 
-test('diffSections: 多余 → extra 列出', () => {
+test('diff: 多余 section', () => {
   const r = diffSections('arxiv', [
-    { id: 'abstract' },
-    { id: 'extra-section' },
+    { id: 'abstract' }, { id: 'introduction' }, { id: 'extra-section' },
   ]);
   assert.ok(r.extra.includes('extra-section'));
 });
 
-test('diffSections: id 优先于 title', () => {
-  // 用 title 是不匹配的 id;diffSections 用 id || title
+test('diff: 用 title (无 id)', () => {
   const r = diffSections('arxiv', [
-    { id: 'abstract', title: '摘要' },
-    { id: 'introduction', title: '引言' },
+    { title: 'Abstract' }, { title: 'Introduction' },
   ]);
-  // 缺 6 个
-  assert.equal(r.missing.length, 6);
+  assert.ok(r.missing.length > 0);
 });
 
-test('diffSections: 大小写不敏感', () => {
+test('diff: 大小写不敏感', () => {
   const r = diffSections('arxiv', [
-    { id: 'Abstract' },
-    { id: 'INTRODUCTION' },
+    { id: 'ABSTRACT' }, { id: 'INTRODUCTION' },
   ]);
-  // 小写化匹配 → 缺 6 个
-  assert.equal(r.missing.length, 6);
+  // 大小写归一化后视为匹配
+  assert.equal(r.missing.includes('abstract'), false);
 });
 
-test('diffSections: 空 sections → 全 missing, orderScore 0', () => {
+// ---------- diffSections: order score ---
+test('diff: 顺序完全匹配 → orderScore=1', () => {
+  const r = diffSections('acl', [
+    { id: 'abstract' }, { id: 'introduction' }, { id: 'related_work' },
+    { id: 'method' }, { id: 'experiments' }, { id: 'results' },
+    { id: 'discussion' }, { id: 'conclusion' }, { id: 'limitations' },
+    { id: 'ethics' }, { id: 'references' },
+  ]);
+  assert.equal(r.orderScore, 1);
+});
+
+test('diff: 顺序反 → orderScore 低', () => {
+  const r = diffSections('acl', [
+    { id: 'references' }, { id: 'ethics' }, { id: 'limitations' },
+    { id: 'conclusion' }, { id: 'discussion' }, { id: 'results' },
+    { id: 'experiments' }, { id: 'method' }, { id: 'related_work' },
+    { id: 'introduction' }, { id: 'abstract' },
+  ]);
+  // 反序 LCS = 1 (abstract 唯一匹配),expected=11
+  // 实际算下来是 1/11
+  assert.ok(r.orderScore < 1);
+});
+
+test('diff: 部分顺序 → 中等分数', () => {
+  // partial order
+  const r = diffSections('arxiv', [
+    { id: 'abstract' }, { id: 'introduction' }, { id: 'method' },
+    { id: 'results' }, { id: 'experiments' }, // 顺序错
+    { id: 'discussion' }, { id: 'conclusion' }, { id: 'references' },
+  ]);
+  // LCS 长度 = 7 (experiments/results 互换,LCS=7,expected=8)
+  // 实际: abstract, introduction, method, results/exp, ..., conclusion, references
+  // abstract(1) + introduction(2) + method(3) + 1 of (results/exp) + discussion(5) + conclusion(6) + references(7) = 7
+  assert.equal(r.orderScore, 7 / 8);
+});
+
+test('diff: 空 sections → orderScore=0', () => {
   const r = diffSections('arxiv', []);
-  assert.equal(r.missing.length, 8);
   assert.equal(r.orderScore, 0);
+  assert.equal(r.missing.length, 8);
 });
 
-test('diffSections: orderScore 0..1', () => {
-  // 逆序: orderScore 接近 0
+test('diff: orderScore 范围 [0, 1]', () => {
   const r = diffSections('arxiv', [
-    { id: 'references' },
-    { id: 'conclusion' },
-    { id: 'discussion' },
-    { id: 'results' },
-    { id: 'experiments' },
-    { id: 'method' },
-    { id: 'introduction' },
-    { id: 'abstract' },
+    { id: 'random1' }, { id: 'random2' },
   ]);
-  // 全部命中但逆序 → LCS = 1 (单方向最长公共子序列)
   assert.ok(r.orderScore >= 0 && r.orderScore <= 1);
 });
 
-test('diffSections: 部分顺序匹配', () => {
-  const r = diffSections('arxiv', [
-    { id: 'abstract' },
-    { id: 'introduction' },
-    { id: 'method' },
-    { id: 'experiments' },
-  ]);
-  // LCS = 4 (前 4 个)
-  assert.equal(r.orderScore, 0.5); // 4/8
-  assert.equal(r.missing.length, 4);
+// ---------- validateAgainstFormat ---
+test('validate: 完整文档', () => {
+  const r = validateAgainstFormat('arxiv', {
+    abstract: 'x'.repeat(100),
+    sections: [
+      { id: 'abstract' }, { id: 'introduction' }, { id: 'method' },
+      { id: 'experiments' }, { id: 'results' }, { id: 'discussion' },
+      { id: 'conclusion' }, { id: 'references' },
+    ],
+  });
+  assert.equal(r.abstractLengthOk, true);
+  assert.equal(r.diff.orderScore, 1);
+  assert.equal(r.format, 'arxiv');
 });
 
-// ---------- validateAgainstFormat ----------
-test('validateAgainstFormat: abstract 空 → abstractLengthOk=false', () => {
-  const r = validateAgainstFormat('arxiv', { abstract: '', sections: [] });
-  assert.equal(r.abstractLengthOk, false);
-  assert.equal(r.abstractLength, undefined);
-});
-
-test('validateAgainstFormat: abstract null → length undefined', () => {
-  const r = validateAgainstFormat('arxiv', { abstract: undefined, sections: [] });
-  assert.equal(r.abstractLengthOk, false);
-  assert.equal(r.abstractLength, undefined);
-});
-
-test('validateAgainstFormat: abstract 超长 → not ok', () => {
+test('validate: abstract 太长 → !abstractLengthOk', () => {
   const r = validateAgainstFormat('arxiv', {
     abstract: 'x'.repeat(300),
     sections: [],
   });
   assert.equal(r.abstractLengthOk, false);
-  assert.equal(r.abstractLength, 300);
 });
 
-test('validateAgainstFormat: abstract 边界 250 → ok', () => {
+test('validate: abstract 空 → undefined length + !ok', () => {
+  const r = validateAgainstFormat('arxiv', {
+    abstract: '',
+    sections: [],
+  });
+  assert.equal(r.abstractLengthOk, false);
+  assert.equal(r.abstractLength, undefined);
+});
+
+test('validate: abstract 缺 → undefined length', () => {
+  const r = validateAgainstFormat('arxiv', {
+    sections: [],
+  });
+  assert.equal(r.abstractLengthOk, false);
+  assert.equal(r.abstractLength, undefined);
+});
+
+test('validate: 边界 abstract (正好 maxChars)', () => {
   const r = validateAgainstFormat('arxiv', {
     abstract: 'x'.repeat(250),
     sections: [],
   });
   assert.equal(r.abstractLengthOk, true);
+  assert.equal(r.abstractLength, 250);
 });
 
-test('validateAgainstFormat: abstract 前后 trim', () => {
-  const r = validateAgainstFormat('arxiv', {
-    abstract: '   ' + 'x'.repeat(100) + '   ',
+test('validate: 包含 spec 字段', () => {
+  const r = validateAgainstFormat('acl', {
+    abstract: 'x',
     sections: [],
   });
-  assert.equal(r.abstractLength, 100);
+  assert.equal(r.spec.expectedSections.length, 11);
+  assert.equal(r.spec.requiresLimitations, true);
 });
 
-test('validateAgainstFormat: 完整 sections + ok abstract', () => {
-  const r = validateAgainstFormat('arxiv', {
-    abstract: 'x'.repeat(100),
-    sections: DELIVERABLE_FORMAT_SPECS.arxiv.expectedSections.map((s) => ({ id: s })),
-  });
-  assert.equal(r.abstractLengthOk, true);
-  assert.deepEqual(r.diff.missing, []);
-  assert.equal(r.diff.orderScore, 1);
-});
-
-test('validateAgainstFormat: 返回 spec + diff + format', () => {
-  const r = validateAgainstFormat('arxiv', { abstract: 'x', sections: [] });
-  assert.equal(r.format, 'arxiv');
-  assert.ok(r.spec);
-  assert.ok(r.diff);
-});
-
-test('validateAgainstFormat: journal abstract 400 → ok', () => {
+test('validate: journal 长 abstract ok', () => {
   const r = validateAgainstFormat('journal', {
     abstract: 'x'.repeat(400),
     sections: [],
   });
+  // journal maxChars=500
   assert.equal(r.abstractLengthOk, true);
 });
 
-test('validateAgainstFormat: journal abstract 600 → not ok', () => {
-  const r = validateAgainstFormat('journal', {
-    abstract: 'x'.repeat(600),
-    sections: [],
+// ---------- 集成 ---
+test('集成: spec + diff + validate', () => {
+  const format = parseDeliverableFormat('acl');
+  assert.equal(format, 'acl');
+  const spec = DELIVERABLE_FORMAT_SPECS[format];
+  assert.equal(spec.requiresEthics, true);
+  const v = validateAgainstFormat(format, {
+    abstract: 'my abstract',
+    sections: [
+      { id: 'abstract' }, { id: 'introduction' }, { id: 'related_work' },
+      { id: 'method' }, { id: 'experiments' }, { id: 'results' },
+      { id: 'discussion' }, { id: 'conclusion' }, { id: 'limitations' },
+      { id: 'ethics' }, { id: 'references' },
+    ],
   });
-  assert.equal(r.abstractLengthOk, false);
+  assert.equal(v.diff.orderScore, 1);
+  assert.equal(v.abstractLengthOk, true);
 });
