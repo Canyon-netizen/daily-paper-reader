@@ -355,12 +355,39 @@ export function advancePipeline(plan, currentStageIdx, gateResult) {
  *   error?: string,
  * }>}
  */
+/**
+ * prefetchApprovedSkillContext() — 预取 Paperclip 已批准(被 pin 住)的 skill 版本。
+ *
+ * iter #74:方法论上下文是同步注入的,所以远端版本必须先落缓存,prompt 才能读到。
+ * 任何一步失败都只记一条警告 —— 流水线照跑,方法论退回到本地文档。
+ */
+async function prefetchApprovedSkillContext() {
+  try {
+    const { refreshPaperclipSkillCache } = await import('./paperclip-skill-source.mjs');
+    const result = await refreshPaperclipSkillCache();
+    if (result.status === 'ok' && result.cache) {
+      console.log(
+        `[paperclip-skill] using the approved version ${result.cache.versionId} (sha256 ${result.cache.sha256})`,
+      );
+    } else if (result.status === 'no-pin') {
+      console.log('[paperclip-skill] no pinned version yet; the local method docs stay in charge');
+    }
+  } catch (err) {
+    console.log(`[paperclip-skill] skipped: ${err && err.message ? err.message : String(err)}`);
+  }
+}
+
 export async function runPipelineStage(stage, input, config) {
   if (!PIPELINE_STAGES.includes(stage)) {
     throw new TypeError(`runPipelineStage: unknown stage "${stage}"`);
   }
   const stageIdx = PIPELINE_STAGES.indexOf(stage);
   const startedAt = Date.now();
+
+  // iter #74: 把 Paperclip 里"已批准(被 pin 住)"的 skill 版本拉进缓存。
+  // 方法论上下文是同步注入的(Designer/Reviewer/Reviser/Modifier 在建 prompt 时
+  // 直接读),所以远端拉取只能在这一步预取;拉不到就静默用本地文档。
+  await prefetchApprovedSkillContext();
 
   try {
     // Stage 7 (export) 是 deterministic,直接调 paper-compiler
@@ -418,7 +445,6 @@ export async function runPipelineStage(stage, input, config) {
 // ---------------------------------------------------------------------------
 // runLoopStage(stage, input, config) — 调现有 3-agent loop(供非 export stage)
 // ---------------------------------------------------------------------------
-
 async function runLoopStage(stage, input, config) {
   // 若 caller 没注入,直接走 stub
   if (!config.caller || typeof config.caller.callLLM !== 'function') {

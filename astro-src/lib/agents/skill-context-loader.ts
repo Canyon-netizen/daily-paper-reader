@@ -4,6 +4,11 @@
  * Designer / Modifier / Reviewer / Reviser 等 agents 真正消费 docs/research-skills/
  * 下的方法论文档作为 system prompt 的"方法论上下文"段,而不是凭 LLM 记忆自由发挥。
  *
+ * iter #74: 增加 Paperclip 源 —— 已批准(被 pin 住)的 skill 版本也能进上下文。
+ *   - 远端优先:某份方法论文档在 Paperclip 里有已批准版本 → 用远端那份
+ *   - 本地兜底:远端没有 / 没 pin / Paperclip 挂了 → 用本地 docs/research-skills/*.md
+ *   - 治理:只读 pin(已批准),绝不读 currentVersionId(最新写入 = 可能只是提案)
+ *
  * 单一真相源:skill-context-loader.ts (浏览器侧, 带类型)
  *   ↕  行为必须与 skill-context-loader.mjs 一致(手维护镜像)
  * 镜像文件:skill-context-loader.mjs (Node CLI 直接 import)
@@ -20,6 +25,14 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  findApprovedFileForStage,
+  loadPaperclipSkillCacheFromEnv,
+  paperclipSkillStagesFromEnv,
+  renderSkillCacheBlock,
+  truncateSkillText,
+  type PaperclipSkillCache,
+} from './paperclip-skill-source.mjs';
 
 // ---------------------------------------------------------------------------
 // 类型 + 常量
@@ -53,11 +66,20 @@ export const STAGE_TO_SKILL: Record<AgentStage, string[]> = {
 /** 每个 skill 文件最多取的字符数(截断 LLM prompt 总开销) */
 export const SKILL_DOC_MAX_CHARS = 3000;
 
+/** loadSkillContext 的可选参数 */
+export interface LoadSkillContextOptions {
+  /** Paperclip 已批准 skill 的缓存(不给就从 env 读) */
+  cache?: PaperclipSkillCache | null;
+  /** 吃 Paperclip skill 的 stage 列表(null = 全部) */
+  stages?: string[] | null;
+}
+
 // ---------------------------------------------------------------------------
 // In-memory cache: 同进程内同 stage 多次调用走缓存,避免重复 IO
 // ---------------------------------------------------------------------------
 
-const _cache = new Map<AgentStage, string>();
+/** cache key 带上已批准版本号:版本一换,缓存自动失效 */
+const _cache = new Map<string, string>();
 
 // ---------------------------------------------------------------------------
 // 公开 API
@@ -75,13 +97,25 @@ const _cache = new Map<AgentStage, string>();
  * 缓存:
  *   - 同一 stage 第二次起走 in-memory cache;若需要强制 reload, 调 resetSkillContextCache()。
  */
-export function loadSkillContext(stage: AgentStage): string {
-  if (_cache.has(stage)) return _cache.get(stage)!;
+export function loadSkillContext(stage: AgentStage, opts: LoadSkillContextOptions = {}): string {
+  const cache = opts.cache !== undefined ? opts.cache : loadPaperclipSkillCacheFromEnv();
+  const stages = opts.stages !== undefined ? opts.stages : paperclipSkillStagesFromEnv();
+  const cacheKey = `${stage}::${cache?.versionId ?? 'no-paperclip'}`;
+  if (_cache.has(cacheKey)) return _cache.get(cacheKey)!;
   const files = STAGE_TO_SKILL[stage] ?? [];
   if (files.length === 0) return '';
 
   const parts: string[] = [`[方法论上下文 · stage=${stage}]`];
   for (const f of files) {
+    // 远端优先:Paperclip 里已批准的同名文档覆盖本地那份
+    const approved = findApprovedFileForStage(cache, f);
+    if (approved) {
+      parts.push(
+        `### ${f}\n${truncateSkillText(approved.content, SKILL_DOC_MAX_CHARS)}` +
+        `\n(已批准版本 ${cache!.versionId} · sha256 ${cache!.sha256})`,
+      );
+      continue;
+    }
     const path = join(SKILL_DOCS_ROOT, f);
     try {
       const content = readFileSync(path, 'utf8');
@@ -94,8 +128,12 @@ export function loadSkillContext(stage: AgentStage): string {
     }
   }
 
+  // Paperclip 已批准 skill 的总纲(它的 SKILL.md)
+  const paperclipBlock = renderSkillCacheBlock(cache, stage, { stages });
+  if (paperclipBlock) parts.push(paperclipBlock);
+
   const out = parts.join('\n\n');
-  _cache.set(stage, out);
+  _cache.set(cacheKey, out);
   return out;
 }
 

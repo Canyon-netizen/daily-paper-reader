@@ -117,6 +117,56 @@ agents 闭环是「**执行化**」(从 RQ 到 deliverable),但具体每一步�
 
 **实际落地**:Designer / Modifier / Reviser / Reviewer 的 prompt 会在下一批(2026-09-14+)加上「注入上下文 = read docs/research-skills/*.md 对应章节」。
 
+#### 5.0.1 Paperclip 源:已批准的 skill 版本也能进上下文(iter #74)
+
+DPR 之外,还有一个 Paperclip 实例在跑一条受治理的 agent 公司流水线:learning agent 从交付收据里提教训,
+**只提案**(写 skill 新版本,不自动生效);judge agent 跑外部判据脚本**只判定**;人审通过之后 CEO 才把
+agent 的 pin 移到新版本。iter #74 让这条链的产物能进到 DPR 的方法论上下文里。
+
+**治理要点 —— 读 pin,不读 currentVersionId**:
+
+| 字段 | 含义 | 能不能当"已批准" |
+|------|------|------------------|
+| `company_skill.currentVersionId` | 库里**最新写入**的版本 | ❌ learning 提个提案它就动了,哪怕没人审、judge 还没判 |
+| agent 的 pin(`desiredSkillEntries[].versionId`) | 人审通过、CEO 移过去的版本 | ✅ 这才是"已批准且已上线" |
+
+所以 `paperclip-skill-source.mjs` 只读 pin。**没有 pin = 没有已批准版本**,直接退到本地文档,
+绝不退回 `currentVersionId` —— 那等于把提案当批准。
+
+**机制(预取 + 同步读缓存)**:
+
+方法论上下文是**同步**注入的(`designer.mjs` / `reviewer.mjs` / `reviser.mjs` / `modifier.mjs` 在建 prompt 时
+直接 `loadSkillContext(stage)`),5 个调用点改成 async 会破坏它们。所以远端拉取只能拆成两步:
+
+1. `prefetchPaperclipSkill()` —— 流水线每个 stage 开头预取一次:`pin → 版本正文 → 落缓存文件`
+2. `loadSkillContext(stage)` —— 同步读缓存,把已批准版本拼进 prompt
+
+**远端优先、本地兜底**:
+
+- 某份方法论文档在已批准版本里有同名文件(`references/writing-paper.md` 之于 draft stage)→ 用远端那份
+- 没有同名文件 / 没有 pin / Paperclip 挂了 → 用本地 `docs/research-skills/*.md`
+- 已批准版本的 `SKILL.md` 作为一个额外块追加(带 `version` 与 `sha256`,prompt 里能看出用的是哪一版)
+
+**配置**(全是环境变量,没配就完全不启用,流水线照跑):
+
+| 变量 | 含义 | 默认 |
+|------|------|------|
+| `PAPERCLIP_API_URL` | Paperclip 实例地址 | `http://127.0.0.1:3100` |
+| `PAPERCLIP_API_KEY` | 可选 bearer token | 空 |
+| `PAPERCLIP_SKILL_AGENT_ID` | **谁的 pin 代表"已批准"** | 无(不配 = 不启用) |
+| `PAPERCLIP_SKILL_KEY` | 要消费的 skill key | 无(不配 = 不启用) |
+| `PAPERCLIP_SKILL_CACHE` | 缓存文件 | `.local-runs/paperclip-skill-cache.json` |
+| `PAPERCLIP_SKILL_STAGES` | 生效 stage(逗号分隔) | 全部 |
+| `PAPERCLIP_SKILL_TTL_MS` | 缓存有效期 | `300000` |
+
+**代码位置**:
+
+- `astro-src/lib/agents/paperclip-skill-source.{mjs,ts}` —— Paperclip 源(纯函数 + 预取)
+- `astro-src/lib/agents/skill-context-loader.{mjs,ts}` —— 接入点(远端优先 / 本地兜底)
+- `astro-src/scripts/agents-run.mjs` —— CLI 入口 `main()` 里预取(覆盖 `--quickstart` / `--new-session` / cycle 全部路径)
+- `astro-src/lib/agents/pipeline.mjs` —— 7-stage 流水线的 `runPipelineStage` 里预取
+- `astro-src/scripts/agents-paperclip-skill-source.test.mjs` —— 单测
+
 ### 5.1 CLI 零摩擦入口（iter #54 引入）
 
 ```bash

@@ -19,7 +19,7 @@
  */
 
 import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
@@ -36,6 +36,11 @@ import {
 } from '../lib/agents/gate.mjs';
 
 import { makeRoundRecord } from '../lib/agents/types.mjs';
+
+// iter #74: Paperclip 已批准(被 pin 住)的 skill 版本源。
+// 方法论上下文是同步注入的(各 agent 建 prompt 时直接读),所以远端拉取必须在
+// 任何 agent 跑之前预取进缓存;拉不到就静默用本地 docs/research-skills/*.md。
+import { refreshPaperclipSkillCache } from '../lib/agents/paperclip-skill-source.mjs';
 
 // Export-bundle builders are now a shared lib (iter #59):
 //   agents-run.mjs --export-md (CLI)  ──┐
@@ -503,7 +508,6 @@ if (args.help) {
 
 function logResearchSkills() {
   const SKILL_DIR = 'docs/research-skills';
-  const { readdirSync, existsSync, statSync } = require('node:fs');
   if (!existsSync(SKILL_DIR)) return;
   try {
     const files = readdirSync(SKILL_DIR).filter(f => f.endsWith('.md') && !f.startsWith('_'));
@@ -518,6 +522,30 @@ function logResearchSkills() {
 
 // Run skills detection early (before any agent runs)
 logResearchSkills();
+
+/**
+ * prefetchPaperclipSkillVersion() — 把 Paperclip 里已批准的 skill 版本预取进缓存。
+ *
+ * iter #74:没有 PAPERCLIP_SKILL_AGENT_ID / PAPERCLIP_SKILL_KEY 就完全不启用
+ * (status=disabled,不打网络);有配置但没 pin 就是"还没有已批准版本",同样退回
+ * 本地方法论文档。任何失败都不阻断 CLI。
+ */
+async function prefetchPaperclipSkillVersion() {
+  try {
+    const result = await refreshPaperclipSkillCache();
+    if (result.status === 'ok' && result.cache) {
+      console.error(
+        `[paperclip-skill] 已批准版本 ${result.cache.versionId} (sha256 ${result.cache.sha256})`,
+      );
+    } else if (result.status === 'no-pin') {
+      console.error('[paperclip-skill] 还没有被 pin 住的版本;方法论文档继续用本地那份');
+    } else if (result.status === 'error') {
+      console.error(`[paperclip-skill] 取不到已批准版本(${result.error});用本地那份`);
+    }
+  } catch (e) {
+    console.error(`[paperclip-skill] 跳过:${e && e.message ? e.message : String(e)}`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // LLM caller(OpenAI-compatible chat completions via fetch)
@@ -2623,6 +2651,9 @@ async function main() {
     console.log('💡 research-skills 已启用:Designer / Modifier / Reviewer / Reviser 自动消费 docs/research-skills/ 方法论');
     console.log('   (设置 DPR_NO_SKILL_BANNER=1 隐藏本提示)');
   }
+  // iter #74: 预取 Paperclip 里已批准(被 pin 住)的 skill 版本。
+  // 这一步在任何 agent 跑之前完成 —— 方法论上下文是同步注入的,没有缓存就没有远端内容。
+  await prefetchPaperclipSkillVersion();
   // 模式 -1: --quickstart (新用户零摩擦入口,iter #54)
   // 等价于 --new-session GOAL --rounds 1 --preset aggressive --dry-run,
   // 然后打印 1 段友好 summary,列出产生了哪些文件 + 4 条下一步建议。
